@@ -1,12 +1,9 @@
-import sys
-
 import numpy as np
 import pytest
 import torch
 from omegaconf import OmegaConf
 
-from espnet2.train.collate_fn import CommonCollateFn
-from espnet3.trainer.model import LitESPnetModel
+from espnet3.components.model import LitESPnetModel
 
 # ===============================================================
 # Test Case Summary for LitESPnetModel
@@ -78,7 +75,7 @@ def dummy_model():
 def dummy_dataset_config():
     return OmegaConf.create(
         {
-            "_target_": "espnet3.data.DataOrganizer",
+            "_target_": "espnet3.components.data_organizer.DataOrganizer",
             "train": [
                 {
                     "name": "dummy_train",

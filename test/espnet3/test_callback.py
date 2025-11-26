@@ -3,28 +3,43 @@ from unittest import mock
 
 import pytest
 import torch
-from lightning.pytorch.callbacks import ModelCheckpoint
+from hydra.utils import instantiate
+from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
+from omegaconf import OmegaConf
 
-from espnet3.trainer.callbacks import AverageCheckpointsCallback, get_default_callbacks
+from espnet3.components.callbacks import (
+    AverageCheckpointsCallback,
+    get_default_callbacks,
+)
 
 # ===============================================================
 # Test Case Summary for AverageCheckpointsCallback
 # ===============================================================
 #
 # Normal Cases
-# | Test Name                                      | Description                                                                                      | # noqa: E501
-# |-----------------------------------------------|--------------------------------------------------------------------------------------------------| # noqa: E501
-# | test_average_checkpoints_callback_on_fit_end  | Verifies that checkpoint averaging and saving works correctly with dummy weights.               | # noqa: E501
-# | test_get_default_callbacks_structure          | Checks structure and types of callbacks returned by get_default_callbacks().                    | # noqa: E501
-# | test_average_checkpoints_with_multiple_metrics| Confirms correct averaging for multiple ModelCheckpoint instances with different monitor names. | # noqa: E501
-# | test_output_filename_format                   | Ensures output filename is formatted using monitor name and checkpoint count.                   | # noqa: E501
+# | Test Name                                      | Description                       |
+# |-----------------------------------------------|------------------------------------|
+# | test_average_checkpoints_callback_on_validation_end  | Verifies that checkpoint    |
+# |                        | averaging and saving works correctly with dummy weights.  |
+# | test_get_default_callbacks_structure          | Checks structure and types of      |
+# |                                   | callbacks returned by get_default_callbacks(). |
+# | test_average_checkpoints_with_multiple_metrics| Confirms correct averaging for     |
+# |                |  multiple ModelCheckpoint instances with different monitor names. |
+# | test_output_filename_format                 | Ensures output filename is formatted |
+# |                                         | using monitor name and checkpoint count. |
+# | test_duplicate_learning_rate_monitor_from_config | Confirms that if                |
+# | |LearningRateMonitor is defined both by default and in the config, duplicates occur|
+# | | (no deduplication or warning yet).                                       |
 #
 # Edge/Error Cases
-# | Test Name                                      | Description                                                                                      | # noqa: E501
-# |-----------------------------------------------|--------------------------------------------------------------------------------------------------| # noqa: E501
-# | test_average_checkpoint_on_non_global_zero    | Ensures callback is skipped when trainer.is_global_zero is False (e.g., non-main DDP rank).     | # noqa: E501
-# | test_average_checkpoint_with_inconsistent_keys| Raises KeyError if state_dict keys differ across checkpoints.                                    | # noqa: E501
-# | test_average_checkpoint_with_int_and_float_mix| Confirms floats are averaged and ints are accumulated properly during checkpoint merging.       | # noqa: E501
+# | Test Name                                      | Description                       |
+# |-----------------------------------------------|------------------------------------|
+# | test_average_checkpoint_on_non_global_zero    | Ensures callback is skipped when   |
+# |                       | trainer.is_global_zero is False (e.g., non-main DDP rank). |
+# | test_average_checkpoint_with_inconsistent_keys| Raises KeyError if state_dict keys |
+# |                                               | differ across checkpoints. |
+# | test_average_checkpoint_with_int_and_float_mix| Confirms floats are averaged and   |
+# |                          | ints are accumulated properly during checkpoint merging.|
 
 
 @pytest.fixture
@@ -38,7 +53,7 @@ def dummy_state_dict():
     }
 
 
-def test_average_checkpoints_callback_on_fit_end(tmp_path, dummy_state_dict):
+def test_average_checkpoints_callback_on_validation_end(tmp_path, dummy_state_dict):
     """Test average checkpoints.
 
     Ensure AverageCheckpointsCallback correctly averages and saves model.
@@ -62,7 +77,7 @@ def test_average_checkpoints_callback_on_fit_end(tmp_path, dummy_state_dict):
         trainer = mock.Mock()
         trainer.is_global_zero = True
 
-        callback.on_fit_end(trainer, pl_module=mock.Mock())
+        callback.on_validation_end(trainer, pl_module=mock.Mock())
 
         mock_save.assert_called_once()
 
@@ -97,7 +112,7 @@ def test_get_default_callbacks_structure():
 
 
 def test_average_checkpoints_with_multiple_metrics(tmp_path, dummy_state_dict):
-    """Test averaging for multiple ModelCheckpoint instances with different monitor names."""
+    """Test averaging for multiple ModelCheckpoints with different monitor names."""
     ckpt_paths_1 = [tmp_path / f"ckpt_loss_{i}.ckpt" for i in range(2)]
     ckpt_paths_2 = [tmp_path / f"ckpt_acc_{i}.ckpt" for i in range(2)]
 
@@ -119,7 +134,7 @@ def test_average_checkpoints_with_multiple_metrics(tmp_path, dummy_state_dict):
             ],
         )
         trainer = mock.Mock(is_global_zero=True)
-        callback.on_fit_end(trainer, pl_module=mock.Mock())
+        callback.on_validation_end(trainer, pl_module=mock.Mock())
 
         assert mock_save.call_count == 2
         filenames = [Path(call.args[1]).name for call in mock_save.call_args_list]
@@ -128,7 +143,7 @@ def test_average_checkpoints_with_multiple_metrics(tmp_path, dummy_state_dict):
 
 
 def test_output_filename_format(tmp_path, dummy_state_dict):
-    """C006: Ensure output filename is formatted properly with monitor name and number of checkpoints."""
+    """Ensure output filename is formatted properly."""
     ckpt_paths = [tmp_path / f"ckpt_{i}.ckpt" for i in range(3)]
 
     with (
@@ -145,7 +160,7 @@ def test_output_filename_format(tmp_path, dummy_state_dict):
             ],
         )
         trainer = mock.Mock(is_global_zero=True)
-        callback.on_fit_end(trainer, pl_module=mock.Mock())
+        callback.on_validation_end(trainer, pl_module=mock.Mock())
 
         filename = Path(mock_save.call_args[0][1]).name
         assert filename == "some.metric.ave_3best.pth"
@@ -164,7 +179,7 @@ def test_average_checkpoint_on_non_global_zero(tmp_path, dummy_state_dict):
             ],
         )
         trainer = mock.Mock(is_global_zero=False)
-        callback.on_fit_end(trainer, pl_module=mock.Mock())
+        callback.on_validation_end(trainer, pl_module=mock.Mock())
 
         mock_save.assert_not_called()
 
@@ -201,7 +216,7 @@ def test_average_checkpoint_with_inconsistent_keys(tmp_path):
             ],
         )
         trainer = mock.Mock(is_global_zero=True)
-        callback.on_fit_end(trainer, pl_module=mock.Mock())
+        callback.on_validation_end(trainer, pl_module=mock.Mock())
 
 
 def test_average_checkpoint_with_int_and_float_mix(tmp_path):
@@ -241,10 +256,52 @@ def test_average_checkpoint_with_int_and_float_mix(tmp_path):
             ],
         )
         trainer = mock.Mock(is_global_zero=True)
-        callback.on_fit_end(trainer, pl_module=mock.Mock())
+        callback.on_validation_end(trainer, pl_module=mock.Mock())
 
         saved = mock_save.call_args[0][0]
         # Float averaged
         assert torch.allclose(saved["weight"], torch.tensor([4.0, 3.0]))
         # Int not averaged
         assert saved["counter"] == 40
+
+
+def test_average_checkpoint_with_no_checkpoints(tmp_path):
+    """Ensure averaging does nothing when there are no checkpoints."""
+    with mock.patch("torch.save") as mock_save:
+        callback = AverageCheckpointsCallback(
+            output_dir=str(tmp_path),
+            best_ckpt_callbacks=[mock.Mock(best_k_models={}, monitor="valid/loss")],
+        )
+        trainer = mock.Mock(is_global_zero=True)
+        # This should not raise an exception
+        callback.on_validation_end(trainer, pl_module=mock.Mock())
+
+        mock_save.assert_not_called()
+
+
+def test_duplicate_learning_rate_monitor_from_config():
+    """Verify that if a LearningRateMonitor is defined both by default and in the config
+    duplicates are created (no warning or deduplication in current behavior).
+    """
+    # First, get the default callbacks (contains exactly one LearningRateMonitor)
+    callbacks = get_default_callbacks(
+        expdir="test_utils/espnet3_dummy/",
+        best_model_criterion=[("valid/loss", 2, "min")],
+    )
+    # Ensure only one LearningRateMonitor is included by default
+    assert sum(isinstance(cb, LearningRateMonitor) for cb in callbacks) == 1
+
+    # Simulate specifying LearningRateMonitor again via config (Hydra-style)
+    cfg = OmegaConf.create(
+        {"callbacks": [{"_target_": "lightning.pytorch.callbacks.LearningRateMonitor"}]}
+    )
+    # Append the instantiated callback to mimic trainer logic
+    for cb_conf in cfg.callbacks:
+        callbacks.append(instantiate(cb_conf))
+
+    # Now we should have duplicates (2 LearningRateMonitor instances)
+    # because no deduplication or warning is implemented yet
+    assert sum(isinstance(cb, LearningRateMonitor) for cb in callbacks) == 2
+
+    # AverageCheckpointsCallback should still be exactly one (unaffected by duplicates)
+    assert sum(isinstance(cb, AverageCheckpointsCallback) for cb in callbacks) == 1
