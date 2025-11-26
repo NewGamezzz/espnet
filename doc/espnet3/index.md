@@ -1,143 +1,81 @@
 ---
 home: true
 icon: /assets/image/espnet.png
-title: ESPnet
+title: ESPnet3
 heroImage: /assets/image/espnet_logo1.png
 heroImageStyle:
   - height: auto
   - width: 400px
 
-heroText: "End-to-end Speech Processing toolkit"
-tagline: "ESPnet is the state-of-the-art toolkit that covers end-to-end speech recognition, text-to-speech, speech translation, speech enhancement, speaker diarization, spoken language understanding, and much more!"
-
+heroText: "ESPnet3: Python-first speech workflows"
+tagline: "Provider/Runner architecture, Hydra configs, and Lightning-based training from laptops to clusters."
 
 highlights:
-  - header: Get started with ESPnet!
+  - header: Start with ESPnet3
     bgImage: https://theme-hope-assets.vuejs.press/bg/3-light.svg
     features:
-      - title: "Running inference on existing ESPnet models"
-        details: "<code>pip install espnet espnet-model-zoo</code> and start using it immediately."
-        icon: fa-solid:bolt
-        link: notebook/#demo
-      - title: "Fine-tuning ESPnet models"
-        details: "<code>pip install espnet</code> and use the <code>espnetez</code> module for fine-tuning."
-        icon: fa-solid:fire
-        link: notebook/#espnet-ez
-      - title: "Complete installation to fully reproduce ESPnet models"
-        details: "Complete the full installation and use the existing recipes."
-        icon: fa-solid:server
-        link: ./installation.md
+      - title: "Docs hub"
+        details: "Where to begin and how pieces fit together."
+        icon: fa-solid:book
+        link: ./README.md
+      - title: "Provider/Runner overview"
+        details: "Understand the execution model for data prep, decode, and scoring."
+        icon: fa-solid:diagram-project
+        link: ./provider_runner.md
+      - title: "Hydra configs"
+        details: "Modular YAML for model, trainer, dataloader, and parallel backends."
+        icon: fa-solid:sliders
+        link: ./parallel.md
 
-  - header: Comprehensive Task Coverage
-    description: We offer complete recipes for a wide range of speech processing tasks.
+  - header: Build and train
     bgImage: https://theme-hope-assets.vuejs.press/bg/2-light.svg
     bgImageStyle:
       background-repeat: repeat
       background-size: initial
     features:
-      - title: "ASR: Automatic Speech Recognition"
-        link: ./recipe/asr1.md
-        icon: material-symbols-light:speech-to-text-rounded
+      - title: "Data pipeline"
+        link: ./dataset.md
+        details: "DataOrganizer, transforms, preprocessors, and sharding."
+        icon: material-symbols:database-outline
+      - title: "System entry point"
+        link: ./system.md
+        details: "Stages orchestrated by BaseSystem and task-specific systems."
+        icon: fa-solid:diagram-project
+      - title: "Recipe layout"
+        link: ./recipe_directory.md
+        details: "How egs3 directories, configs, and stages are organized."
+        icon: fa-solid:folder-tree
+      - title: "Data preparation"
+        link: ./data_preparation.md
+        details: "Provider/Runner patterns for feature extraction and cleaning."
+        icon: fa-solid:hammer
+      - title: "Callbacks"
+        link: ./callbacks.md
+        details: "Default Lightning callbacks and how to customize them."
+        icon: fa-solid:bell
+      - title: "Optimizers & schedulers"
+        link: ./optimizer_configuration.md
+        details: "Single vs multi-optimizer setups enforced by ESPnet3."
+        icon: fa-solid:timeline
+      - title: "Multi-GPU / multi-node"
+        link: ./multiple_gpu.md
+        details: "Configure Lightning for distributed runs."
+        icon: fa-solid:network-wired
 
-      - title: "TTS: Text-to-speech"
-        link: ./recipe/tts1.md
-        icon: material-symbols-light:text-to-speech-rounded
-
-      - title: "Speech Enhancement"
-        link: ./recipe/enh1.md
-        icon: material-symbols:adaptive-audio-mic-rounded
-
-      - title: "Weakly-supervised Learning"
-        link: ./recipe/s2t1.md
-        icon: guidance:children-must-be-supervised
-
-      - title: "Speaker Embedding"
-        link: ./recipe/spk1.md
-        icon: ic:sharp-safety-divider
-
-      - title: "Speech-to-Text Translation"
-        link: ./recipe/st1.md
-        icon: ph:translate
-
-      - title: "Singing Voice Synthesis"
-        link: ./recipe/svs1.md
-        icon: mdi:music
-
-      - title: "Discrete Unit ASR"
-        link: ./recipe/asr2.md
-        icon: carbon:string-integer
-
-      - title: "Speech Codec"
-        link: ./recipe/codec1.md
-        icon: material-symbols:hd-outline
-
-      - title: "ASR with Speech Enhancement"
-        link: ./recipe/enh_asr1.md
-        icon: icon-park-outline:voice-one
-
-      - title: "... And much more!"
-        link: recipe/
-
-  - header: Tutorials
+  - header: Inference and evaluation
     bgImage: https://theme-hope-assets.vuejs.press/bg/4-light.svg
     bgImageStyle:
       background-repeat: repeat
       background-size: initial
     features:
-      - title: Full ESPnet installation
-        details: Detailed steps for installing ESPnet to use its recipes
-        icon: ic:baseline-install-desktop
-        link: ./installation.md
-
-      - title: ESPnet2
-        details: Leveraging ESPnet2 recipes for full replication
-        icon: mdi:graduation-cap
-        link: ./espnet2_tutorial.md
-
-      - title: ESPnet1
-        details: Documents on ESPnet1 recipes (Legacy)
-        icon: mdi:graduation-cap
-        link: ./espnet1_tutorial.md
-
-      - title: Training configurations
-        details: Understanding and updating training configurations
-        icon: fa6-solid:sliders
-        link: ./espnet2_training_option.md
-
-      - title: Recipe tips
-        details: Various tips for using <code>run.sh</code> in ESPnet recipes
-        icon: mdi:clipboard-check-outline
-        link: ./tutorial.md
-
-      - title: Audio formatting
-        details: Formatting audio files into <code>wav.scp</code> for ESPnet recipes
-        icon: mdi:microphone
-        link: ./espnet2_format_wav_scp.md
-
-      - title: Task class and data input system
-        details: Common task/data interface for ESPnet2
-        icon: material-symbols-light:database-outline
-        link: ./espnet2_task.md
-
-      - title: Docker
-        details: Running ESPnet with Docker
-        icon: mdi:docker
-        link: ./docker.md
-
-      - title: Job scheduling system
-        details: Distributing jobs in a multi-machine environment
-        icon: tabler:list-check
-        link: ./parallelization.md
-
-      - title: Distributed training
-        details: Handling multiple GPUs for training
-        icon: fa-solid:network-wired
-        link: ./espnet2_distributed.md
-
-      - title: Document Generation
-        details: Details on fixing the ESPnet documentation
-        icon: fa-solid:book
-        link: ./document.md
+      - title: "Inference runners"
+        link: ./provider_runner.md
+        details: "Scale decode jobs locally or on clusters."
+        icon: fa-solid:bolt
+      - title: "Evaluation pipeline"
+        link: ./evaluate.md
+        details: "InferenceRunner + ScoreRunner with YAML-driven metrics."
+        icon: fa-solid:check-double
 
 footer: Apache License 2.0, Copyright © 2024-present ESPnet community
 ---

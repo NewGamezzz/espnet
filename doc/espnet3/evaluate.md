@@ -2,7 +2,7 @@
 title: 📘 ESPnet3 Inference & Evaluation Framework
 author:
   name: "Masao Someki"
-date: 202-07-01
+date: 2024-07-01
 ---
 
 This document provides a deep explanation of the inference and scoring pipeline in ESPnet3, centered around the following components:

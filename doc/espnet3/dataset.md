@@ -2,7 +2,7 @@
 title: 📦 ESPnet-3 Data Loading System Documentation
 author:
   name: "Masao Someki"
-date: 202-07-01
+date: 2024-07-01
 ---
 
 This document provides a comprehensive overview of the dataset system used in ESPnet-3, specifically covering:
@@ -169,4 +169,3 @@ No need for users to explicitly handle this distinction—**it's handled interna
 * Users only need to implement `Dataset` (data loading) and `Transform` (modification).
 * `Preprocessor` support is automatic, with UID handling taken care of internally.
 * This design cleanly separates raw loading, online transformation, and ESPnet-specific preprocessing logic.
-
