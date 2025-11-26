@@ -26,6 +26,8 @@ code works in local, multiprocessing, and Dask JobQueue modes.
 
 ### 2. Minimal example
 
+- Inference example
+
 ```python
 from espnet3.runner.inference_provider import InferenceProvider
 from espnet3.runner.base_runner import BaseRunner
@@ -50,6 +52,35 @@ provider = MyProvider(cfg, params={"beam_size": 8})
 runner = MyRunner(provider)
 num_items = len(provider.build_env_local()["dataset"])
 outputs = runner(range(num_items))  # works locally
+```
+
+- Example on your custom provider
+
+
+```python
+from espnet3.runner.env_provider import EnvironmentProvider
+from espnet3.runner.base_runner import BaseRunner
+
+class MyProvider(EnvironmentProvider):
+    @staticmethod
+    def build_env_local(cfg):
+        return {"abc": 123}
+
+    @staticmethod
+    def make_worker_setup_fn(cfg):
+        def setup_fn():
+            return {"abc": 123}
+        return setup_fn()
+
+class MyRunner(BaseRunner):
+    @staticmethod
+    def forward(idx: int, *, abc, **env):
+        with open("abc.txt", "w") as f:
+            f.write(f"{idx}: {abc}\n")
+
+provider = MyProvider(cfg)
+runner = MyRunner(provider)
+outputs = runner(range(3))
 ```
 
 Switch to distributed execution by calling `set_parallel(cfg.parallel)` or by
