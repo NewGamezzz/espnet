@@ -25,6 +25,40 @@ if __name__ == "__main__":
                         type=Path, help="List of directory")
     args = parser.parse_args()
 
+    espnet3_dir = args.root / "espnet3"
+    espnet3_pages = []
+    if espnet3_dir.exists():
+        espnet3_order = [
+            ("index.md", "Overview"),
+            ("README.md", "Docs hub"),
+            ("provider_runner.md", "Provider / Runner"),
+            ("parallel.md", "Parallel / configs"),
+            ("dataset.md", "Dataset pipeline"),
+            ("data_preparation.md", "Data preparation"),
+            ("system.md", "System entry point"),
+            ("recipe_directory.md", "Recipe layout"),
+            ("callbacks.md", "Callbacks"),
+            ("optimizer_configuration.md", "Optimizer configuration"),
+            ("multiple_optimizers_schedulers.md", "Multiple optimizers & schedulers"),
+            ("multiple_gpu.md", "Multi-GPU / multi-node"),
+            ("evaluate.md", "Evaluation"),
+        ]
+
+        used = set()
+        for filename, text in espnet3_order:
+            md = espnet3_dir / filename
+            if md.exists():
+                espnet3_pages.append({"text": text, "link": filename})
+                used.add(filename)
+
+        for md in sorted(espnet3_dir.glob("*.md")):
+            if md.name in used:
+                continue
+            espnet3_pages.append({
+                "text": md.stem.replace("_", " ").title(),
+                "link": md.name,
+            })
+
     # Create navbar (on the upper side of the page)
     navbars = [{
         "text": "Tutorials",
@@ -43,14 +77,23 @@ if __name__ == "__main__":
             {"text": "Distributed training", "link": "espnet2_distributed.md"},
             {"text": "Document Generation", "link": "document.md"},
         ]
-    }, {
+    }]
+
+    if espnet3_pages:
+        navbars.append({
+            "text": "ESPnet3",
+            "icon": "fa-solid:rocket",
+            "prefix": "espnet3/",
+            "children": espnet3_pages,
+        })
+
+    navbars += [{
         "text": "Demos",
         "icon": "fa-solid:laptop-code",
         "prefix": "notebook/",
         "children": [
             {"text": "Roadmap", "link": "README.md"},
             {"text": "ESPnet2", "prefix": "ESPnet2/", "children": ["Demo/", "Course/"]},
-            {"text": "ESPnet-EZ", "prefix": "ESPnetEZ/", "children": ["README.md"]},
             {
                 "text": "ESPnet1 (Legacy)",
                 "prefix": "ESPnet1/",

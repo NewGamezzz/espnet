@@ -13,7 +13,8 @@ majority of Lightning callbacks are immediately available.  On top of that, the
 applied when a recipe calls `get_default_callbacks`.  This document explains the
 default behaviour and how to extend it in your own experiments.
 
-### ✅ What you configure vs. what ESPnet3 provides
+<div class='custom-h3'><p>✅ What you configure vs. what ESPnet3 provides</p></div>
+
 
 | Area          | You write / configure                             | ESPnet3 / Lightning handles                             |
 | ------------- | -------------------------------------------------- | ------------------------------------------------------- |
@@ -23,7 +24,8 @@ default behaviour and how to extend it in your own experiments.
 
 ---
 
-### Default callback stack
+<div class='custom-h3'><p>Default callback stack</p></div>
+
 
 `get_default_callbacks` returns the following callbacks, all pre-configured to
 write into the experiment directory:
@@ -34,7 +36,7 @@ write into the experiment directory:
    `best_model_criterion`, each tracking a validation metric and keeping the
    top-*k* checkpoints.
 3. **`AverageCheckpointsCallback`** – averages the best checkpoints tracked by
-   the callbacks above and writes `<metric>.ave_<k>best.pth` once validation
+   the callbacks above and writes `&lt;metric&gt;.ave_&lt;k&gt;best.pth` once validation
    finishes.
 4. **`LearningRateMonitor`** – logs optimiser learning rates so that they are
    visible in TensorBoard or any Lightning-compatible logger.
@@ -47,7 +49,8 @@ instantiated automatically unless you override the callback list explicitly.
 
 ---
 
-### Controlling checkpoint selection
+<div class='custom-h3'><p>Controlling checkpoint selection</p></div>
+
 
 The metrics that drive checkpoint selection are configured through
 `best_model_criterion` in the experiment YAML:
@@ -79,7 +82,8 @@ best_model_criterion:
 
 ---
 
-### Adjusting progress logging
+<div class='custom-h3'><p>Adjusting progress logging</p></div>
+
 
 The `TQDMProgressBar` refresh interval defaults to 500 steps.  Override the
 value by passing `log_interval` when calling `get_default_callbacks` from your
@@ -100,7 +104,8 @@ before constructing the Lightning trainer.
 
 ---
 
-### Providing custom callbacks through Hydra
+<div class='custom-h3'><p>Providing custom callbacks through Hydra</p></div>
+
 
 Recipes can also instantiate callbacks directly from the YAML configuration via
 Hydra/OmegaConf.  Simply disable the default stack and enumerate your desired
@@ -124,7 +129,8 @@ requires.
 
 ---
 
-### ESPnet-specific checkpoint averaging details
+<div class='custom-h3'><p>ESPnet-specific checkpoint averaging details</p></div>
+
 
 `AverageCheckpointsCallback` is an ESPnet-provided extension that runs on the
 rank-zero process at the end of validation.  For every `ModelCheckpoint`
@@ -133,7 +139,7 @@ checkpoints, verifies that the parameter sets match, and averages weights whose
 keys start with `model.`.  Integer tensors, such as
 `BatchNorm.num_batches_tracked` are accumulated instead of averaged so the
 resulting statistics remain meaningful.  The averaged weights are written to
-`${expdir}/${monitor}.ave_<k>best.pth`, regardless of whether the checkpoints
+`${expdir}/${monitor}.ave_&lt;k&gt;best.pth`, regardless of whether the checkpoints
 were produced by native PyTorch Lightning, DeepSpeed, or other supported
 strategies.
 

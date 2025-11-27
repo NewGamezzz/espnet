@@ -12,7 +12,8 @@ Provider/Runner abstraction for scalable inference or data processing.  The same
 configuration runs locally, with multiple GPUs in a single job, or across SLURM
 clusters without modifying the Python code.
 
-### ✅ Which part do you change for multi-GPU?
+<div class='custom-h3'><p>✅ Which part do you change for multi-GPU?</p></div>
+
 
 | Concern          | You configure                                      | ESPnet3 / Lightning handles                   |
 | ---------------- | -------------------------------------------------- | ----------------------------------------------|
@@ -23,7 +24,10 @@ clusters without modifying the Python code.
 
 ---
 
-### 1. Training with PyTorch Lightning
+<div class='custom-h3'><ol>
+<li>Training with PyTorch Lightning</li>
+</ol></div>
+
 
 Distributed training is configured directly in the experiment YAML file.  The
 example below launches a data-parallel job on two nodes with four GPUs per node.
@@ -55,7 +59,10 @@ The training script itself is unchanged between local and cluster runs.
 
 ---
 
-### 2. Inference or evaluation with runners
+<div class='custom-h3'><ol>
+<li>Inference or evaluation with runners</li>
+</ol></div>
+
 
 For multi-GPU inference, decoding, or scoring jobs ESPnet3 provides the
 `BaseRunner` class.  A runner processes indices in parallel while an
@@ -98,7 +105,10 @@ GPU per worker specify `env: slurm` (or any Dask JobQueue backend) and use
 
 ---
 
-### 3. Local vs. cluster performance
+<div class='custom-h3'><ol>
+<li>Local vs. cluster performance</li>
+</ol></div>
+
 
 The refactored runner supports three modes: local, synchronous cluster jobs, and
 asynchronous cluster submissions.  The same decoding runner was benchmarked in

@@ -74,7 +74,7 @@ python ./doc/recipe2md.py --src ./egs2/TEMPLATE --dst ./doc/recipe
 
 # generate package doc
 python ./doc/members2rst.py --root espnet2 --dst ./doc/_gen/guide --exclude espnet2.bin
-python ./doc/members2rst.py --root espnetez --dst ./doc/_gen/guide
+python ./doc/members2rst.py --root espnet3 --dst ./doc/_gen/guide
 
 # build markdown
 cp ./doc/index.rst ./doc/_gen/index.rst
@@ -85,10 +85,12 @@ sphinx-build -M markdown ./doc/_gen ./doc/build
 # copy markdown files to specific directory.
 cp -r ./doc/build/markdown/* ./doc/vuepress/src/
 cp -r ./doc/notebook ./doc/vuepress/src/
+rm -rf ./doc/vuepress/src/notebook/ESPnetEZ
 cp -r ./doc/recipe ./doc/vuepress/src
 cp ./doc/*.md ./doc/vuepress/src/
 mv ./doc/vuepress/src/README.md ./doc/vuepress/src/document.md
 cp -r ./doc/image ./doc/vuepress/src/
+cp -r ./doc/espnet3 ./doc/vuepress/src/
 
 # Document generation has finished.
 # From the following point we modify files for VuePress.
@@ -97,11 +99,13 @@ cp -r ./doc/image ./doc/vuepress/src/
 python ./doc/convert_custom_tags_to_html.py ./doc/vuepress/src/guide
 python ./doc/convert_custom_tags_to_html.py ./doc/vuepress/src/tools
 python ./doc/convert_custom_tags_to_html.py ./doc/vuepress/src/recipe
+python ./doc/convert_custom_tags_to_html.py ./doc/vuepress/src/espnet3
 
 # Convert API document to specific html tags to display sphinx style
 python ./doc/convert_md_to_homepage.py ./doc/vuepress/src/guide/
 python ./doc/convert_md_to_homepage.py ./doc/vuepress/src/tools/
 python ./doc/convert_md_to_homepage.py ./doc/vuepress/src/recipe
+python ./doc/convert_md_to_homepage.py ./doc/vuepress/src/espnet3
 
 # Create navbar and sidebar.
 cd ./doc/vuepress

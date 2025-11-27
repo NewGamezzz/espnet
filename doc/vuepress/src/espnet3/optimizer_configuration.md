@@ -16,7 +16,8 @@ purely from the Hydra configuration.  Two modes are supported by
 
 The sections below describe both.
 
-### ✅ What lives in `configure_optimizers` vs YAML
+<div class='custom-h3'><p>✅ What lives in <code>configure_optimizers</code> vs YAML</p></div>
+
 
 | Layer           | You control via YAML                               | ESPnet3 (`LitESPnetModel`) ensures            |
 | --------------- | -------------------------------------------------- | --------------------------------------------- |
@@ -26,7 +27,10 @@ The sections below describe both.
 
 ---
 
-### 1. Single optimiser
+<div class='custom-h3'><ol>
+<li>Single optimiser</li>
+</ol></div>
+
 
 Use `optim` and `scheduler` when the entire model shares one optimiser.  The
 entries are passed directly to `hydra.utils.instantiate`, so any optimiser or
@@ -48,7 +52,10 @@ the scheduler to the optimiser, and returns them to Lightning.
 
 ---
 
-### 2. Multiple optimisers
+<div class='custom-h3'><ol>
+<li>Multiple optimisers</li>
+</ol></div>
+
 
 When different parts of the model need their own optimiser, switch to `optims`
 and `schedulers`.  Each entry contains a nested `optim` block and a `params`

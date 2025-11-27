@@ -15,7 +15,10 @@ from laptops to clusters.
 
 ---
 
-### 1. Responsibilities
+<div class='custom-h3'><ol>
+<li>Responsibilities</li>
+</ol></div>
+
 
 - **EnvironmentProvider** – builds everything that should live on a worker
   (datasets, models, tokenisers, helper objects).  The provider receives the Hydra
@@ -29,7 +32,8 @@ from laptops to clusters.
 By restricting state to these two pieces ESPnet3 ensures that the same Python
 code works in local, multiprocessing, and Dask JobQueue modes.
 
-### ✅ Who does what?
+<div class='custom-h3'><p>✅ Who does what?</p></div>
+
 
 | Piece              | You implement                                       | ESPnet3 handles                               |
 | ------------------ | --------------------------------------------------- | --------------------------------------------- |
@@ -39,7 +43,10 @@ code works in local, multiprocessing, and Dask JobQueue modes.
 
 ---
 
-### 2. Minimal example
+<div class='custom-h3'><ol>
+<li>Minimal example</li>
+</ol></div>
+
 
 - Inference example
 
@@ -103,7 +110,10 @@ constructing the runner with `async_mode=True`; no further changes are required.
 
 ---
 
-### 3. Execution modes
+<div class='custom-h3'><ol>
+<li>Execution modes</li>
+</ol></div>
+
 
 The same runner can be executed in three modes:
 
@@ -121,7 +131,10 @@ results show that scaling from one to four GPUs on SLURM reduces wall time from
 
 ---
 
-### 4. Customising Dask job submissions
+<div class='custom-h3'><ol>
+<li>Customising Dask job submissions</li>
+</ol></div>
+
 
 `BaseRunner` dynamically subclasses the cluster’s `job_cls` during asynchronous runs. 
 This allows you to inject custom `sbatch` flags, wrap the command in your own script, or modify environment variables before the worker starts.  
@@ -129,7 +142,10 @@ Because the hook lives in ESPnet3 you can implement these tweaks in your runner 
 
 ---
 
-### 5. Best practices
+<div class='custom-h3'><ol>
+<li>Best practices</li>
+</ol></div>
+
 
 - Keep provider outputs to be lightweight and serialisable.
 - Avoid capturing `self` inside the worker setup function; return a callable that closes over immutable state instead.

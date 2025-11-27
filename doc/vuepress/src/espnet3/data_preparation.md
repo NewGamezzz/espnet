@@ -19,7 +19,8 @@ This guide focuses on:
 2. Executing those runners locally and on clusters.
 3. Incorporating data cleaning in the same pipeline.
 
-### ✅ What you implement in this pipeline
+<div class='custom-h3'><p>✅ What you implement in this pipeline</p></div>
+
 
 | Part              | You implement                                          | ESPnet3 handles                                |
 | ----------------- | ------------------------------------------------------ | ---------------------------------------------- |
@@ -29,7 +30,10 @@ This guide focuses on:
 
 ---
 
-### 1. Defining the environment: `EnvironmentProvider`
+<div class='custom-h3'><ol>
+<li>Defining the environment: <code>EnvironmentProvider</code></li>
+</ol></div>
+
 
 A provider encapsulates everything that has to be instantiated once per
 process: datasets, tokenisers, models, or utility objects.  For data preparation
@@ -68,7 +72,10 @@ and asynchronous modes without additional changes.
 
 ---
 
-### 2. Implementing the computation: `BaseRunner`
+<div class='custom-h3'><ol>
+<li>Implementing the computation: <code>BaseRunner</code></li>
+</ol></div>
+
 
 A runner defines a static `forward` method that processes a single index.  The
 example below performs feature extraction and includes an optional cleaning
@@ -104,7 +111,10 @@ be provided through the provider params or when instantiating the runner.
 
 ---
 
-### 3. Running locally
+<div class='custom-h3'><ol>
+<li>Running locally</li>
+</ol></div>
+
 
 Local execution is the default when no parallel configuration is set.  The
 provider builds the environment once and the runner iterates through the
@@ -124,7 +134,10 @@ runner(indices)  # returns a list of metadata dictionaries
 
 ---
 
-### 4. Scaling out with Dask (synchronous mode)
+<div class='custom-h3'><ol>
+<li>Scaling out with Dask <span class='small-bracket'>(synchronous mode)</span></li>
+</ol></div>
+
 
 To distribute the same runner across multiple workers, define a `parallel`
 section in the YAML configuration and pass it to `set_parallel` before
@@ -156,7 +169,10 @@ copy of the dataset and helpers before executing `forward`.
 
 ---
 
-### 5. Asynchronous shards for large jobs
+<div class='custom-h3'><ol>
+<li>Asynchronous shards for large jobs</li>
+</ol></div>
+
 
 For extremely long jobs you can enable the asynchronous mode introduced in the
 runner refactor.  Pass `async_mode=True` to the runner and ESPnet3 will
@@ -180,7 +196,10 @@ submissions without modifying the preparation logic.
 
 ---
 
-### 6. Data cleaning within the same pipeline
+<div class='custom-h3'><ol>
+<li>Data cleaning within the same pipeline</li>
+</ol></div>
+
 
 Since cleaning is just additional Python code inside `forward`, you can:
 
@@ -193,7 +212,10 @@ is identical regardless of whether the job runs locally or on a cluster.
 
 ---
 
-### 7. Sharing prepared data
+<div class='custom-h3'><ol>
+<li>Sharing prepared data</li>
+</ol></div>
+
 
 Prepared features can be written in any format (JSONL, SCP, Hugging Face
 datasets, etc.).  Because preparation is now a regular Python workflow, you can
