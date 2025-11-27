@@ -36,7 +36,27 @@ def batch_collect_stats(
     write_collected_feats: bool = False,
     collect_stats_kwargs: Optional[Dict[str, Any]] = None,
 ):
-    """Process a batch of dataset indices and compute feature statistics."""
+    """
+    Process a batch of dataset indices and compute feature statistics.
+
+    Args:
+        idxs (List[int]): Indices to fetch from the dataset.
+        model: Model implementing ``collect_feats``.
+        dataset: Dataset providing samples that collate into ``(uids, batch_dict)``.
+        collate_fn: Callable returning ``(uids, batch_dict)`` for the given items.
+        device (torch.device | None): Device to move batch tensors onto.
+        write_collected_feats (bool): If True, also return raw features for writing.
+        collect_stats_kwargs (Dict[str, Any] | None): Extra kwargs forwarded to
+            ``model.collect_feats``.
+
+    Returns:
+        Tuple[Dict, Dict] | Tuple[Dict, Dict, Dict]:
+            Aggregated stats and shape info, and optionally collected features.
+
+    Example:
+        >>> stats, shapes = batch_collect_stats([0, 1], model=model,
+        ...     dataset=ds, collate_fn=collate, device=torch.device("cpu"))
+    """
 
     structured_items: List[Tuple[str, Any]] = []
     for i in idxs:
@@ -230,7 +250,32 @@ def _dataset_length(dataset_config, mode: str, shard_idx: Optional[int] = None) 
 
 
 class CollectStatsInferenceProvider(EnvironmentProvider):
-    """EnvironmentProvider tailored for collect-stats jobs."""
+    """
+    EnvironmentProvider tailored for collect-stats jobs.
+
+    Args:
+        model_config: Configuration used to instantiate the model that exposes
+            ``collect_feats``.
+        dataset_config: Organizer configuration for the target dataset split.
+        dataloader_config: Dataloader configuration controlling collation and
+            sharding.
+        mode (str): Dataset split name (e.g., ``"train"`` or ``"valid"``).
+        task (str | None): Optional ESPnet task name to resolve models.
+        shard_idx (int | None): Optional shard index when running per-shard.
+        params (Dict[str, Any] | None): Additional overrides merged into the
+            environment (e.g., ``write_collected_feats``).
+
+    Example:
+        >>> provider = CollectStatsInferenceProvider(  # doctest: +SKIP
+        ...     model_config=model_cfg,
+        ...     dataset_config=ds_cfg,
+        ...     dataloader_config=dl_cfg,
+        ...     mode="train",
+        ... )
+        >>> env = provider.build_env_local()  # doctest: +SKIP
+        >>> set(env.keys()) >= {"dataset", "model"}  # doctest: +SKIP
+        True
+    """
 
     def __init__(
         self,
@@ -300,7 +345,13 @@ class CollectStatsInferenceProvider(EnvironmentProvider):
 
 
 class CollectStatsRunner(BaseRunner):
-    """Runner that executes collect-stats over batches of indices."""
+    """
+    Runner that executes collect-stats over batches of indices.
+
+    Example:
+        >>> runner = CollectStatsRunner(provider)  # doctest: +SKIP
+        >>> results = runner([[0, 1], [2, 3]])  # doctest: +SKIP
+    """
 
     @staticmethod
     def forward(
@@ -313,6 +364,23 @@ class CollectStatsRunner(BaseRunner):
         write_collected_feats: bool = False,
         collect_stats_kwargs: Optional[Dict[str, Any]] = None,
     ):
+        """
+        Execute stats collection for a batch of indices.
+
+        Args:
+            batch_indices (Iterable[int] | int): Indices to process.
+            dataset: Dataset instance from the provider.
+            model: Model implementing ``collect_feats``.
+            collate_fn: Collate function returning ``(uids, batch_dict)``.
+            device: Torch device to run inference on.
+            write_collected_feats (bool): Whether to keep raw collected features.
+            collect_stats_kwargs (Dict[str, Any] | None): Extra kwargs for
+                ``model.collect_feats``.
+
+        Returns:
+            Tuple[Dict, Dict] | Tuple[Dict, Dict, Dict]: Same format as
+            :func:`batch_collect_stats`.
+        """
         if isinstance(batch_indices, Iterable) and not isinstance(
             batch_indices, (str, bytes)
         ):
@@ -406,7 +474,27 @@ def collect_stats_multiple_iterator(
     parallel_config: Any,
     write_collected_feats: bool = False,
 ):
-    """Collect stats on sharded datasets using Dask + setup_fn."""
+    """
+    Collect stats on sharded datasets using the multiple-iterator path.
+
+    Args:
+        model_config: Configuration to instantiate the model.
+        dataset_config: Dataset organizer configuration supporting sharding.
+        dataloader_config: Dataloader configuration containing shard metadata.
+        mode (str): Dataset split name (``\"train\"`` or ``\"valid\"``).
+        output_dir (Path): Base directory to save stats.
+        task (str | None): Optional ESPnet task name.
+        batch_size (int): Number of items per stats batch.
+        parallel_config: Parallel execution config consumed by ``set_parallel``.
+        write_collected_feats (bool): Whether to persist raw collected features.
+
+    Returns:
+        Tuple[Dict, Dict, Dict]: Aggregated sum, squared-sum, and count dictionaries.
+
+    Note:
+        Shards are processed sequentially; ``write_collected_feats`` is typically
+        disabled here to avoid large intermediate outputs.
+    """
     set_parallel(parallel_config)
 
     sum_dict, sq_dict, count_dict = (

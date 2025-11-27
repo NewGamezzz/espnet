@@ -42,25 +42,97 @@ class BaseSystem:
     # Stage stubs (override in subclasses if needed)
     # ---------------------------------------------------------
     def create_dataset(self):
+        """
+        Prepare datasets for the current recipe.
+
+        Returns:
+            None: Base implementation is a stub and only logs.
+
+        Example:
+            >>> system = BaseSystem(train_config, eval_config)  # doctest: +SKIP
+            >>> system.create_dataset()  # doctest: +SKIP
+        """
         logger.info("Running prepare() (BaseSystem stub). Nothing done.")
 
     def collect_stats(self):
+        """
+        Run statistics collection for the training/validation splits.
+
+        Returns:
+            Any: Output of :func:`espnet3.systems.base.train.collect_stats`.
+
+        Example:
+            >>> system = BaseSystem(train_config, eval_config)  # doctest: +SKIP
+            >>> system.collect_stats()  # doctest: +SKIP
+        """
         return collect_stats(self.train_config)
 
     def train(self):
+        """
+        Launch model training.
+
+        Returns:
+            Any: Output of :func:`espnet3.systems.base.train.train`, typically
+            the Lightning trainer fit result.
+
+        Example:
+            >>> system = BaseSystem(train_config, eval_config)  # doctest: +SKIP
+            >>> system.train()  # doctest: +SKIP
+        """
         return train(self.train_config)
 
     def evaluate(self):
+        """
+        Decode and score using the evaluation config.
+
+        Returns:
+            Any: Metrics produced by :meth:`score`.
+
+        Example:
+            >>> system = BaseSystem(train_config, eval_config)  # doctest: +SKIP
+            >>> system.evaluate()  # doctest: +SKIP
+        """
         self.decode()
         return self.score()
 
     def decode(self):
+        """
+        Run model inference on the evaluation datasets.
+
+        Returns:
+            Any: Result of :func:`espnet3.systems.base.inference.inference`.
+
+        Example:
+            >>> system = BaseSystem(train_config, eval_config)  # doctest: +SKIP
+            >>> system.decode()  # doctest: +SKIP
+        """
         return inference(self.eval_config)
 
     def score(self):
+        """
+        Compute metrics for decoded outputs.
+
+        Returns:
+            Any: Metrics dictionary produced by
+            :func:`espnet3.systems.base.score.score`.
+
+        Example:
+            >>> system = BaseSystem(train_config, eval_config)  # doctest: +SKIP
+            >>> scores = system.score()  # doctest: +SKIP
+        """
         result = score(self.eval_config)
         logger.info("Scoring results: %s", result)
         return result
 
     def publish(self):
+        """
+        Placeholder for publishing artifacts.
+
+        Returns:
+            None: Base implementation only logs and performs no action.
+
+        Example:
+            >>> system = BaseSystem(train_config, eval_config)  # doctest: +SKIP
+            >>> system.publish()  # doctest: +SKIP
+        """
         logger.info("Running publish() (BaseSystem stub). Nothing done.")

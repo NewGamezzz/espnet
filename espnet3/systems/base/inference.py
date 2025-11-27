@@ -13,8 +13,37 @@ from espnet3.systems.base.inference_provider import (
 
 
 class InferenceProvider(BaseInferenceProvider):
+    """
+    Provider that builds dataset/model for simple single-GPU inference.
+
+    Args:
+        config (DictConfig): Hydra configuration containing ``dataset`` organizer,
+            ``model`` factory, and ``test_set`` selection.
+
+    Example:
+        >>> provider = InferenceProvider(cfg)  # doctest: +SKIP
+        >>> env = provider.build_env_local()  # doctest: +SKIP
+        >>> {"dataset", "model"} <= set(env.keys())  # doctest: +SKIP
+        True
+    """
+
     @staticmethod
     def build_dataset(config):
+        """
+        Instantiate the requested test split from the dataset organizer.
+
+        Args:
+            config (DictConfig): Configuration with a ``dataset`` organizer and
+                ``test_set`` name.
+
+        Returns:
+            Any: Dataset object corresponding to ``config.test_set``.
+
+        Example:
+            >>> ds = InferenceProvider.build_dataset(cfg)  # doctest: +SKIP
+            >>> len(ds)  # doctest: +SKIP
+            100
+        """
         # config includes test dataset
         organizer = instantiate(config.dataset)
         test_set = config.test_set
@@ -22,6 +51,21 @@ class InferenceProvider(BaseInferenceProvider):
 
     @staticmethod
     def build_model(config):
+        """
+        Load the speech-to-text model and place it on the available device.
+
+        Args:
+            config (DictConfig): Configuration with a ``model`` instantiation
+                target that accepts a ``device`` keyword.
+
+        Returns:
+            Any: Inference-ready model instance.
+
+        Example:
+            >>> model = InferenceProvider.build_model(cfg)  # doctest: +SKIP
+            >>> callable(model)  # doctest: +SKIP
+            True
+        """
         device = "cuda" if torch.cuda.is_available() else "cpu"
         if device == "cuda":
             device_id = os.getenv("CUDA_VISIBLE_DEVICES", "0").split(",")[0].strip()
@@ -35,8 +79,33 @@ class InferenceProvider(BaseInferenceProvider):
 
 
 class InferenceRunner(BaseRunner):
+    """
+    Runner that produces hypotheses and references for each sample.
+
+    Example:
+        >>> runner = InferenceRunner(provider)  # doctest: +SKIP
+        >>> outputs = runner([0, 1])  # doctest: +SKIP
+    """
+
     @staticmethod
     def forward(idx, dataset=None, model=None, **kwargs):
+        """
+        Run inference for a single dataset index.
+
+        Args:
+            idx (int): Sample index to decode.
+            dataset: Dataset instance providing ``speech`` and ``text`` fields.
+            model: Inference model supporting callable interface and tokenizer.
+            **kwargs: Unused additional arguments.
+
+        Returns:
+            Dict[str, Any]: Mapping with ``idx``, ``hyp`` (decoded text),
+            and ``ref`` (reference text).
+
+        Example:
+            >>> InferenceRunner.forward(0, dataset=ds, model=asr_model)  # doctest: +SKIP
+            {'idx': 0, 'hyp': '...', 'ref': '...'}
+        """
         data = dataset[idx]
         speech = data["speech"]
         hyp = model(speech)[0][0]
@@ -45,6 +114,21 @@ class InferenceRunner(BaseRunner):
 
 
 def inference(config: DictConfig):
+    """
+    Decode all configured test sets and write hyp/ref SCP files.
+
+    Args:
+        config (DictConfig): Configuration containing dataset/test set
+            definitions, parallel settings, decode directory, and model
+            parameters.
+
+    Returns:
+        None: Produces ``hyp.scp`` and ``ref.scp`` files under
+        ``config.decode_dir`` for each test set.
+
+    Example:
+        >>> inference(cfg)  # doctest: +SKIP
+    """
     set_parallel(config.parallel)
 
     test_sets = [test_set.name for test_set in config.dataset.test]

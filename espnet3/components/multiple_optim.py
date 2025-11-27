@@ -28,7 +28,21 @@ class MultipleOptim(torch.optim.Optimizer):
 
     @property
     def state(self) -> Dict[str, torch.Tensor]:
-        """Return the combined state for each optimizer in ``self.optimizers``."""
+        """
+        Combined state for every wrapped optimizer.
+
+        Returns:
+            Dict[Any, torch.Tensor]: Flattened mapping that merges the
+                ``state`` dictionaries of each optimizer in ``self.optimizers``.
+
+        Example:
+            >>> import torch
+            >>> opt1 = torch.optim.SGD([torch.zeros(1, requires_grad=True)], lr=0.1)
+            >>> opt2 = torch.optim.Adam([torch.zeros(1, requires_grad=True)], lr=0.1)
+            >>> wrapper = MultipleOptim([opt1, opt2])
+            >>> isinstance(wrapper.state, dict)
+            True
+        """
         return {
             key: value
             for optimizer in self.optimizers
@@ -37,8 +51,19 @@ class MultipleOptim(torch.optim.Optimizer):
 
     @property
     def param_groups(self) -> List[Dict[str, Union[torch.Tensor, float, bool, Any]]]:
-        """Return the combined parameter groups for each optimizer in
-        ``self.optimizers``."""
+        """
+        Parameter groups across all wrapped optimizers.
+
+        Returns:
+            List[Dict[str, Union[torch.Tensor, float, bool, Any]]]: List of
+                parameter group dictionaries, concatenated in the same order
+                as ``self.optimizers``.
+
+        Example:
+            >>> opt = MultipleOptim([torch.optim.SGD([], lr=0.1)])  # doctest: +SKIP
+            >>> isinstance(opt.param_groups, list)
+            True
+        """
         return [
             element
             for optimizer in self.optimizers
@@ -47,7 +72,18 @@ class MultipleOptim(torch.optim.Optimizer):
 
     @property
     def defaults(self) -> Dict[str, torch.Tensor]:
-        """Return the combined defaults for each optimizer in ``self.optimizers``."""
+        """
+        Default hyper-parameters merged from all optimizers.
+
+        Returns:
+            Dict[str, torch.Tensor]: Combined defaults dictionary from each
+                optimizer.
+
+        Example:
+            >>> opt = MultipleOptim([torch.optim.SGD([], lr=0.1)])  # doctest: +SKIP
+            >>> "lr" in opt.defaults
+            True
+        """
         return {
             key: value
             for optimizer in self.optimizers
@@ -55,7 +91,17 @@ class MultipleOptim(torch.optim.Optimizer):
         }
 
     def __getstate__(self) -> List[torch.optim.Optimizer]:
-        """Return ``self.optimizers`` for pickling purposes."""
+        """
+        Provide pickling support by returning the wrapped optimizers.
+
+        Returns:
+            List[torch.optim.Optimizer]: Underlying optimizers to be pickled.
+
+        Example:
+            >>> import pickle
+            >>> opt = MultipleOptim([torch.optim.SGD([], lr=0.1)])  # doctest: +SKIP
+            >>> state = pickle.dumps(opt)  # doctest: +SKIP
+        """
         return self.optimizers
 
     def __setstate__(self, optimizers: List[torch.optim.Optimizer]) -> None:
@@ -87,7 +133,13 @@ class MultipleOptim(torch.optim.Optimizer):
         return repr_str
 
     def _hook_for_profile(self) -> None:
-        """Call ``_hook_for_profile`` for each optimizer in ``self.optimizers``."""
+        """
+        Call ``_hook_for_profile`` for each optimizer in ``self.optimizers``.
+
+        Example:
+            >>> opt = MultipleOptim([torch.optim.SGD([], lr=0.1)])  # doctest: +SKIP
+            >>> opt._hook_for_profile()  # doctest: +SKIP
+        """
         for optimizer in self.optimizers:
             optimizer._hook_for_profile()
 

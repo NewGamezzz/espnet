@@ -11,20 +11,28 @@ from espnet3.components.multiple_optim import MultipleOptim
 
 class MultipleScheduler(torch.optim.lr_scheduler._LRScheduler):
     """
-    Wrapper class around ``lr_scheduler``s to return a dummy optimizer to pass
-    PyTorch Lightning checks.
+    Wrap a scheduler so Lightning accepts the ``MultipleOptim`` wrapper.
 
-    Modified from the reply in a GitHub Issue thread here:
-    https://github.com/Lightning-AI/lightning/issues/3346#issuecomment-1036063687
+    Lightning expects a scheduler to expose an ``optimizer`` attribute. This shim
+    forwards everything to the wrapped scheduler while reporting the
+    ``MultipleOptim`` instance. It allows one scheduler per optimizer inside
+    ``MultipleOptim`` without triggering Lightning's per-optimizer training_step
+    logic.
 
-    Parameters
-    ----------
-    multiple_optim: MultipleOptim
-    lr_scheduler: torch.optim.lr_scheduler._LRScheduler
-    idx: int
-        Index of the optimizer in ``multiple_optimizer`` the learning rate scheduler
-        ``lr_scheduler`` is assigned to
+    Args:
+        multiple_optimizer (MultipleOptim): The wrapper that owns the underlying
+            optimizers.
+        lr_scheduler (torch.optim.lr_scheduler.LRScheduler): Scheduler configured
+            for a single optimizer inside ``multiple_optimizer``.
+        optimizer_idx (int): Index of the optimizer the scheduler controls.
 
+    Note:
+        Only minimal delegation is implemented. Any attribute not explicitly
+        intercepted is passed through to the wrapped scheduler.
+
+    Example:
+        >>> ms = MultipleScheduler(multi_optim, StepLR(opt_a, step_size=10), 0)
+        >>> lr = ms.get_last_lr()
     """
 
     @typechecked

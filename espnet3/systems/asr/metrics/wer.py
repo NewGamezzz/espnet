@@ -1,4 +1,16 @@
-"""Word error rate metric utilities."""
+"""
+Word error rate metric utilities.
+
+Provides a callable :class:`WER` metric that normalizes text, computes WER, and
+stores alignment visualizations for error analysis.
+
+Example:
+    >>> from pathlib import Path
+    >>> metric = WER()
+    >>> scores = metric({"ref": ["i like cats"], "hyp": ["i like cat"]}, "test", Path("decode"))  # doctest: +SKIP
+    >>> scores["WER"]  # doctest: +SKIP
+    25.0
+"""
 
 from __future__ import annotations
 
@@ -12,7 +24,22 @@ from espnet3.components.abs_metric import AbsMetrics
 
 
 class WER(AbsMetrics):
-    """Compute WER for decoded hypotheses."""
+    """
+    Compute word error rate (WER) for decoded hypotheses.
+
+    Args:
+        ref_key (str): Dictionary key that stores reference strings.
+        hyp_key (str): Dictionary key that stores hypothesis strings.
+        clean_types (Iterable[str] | None): Text normalizers passed to
+            :class:`espnet2.text.cleaner.TextCleaner`.
+
+    Example:
+        >>> from pathlib import Path
+        >>> metric = WER(ref_key="ref", hyp_key="hyp")
+        >>> data = {"ref": ["hello world"], "hyp": ["hello word"]}
+        >>> metric(data, "demo", Path("decode"))  # doctest: +SKIP
+        {'WER': 50.0}
+    """
 
     def __init__(
         self,
@@ -34,6 +61,23 @@ class WER(AbsMetrics):
         test_name: str,
         decode_dir: Path,
     ) -> Dict[str, float]:
+        """
+        Calculate WER for a test split and write alignment details to disk.
+
+        Args:
+            data (Dict[str, List[str]]): Mapping containing lists of references
+                and hypotheses keyed by ``ref_key``/``hyp_key``.
+            test_name (str): Name of the evaluation split (used for output dir).
+            decode_dir (Path): Directory where alignment files are written.
+
+        Returns:
+            Dict[str, float]: Dictionary with a single ``"WER"`` percentage.
+
+        Example:
+            >>> metric = WER()
+            >>> metric({"ref": ["how are you"], "hyp": ["how you are"]}, "set1", Path("decode"))  # doctest: +SKIP
+            {'WER': 33.33}
+        """
         refs = [self._clean(x) for x in data[self.ref_key]]
         hyps = [self._clean(x) for x in data[self.hyp_key]]
 

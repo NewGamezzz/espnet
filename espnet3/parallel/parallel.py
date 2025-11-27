@@ -92,12 +92,41 @@ def set_parallel(config: DictConfig) -> None:
 
 
 def get_parallel_config() -> Optional[DictConfig]:
-    """Return the global Dask cluster configuration."""
+    """
+    Retrieve the last parallel configuration registered via ``set_parallel``.
+
+    Returns:
+        Optional[DictConfig]: A shallow copy of the configuration passed to
+            ``set_parallel``. Returns ``None`` if no configuration has been set.
+
+    Example:
+        >>> from omegaconf import OmegaConf
+        >>> cfg = OmegaConf.create({"env": "local", "n_workers": 1})
+        >>> set_parallel(cfg)
+        >>> get_parallel_config().env
+        'local'
+    """
     return parallel_config
 
 
 def _make_client(config: DictConfig = None) -> Client:
-    """Create a Dask client tied to the global singleton cluster."""
+    """
+    Create a Dask client tied to the global singleton cluster.
+
+    Args:
+        config (DictConfig): Parallel configuration that defines the cluster
+            backend (``env``), worker count, and backend-specific options.
+
+    Returns:
+        Client: Connected Dask client instance for the requested environment.
+
+    Example:
+        >>> from omegaconf import OmegaConf
+        >>> cfg = OmegaConf.create({"env": "local", "n_workers": 2, "options": {}})
+        >>> client = _make_client(cfg)  # doctest: +SKIP
+        >>> isinstance(client.scheduler_info(), dict)
+        True
+    """
     if config.env == "local":
         return Client(LocalCluster(n_workers=config.n_workers, **config.options))
 

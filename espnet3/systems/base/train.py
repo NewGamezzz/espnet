@@ -1,4 +1,14 @@
-"""Training entrypoint for the LibriSpeech 100h recipe."""
+"""
+Training entrypoint for the LibriSpeech 100h recipe.
+
+This module wires together model instantiation, Lightning trainer creation,
+stats collection, and the main training loop.
+
+Example:
+    >>> from omegaconf import OmegaConf
+    >>> cfg = OmegaConf.create({"exp_dir": "exp/demo", "model": {...}})  # doctest: +SKIP
+    >>> train(cfg)  # doctest: +SKIP
+"""
 
 from __future__ import annotations
 
@@ -17,6 +27,7 @@ from espnet3.utils.task import get_espnet_model, save_espnet_config
 
 
 def _instantiate_model(cfg: DictConfig) -> Any:
+    """Instantiate the underlying ESPnet model from config or task registry."""
     task = cfg.get("task")
     if task:
         model_cfg = OmegaConf.to_container(cfg.model, resolve=True)
@@ -25,6 +36,7 @@ def _instantiate_model(cfg: DictConfig) -> Any:
 
 
 def _build_trainer(cfg: DictConfig) -> ESPnet3LightningTrainer:
+    """Create the Lightning trainer wrapper and bind the model."""
     model = _instantiate_model(cfg)
     lit_model = LitESPnetModel(model, cfg)
     trainer = ESPnet3LightningTrainer(
@@ -37,12 +49,28 @@ def _build_trainer(cfg: DictConfig) -> ESPnet3LightningTrainer:
 
 
 def _ensure_directories(cfg: DictConfig) -> None:
+    """Create experiment and stats directories if they do not exist."""
     Path(cfg.exp_dir).mkdir(parents=True, exist_ok=True)
     if hasattr(cfg, "stats_dir"):
         Path(cfg.stats_dir).mkdir(parents=True, exist_ok=True)
 
 
 def collect_stats(cfg: DictConfig) -> None:
+    """
+    Entry point for collecting dataset statistics used during training.
+
+    Args:
+        cfg (DictConfig): Hydra configuration that defines dataset, model, and
+            optional parallel execution settings.
+
+    Returns:
+        None: Invokes the trainer's ``collect_stats`` routine for side effects.
+
+    Example:
+        >>> from omegaconf import OmegaConf
+        >>> cfg = OmegaConf.create({"exp_dir": "exp/demo", "model": {...}})  # doctest: +SKIP
+        >>> collect_stats(cfg)  # doctest: +SKIP
+    """
     _ensure_directories(cfg)
 
     if cfg.get("parallel"):
@@ -63,7 +91,21 @@ def collect_stats(cfg: DictConfig) -> None:
 
 
 def train(cfg: DictConfig) -> None:
-    """Main training loop."""
+    """
+    Main training loop.
+
+    Args:
+        cfg (DictConfig): Hydra configuration including model/trainer settings,
+            experiment directory, and optional task registry references.
+
+    Returns:
+        None: Delegates to the Lightning trainer for fitting the model.
+
+    Example:
+        >>> from omegaconf import OmegaConf
+        >>> cfg = OmegaConf.create({"exp_dir": "exp/demo", "model": {...}})  # doctest: +SKIP
+        >>> train(cfg)  # doctest: +SKIP
+    """
     _ensure_directories(cfg)
 
     if cfg.get("parallel"):

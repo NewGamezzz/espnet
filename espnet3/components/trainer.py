@@ -13,6 +13,26 @@ from espnet3.components.model import LitESPnetModel
 
 
 def get_or_initialize(config, item_name: str = None, default=None) -> Any:
+    """Instantiate a Hydra config entry or return the raw object.
+
+    Args:
+        config: A configuration object or OmegaConf node.
+        item_name (str | None): Optional attribute/key name to look up on ``config``.
+            When omitted, ``config`` itself is treated as the target.
+        default: Fallback value if ``item_name`` is missing.
+
+    Returns:
+        Any: The instantiated object when the target is a ``DictConfig``/``ListConfig``,
+        otherwise the value itself.
+
+    Note:
+        This helper mirrors the pattern used throughout the trainer setup where
+        user-provided sub-configs (e.g., logger, accelerator) may be Hydra objects.
+
+    Example:
+        >>> accelerator = get_or_initialize(cfg.trainer, \"accelerator\", \"auto\")
+        >>> callbacks = get_or_initialize(cfg.trainer, \"callbacks\", [])
+    """
     if item_name is not None:
         item = getattr(config, item_name, default)
     else:

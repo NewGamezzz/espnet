@@ -15,25 +15,79 @@ logger = logging.getLogger(__name__)
 
 
 def load_function(path):
+    """
+    Import a callable from its dotted Python path.
+
+    Args:
+        path (str): Dotted path like ``"package.module.function"``.
+
+    Returns:
+        Callable: The referenced attribute, typically a function.
+
+    Example:
+        >>> sqrt = load_function("math.sqrt")
+        >>> sqrt(9)
+        3.0
+    """
     module_path, func_name = path.rsplit(".", 1)
     module = import_module(module_path)
     return getattr(module, func_name)
 
 
 class ASRSystem(BaseSystem):
-    """ASR-specific system.
+    """
+    ASR-specific system that optionally trains a tokenizer before training.
 
-    This system adds:
-      - Tokenizer training inside train()
+    This class wires together dataset preparation, tokenizer training, and
+    the base training/inference hooks defined in :class:`BaseSystem`.
+
+    Args:
+        train_config (DictConfig): Training configuration consumed by the
+            underlying ESPnet components.
+        eval_config (DictConfig | None): Optional evaluation configuration.
+
+    Example:
+        >>> system = ASRSystem(train_config, eval_config)  # doctest: +SKIP
+        >>> system.train(dataset_dir="/data/asr")  # doctest: +SKIP
+        >>> scores = system.evaluate()  # doctest: +SKIP
     """
 
     def create_dataset(self, func: str, **kwargs):
+        """
+        Run a user-provided dataset creation function.
+
+        Args:
+            func (str): Dotted path to a callable that prepares datasets.
+            **kwargs: Keyword arguments forwarded to the callable.
+
+        Returns:
+            Any: Whatever the dataset creation function returns.
+
+        Example:
+            >>> system = ASRSystem(train_config, eval_config)  # doctest: +SKIP
+            >>> system.create_dataset("my.module.prepare", root="/data")  # doctest: +SKIP
+        """
         logger.info("ASRSystem.create_dataset(): starting dataset creation process")
         logger.info(f"Creating dataset with function {func}")
         fn = load_function(func)
         return fn(**kwargs)
 
     def train(self, dataset_dir: str = None):
+        """
+        Train tokenizer if necessary, then delegate to the base trainer.
+
+        Args:
+            dataset_dir (str | None): Root path of the training corpus. Required
+                when the tokenizer model has not been generated yet.
+
+        Returns:
+            Any: The result of :meth:`BaseSystem.train`, typically the Lightning
+            trainer's fit return value.
+
+        Example:
+            >>> system = ASRSystem(train_config, eval_config)  # doctest: +SKIP
+            >>> system.train(dataset_dir="/data/LibriSpeech")  # doctest: +SKIP
+        """
         logger.info("ASRSystem.train(): starting training process")
 
         # Train tokenizer if not trained previously
@@ -48,6 +102,23 @@ class ASRSystem(BaseSystem):
         return super().train()
 
     def train_tokenizer(self, dataset_dir: str = None):
+        """
+        Train a sentencepiece tokenizer from the LibriSpeech-style dataset.
+
+        Args:
+            dataset_dir (str): Root directory containing the training split.
+
+        Returns:
+            None
+
+        Note:
+            The training text is gathered from the ``train-clean-100`` subset and
+            saved under ``train.txt`` in ``tokenizer.save_path``.
+
+        Example:
+            >>> system = ASRSystem(train_config, eval_config)  # doctest: +SKIP
+            >>> system.train_tokenizer(dataset_dir="/data/LibriSpeech")  # doctest: +SKIP
+        """
         assert (
             dataset_dir is not None
         ), "dataset_dir must be provided for tokenizer training"

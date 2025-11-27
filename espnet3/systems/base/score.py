@@ -12,6 +12,20 @@ from espnet3.systems.base.scp_utils import (
 
 
 def score(config: DictConfig):
+    """
+    Compute evaluation metrics for decoded hypotheses and persist results.
+
+    Args:
+        config (DictConfig): Scoring configuration including metrics, dataset,
+            and decode directory paths.
+
+    Returns:
+        Dict[str, Dict[str, float]]: Nested mapping
+            ``{metric_class_path: {test_set: metric_values}}``.
+
+    Note:
+        Results are also written to ``decode_dir/scores.json`` for later inspection.
+    """
     test_sets = [t.name for t in config.dataset.test]
     results = {}
     assert hasattr(config, "metrics"), "Please specify metrics!"
