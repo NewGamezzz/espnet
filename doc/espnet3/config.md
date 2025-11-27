@@ -1,8 +1,24 @@
-## ESPnet3 Configuration and Parallel Execution
+---
+title: ESPnet3 Configuration and Parallel Execution
+author:
+  name: "Masao Someki"
+date: 2025-11-26
+---
+
+## 🧩 ESPnet3 Configuration and Parallel Execution
 
 ESPnet3 leans on OmegaConf/Hydra for declarative experiment setup and on Dask
 for parallel execution. This page shows how to structure configs, select
 parallel backends, and connect the pieces to training or runner-based jobs.
+
+### ✅ At a glance: who owns what?
+
+| Section      | You edit in YAML                                       | ESPnet3 / libraries handle                           |
+| ------------ | ------------------------------------------------------ | ---------------------------------------------------- |
+| `model`      | Choose architecture and hyperparameters               | Instantiating via Hydra and wrapping in `LitESPnetModel` |
+| `trainer`    | Training strategy, devices, logging, callbacks        | Passing options to `lightning.pytorch.Trainer`       |
+| `parallel`   | Dask / cluster settings (env, workers, options)       | Creating clients via `espnet3.parallel.parallel.set_parallel` |
+| `dataloader` | Dataset, sampler, collate_fn configs                  | Constructing dataloaders and iterating during training |
 
 ---
 
@@ -13,7 +29,7 @@ looks like:
 
 ```yaml
 expdir: exp/asr_example
-seed: 777
+seed: 2025
 
 model:  # ESPnet or custom model
   _target_: my_pkg.models.ASRModel
@@ -48,7 +64,7 @@ ESPnet-provided components or your own classes.
 
 ### Parallel execution with Dask
 
-`espnet3.parallel.set_parallel` reads a `parallel` config and prepares a Dask
+`espnet3.parallel.parallel.set_parallel` reads a `parallel` config and prepares a Dask
 client. Define multiple blocks (e.g., `parallel_cpu`, `parallel_gpu`) and pick
 one at launch.
 
@@ -79,7 +95,7 @@ parallel_gpu:
 ```
 
 ```python
-from espnet3.parallel import set_parallel
+from espnet3.parallel.parallel import set_parallel
 
 set_parallel(cfg.parallel_gpu)
 provider = MyProvider(cfg)
@@ -99,8 +115,8 @@ Two common patterns:
 
 1. **Reuse ESPnet models**
    ```python
-   from espnet3.trainer import LitESPnetModel
-   from espnet3.base.task import get_espnet_model
+   from espnet3.components.model import LitESPnetModel
+   from espnet3.utils.task import get_espnet_model
 
    espnet_model = get_espnet_model(task="asr", config=cfg.model)
    model = LitESPnetModel(espnet_model)
@@ -109,7 +125,7 @@ Two common patterns:
 2. **Instantiate custom models**
    ```python
    import hydra
-   from espnet3.trainer import LitESPnetModel
+   from espnet3.components.model import LitESPnetModel
 
    custom_model = hydra.utils.instantiate(cfg.model)
    model = LitESPnetModel(custom_model)
@@ -187,7 +203,9 @@ trainer:
       name: tb_logger
 
   callbacks:
-    - _target_: espnet3.trainer.callbacks.AverageCheckpointsCallback
+    # This AverageCheckpointsCallback is included as a default callback without writing here.
+    # We included this as an example.
+    - _target_: espnet3.components.callbacks.AverageCheckpointsCallback
       output_dir: ${expdir}
       best_ckpt_callbacks: []
 ```

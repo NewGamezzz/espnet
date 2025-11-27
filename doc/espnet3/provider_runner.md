@@ -1,4 +1,11 @@
-## ESPnet3: Provider/Runner Architecture
+---
+title: ESPnet3: Provider/Runner Architecture
+author:
+  name: "Masao Someki"
+date: 2025-11-26
+---
+
+## 🏗 ESPnet3: Provider/Runner Architecture
 
 The Provider/Runner split introduced in
 [#6178](https://github.com/espnet/espnet/pull/6178#issuecomment-3393671961)
@@ -22,6 +29,14 @@ from laptops to clusters.
 By restricting state to these two pieces ESPnet3 ensures that the same Python
 code works in local, multiprocessing, and Dask JobQueue modes.
 
+### ✅ Who does what?
+
+| Piece              | You implement                                       | ESPnet3 handles                               |
+| ------------------ | --------------------------------------------------- | --------------------------------------------- |
+| `EnvironmentProvider` | How to build datasets, models, helpers per worker | Registering the environment and passing kwargs |
+| `BaseRunner.forward`  | The actual computation for each index             | Iteration over indices and async/parallel wiring |
+| `parallel` config     | Dask backend and cluster options                  | Client creation and job submission            |
+
 ---
 
 ### 2. Minimal example
@@ -29,8 +44,8 @@ code works in local, multiprocessing, and Dask JobQueue modes.
 - Inference example
 
 ```python
-from espnet3.runner.inference_provider import InferenceProvider
-from espnet3.runner.base_runner import BaseRunner
+from espnet3.parallel.base_runner import BaseRunner
+from espnet3.systems.base.inference_provider import InferenceProvider
 
 class MyProvider(InferenceProvider):
     @staticmethod
@@ -58,8 +73,8 @@ outputs = runner(range(num_items))  # works locally
 
 
 ```python
-from espnet3.runner.env_provider import EnvironmentProvider
-from espnet3.runner.base_runner import BaseRunner
+from espnet3.parallel.env_provider import EnvironmentProvider
+from espnet3.parallel.base_runner import BaseRunner
 
 class MyProvider(EnvironmentProvider):
     @staticmethod
@@ -108,21 +123,16 @@ results show that scaling from one to four GPUs on SLURM reduces wall time from
 
 ### 4. Customising Dask job submissions
 
-`BaseRunner` dynamically subclasses the cluster’s `job_cls` during asynchronous
-runs.  This allows you to inject custom `sbatch` flags, wrap the command in your
-own script, or modify environment variables before the worker starts.  Because
-the hook lives in ESPnet3 you can implement these tweaks in your runner without
-forking Dask JobQueue or ESPnet itself.
+`BaseRunner` dynamically subclasses the cluster’s `job_cls` during asynchronous runs. 
+This allows you to inject custom `sbatch` flags, wrap the command in your own script, or modify environment variables before the worker starts.  
+Because the hook lives in ESPnet3 you can implement these tweaks in your runner without forking Dask JobQueue or ESPnet itself.
 
 ---
 
 ### 5. Best practices
 
-- Keep provider outputs lightweight and serialisable.
-- Avoid capturing `self` inside the worker setup function; return a callable that
-  closes over immutable state instead.
-- Use the returned results (or per-shard JSONL files in async mode) to implement
-  post-processing such as scoring or manifest generation.
+- Keep provider outputs to be lightweight and serialisable.
+- Avoid capturing `self` inside the worker setup function; return a callable that closes over immutable state instead.
+- Use the returned results (or per-shard JSONL files in async mode) to implement post-processing such as scoring or manifest generation.
 
-The Provider/Runner architecture keeps experimentation Pythonic while providing a
-clear path to production-scale clusters.
+The Provider/Runner architecture keeps experimentation Pythonic while providing a clear path to production-scale clusters.

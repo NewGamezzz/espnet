@@ -1,13 +1,28 @@
-## ESPnet3: Optimiser and Scheduler Configuration
+---
+title: ESPnet3: Optimiser and Scheduler Configuration
+author:
+  name: "Masao Someki"
+date: 2025-11-26
+---
+
+## ⚙️ ESPnet3: Optimiser and Scheduler Configuration
 
 ESPnet3 wraps PyTorch Lightning so that optimisers and schedulers can be defined
 purely from the Hydra configuration.  Two modes are supported by
-`espnet3.trainer.model.LitESPnetModel.configure_optimizers`:
+`espnet3.components.model.LitESPnetModel.configure_optimizers`:
 
 1. a single optimiser/scheduler pair (`optim` + `scheduler`)
 2. multiple optimiser/scheduler pairs (`optims` + `schedulers`)
 
 The sections below describe both.
+
+### ✅ What lives in `configure_optimizers` vs YAML
+
+| Layer           | You control via YAML                               | ESPnet3 (`LitESPnetModel`) ensures            |
+| --------------- | -------------------------------------------------- | --------------------------------------------- |
+| `optim` / `optims` blocks   | Which optimiser classes and their hyperparameters | Correct parameter grouping and uniqueness     |
+| `scheduler` / `schedulers`  | Scheduler types and decay schedules    | Matching schedulers 1:1 with optimisers       |
+| Model parameter names       | Which parts of the model each entry sees | That every trainable param is assigned once |
 
 ---
 
@@ -28,7 +43,7 @@ scheduler:
   T_max: 100000
 ```
 
-No additional wiring is necessary—ESPnet3 instantiates both objects, attaches
+No additional wiring is necessary because ESPnet3 instantiates both objects, attaches
 the scheduler to the optimiser, and returns them to Lightning.
 
 ---

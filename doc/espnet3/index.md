@@ -2,6 +2,9 @@
 home: true
 icon: /assets/image/espnet.png
 title: ESPnet3
+author:
+  name: "Masao Someki"
+date: 2025-11-26
 heroImage: /assets/image/espnet_logo1.png
 heroImageStyle:
   - height: auto

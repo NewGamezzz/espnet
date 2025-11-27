@@ -1,4 +1,11 @@
-## ESPnet3: Data Preparation with Providers and Runners
+---
+title: ESPnet3: Data Preparation with Providers and Runners
+author:
+  name: "Masao Someki"
+date: 2025-11-26
+---
+
+## 🧪 ESPnet3: Data Preparation with Providers and Runners
 
 ESPnet3 replaces the shell-script based pipelines from ESPnet2 with a unified
 Python workflow.  Datasets, feature extraction, and data cleaning are performed
@@ -12,29 +19,47 @@ This guide focuses on:
 2. Executing those runners locally and on clusters.
 3. Incorporating data cleaning in the same pipeline.
 
+### ✅ What you implement in this pipeline
+
+| Part              | You implement                                          | ESPnet3 handles                                |
+| ----------------- | ------------------------------------------------------ | ---------------------------------------------- |
+| `EnvironmentProvider` subclass | How to build the dataset and per-worker environment | Dispatching to workers and injecting kwargs    |
+| `BaseRunner` subclass          | The `forward` function (per-index computation)       | Looping over indices and result collection     |
+| YAML config                    | `dataset`, `parallel`, and any runtime parameters    | Wiring configs into providers and runners      |
+
 ---
 
 ### 1. Defining the environment: `EnvironmentProvider`
 
 A provider encapsulates everything that has to be instantiated once per
-process—datasets, tokenisers, models, or utility objects.  For data preparation
+process: datasets, tokenisers, models, or utility objects.  For data preparation
 we usually construct datasets and lightweight helpers.  Providers receive a
 Hydra configuration so the implementation stays declarative.
 
 ```python
-from espnet3.runner.inference_provider import InferenceProvider
 from omegaconf import DictConfig
 
-class PrepProvider(InferenceProvider):
-    @staticmethod
-    def build_dataset(cfg: DictConfig):
-        # Load raw manifests and return a list/sequence of samples.
-        return load_raw_samples(cfg.dataset)
+from espnet3.parallel.env_provider import EnvironmentProvider
 
-    @staticmethod
-    def build_model(cfg: DictConfig):
-        # Optional: build reusable helpers (feature extractor, normaliser, …).
-        return build_feature_pipeline(cfg.model)
+class MyDatasetProvider(EnvironmentProvider):
+    def __init__(self, cfg: DictConfig, *, params: dict | None = None):
+        super().__init__(cfg)
+        self.dataset_cfg = cfg.dataset
+        self.params = params or {}
+
+    def build_env_local(self):
+        dataset = load_raw_samples(self.dataset_cfg)
+        return {"dataset": dataset, **self.params}
+
+    def make_worker_setup_fn(self):
+        dataset_cfg = self.dataset_cfg
+        params = self.params
+
+        def setup():
+            dataset = load_raw_samples(dataset_cfg)
+            return {"dataset": dataset, **params}
+
+        return setup
 ```
 
 Anything returned by the provider is injected into the runner as keyword
@@ -50,23 +75,26 @@ example below performs feature extraction and includes an optional cleaning
 step, showing how preparation and cleaning share the same infrastructure.
 
 ```python
-from espnet3.runner.base_runner import BaseRunner
+from espnet3.parallel.base_runner import BaseRunner
+import librosa
 
 class PrepRunner(BaseRunner):
     @staticmethod
-    def forward(idx: int, *, dataset, model, cleaner=None, output_dir=None):
+    def forward(idx: int, *, dataset=None, cleaner=None, output_dir=None):
         sample = dataset[idx]
-        feats = model.extract(sample["audio"], sr=sample["sr"])
+        audio = sample["audio"]
+        sr = sample["sr"]
+        stft = librosa.stft(audio)
 
         if cleaner is not None:
             sample = cleaner(sample)
             if sample is None:  # filtered out
                 return None
 
-        save_features(sample["utt_id"], feats, output_dir)
+        save_features(sample["utt_id"], stft, output_dir)
         return {
             "utt_id": sample["utt_id"],
-            "features": feats.shape,
+            "stft_shape": stft.shape,
         }
 ```
 
@@ -84,9 +112,10 @@ requested indices.
 
 ```python
 from omegaconf import OmegaConf
+from espnet3.parallel.base_runner import BaseRunner
 
 cfg = OmegaConf.load("prep.yaml")
-provider = PrepProvider(cfg, params={"output_dir": "exp/data"})
+provider = MyDatasetProvider(cfg, params={"output_dir": "exp/data"})
 runner = PrepRunner(provider)
 
 indices = list(range(len(provider.build_env_local()["dataset"])))
@@ -116,13 +145,13 @@ parallel:
 ```
 
 ```python
-from espnet3.parallel import set_parallel
+from espnet3.parallel.parallel import set_parallel
 
 set_parallel(cfg.parallel)
 results = runner(range(total_items))  # transparently runs on the cluster
 ```
 
-Workers call `PrepProvider.make_worker_setup_fn()` to instantiate their own
+Workers call `MyDatasetProvider.make_worker_setup_fn()` to instantiate their own
 copy of the dataset and helpers before executing `forward`.
 
 ---

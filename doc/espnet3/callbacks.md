@@ -1,10 +1,25 @@
-## ESPnet3: Callback Mechanisms in Training
+---
+title: ESPnet3: Callback Mechanisms in Training
+author:
+  name: "Masao Someki"
+date: 2025-11-26
+---
+
+## 🎛 ESPnet3: Callback Mechanisms in Training
 
 ESPnet3 relies on PyTorch Lightning for training orchestration, so the vast
 majority of Lightning callbacks are immediately available.  On top of that, the
-`espnet3.trainer.callbacks` module ships a curated stack of defaults that are
+`espnet3.components.callbacks` module ships a curated stack of defaults that are
 applied when a recipe calls `get_default_callbacks`.  This document explains the
 default behaviour and how to extend it in your own experiments.
+
+### ✅ What you configure vs. what ESPnet3 provides
+
+| Area          | You write / configure                             | ESPnet3 / Lightning handles                             |
+| ------------- | -------------------------------------------------- | ------------------------------------------------------- |
+| `trainer.callbacks` in YAML | Which callbacks to enable and their arguments      | Instantiating callbacks via Hydra/OmegaConf             |
+| Custom callback classes     | Domain-specific behaviour (logging, exports, etc.) | Wiring them into the training loop and rank handling    |
+| `best_model_criterion`      | Which metrics to monitor and how many to keep      | Selecting, saving, and optionally averaging checkpoints |
 
 ---
 
@@ -27,7 +42,7 @@ write into the experiment directory:
    rate can be controlled from the configuration file.
 
 All of these callbacks live in
-[`espnet3/trainer/callbacks.py`](../../espnet3/trainer/callbacks.py) and are
+[`espnet3/components/callbacks.py`](../../espnet3/components/callbacks.py) and are
 instantiated automatically unless you override the callback list explicitly.
 
 ---
@@ -52,6 +67,16 @@ three checkpoints with the smallest `valid/loss` and two checkpoints with the
 smallest `valid/wer`.  `AverageCheckpointsCallback` will in turn average the
 weights tracked by these callbacks.
 
+You can put any item as the criteria in the `best_model_criterion`.
+For example, if you have implemented your custom model and returns `your_metrics`, then you can put the following item to select which checkpoint to keep.
+
+```yaml
+best_model_criterion:
+  - - your_metrics
+    - 3     # number of ckpts
+    - min   # ESPnet3 will keep the checkpoint if the value is minimul
+```
+
 ---
 
 ### Adjusting progress logging
@@ -61,7 +86,7 @@ value by passing `log_interval` when calling `get_default_callbacks` from your
 recipe:
 
 ```python
-from espnet3.trainer.callbacks import get_default_callbacks
+from espnet3.components.callbacks import get_default_callbacks
 
 callbacks = get_default_callbacks(
     expdir=str(expdir),
@@ -84,7 +109,7 @@ callbacks in `trainer.callbacks`:
 ```yaml
 trainer:
   callbacks:
-    - _target_: espnet3.trainer.callbacks.AverageCheckpointsCallback
+    - _target_: espnet3.components.callbacks.AverageCheckpointsCallback
       output_dir: ${expdir}
       best_ckpt_callbacks:
         - _target_: lightning.pytorch.callbacks.ModelCheckpoint
@@ -93,7 +118,7 @@ trainer:
           mode: min
 ```
 
-Mixing both approaches is perfectly valid—use `get_default_callbacks` for the
+Mixing both approaches is perfectly valid; use `get_default_callbacks` for the
 common utilities and append any domain-specific callbacks that your project
 requires.
 
@@ -105,8 +130,8 @@ requires.
 rank-zero process at the end of validation.  For every `ModelCheckpoint`
 callback listed in `best_ckpt_callbacks` it loads the corresponding top-*k*
 checkpoints, verifies that the parameter sets match, and averages weights whose
-keys start with `model.`.  Integer tensors—such as
-`BatchNorm.num_batches_tracked`—are accumulated instead of averaged so the
+keys start with `model.`.  Integer tensors, such as
+`BatchNorm.num_batches_tracked` are accumulated instead of averaged so the
 resulting statistics remain meaningful.  The averaged weights are written to
 `${expdir}/${monitor}.ave_<k>best.pth`, regardless of whether the checkpoints
 were produced by native PyTorch Lightning, DeepSpeed, or other supported
@@ -115,7 +140,7 @@ strategies.
 You can reuse the callback outside the defaults by instantiating it directly:
 
 ```python
-from espnet3.trainer.callbacks import AverageCheckpointsCallback
+from espnet3.components.callbacks import AverageCheckpointsCallback
 
 ave_ckpt = AverageCheckpointsCallback(
     output_dir=str(expdir),

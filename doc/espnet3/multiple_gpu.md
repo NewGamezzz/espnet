@@ -1,9 +1,25 @@
-## ESPnet3: Multi-GPU and Multi-Node Execution
+---
+title: ESPnet3: Multi-GPU and Multi-Node Execution
+author:
+  name: "Masao Someki"
+date: 2025-11-26
+---
+
+## 🚀 ESPnet3: Multi-GPU and Multi-Node Execution
 
 ESPnet3 relies on PyTorch Lightning for distributed training and on the
 Provider/Runner abstraction for scalable inference or data processing.  The same
 configuration runs locally, with multiple GPUs in a single job, or across SLURM
 clusters without modifying the Python code.
+
+### ✅ Which part do you change for multi-GPU?
+
+| Concern          | You configure                                      | ESPnet3 / Lightning handles                   |
+| ---------------- | -------------------------------------------------- | ----------------------------------------------|
+| Devices / nodes  | `trainer.devices`, `trainer.num_nodes`             | Spawning processes and setting up DDP         |
+| Strategy         | `trainer.strategy` (`ddp`, `ddp_spawn`, etc.)      | Communication, gradient sync, checkpointing   |
+| Cluster backend  | `parallel` section (`env: slurm`, job options)     | Dask client and job submission                |
+| Runners          | Provider/Runner definitions for inference          | Scheduling work across workers / GPUs         |
 
 ---
 
@@ -13,10 +29,11 @@ Distributed training is configured directly in the experiment YAML file.  The
 example below launches a data-parallel job on two nodes with four GPUs per node.
 
 ```yaml
+num_device: 4
+num_nodes: 2
+
 trainer:
   accelerator: gpu
-  devices: 4
-  num_nodes: 2
   strategy: ddp
   precision: 16-mixed
   gradient_clip_val: 1.0
@@ -24,8 +41,8 @@ trainer:
 ```
 
 Lightning handles process spawning, communication, gradient accumulation, and
-checkpointing.  No wrapper scripts are required—`espnet3.trainer.trainer` reads
-this configuration and forwards it to Lightning.
+checkpointing.  No wrapper scripts are required because `espnet3.components.trainer`
+reads this configuration and forwards it to Lightning.
 
 When running under a scheduler (e.g., SLURM) make sure the submission command
 requests matching resources, for example:
@@ -45,9 +62,9 @@ For multi-GPU inference, decoding, or scoring jobs ESPnet3 provides the
 `EnvironmentProvider` constructs datasets and models on each worker.
 
 ```python
-from espnet3.runner.inference_provider import InferenceProvider
-from espnet3.runner.base_runner import BaseRunner
-from espnet3.parallel import set_parallel
+from espnet3.parallel.base_runner import BaseRunner
+from espnet3.parallel.parallel import set_parallel
+from espnet3.systems.base.inference_provider import InferenceProvider
 
 class DecodeProvider(InferenceProvider):
     @staticmethod
@@ -83,7 +100,7 @@ GPU per worker specify `env: slurm` (or any Dask JobQueue backend) and use
 
 ### 3. Local vs. cluster performance
 
-The refactored runner supports three modes—local, synchronous cluster jobs, and
+The refactored runner supports three modes: local, synchronous cluster jobs, and
 asynchronous cluster submissions.  The same decoding runner was benchmarked in
 [#6178](https://github.com/espnet/espnet/pull/6178#issuecomment-3400164353) on an
 A40 GPU with the OWSM-V4 medium (1B) model over 1,000 LibriSpeech test-clean

@@ -1,5 +1,8 @@
 ---
 title: ESPnet3 System Entry Point
+author:
+  name: "Masao Someki"
+date: 2025-11-26
 ---
 
 ESPnet3 training is driven by **System** classes. A System is the entry point
@@ -7,7 +10,7 @@ that binds configs to stage functions (prepare, train, decode, score, publish).
 This document explains the base interface, how stages are invoked, and how to
 extend it for custom tasks.
 
-## BaseSystem at a glance
+## 🧠 BaseSystem at a glance
 
 `espnet3.systems.base.system.BaseSystem` implements the common stage hooks:
 
@@ -31,6 +34,15 @@ class BaseSystem:
 - `evaluate()` calls `decode()` then `score()` for convenience.
 - Defaults delegate to stage functions in `espnet3.systems.base.{train,inference,score}`.
 
+### ✅ What you typically override
+
+| Method / area   | When you override it                               | Typical user responsibility                     |
+| --------------- | --------------------------------------------------- | ----------------------------------------------- |
+| `create_dataset`| Custom corpus preparation or manifest generation    | Call recipe-specific `create_dataset.py` logic  |
+| `train`         | Extra steps before/after training                   | Tokenizer training, warmup, custom logging      |
+| `decode` / `score` | Custom decoding pipeline or metrics             | Hook into custom inference / scoring scripts    |
+| `publish`       | Packaging models for release                        | Upload to hubs, export ONNX, create tarballs    |
+
 ## How stages are executed
 
 - `run.py` in each recipe instantiates a System and runs selected stages from
@@ -44,14 +56,12 @@ class BaseSystem:
 
 `espnet3.systems.asr.system.ASRSystem` customises a few hooks:
 
-- **create_dataset(func, **kwargs)**: dynamically import and run a dataset
+- **create_dataset(func, kwargs)**: dynamically import and run a dataset
   creation function.
-- **train(dataset_dir=None)**: trains a tokenizer if missing, then calls
-  `BaseSystem.train()`.
+- **train()**: calls `BaseSystem.train()`.
 - **train_tokenizer(dataset_dir)**: builds text and runs SentencePiece training.
 
-You can subclass `BaseSystem` to add task-specific steps (e.g., TTS vocoder
-training, GAN discriminator warmup).
+You can subclass `BaseSystem` to add task-specific steps (e.g., TTS vocoder training).
 
 ## When to override
 
@@ -77,8 +87,7 @@ Keep overrides minimal; rely on the base helpers for standard behavior.
 python run.py \
   --stage train decode score \
   --train_config conf/train.yaml \
-  --eval_config conf/eval.yaml \
-  --train_overrides trainer.max_epochs=10
+  --eval_config conf/eval.yaml
 ```
 
 This loads configs, builds the System, and runs the chosen stages in order,

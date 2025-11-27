@@ -1,11 +1,11 @@
 ---
-title: 📦 ESPnet-3 Data Loading System Documentation
+title: 📦 ESPnet3 Data Loading System Documentation
 author:
   name: "Masao Someki"
-date: 2024-07-01
+date: 2025-11-26
 ---
 
-This document provides a comprehensive overview of the dataset system used in ESPnet-3, specifically covering:
+This document provides a comprehensive overview of the dataset system used in ESPnet3, specifically covering:
 
 - `DataOrganizer`
 - `DatasetConfig`
@@ -48,7 +48,7 @@ DataOrganizer
 
 ### Automatic Preprocessor Handling
 
-In ESPnet-3, the type of `preprocessor` is **automatically inferred**:
+In ESPnet3, the type of `preprocessor` is **automatically inferred**:
 
 * If it is an instance of `AbsPreprocessor`, the call will use `(uid, sample)`
 * Otherwise, it is called with a single argument: `sample`
@@ -94,7 +94,7 @@ A dataclass representing a single dataset’s configuration.
 | ----------- | -------------------------------------- |
 | `name`      | Dataset name                           |
 | `dataset`   | Hydra config for dataset instantiation |
-| `transform` | Hydra config for sample transformation |
+| `transform` | Hydra config for transformation instantiation |
 
 ---
 
@@ -138,18 +138,18 @@ class MyDataset(ShardedDataset):
 
 ---
 
-## ⚙️ Preprocessor Behavior in ESPnet-3
+## ⚙️ Preprocessor Behavior in ESPnet3
 
 ### Auto-Type Detection
 
-ESPnet-3 automatically determines how to call the `preprocessor`:
+ESPnet3 automatically determines how to call the `preprocessor`:
 
 | Type                          | Call Signature              | Use Case                     |
 | ----------------------------- | --------------------------- | ---------------------------- |
 | Regular callable              | `preprocessor(sample)`      | Custom/simple processing     |
 | Instance of `AbsPreprocessor` | `preprocessor(uid, sample)` | ESPnet’s internal processors |
 
-No need for users to explicitly handle this distinction—**it's handled internally**.
+No need for users to explicitly handle this distinction: **it's handled internally**.
 
 ### Intended Responsibilities
 
@@ -157,7 +157,7 @@ No need for users to explicitly handle this distinction—**it's handled interna
 | ------------ | ---------------------------------------- | -------------------------------------- |
 | Dataset      | Load raw data only                       | Implement `__getitem__` returning dict |
 | Transform    | Lightweight online modifications         | e.g., normalization, text cleaning     |
-| Preprocessor | Mostly for ESPnet's `CommonPreprocessor` | Follows ESPnet-supported types only    |
+| Preprocessor | Mostly for ESPnet2's `CommonPreprocessor` | Follows ESPnet2-supported types only    |
 
 > 🔗 The only officially supported preprocessors are those implemented in
 > [espnet2/train/preprocessor.py](https://github.com/espnet/espnet/blob/master/espnet2/train/preprocessor.py)
@@ -166,6 +166,5 @@ No need for users to explicitly handle this distinction—**it's handled interna
 
 ## ✅ Summary
 
-* Users only need to implement `Dataset` (data loading) and `Transform` (modification).
+* Users only need to implement `Dataset` (data loading) and `Transform` (modification, optional).
 * `Preprocessor` support is automatic, with UID handling taken care of internally.
-* This design cleanly separates raw loading, online transformation, and ESPnet-specific preprocessing logic.

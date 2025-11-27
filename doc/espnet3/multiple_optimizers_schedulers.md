@@ -1,11 +1,24 @@
 ---
 title: Multiple Optimizers and Schedulers in ESPnet3
+author:
+  name: "Masao Someki"
+date: 2025-11-26
 ---
+
+## 🧮 Multiple Optimizers and Schedulers in ESPnet3
 
 ESPnet3 lets you configure one optimizer/scheduler pair or multiple optimizer
 and scheduler groups. This guide explains the rules enforced by
 `LitESPnetModel.configure_optimizers`, how parameter selection works, and how
 to debug common errors.
+
+### ✅ What you set up here
+
+| Goal                     | YAML fields to touch                 | Notes                                      |
+| ------------------------ | ------------------------------------ | ------------------------------------------ |
+| Single optimizer         | `optim`, optional `scheduler`        | Easiest setup; whole model shares settings |
+| Different LR per module  | Multiple entries under `optims`      | Use `params` to select parameter subsets   |
+| Different schedulers     | Matching entries under `schedulers`  | Order must match `optims` one-to-one       |
 
 ## Single optimizer + scheduler (baseline)
 
