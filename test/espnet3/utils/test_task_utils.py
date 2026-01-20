@@ -35,7 +35,6 @@ from espnet3.utils.task import get_espnet_model, get_task_class, save_espnet_con
             "TargetSpeakerExtractionTask",
         ),
         ("espnet2.tasks.gan_svs.GANSVSTask", "GANSVSTask"),
-        ("espnet2.tasks.gan_tts.GANTTSTask", "GANTTSTask"),
         ("espnet2.tasks.hubert.HubertTask", "HubertTask"),
         ("espnet2.tasks.lm.LMTask", "LMTask"),
         ("espnet2.tasks.mt.MTTask", "MTTask"),
@@ -45,7 +44,6 @@ from espnet3.utils.task import get_espnet_model, get_task_class, save_espnet_con
         ("espnet2.tasks.spk.SpeakerTask", "SpeakerTask"),
         ("espnet2.tasks.st.STTask", "STTask"),
         ("espnet2.tasks.svs.SVSTask", "SVSTask"),
-        ("espnet2.tasks.tts.TTSTask", "TTSTask"),
         ("espnet2.tasks.uasr.UASRTask", "UASRTask"),
     ],
 )
