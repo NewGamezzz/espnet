@@ -1,44 +1,24 @@
-"""
-Character error rate metric utilities.
-
-Provides a callable :class:`CER` metric that normalizes text, computes CER, and
-writes alignment visualizations for later inspection.
-
-Example:
-    >>> from pathlib import Path
-    >>> metric = CER()
-    >>> scores = metric({"ref": ["a b"], "hyp": ["a c"]}, "test", Path("decode"))  # doctest: +SKIP
-    >>> scores["CER"]  # doctest: +SKIP
-    50.0
-"""
+"""Character error rate metric utilities."""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Dict, Iterable, List
 
-import jiwer
+try:
+    import jiwer
+except ImportError:
+    jiwer = None
 
 from espnet2.text.cleaner import TextCleaner
-from espnet3.components.abs_metric import AbsMetrics
+from espnet3.components.metrics.abs_metric import AbsMetrics
 
 
 class CER(AbsMetrics):
-    """
-    Compute character error rate (CER) for decoded hypotheses.
+    """Compute CER for a decoded dataset.
 
-    Args:
-        ref_key (str): Dictionary key that stores reference strings.
-        hyp_key (str): Dictionary key that stores hypothesis strings.
-        clean_types (Iterable[str] | None): Text normalizers passed to
-            :class:`espnet2.text.cleaner.TextCleaner`.
-
-    Example:
-        >>> from pathlib import Path
-        >>> metric = CER(ref_key="ref", hyp_key="hyp")
-        >>> data = {"ref": ["hello"], "hyp": ["hullo"]}
-        >>> metric(data, "demo", Path("decode"))  # doctest: +SKIP
-        {'CER': 20.0}
+    This metric expects decoded hypothesis and reference strings and produces
+    a percentage score along with alignment visualization output.
     """
 
     def __init__(
@@ -47,13 +27,40 @@ class CER(AbsMetrics):
         hyp_key: str = "hyp",
         clean_types: Iterable[str] | None = None,
     ) -> None:
+        """Initialize the CER metric.
+
+        Args:
+            ref_key: Key name for reference text entries.
+            hyp_key: Key name for hypothesis text entries.
+            clean_types: Optional cleaner types passed to TextCleaner.
+        """
         self.cleaner = TextCleaner(clean_types)
         self.ref_key = ref_key
         self.hyp_key = hyp_key
 
     def _clean(self, text: str) -> str:
+        """Clean text and provide a placeholder for empty strings.
+
+        Args:
+            text: Input text to clean.
+
+        Returns:
+            Cleaned string, or a placeholder to avoid empty inputs.
+        """
         cleaned = self.cleaner(text).strip()
         return cleaned if cleaned else "."
+
+    def _ensure_jiwer(self) -> None:
+        """Raise an error if the optional jiwer dependency is missing.
+
+        Raises:
+            RuntimeError: If ``jiwer`` is not installed.
+        """
+        if jiwer is None:
+            raise RuntimeError(
+                "jiwer is required to compute CER. "
+                "Please install it with `pip install espnet[asr]`."
+            )
 
     def __call__(
         self,
@@ -61,23 +68,22 @@ class CER(AbsMetrics):
         test_name: str,
         decode_dir: Path,
     ) -> Dict[str, float]:
-        """
-        Calculate CER for a test split and write alignment details to disk.
+        """Compute CER, write alignment details, and return the metric.
 
         Args:
-            data (Dict[str, List[str]]): Mapping containing lists of references
-                and hypotheses keyed by ``ref_key``/``hyp_key``.
-            test_name (str): Name of the evaluation split (used for output dir).
-            decode_dir (Path): Directory where alignment files are written.
+            data: Mapping of field names to lists of strings. This is built
+                from inference-time SCP outputs, e.g.
+                ``{"ref": [str1, str2, ...], "hyp": [str1, str2, ...]}``.
+            test_name: Test set name used for output directory naming.
+            decode_dir: Base decode directory for alignment outputs.
 
         Returns:
-            Dict[str, float]: Dictionary with a single ``"CER"`` percentage.
+            Dict containing CER in percentage points.
 
-        Example:
-            >>> metric = CER()
-            >>> metric({"ref": ["abc"], "hyp": ["axc"]}, "set1", Path("decode"))  # doctest: +SKIP
-            {'CER': 33.33}
+        Raises:
+            RuntimeError: If ``jiwer`` is not installed.
         """
+        self._ensure_jiwer()
         refs = [self._clean(x) for x in data[self.ref_key]]
         hyps = [self._clean(x) for x in data[self.hyp_key]]
 

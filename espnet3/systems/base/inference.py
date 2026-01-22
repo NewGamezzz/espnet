@@ -1,156 +1,122 @@
-import os
+"""Inference entrypoint for ESPnet3 systems."""
+
+import logging
+import time
 from pathlib import Path
 
-import torch
-from hydra.utils import instantiate
 from omegaconf import DictConfig
 
-from espnet3.parallel.base_runner import BaseRunner
 from espnet3.parallel.parallel import set_parallel
-from espnet3.systems.base.inference_provider import (
-    InferenceProvider as BaseInferenceProvider,
-)
+from espnet3.systems.asr.inference import InferenceProvider, InferenceRunner
+from espnet3.systems.base.inference_runner import AbsInferenceRunner
+
+logger = logging.getLogger(__name__)
 
 
-class InferenceProvider(BaseInferenceProvider):
-    """
-    Provider that builds dataset/model for simple single-GPU inference.
-
-    Args:
-        config (DictConfig): Hydra configuration containing ``dataset`` organizer,
-            ``model`` factory, and ``test_set`` selection.
-
-    Example:
-        >>> provider = InferenceProvider(cfg)  # doctest: +SKIP
-        >>> env = provider.build_env_local()  # doctest: +SKIP
-        >>> {"dataset", "model"} <= set(env.keys())  # doctest: +SKIP
-        True
-    """
-
-    @staticmethod
-    def build_dataset(config):
-        """
-        Instantiate the requested test split from the dataset organizer.
-
-        Args:
-            config (DictConfig): Configuration with a ``dataset`` organizer and
-                ``test_set`` name.
-
-        Returns:
-            Any: Dataset object corresponding to ``config.test_set``.
-
-        Example:
-            >>> ds = InferenceProvider.build_dataset(cfg)  # doctest: +SKIP
-            >>> len(ds)  # doctest: +SKIP
-            100
-        """
-        # config includes test dataset
-        organizer = instantiate(config.dataset)
-        test_set = config.test_set
-        return organizer.test[test_set]
-
-    @staticmethod
-    def build_model(config):
-        """
-        Load the speech-to-text model and place it on the available device.
-
-        Args:
-            config (DictConfig): Configuration with a ``model`` instantiation
-                target that accepts a ``device`` keyword.
-
-        Returns:
-            Any: Inference-ready model instance.
-
-        Example:
-            >>> model = InferenceProvider.build_model(cfg)  # doctest: +SKIP
-            >>> callable(model)  # doctest: +SKIP
-            True
-        """
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        if device == "cuda":
-            device_id = os.getenv("CUDA_VISIBLE_DEVICES", "0").split(",")[0].strip()
-            device = f"cuda:{device_id}"
-
-        # config includes model
-        model = instantiate(
-            config.model, device=device
-        )  # In this recipe we assume this to be espnet2.bin.asr_inference.Speech2Text
-        return model
+def _flatten_results(results):
+    flat = []
+    for item in results:
+        if isinstance(item, list):
+            flat.extend(item)
+        else:
+            flat.append(item)
+    return flat
 
 
-class InferenceRunner(BaseRunner):
-    """
-    Runner that produces hypotheses and references for each sample.
+def _collect_scp_lines(results, *, idx_key: str, hyp_keys, ref_keys):
+    scp_lines = {}
+    hyp_keys = list(hyp_keys) if isinstance(hyp_keys, (list, tuple)) else [hyp_keys]
+    ref_keys = list(ref_keys) if isinstance(ref_keys, (list, tuple)) else [ref_keys]
+    list_sizes = {key: None for key in (*hyp_keys, *ref_keys)}
 
-    Example:
-        >>> runner = InferenceRunner(provider)  # doctest: +SKIP
-        >>> outputs = runner([0, 1])  # doctest: +SKIP
-    """
+    for result in results:
+        if not isinstance(result, dict):
+            raise TypeError(
+                f"Expected dict output, got {type(result).__name__}: {result}"
+            )
 
-    @staticmethod
-    def forward(idx, dataset=None, model=None, **kwargs):
-        """
-        Run inference for a single dataset index.
+        idx_value = result[idx_key]
+        if isinstance(idx_value, (list, tuple)):
+            raise TypeError(
+                f"'{idx_key}' must be a scalar, got {type(idx_value).__name__}"
+            )
 
-        Args:
-            idx (int): Sample index to decode.
-            dataset: Dataset instance providing ``speech`` and ``text`` fields.
-            model: Inference model supporting callable interface and tokenizer.
-            **kwargs: Unused additional arguments.
+        for field_key in (*ref_keys, *hyp_keys):
+            value = result[field_key]
+            if isinstance(value, (list, tuple)):
+                if list_sizes[field_key] is None:
+                    list_sizes[field_key] = len(value)
+                elif list_sizes[field_key] != len(value):
+                    raise ValueError(
+                        f"List length mismatch for '{field_key}': "
+                        f"expected {list_sizes[field_key]}, got {len(value)}"
+                    )
+                for i, entry in enumerate(value):
+                    if isinstance(entry, (list, tuple)):
+                        raise TypeError(f"Nested list is not allowed for '{field_key}'")
+                    scp_key = f"{field_key}{i}"
+                    scp_lines.setdefault(scp_key, []).append(f"{idx_value} {entry}")
+            else:
+                if list_sizes[field_key] is not None:
+                    raise TypeError(
+                        f"'{field_key}' must be a list when list outputs are used"
+                    )
+                scp_lines.setdefault(field_key, []).append(f"{idx_value} {value}")
 
-        Returns:
-            Dict[str, Any]: Mapping with ``idx``, ``hyp`` (decoded text),
-            and ``ref`` (reference text).
-
-        Example:
-            >>> InferenceRunner.forward(0, dataset=ds, model=asr_model)  # doctest: +SKIP
-            {'idx': 0, 'hyp': '...', 'ref': '...'}
-        """
-        data = dataset[idx]
-        speech = data["speech"]
-        hyp = model(speech)[0][0]
-        ref = model.tokenizer.tokens2text(model.converter.ids2tokens(data["text"]))
-        return {"idx": idx, "hyp": hyp, "ref": ref}
+    return scp_lines
 
 
 def inference(config: DictConfig):
-    """
-    Decode all configured test sets and write hyp/ref SCP files.
+    """Run inference over all configured test sets and write SCP outputs.
 
     Args:
-        config (DictConfig): Configuration containing dataset/test set
-            definitions, parallel settings, decode directory, and model
-            parameters.
-
-    Returns:
-        None: Produces ``hyp.scp`` and ``ref.scp`` files under
-        ``config.decode_dir`` for each test set.
-
-    Example:
-        >>> inference(cfg)  # doctest: +SKIP
+        config: Hydra/omegaconf configuration with dataset and decode settings.
     """
+    start = time.perf_counter()
     set_parallel(config.parallel)
 
     test_sets = [test_set.name for test_set in config.dataset.test]
     assert len(test_sets) > 0, "No test set found in dataset"
     assert len(test_sets) == len(set(test_sets)), "Duplicate test key found."
 
+    logger.info(
+        "Starting inference | decode_dir=%s test_sets=%s",
+        getattr(config, "decode_dir", None),
+        test_sets,
+    )
+
     for test_name in test_sets:
-        print(f"===> Processing {test_name}")
+        logger.info("===> Processing test set: %s", test_name)
         config.test_set = test_name
         provider = InferenceProvider(config)
-        runner = InferenceRunner(
-            provider=provider,
-            async_mode=False,
-        )
+        runner = InferenceRunner(provider=provider, async_mode=False)
+        if not isinstance(runner, AbsInferenceRunner):
+            raise TypeError(
+                f"{type(runner).__name__} must inherit from AbsInferenceRunner"
+            )
         dataset_length = len(provider.build_dataset(config))
-        print(f"===> Processing {dataset_length} samples..")
+        logger.info("===> Processing %d samples..", dataset_length)
         out = runner(list(range(dataset_length)))
+        if out is None:
+            raise RuntimeError("Async inference is not supported in this entrypoint.")
+        results = _flatten_results(out)
+        scp_lines = _collect_scp_lines(
+            results,
+            idx_key=runner.idx_key,
+            hyp_keys=runner.hyp_key,
+            ref_keys=runner.ref_key,
+        )
 
         # create scp files
-        (Path(config.decode_dir) / test_name).mkdir(parents=True, exist_ok=True)
-        with open(Path(config.decode_dir) / test_name / "ref.scp", "w") as f:
-            f.write("\n".join([f"{result['idx']} {result['ref']}" for result in out]))
+        output_dir = Path(config.decode_dir) / test_name
+        output_dir.mkdir(parents=True, exist_ok=True)
+        for key, lines in scp_lines.items():
+            with open(output_dir / f"{key}.scp", "w", encoding="utf-8") as f:
+                f.write("\n".join(lines))
+        logger.info(
+            "Finished test set %s | outputs=%s",
+            test_name,
+            output_dir,
+        )
 
-        with open(Path(config.decode_dir) / test_name / "hyp.scp", "w") as f:
-            f.write("\n".join([f"{result['idx']} {result['hyp']}" for result in out]))
+    logger.info("Inference finished in %.2fs", time.perf_counter() - start)

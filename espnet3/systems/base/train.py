@@ -1,17 +1,9 @@
-"""
-Training entrypoint for the LibriSpeech 100h recipe.
-
-This module wires together model instantiation, Lightning trainer creation,
-stats collection, and the main training loop.
-
-Example:
-    >>> from omegaconf import OmegaConf
-    >>> cfg = OmegaConf.create({"exp_dir": "exp/demo", "model": {...}})  # doctest: +SKIP
-    >>> train(cfg)  # doctest: +SKIP
-"""
+"""Training entrypoint for the LibriSpeech 100h recipe."""
 
 from __future__ import annotations
 
+import logging
+import time
 from pathlib import Path
 from typing import Any, Dict
 
@@ -20,14 +12,15 @@ import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
-from espnet3.components.model import LitESPnetModel
-from espnet3.components.trainer import ESPnet3LightningTrainer
+from espnet3.components.modeling.model import LitESPnetModel
+from espnet3.components.training.trainer import ESPnet3LightningTrainer
 from espnet3.parallel.parallel import set_parallel
 from espnet3.utils.task import get_espnet_model, save_espnet_config
 
+logger = logging.getLogger(__name__)
+
 
 def _instantiate_model(cfg: DictConfig) -> Any:
-    """Instantiate the underlying ESPnet model from config or task registry."""
     task = cfg.get("task")
     if task:
         model_cfg = OmegaConf.to_container(cfg.model, resolve=True)
@@ -36,8 +29,8 @@ def _instantiate_model(cfg: DictConfig) -> Any:
 
 
 def _build_trainer(cfg: DictConfig) -> ESPnet3LightningTrainer:
-    """Create the Lightning trainer wrapper and bind the model."""
     model = _instantiate_model(cfg)
+    logger.info("Model:\n%s", model)
     lit_model = LitESPnetModel(model, cfg)
     trainer = ESPnet3LightningTrainer(
         model=lit_model,
@@ -49,29 +42,15 @@ def _build_trainer(cfg: DictConfig) -> ESPnet3LightningTrainer:
 
 
 def _ensure_directories(cfg: DictConfig) -> None:
-    """Create experiment and stats directories if they do not exist."""
     Path(cfg.exp_dir).mkdir(parents=True, exist_ok=True)
     if hasattr(cfg, "stats_dir"):
         Path(cfg.stats_dir).mkdir(parents=True, exist_ok=True)
 
 
 def collect_stats(cfg: DictConfig) -> None:
-    """
-    Entry point for collecting dataset statistics used during training.
-
-    Args:
-        cfg (DictConfig): Hydra configuration that defines dataset, model, and
-            optional parallel execution settings.
-
-    Returns:
-        None: Invokes the trainer's ``collect_stats`` routine for side effects.
-
-    Example:
-        >>> from omegaconf import OmegaConf
-        >>> cfg = OmegaConf.create({"exp_dir": "exp/demo", "model": {...}})  # doctest: +SKIP
-        >>> collect_stats(cfg)  # doctest: +SKIP
-    """
+    """Collect statistics required by the training pipeline."""
     _ensure_directories(cfg)
+    start = time.perf_counter()
 
     if cfg.get("parallel"):
         set_parallel(cfg.parallel)
@@ -88,25 +67,18 @@ def collect_stats(cfg: DictConfig) -> None:
 
     trainer = _build_trainer(cfg)
     trainer.collect_stats()
+    logger.info(
+        "Collect stats finished in %.2fs | exp_dir=%s stats_dir=%s",
+        time.perf_counter() - start,
+        cfg.exp_dir,
+        getattr(cfg, "stats_dir", None),
+    )
 
 
 def train(cfg: DictConfig) -> None:
-    """
-    Main training loop.
-
-    Args:
-        cfg (DictConfig): Hydra configuration including model/trainer settings,
-            experiment directory, and optional task registry references.
-
-    Returns:
-        None: Delegates to the Lightning trainer for fitting the model.
-
-    Example:
-        >>> from omegaconf import OmegaConf
-        >>> cfg = OmegaConf.create({"exp_dir": "exp/demo", "model": {...}})  # doctest: +SKIP
-        >>> train(cfg)  # doctest: +SKIP
-    """
+    """Run the training loop."""
     _ensure_directories(cfg)
+    start = time.perf_counter()
 
     if cfg.get("parallel"):
         set_parallel(cfg.parallel)
@@ -127,3 +99,9 @@ def train(cfg: DictConfig) -> None:
         fit_kwargs = OmegaConf.to_container(cfg.fit, resolve=True)
 
     trainer.fit(**fit_kwargs)
+    logger.info(
+        "Training finished in %.2fs | exp_dir=%s model=%s",
+        time.perf_counter() - start,
+        cfg.exp_dir,
+        cfg.model.get("_target_", None) if isinstance(cfg.model, DictConfig) else None,
+    )

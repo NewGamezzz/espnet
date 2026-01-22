@@ -1,49 +1,45 @@
+"""Metric scoring entrypoint for decoded outputs."""
+
 import json
 from pathlib import Path
 
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
-from espnet3.components.abs_metric import AbsMetrics
-from espnet3.systems.base.scp_utils import (
-    get_class_path,
-    load_scp_fields,
-)
+from espnet3.components.metrics.abs_metric import AbsMetrics
+from espnet3.utils.scp_utils import get_class_path, load_scp_fields
 
 
 def score(config: DictConfig):
-    """
-    Compute evaluation metrics for decoded hypotheses and persist results.
+    """Compute metrics for each test set and write a scores JSON file.
 
     Args:
-        config (DictConfig): Scoring configuration including metrics, dataset,
-            and decode directory paths.
+        config: Hydra/omegaconf configuration with decode and metric settings.
 
     Returns:
-        Dict[str, Dict[str, float]]: Nested mapping
-            ``{metric_class_path: {test_set: metric_values}}``.
-
-    Note:
-        Results are also written to ``decode_dir/scores.json`` for later inspection.
+        Nested dict keyed by metric class path and test set name.
     """
     test_sets = [t.name for t in config.dataset.test]
     results = {}
     assert hasattr(config, "metrics"), "Please specify metrics!"
 
     for metric_cfg in config.metrics:
-        apply_to = metric_cfg.get("apply_to", None)
-        assert apply_to is not None, "Please set 'apply_to' to specify test set"
-
         metric = instantiate(metric_cfg.metric)
         if not isinstance(metric, AbsMetrics):
             raise TypeError(f"{type(metric)} is not a valid AbsMetrics instance")
 
         results[get_class_path(metric)] = {}
         for test_name in test_sets:
-            if test_name not in apply_to:
-                continue
-
-            inputs = OmegaConf.to_container(metric_cfg.inputs, resolve=True)
+            if hasattr(metric_cfg, "inputs"):
+                inputs = OmegaConf.to_container(metric_cfg.inputs, resolve=True)
+            else:
+                ref_key = getattr(metric, "ref_key", None)
+                hyp_key = getattr(metric, "hyp_key", None)
+                if ref_key is None or hyp_key is None:
+                    raise ValueError(
+                        f"Metric {get_class_path(metric)} requires inputs in config"
+                    )
+                inputs = [ref_key, hyp_key]
             data = load_scp_fields(
                 decode_dir=Path(config.decode_dir),
                 test_name=test_name,
