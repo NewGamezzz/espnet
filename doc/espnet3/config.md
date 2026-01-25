@@ -20,15 +20,13 @@ parallel backends, and connect the pieces to training or runner-based jobs.
 | `parallel`   | Dask / cluster settings (env, workers, options)       | Creating clients via `espnet3.parallel.parallel.set_parallel` |
 | `dataloader` | Dataset, sampler, collate_fn configs                  | Constructing dataloaders and iterating during training |
 
----
-
 ### Core config layout
 
 Organise YAML files into small, purpose-driven sections. A minimal skeleton
 looks like:
 
 ```yaml
-expdir: exp/asr_example
+exp_dir: exp/asr_example
 seed: 2025
 
 model:  # ESPnet or custom model
@@ -59,8 +57,6 @@ dataloader:  # Optional: overrides for collate/sampler/datasets
 
 Hydra instantiates each `_target_` at runtime, so the same pattern works for
 ESPnet-provided components or your own classes.
-
----
 
 ### Parallel execution with Dask
 
@@ -107,8 +103,6 @@ Switch to asynchronous submission by constructing the runner with
 `async_mode=True`; job specs will be written to disk and submitted via Dask
 JobQueue.
 
----
-
 ### Model definition
 
 Two common patterns:
@@ -133,16 +127,12 @@ Two common patterns:
 
 Both feed directly into the Lightning trainer specified by `trainer`.
 
----
-
 ### Optimisers and schedulers
 
 ESPnet3 supports single or multiple optimiser setups. See
-`doc/espnet3/optimizer_configuration.md` for the rules enforced by
-`LitESPnetModel.configure_optimizers` (matching parameter groups, scheduler
-counts, etc.).
-
----
+[Optimizer configuration](./core/components/optimizer_configuration.md) for the
+rules enforced by `ESPnetLightningModule.configure_optimizers` (matching
+parameter groups, scheduler counts, etc.).
 
 ### Dataloader configuration
 
@@ -175,10 +165,8 @@ dataloader:
     sampler:
       _target_: lhotse.dataset.sampling.SimpleCutSampler
       max_cuts: 20
-      shuffle: false
+  shuffle: false
 ```
-
----
 
 ### Trainer parameters
 
@@ -199,14 +187,14 @@ trainer:
 
   logger:
     - _target_: lightning.pytorch.loggers.TensorBoardLogger
-      save_dir: ${expdir}/tensorboard
+      save_dir: ${exp_dir}/tensorboard
       name: tb_logger
 
   callbacks:
     # This AverageCheckpointsCallback is included as a default callback without writing here.
     # We included this as an example.
     - _target_: espnet3.components.callbacks.AverageCheckpointsCallback
-      output_dir: ${expdir}
+      output_dir: ${exp_dir}
       best_ckpt_callbacks: []
 ```
 

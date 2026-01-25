@@ -10,17 +10,16 @@ date: 2025-11-26
 This guide provides the fastest way to start using ESPnet3.  
 Choose the workflow that fits your environment and follow the examples below.
 
----
-
 # ⚡ Quick Start (ASR Example)
 
 ## 1. Install ESPnet3
 
 ESPnet3 is distributed under the **same pip package name: `espnet`**.
+For more installation options (uv, pixi, source), see [ESPnet3 Installation](./install.md).
 
 ```bash
 pip install espnet
-````
+```
 
 ### Install from source (recommended for development)
 
@@ -32,8 +31,6 @@ cd espnet/tools
 # Installs pixi + uv and sets up all dependencies much faster than conda.
 . setup_uv.sh
 ```
-
----
 
 ## 📦 2. Install system-specific dependencies
 
@@ -62,8 +59,6 @@ pip install -e ".[asr]"
 uv pip install -e ".[asr]"
 ```
 
----
-
 ## 🧪 3. Run a recipe **without cloning the repository**
 
 (import-based execution)
@@ -72,25 +67,28 @@ ESPnet3 recipes are fully importable.
 Create config files locally and run:
 
 ```python
-from egs3.TEMPLATE.asr.run import DEFAULT_STAGES, main
+from argparse import Namespace
+from pathlib import Path
+
+from egs3.TEMPLATE.asr.run import main
 from espnet3.systems.asr.system import ASRSystem
 
-main(
-    train_config="/path/to/train_config.yaml",
-    eval_config="/path/to/eval_config.yaml",
-    system_cls=ASRSystem,
-    stages=DEFAULT_STAGES,
-    stage_configs={
-        "stage_name": {
-            "key": "value"
-        }
-    }
+stages = ["create_dataset", "collect_stats", "train", "infer", "measure"]
+args = Namespace(
+    stages=stages,
+    train_config=Path("/path/to/train_config.yaml"),
+    infer_config=Path("/path/to/infer_config.yaml"),
+    measure_config=Path("/path/to/measure_config.yaml"),
+    publish_config=None,
+    demo_config=None,
+    dry_run=False,
+    write_requirements=False,
 )
+
+main(args=args, system_cls=ASRSystem, stages=stages)
 ```
 
 This is useful for programmatic pipelines or MLOps workflows.
-
----
 
 ## 🖥 4. Run a recipe **with a cloned repository**
 
@@ -101,12 +99,11 @@ Example: LibriSpeech 100h ASR
 ```bash
 cd egs3/librispeech_100/asr
 python run.py \
-    --stage all \
+    --stages all \
     --train_config conf/train.yaml \
-    --eval_config conf/evaluate.yaml
+    --infer_config conf/infer.yaml \
+    --measure_config conf/measure.yaml
 ```
-
----
 
 # 🧠 Understanding Stages
 
@@ -121,57 +118,27 @@ Typical ASR pipeline:
 1. **create_dataset** (download/prepare raw data)
 2. **collect_stats** (compute CMVN/statistics)
 3. **train** (fit the model)
-4. **evaluate**
-
-   * **decode** (generate hypotheses)
-   * **score** (compute metrics)
-5. **publish** (package artifacts)
+4. **infer** (generate hypotheses)
+5. **measure** (compute metrics)
+6. **pack_model / upload_model** (package + upload artifacts)
 
 You can run selected stages:
 
 ```bash
 python run.py \
-    --stage train evaluate \
+    --stages train infer measure \
     --train_config conf/train.yaml \
-    --eval_config conf/evaluate.yaml
+    --infer_config conf/infer.yaml \
+    --measure_config conf/measure.yaml
 ```
 
----
+# 🧵 Stage-specific arguments
 
-# 🧵 Passing arguments to specific stages
-
-Each stage accepts arguments via namespaced CLI flags:
-
-```
---stage.<stage_name>.<argument> <value>
-```
-
-Example (ASR):
-
-```bash
-python run.py \
-  --stage all \
-  --train_config conf/train.yaml \
-  --eval_config conf/evaluate.yaml \
-  --stage.create_dataset.dataset_root /path/to/LibriSpeech
-```
-
-Where `src/create_dataset.py` contains:
-
-```python
-def create_dataset(dataset_root, ...):
-    ...
-```
-
-Your custom stages also automatically receive arguments:
-
-```
---stage.custom_stage.some_arg value
-```
+Stages do not accept arbitrary CLI arguments. Keep all stage settings in the
+YAML configs and pass the configs via `--train_config`, `--infer_config`, and
+`--measure_config`.
 
 No code changes inside the system class are needed.
-
----
 
 # 🧩 Implementing `src/` for your recipe
 
@@ -189,18 +156,14 @@ Typical files:
 
 `run.py` automatically adds this directory to `PYTHONPATH`.
 
----
-
 # ⚙️ Configurations (Hydra)
 
 All hyperparameters live in `conf/*.yaml`.
 
 **Important: ESPnet3 disables CLI overrides (`--key=value`).**
 This is because ESPnet3 relies on hierarchical config merging that conflicts
-with Hydra’s runtime override semantics.
+with Hydra's runtime override semantics.
 All overrides must be written inside YAML files.
-
----
 
 # ✅ Putting Everything Together (cloned repository workflow)
 
@@ -216,61 +179,58 @@ Replace `ASRSystem` if you define a custom system. Then:
 cd egs3/<your_recipe>/<task>
 
 # Dataset preparation
-python run.py --stage create_dataset --train_config conf/train.yaml
+python run.py --stages create_dataset --train_config conf/train.yaml
 
 # (Optional) collect_stats + training
-python run.py --stage train --train_config conf/train.yaml --collect_stats
+python run.py --stages collect_stats train --train_config conf/train.yaml
 
 # Evaluation
-python run.py --stage evaluate --eval_config conf/evaluate.yaml
+python run.py --stages infer measure --infer_config conf/infer.yaml --measure_config conf/measure.yaml
 ```
 
 Outputs go to:
 
 * `exp/` – training logs + checkpoints
-* `decode_*/` – decoding + scoring results
-
----
+* `infer_dir/` – inference outputs + measures.json
 
 ## 📚 Additional ESPnet3 Documentation
 
-### ✅ Cheat sheet: what you touch vs. what’s provided
+### ✅ Cheat sheet: what you touch vs. what's provided
 
 | Goal                        | You mainly edit / run                        | Read next                          |
 | --------------------------- | -------------------------------------------- | ---------------------------------- |
-| Define datasets and loaders | `conf/dataset*.yaml`, `DataOrganizer` config | `dataset.md`                       |
-| Configure training          | `conf/train.yaml` (model, trainer, optim)    | `optimizer_configuration.md`, `callbacks.md` |
-| Run multi-GPU / cluster     | `conf/train.yaml` + `parallel` blocks        | `multiple_gpu.md`, `config.md`     |
-| Set up evaluation           | `conf/evaluate.yaml` and score scripts       | `evaluate.md`, `provider_runner.md`|
+| Define datasets and loaders | `conf/dataset*.yaml`, `DataOrganizer` config | [DataOrganizer and dataset pipeline](./core/components/data-organizer.md) |
+| Configure training          | `conf/train.yaml` (model, trainer, optim)    | [Optimizer configuration](./core/components/optimizer_configuration.md), [Callbacks](./core/components/callbacks.md) |
+| Run multi-GPU / cluster     | `conf/train.yaml` + `parallel` blocks        | [Multi-GPU / multi-node](./core/parallel/multiple_gpu.md), [Train config](./config/train_config.md) |
+| Set up evaluation           | `conf/infer.yaml` + `conf/measure.yaml`      | [Inference](./stages/inference.md), [Measure](./stages/measure.md), [Provider / Runner](./core/parallel/provider_runner.md) |
 
 ### Execution Framework
 
-* **Provider / Runner:** `provider_runner.md`
-* **Configuration:** `parallel.md`
+* **Provider / Runner:** [Provider / Runner](./core/parallel/provider_runner.md)
+* **Parallel configuration:** [Parallel](./core/parallel.md)
 
 ### Data & Datasets
 
-* **Data preparation examples:** `data_preparation.md`
-* **Dataset classes & sharding:** `dataset.md`
+* **Data preparation examples:** [Data preparation](./core/parallel/data_preparation.md)
+* **Dataset classes & sharding:** [DataOrganizer and dataset pipeline](./core/components/data-organizer.md)
 
 ### Training
 
-* **Callbacks:** `callbacks.md`
-* **Optimizers:** `optimizer_configuration.md`
-* **Multiple optimizers/schedulers:** `multiple_optimizers_schedulers.md`
-* **Multi-GPU & multi-node:** `multiple_gpu.md`
+* **Callbacks:** [Callbacks](./core/components/callbacks.md)
+* **Optimizers:** [Optimizer configuration](./core/components/optimizer_configuration.md)
+* **Multiple optimizers/schedulers:** [Multiple optimizers & schedulers](./core/components/multiple_optimizers_schedulers.md)
+* **Multi-GPU & multi-node:** [Multi-GPU / multi-node](./core/parallel/multiple_gpu.md)
 
 ### Inference & Evaluation
 
-* **Runner-based decoding:** `provider_runner.md`
-* **Scoring pipeline:** `evaluate.md`
+* **Runner-based decoding:** [Provider / Runner](./core/parallel/provider_runner.md)
+* **Inference pipeline:** [Inference](./stages/inference.md)
+* **Measurement pipeline:** [Measure](./stages/measure.md)
 
 ### Recipe Structure
 
-* **Recipe directory layout:** `recipe_directory.md`
-* **System entry points:** `system.md`
-
----
+* **Recipe directory layout:** [Recipe directory layout](./recipe_directory.md)
+* **Systems:** [Systems](./core/systems.md)
 
 ## 💡 Tips for Working With Recipes
 
