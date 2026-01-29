@@ -99,13 +99,13 @@ def train_sentencepiece(
     Args:
         dump_text_path (Union[str, Path]): Path to the `train.txt` file
             containing the training data for the SentencePiece model.
-        output_path (Union[str, Path]): Output directory where the trained
+        save_path (Union[str, Path]): Output directory where the trained
             SentencePiece model and vocabulary list will be stored.
         vocab_size (int, optional): The size of the vocabulary to be generated
             by the SentencePiece model. Defaults to 5000.
         character_coverage (float, optional): The character coverage rate
             for the model, which indicates the percentage of characters in
-            the training data that should be covered. Defaults to 0.9995.
+            the training data that should be covered. Defaults to 1.0.
         model_type (str, optional): The type of model to be trained.
             Options include 'bpe' (Byte Pair Encoding), 'unigram',
             'char', and 'word'. Defaults to "bpe".

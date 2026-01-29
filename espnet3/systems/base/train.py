@@ -1,4 +1,4 @@
-"""Training entrypoint for the LibriSpeech 100h recipe."""
+"""Training entrypoint for ESPnet3 systems."""
 
 from __future__ import annotations
 

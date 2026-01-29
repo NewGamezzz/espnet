@@ -21,7 +21,7 @@ def load_function(path):
     """Load a callable from a dotted module path.
 
     Args:
-        path: Dotted module path (e.g., ``package.module:function``).
+        path: Dotted module path (e.g., ``package.module.function``).
 
     Returns:
         Callable referenced by the path.

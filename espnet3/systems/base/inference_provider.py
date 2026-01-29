@@ -150,7 +150,7 @@ class InferenceProvider(EnvironmentProvider, ABC):
         is the configuration that the user passed when instantiating the class.
 
         Args:
-            cfg (DictConfig): Configuration.
+            config (DictConfig): Configuration.
 
         Returns:
             Any: Model object (type defined by subclass).
