@@ -10,7 +10,7 @@ from espnet3.components.metrics.abs_metric import AbsMetrics
 from espnet3.utils.scp_utils import get_cls_path, load_scp_fields
 
 
-def measure(config: DictConfig):
+def measure(measure_config: DictConfig):
     """Compute metrics for each test set and write a measures JSON file.
 
     Args:
@@ -19,11 +19,11 @@ def measure(config: DictConfig):
     Returns:
         Nested dict keyed by metric class path and test set name.
     """
-    test_sets = [t.name for t in config.dataset.test]
+    test_sets = [t.name for t in measure_config.dataset.test]
     results = {}
-    assert hasattr(config, "metrics"), "Please specify metrics!"
+    assert hasattr(measure_config, "metrics"), "Please specify metrics!"
 
-    for metric_config in config.metrics:
+    for metric_config in measure_config.metrics:
         metric = instantiate(metric_config.metric)
         if not isinstance(metric, AbsMetrics):
             raise TypeError(f"{type(metric)} is not a valid AbsMetrics instance")
@@ -41,15 +41,15 @@ def measure(config: DictConfig):
                     )
                 inputs = [ref_key, hyp_key]
             data = load_scp_fields(
-                inference_dir=Path(config.inference_dir),
+                inference_dir=Path(measure_config.inference_dir),
                 test_name=test_name,
                 inputs=inputs,
                 file_suffix=".scp",
             )
-            metric_result = metric(data, test_name, config.inference_dir)
+            metric_result = metric(data, test_name, measure_config.inference_dir)
             results[get_cls_path(metric)].update({test_name: metric_result})
 
-    out_path = Path(config.inference_dir) / "measures.json"
+    out_path = Path(measure_config.inference_dir) / "measurements.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
 
