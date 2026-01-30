@@ -34,7 +34,7 @@ def _build_trainer(cfg: DictConfig) -> ESPnet3LightningTrainer:
     lit_model = ESPnetLightningModule(model, cfg)
     trainer = ESPnet3LightningTrainer(
         model=lit_model,
-        expdir=cfg.exp_dir,
+        exp_dir=cfg.exp_dir,
         config=cfg.trainer,
         best_model_criterion=cfg.best_model_criterion,
     )
