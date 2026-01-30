@@ -56,8 +56,8 @@ class AsyncJobSpec:
     extras: Dict | None
 
 
-def _import_obj(class_path: str):
-    mod, _, name = class_path.rpartition(".")
+def _import_obj(cls_path: str):
+    mod, _, name = cls_path.rpartition(".")
     return getattr(importlib.import_module(mod), name)
 
 
@@ -86,7 +86,7 @@ def convert_paths(obj):
         return obj
 
 
-def get_full_class_path_from_instance(obj):
+def get_full_cls_path_from_instance(obj):
     """Return the full import path of the given object's class."""
     cls = obj.__class__
     module = cls.__module__
@@ -295,8 +295,8 @@ class BaseRunner(ABC):
 
             # DictConfig -> dict
             cfg_dict = OmegaConf.to_container(self.provider.config, resolve=True)
-            provider_cls = get_full_class_path_from_instance(self.provider)
-            runner_cls = get_full_class_path_from_instance(self)
+            provider_cls = get_full_cls_path_from_instance(self.provider)
+            runner_cls = get_full_cls_path_from_instance(self)
 
             job_meta = []
             for rank, chunk in enumerate(chunks):

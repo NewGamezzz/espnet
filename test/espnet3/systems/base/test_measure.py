@@ -6,7 +6,7 @@ from omegaconf import OmegaConf
 
 from espnet3.components.metrics.abs_metric import AbsMetrics
 from espnet3.systems.base.measure import measure
-from espnet3.utils.scp_utils import get_class_path
+from espnet3.utils.scp_utils import get_cls_path
 
 
 class DummyMetric(AbsMetrics):
@@ -48,7 +48,7 @@ def test_measure_uses_metric_keys_and_writes_json(tmp_path):
 
     results = measure(cfg)
 
-    expected_key = get_class_path(DummyMetric())
+    expected_key = get_cls_path(DummyMetric())
     assert results[expected_key][test_name] == {"count": 2}
     measures_path = infer_dir / "measures.json"
     assert measures_path.is_file()
@@ -78,7 +78,7 @@ def test_measure_uses_config_inputs_mapping(tmp_path):
 
     results = measure(cfg)
 
-    expected_key = get_class_path(NoKeyMetric())
+    expected_key = get_cls_path(NoKeyMetric())
     assert results[expected_key][test_name] == {"ok": True}
 
 
