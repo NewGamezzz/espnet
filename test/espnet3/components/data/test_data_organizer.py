@@ -7,7 +7,7 @@ from omegaconf import OmegaConf
 from espnet2.train.preprocessor import AbsPreprocessor
 from espnet3.components.data.data_organizer import (
     DataOrganizer,
-    do_nothing_transform,
+    do_nothing,
 )
 from espnet3.components.data.dataset import (
     CombinedDataset,
@@ -171,8 +171,8 @@ def test_combined_dataset():
     combined = CombinedDataset(
         [ds1, ds2],
         [
-            (DummyTransform(), do_nothing_transform),
-            (DummyTransform(), do_nothing_transform),
+            (DummyTransform(), do_nothing),
+            (DummyTransform(), do_nothing),
         ],
     )
     assert len(combined) == 4
@@ -413,8 +413,8 @@ def test_data_organizer_inconsistent_keys():
         CombinedDataset(
             [ds1, ds2],
             [
-                (do_nothing_transform, do_nothing_transform),
-                (do_nothing_transform, do_nothing_transform),
+                (do_nothing, do_nothing),
+                (do_nothing, do_nothing),
             ],
         )
 
@@ -426,7 +426,7 @@ def test_data_organizer_transform_none():
 
     ds = DummyDataset()
     with pytest.raises(ValueError):
-        CombinedDataset([ds], [(BrokenTransform(), do_nothing_transform)])
+        CombinedDataset([ds], [(BrokenTransform(), do_nothing)])
 
 
 def test_data_organizer_invalid_preprocessor_type():

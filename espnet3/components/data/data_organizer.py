@@ -1,6 +1,8 @@
 """DataOrganizer class for managing datasets in ESPnet3."""
 
 from dataclasses import dataclass
+from omegaconf import DictConfig
+from hydra.utils import instantiate
 from typing import Any, Callable, Dict, List, Optional, Union
 
 from espnet2.train.preprocessor import AbsPreprocessor
@@ -32,28 +34,15 @@ class DatasetConfig:
         ...         "_target_": "my_project.transforms.uppercase_transform"
         ...     }
         ... }
-        >>> config = DatasetConfig.from_dict(cfg_dict)
+        >>> config = DatasetConfig(**cfg_dict)
     """
 
     name: str
     dataset: Dict[str, Any] = None
     transform: Optional[Dict[str, Any]] = None
 
-    @staticmethod
-    def from_dict(cfg: Dict[str, Any]) -> "DatasetConfig":
-        """Create a DatasetConfig instance from a plain dictionary.
 
-        Args:
-            cfg (Dict[str, Any]): Dictionary containing keys matching DatasetConfig
-                fields.
-
-        Returns:
-            DatasetConfig: Parsed configuration object.
-        """
-        return DatasetConfig(**cfg)
-
-
-def do_nothing_transform(*x):
+def do_nothing(*x):
     """Return input as-is.
 
     Args:
@@ -62,10 +51,7 @@ def do_nothing_transform(*x):
     Returns:
         The input object unchanged.
     """
-    if len(x) == 1:
-        return x[0]
-    else:
-        return x
+    return x
 
 
 class DataOrganizer:
@@ -136,7 +122,9 @@ class DataOrganizer:
         preprocessor: Optional[Callable[[dict], dict]] = None,
     ):
         """Initialize DataOrganizer object."""
-        self.preprocessor = preprocessor or do_nothing_transform
+        self.preprocessor = preprocessor or do_nothing
+        if isinstance(self.preprocessor, (dict, DictConfig)):
+            self.preprocessor = instantiate(self.preprocessor)
         assert callable(self.preprocessor), "Preprocessor should be callable."
         is_espnet_preprocessor = isinstance(self.preprocessor, AbsPreprocessor)
 
@@ -145,12 +133,14 @@ class DataOrganizer:
             transforms = []
             for cfg in cfg_list:
                 if isinstance(cfg, dict):
-                    cfg = DatasetConfig.from_dict(cfg)
+                    cfg = DatasetConfig(**cfg)
                 dataset = cfg.dataset
                 if hasattr(cfg, "transform"):
                     transform = cfg.transform
                 else:
-                    transform = do_nothing_transform
+                    transform = do_nothing
+                if isinstance(transform, (dict, DictConfig)):
+                    transform = instantiate(transform)
 
                 datasets.append(dataset)
                 transforms.append((transform, self.preprocessor))
@@ -194,7 +184,7 @@ class DataOrganizer:
                 if hasattr(cfg, "transform"):
                     transform = cfg.transform
                 else:
-                    transform = do_nothing_transform
+                    transform = do_nothing
                 self.test_sets[cfg.name] = DatasetWithTransform(
                     dataset,
                     transform,
