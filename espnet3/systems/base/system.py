@@ -6,7 +6,7 @@ from pathlib import Path
 from omegaconf import DictConfig
 
 from espnet3.systems.base.inference import infer
-from espnet3.systems.base.measure import measure
+from espnet3.systems.base.measurement import measure
 from espnet3.systems.base.train import collect_stats, train
 
 logger = logging.getLogger(__name__)

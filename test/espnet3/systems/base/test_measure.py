@@ -5,7 +5,7 @@ import pytest
 from omegaconf import OmegaConf
 
 from espnet3.components.metrics.abs_metric import AbsMetrics
-from espnet3.systems.base.measure import measure
+from espnet3.systems.base.measurement import measure
 from espnet3.utils.scp_utils import get_cls_path
 
 
