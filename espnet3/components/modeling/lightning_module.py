@@ -294,24 +294,24 @@ class ESPnetLightningModule(lightning.LightningModule):
             }  # key: name, value: param
             used_param_ids = set()
 
-            for optim_cfg in self.config.optims:
-                assert "params" in optim_cfg, "missing 'params' in optim config"
-                assert "optim" in optim_cfg, "missing nested 'optim' block"
+            for optim_config in self.config.optims:
+                assert "params" in optim_config, "missing 'params' in optim config"
+                assert "optim" in optim_config, "missing nested 'optim' block"
 
                 # filter parameters whose name contains the 'params' keyword
                 selected = [
                     p
                     for name, p in trainable_params.items()
-                    if optim_cfg["params"] in name
+                    if optim_config["params"] in name
                 ]
                 selected_names = [
                     name
                     for name in trainable_params.keys()
-                    if optim_cfg["params"] in name
+                    if optim_config["params"] in name
                 ]
                 assert (
                     len(selected) > 0
-                ), f"No trainable parameters found for: {optim_cfg['params']}"
+                ), f"No trainable parameters found for: {optim_config['params']}"
 
                 for n in selected_names:
                     assert (
@@ -320,7 +320,8 @@ class ESPnetLightningModule(lightning.LightningModule):
                     used_param_ids.add(n)
 
                 optim = instantiate(
-                    OmegaConf.to_container(optim_cfg["optim"], resolve=True), selected
+                    OmegaConf.to_container(optim_config["optim"], resolve=True),
+                    selected
                 )
                 optims.append(optim)
 

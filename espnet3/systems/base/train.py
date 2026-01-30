@@ -20,88 +20,88 @@ from espnet3.utils.task_utils import get_espnet_model, save_espnet_config
 logger = logging.getLogger(__name__)
 
 
-def _instantiate_model(cfg: DictConfig) -> Any:
-    task = cfg.get("task")
+def _instantiate_model(config: DictConfig) -> Any:
+    task = config.get("task")
     if task:
-        model_cfg = OmegaConf.to_container(cfg.model, resolve=True)
-        return get_espnet_model(task, model_cfg)
-    return instantiate(cfg.model)
+        model_config = OmegaConf.to_container(config.model, resolve=True)
+        return get_espnet_model(task, model_config)
+    return instantiate(config.model)
 
 
-def _build_trainer(cfg: DictConfig) -> ESPnet3LightningTrainer:
-    model = _instantiate_model(cfg)
+def _build_trainer(config: DictConfig) -> ESPnet3LightningTrainer:
+    model = _instantiate_model(config)
     logger.info("Model:\n%s", model)
-    lit_model = ESPnetLightningModule(model, cfg)
+    lit_model = ESPnetLightningModule(model, config)
     trainer = ESPnet3LightningTrainer(
         model=lit_model,
-        exp_dir=cfg.exp_dir,
-        config=cfg.trainer,
-        best_model_criterion=cfg.best_model_criterion,
+        exp_dir=config.exp_dir,
+        config=config.trainer,
+        best_model_criterion=config.best_model_criterion,
     )
     return trainer
 
 
-def _ensure_directories(cfg: DictConfig) -> None:
-    Path(cfg.exp_dir).mkdir(parents=True, exist_ok=True)
-    if hasattr(cfg, "stats_dir"):
-        Path(cfg.stats_dir).mkdir(parents=True, exist_ok=True)
+def _ensure_directories(config: DictConfig) -> None:
+    Path(config.exp_dir).mkdir(parents=True, exist_ok=True)
+    if hasattr(config, "stats_dir"):
+        Path(config.stats_dir).mkdir(parents=True, exist_ok=True)
 
 
-def collect_stats(cfg: DictConfig) -> None:
+def collect_stats(config: DictConfig) -> None:
     """Collect statistics required by the training pipeline."""
-    _ensure_directories(cfg)
+    _ensure_directories(config)
     start = time.perf_counter()
 
-    if cfg.get("parallel"):
-        set_parallel(cfg.parallel)
+    if config.get("parallel"):
+        set_parallel(config.parallel)
 
-    if cfg.get("seed") is not None:
-        L.seed_everything(int(cfg.seed), workers=True)
+    if config.get("seed") is not None:
+        L.seed_everything(int(config.seed), workers=True)
 
     torch.set_float32_matmul_precision("high")
 
-    if "normalize" in cfg.model:
-        cfg.model.pop("normalize")
-    if "normalize_conf" in cfg.model:
-        cfg.model.pop("normalize_conf")
+    if "normalize" in config.model:
+        config.model.pop("normalize")
+    if "normalize_conf" in config.model:
+        config.model.pop("normalize_conf")
 
-    trainer = _build_trainer(cfg)
+    trainer = _build_trainer(config)
     trainer.collect_stats()
     logger.info(
         "Collect stats finished in %.2fs | exp_dir=%s stats_dir=%s",
         time.perf_counter() - start,
-        cfg.exp_dir,
-        getattr(cfg, "stats_dir", None),
+        config.exp_dir,
+        getattr(config, "stats_dir", None),
     )
 
 
-def train(cfg: DictConfig) -> None:
+def train(config: DictConfig) -> None:
     """Run the training loop."""
-    _ensure_directories(cfg)
+    _ensure_directories(config)
     start = time.perf_counter()
 
-    if cfg.get("parallel"):
-        set_parallel(cfg.parallel)
+    if config.get("parallel"):
+        set_parallel(config.parallel)
 
-    if cfg.get("seed") is not None:
-        L.seed_everything(int(cfg.seed), workers=True)
+    if config.get("seed") is not None:
+        L.seed_everything(int(config.seed), workers=True)
 
     torch.set_float32_matmul_precision("high")
 
-    task = cfg.get("task")
+    task = config.get("task")
     if task:
-        save_espnet_config(task, cfg, cfg.exp_dir)
+        save_espnet_config(task, config, config.exp_dir)
 
-    trainer = _build_trainer(cfg)
+    trainer = _build_trainer(config)
 
     fit_kwargs: Dict[str, Any] = {}
-    if hasattr(cfg, "fit") and cfg.fit:
-        fit_kwargs = OmegaConf.to_container(cfg.fit, resolve=True)
+    if hasattr(config, "fit") and config.fit:
+        fit_kwargs = OmegaConf.to_container(config.fit, resolve=True)
 
     trainer.fit(**fit_kwargs)
     logger.info(
         "Training finished in %.2fs | exp_dir=%s model=%s",
         time.perf_counter() - start,
-        cfg.exp_dir,
-        cfg.model.get("_target_", None) if isinstance(cfg.model, DictConfig) else None,
+        config.exp_dir,
+        config.model.get("_target_", None) if isinstance(config.model, DictConfig) else None,
     )

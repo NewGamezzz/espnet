@@ -262,7 +262,7 @@ def wrap_func_with_worker_env(func: Callable) -> Callable:
         >>> def add_bias(x, bias):
         ...     return x + bias
         ...
-        >>> with get_client(local_cfg, setup_fn=setup_fn) as client:
+        >>> with get_client(local_config, setup_fn=setup_fn) as client:
         ...     # 'bias' comes from worker env, no need to pass it explicitly
         ...     futs = client.map(add_bias, [1, 2])
         ...     print(client.gather(futs))

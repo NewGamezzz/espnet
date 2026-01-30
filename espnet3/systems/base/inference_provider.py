@@ -60,7 +60,7 @@ class InferenceProvider(EnvironmentProvider, ABC):
               Any additional fields from ``params`` are also included.
 
         Example:
-            >>> provider = InferenceProvider(cfg, params={"device": "cuda"})
+            >>> provider = InferenceProvider(config, params={"device": "cuda"})
             >>> env = provider.build_env_local()
             >>> env.keys()
             dict_keys(["dataset", "model", "device"])
@@ -86,7 +86,7 @@ class InferenceProvider(EnvironmentProvider, ABC):
             returns ``{"dataset": ..., "model": ..., **params}``.
 
         Example:
-            >>> provider = InferenceProvider(cfg, params={"device": "cuda:0"})
+            >>> provider = InferenceProvider(config, params={"device": "cuda:0"})
             >>> setup_fn = provider.build_worker_setup_fn()
             >>> env = setup_fn()
             >>> "dataset" in env and "model" in env
@@ -127,10 +127,10 @@ class InferenceProvider(EnvironmentProvider, ABC):
         Example:
             >>> # Minimal sketch; actual keys depend on your subclass
             >>> from omegaconf import OmegaConf
-            >>> cfg = OmegaConf.create({
+            >>> config = OmegaConf.create({
             >>>     "dataset": {"path": "data/test", "split": "test"}
             >>> })
-            >>> ds = MyInferenceProvider.build_dataset(cfg)
+            >>> ds = MyInferenceProvider.build_dataset(config)
 
         Notes:
             - Keep dataset initialization lightweight by using lazy loading or
@@ -163,10 +163,10 @@ class InferenceProvider(EnvironmentProvider, ABC):
         Example:
             >>> # Minimal sketch; actual keys depend on your subclass
             >>> from omegaconf import OmegaConf
-            >>> cfg = OmegaConf.create({
+            >>> config = OmegaConf.create({
             >>>     "model": {"checkpoint": "exp/model.pth", "device": "cpu"}
             >>> })
-            >>> model = MyInferenceProvider.build_model(cfg)  # doctest: +SKIP
+            >>> model = MyInferenceProvider.build_model(config)  # doctest: +SKIP
 
         Notes:
             - This method should handle **loading weights** and placing the

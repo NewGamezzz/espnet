@@ -82,8 +82,8 @@ def _process_dict_config_entry(entry: DictConfig, base_path: Path) -> list:
         # Compose config path like 'optimizer/adam.yaml'
         # or use as-is if path includes '/'
         composed = f"{key}/{val}" if "/" not in val else val
-        cfg_path = _build_config_path(base_path, composed)
-        results.append({key: load_config_with_defaults(str(cfg_path))})
+        config_path = _build_config_path(base_path, composed)
+        results.append({key: load_config_with_defaults(str(config_path))})
     return results
 
 
@@ -119,42 +119,41 @@ def load_config_with_defaults(path: str) -> OmegaConf:
         OmegaConf.DictConfig: Fully resolved and merged configuration object.
     """
     base_path = Path(path).parent
-    main_cfg = OmegaConf.load(path)
-    cfg_self = main_cfg.copy()
+    main_config = OmegaConf.load(path)
+    config_self = main_config.copy()
 
-    if "defaults" not in main_cfg:
-        return cfg_self
+    if "defaults" not in main_config:
+        return config_self
 
-    merged_cfgs = []
+    merged_configs = []
     self_merged = False
 
-    for entry in main_cfg.defaults:
+    for entry in main_config.defaults:
         if isinstance(entry, str):
             if entry == "_self_":
-                merged_cfgs.append(cfg_self)
+                merged_configs.append(config_self)
                 self_merged = True
             else:
-                cfg_path = _build_config_path(base_path, entry)
-                merged_cfgs.append(load_config_with_defaults(str(cfg_path)))
+                config_path = _build_config_path(base_path, entry)
+                merged_configs.append(load_config_with_defaults(str(config_path)))
 
         elif isinstance(entry, DictConfig):
-            merged_cfgs.extend(_process_dict_config_entry(entry, base_path))
+            merged_configs.extend(_process_dict_config_entry(entry, base_path))
 
         elif entry == "_self_":
-            merged_cfgs.append(cfg_self)
+            merged_configs.append(config_self)
             self_merged = True
 
     if not self_merged:
-        merged_cfgs.append(cfg_self)
+        merged_configs.append(config_self)
 
-    final_cfg = OmegaConf.merge(*merged_cfgs)
-    OmegaConf.resolve(final_cfg)
+    final_config = OmegaConf.merge(*merged_configs)
+    OmegaConf.resolve(final_config)
 
-    if "defaults" in final_cfg:
-        del final_cfg["defaults"]
+    if "defaults" in final_config:
+        del final_config["defaults"]
 
-    _ensure_target_convert_all(final_cfg)
-    return final_cfg
+    return final_config
 
 
 def _ensure_target_convert_all(cfg) -> None:

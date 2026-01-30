@@ -116,9 +116,9 @@ class BaseSystem:
         self._reject_stage_args("train", args, kwargs)
         model_target = None
         if self.train_config is not None and hasattr(self.train_config, "model"):
-            model_cfg = self.train_config.model
-            if isinstance(model_cfg, DictConfig):
-                model_target = model_cfg.get("_target_")
+            model_config = self.train_config.model
+            if isinstance(model_config, DictConfig):
+                model_target = model_config.get("_target_")
         logger.info(
             "Training start | exp_dir=%s model=%s",
             getattr(self.train_config, "exp_dir", None),

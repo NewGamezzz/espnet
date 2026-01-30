@@ -29,11 +29,11 @@ class InferenceProvider(EnvironmentProvider, ABC):
 
     @staticmethod
     @abstractmethod
-    def build_dataset(cfg: DictConfig):
+    def build_dataset(config: DictConfig):
         """Create a dataset object from config.
 
         Args:
-            cfg: Configuration for dataset construction.
+            config: Configuration for dataset construction.
 
         Returns:
             Dataset-like object used for inference.
@@ -42,11 +42,11 @@ class InferenceProvider(EnvironmentProvider, ABC):
 
     @staticmethod
     @abstractmethod
-    def build_model(cfg: DictConfig):
+    def build_model(config: DictConfig):
         """Create a model object from config.
 
         Args:
-            cfg: Configuration for model construction.
+            config: Configuration for model construction.
 
         Returns:
             Model-like object used for inference.
@@ -67,13 +67,13 @@ class InferenceProvider(EnvironmentProvider, ABC):
         Returns:
             Callable that constructs a fresh environment when invoked.
         """
-        cfg = self.config
+        config = self.config
         params = dict(self.params)
 
         def setup() -> Dict[str, Any]:
             env = {
-                "dataset": self.build_dataset(cfg),
-                "model": self.build_model(cfg),
+                "dataset": self.build_dataset(config),
+                "model": self.build_model(config),
             }
             env.update(params)
             return env

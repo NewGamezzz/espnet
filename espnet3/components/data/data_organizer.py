@@ -25,7 +25,7 @@ class DatasetConfig:
             a transform applied to each sample after loading.
 
     Example:
-        >>> cfg_dict = {
+        >>> config_dict = {
         ...     "name": "custom",
         ...     "dataset": {
         ...         "_target_": "my_project.datasets.MyDataset",
@@ -34,7 +34,7 @@ class DatasetConfig:
         ...         "_target_": "my_project.transforms.uppercase_transform"
         ...     }
         ... }
-        >>> config = DatasetConfig(**cfg_dict)
+        >>> config = DatasetConfig(**config_dict)
     """
 
     name: str
@@ -99,8 +99,8 @@ class DataOrganizer:
 
     Example (training + validation):
         >>> organizer = DataOrganizer(
-        ...     train=train_cfgs,
-        ...     valid=valid_cfgs,
+        ...     train=train_configs,
+        ...     valid=valid_configs,
         ...     preprocessor=MyPreprocessor()
         ... )
         >>> sample = organizer.train[0]
@@ -108,7 +108,7 @@ class DataOrganizer:
 
     Example (testing only):
         >>> organizer = DataOrganizer(
-        ...     test=test_cfgs,
+        ...     test=test_configs,
         ...     preprocessor=MyPreprocessor()
         ... )
         >>> test_sample = organizer.test["test_clean"][0]
@@ -128,15 +128,17 @@ class DataOrganizer:
         assert callable(self.preprocessor), "Preprocessor should be callable."
         is_espnet_preprocessor = isinstance(self.preprocessor, AbsPreprocessor)
 
-        def build_dataset_list(cfg_list):
+        def build_dataset_list(config_list):
             datasets = []
             transforms = []
-            for cfg in cfg_list:
-                if isinstance(cfg, dict):
-                    cfg = DatasetConfig(**cfg)
-                dataset = cfg.dataset
-                if hasattr(cfg, "transform"):
-                    transform = cfg.transform
+            for config in config_list:
+                if isinstance(config, dict):
+                    config = DatasetConfig(**config)
+                dataset = config.dataset
+                if isinstance(dataset, (dict, DictConfig)):
+                    dataset = instantiate(dataset)
+                if hasattr(config, "transform"):
+                    transform = config.transform
                 else:
                     transform = do_nothing
                 if isinstance(transform, (dict, DictConfig)):
@@ -179,13 +181,13 @@ class DataOrganizer:
 
         self.test_sets = {}
         if test is not None:
-            for cfg in test:
-                dataset = cfg.dataset
-                if hasattr(cfg, "transform"):
-                    transform = cfg.transform
+            for config in test:
+                dataset = config.dataset
+                if hasattr(config, "transform"):
+                    transform = config.transform
                 else:
                     transform = do_nothing
-                self.test_sets[cfg.name] = DatasetWithTransform(
+                self.test_sets[config.name] = DatasetWithTransform(
                     dataset,
                     transform,
                     self.preprocessor,

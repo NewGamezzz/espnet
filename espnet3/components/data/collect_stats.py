@@ -158,12 +158,12 @@ def _accumulate_and_persist_batch(
 
 
 def _build_collate_fn(dataloader_config):
-    cfg = dataloader_config
-    if not isinstance(cfg, DictConfig):
-        cfg = OmegaConf.create(cfg) if cfg is not None else OmegaConf.create({})
+    if not isinstance(dataloader_config, DictConfig):
+        dataloader_config = OmegaConf.create(dataloader_config) \
+            if dataloader_config is not None else OmegaConf.create({})
 
-    if hasattr(cfg, "collate_fn") and cfg.collate_fn is not None:
-        return instantiate(cfg.collate_fn)
+    if hasattr(dataloader_config, "collate_fn") and dataloader_config.collate_fn is not None:
+        return instantiate(dataloader_config.collate_fn)
     else:
         return CommonCollateFn(int_pad_value=-1)
 
@@ -210,11 +210,10 @@ def _chunk_indices(num_items: int, batch_size: int) -> List[List[int]]:
 
 
 def _instantiate_dataset(dataset_config, mode: str):
-    cfg = dataset_config
-    if not isinstance(cfg, DictConfig):
-        cfg = OmegaConf.create(cfg)
+    if not isinstance(dataset_config, DictConfig):
+        dataset_config = OmegaConf.create(dataset_config)
 
-    organizer = instantiate(cfg)
+    organizer = instantiate(dataset_config)
     dataset = getattr(organizer, mode, None)
     if dataset is None:
         raise ValueError(f"Dataset organizer does not provide split '{mode}'")
@@ -270,15 +269,15 @@ class CollectStatsInferenceProvider(EnvironmentProvider):
         params: Optional[Dict[str, Any]] = dict(),
     ):
         """Initialize CollectStatsInferenceProvider object."""
-        cfg = OmegaConf.create({})
-        cfg.model_config = model_config
-        cfg.dataset_config = dataset_config
-        cfg.dataloader_config = dataloader_config
-        cfg.mode = mode
-        cfg.task = task
-        cfg.shard_idx = shard_idx
-        cfg.update(**params)
-        super().__init__(cfg)
+        config = OmegaConf.create({})
+        config.model_config = model_config
+        config.dataset_config = dataset_config
+        config.dataloader_config = dataloader_config
+        config.mode = mode
+        config.task = task
+        config.shard_idx = shard_idx
+        config.update(**params)
+        super().__init__(config)
 
     def build_env_local(self) -> Dict[str, Any]:
         """Build the environment once on the driver for local inference."""
@@ -471,8 +470,8 @@ def collect_stats_multiple_iterator(
         defaultdict(lambda: 0),
     )
 
-    mode_cfg = getattr(dataloader_config, mode)
-    num_shards = mode_cfg.num_shards
+    mode_config = getattr(dataloader_config, mode)
+    num_shards = mode_config.num_shards
 
     for shard_idx in range(num_shards):
         sum_dict, sq_dict, count_dict = _collect_stats_common(

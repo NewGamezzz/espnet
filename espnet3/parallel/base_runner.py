@@ -285,16 +285,16 @@ class BaseRunner(ABC):
             - When not gathering, each shard writes to
               ``async_result_dir / f"result-<job_id>.jsonl"`` on its worker.
         """
-        par_cfg = get_parallel_config()
-        client = build_client(par_cfg)
-        n_workers = par_cfg.get("n_workers", 1)
+        par_config = get_parallel_config()
+        client = build_client(par_config)
+        n_workers = par_config.get("n_workers", 1)
         try:
             chunks = _default_chunk(indices, n_workers)
             self.async_specs_dir.mkdir(parents=True, exist_ok=True)
             self.async_result_dir.mkdir(parents=True, exist_ok=True)
 
             # DictConfig -> dict
-            cfg_dict = OmegaConf.to_container(self.provider.config, resolve=True)
+            config_dict = OmegaConf.to_container(self.provider.config, resolve=True)
             provider_cls = get_full_cls_path_from_instance(self.provider)
             runner_cls = get_full_cls_path_from_instance(self)
 
@@ -308,7 +308,7 @@ class BaseRunner(ABC):
                 spec = AsyncJobSpec(
                     runner_cls=runner_cls,
                     provider_cls=provider_cls,
-                    config=cfg_dict,
+                    config=config_dict,
                     params=getattr(self.provider, "params", {}) or {},
                     indices=list(chunk),
                     world_size=len(chunks),
@@ -370,8 +370,8 @@ class BaseRunner(ABC):
         if self.async_mode:
             return asyncio.run(self._run_async(indices))
 
-        par_cfg = get_parallel_config()
-        if par_cfg is None or getattr(par_cfg, "env", "local") == "local":
+        par_config = get_parallel_config()
+        if par_config is None or getattr(par_config, "env", "local") == "local":
             return self._run_local(indices)
         return self._run_parallel(indices)
 
@@ -417,9 +417,9 @@ def _async_worker_entry_from_spec_path(spec_path: str):
     RunnerCls = _import_obj(spec["runner_cls"])
     ProviderCls = _import_obj(spec["provider_cls"])
 
-    cfg = DictConfig(spec["config"])
+    config = DictConfig(spec["config"])
     params = spec.get("params", {}) or {}
-    provider = ProviderCls(cfg, params=params)
+    provider = ProviderCls(config, params=params)
 
     # Add world size and rank
     os.environ["WORLD_SIZE"] = str(spec["world_size"])
