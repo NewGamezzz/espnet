@@ -28,14 +28,14 @@ class InferenceProvider(EnvironmentProvider, ABC):
           pickle-safe for Dask.
 
     Args:
-        config (DictConfig): Hydra configuration used to build dataset/model.
+        infer_config (DictConfig): Hydra configuration used to build dataset/model.
         params (Dict[str, Any] | None): Optional additional key-value pairs
             that will be merged into the returned environment (e.g., device,
             tokenizer, beam size).
 
     Notes:
         - Subclasses must implement ``build_dataset`` and ``build_model``.
-        - ``self.config.update(self.params)`` allows lightweight overrides
+        - ``self.infer_config.update(self.params)`` allows lightweight overrides
           (e.g., runtime overrides) but avoid mutating deep structures unless
           intended.
     """
