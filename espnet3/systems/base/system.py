@@ -43,7 +43,7 @@ class BaseSystem:
         """Initialize the system with optional stage configs."""
         self.train_config = train_config
         self.infer_config = infer_config
-        self.metric_config = measure_config
+        self.measure_config = measure_config
         self.publish_config = publish_config
         self.demo_config = demo_config
         self.demo_config_path = demo_config_path
@@ -139,10 +139,10 @@ class BaseSystem:
         """Compute evaluation metrics from hypothesis/reference outputs."""
         self._reject_stage_args("measure", args, kwargs)
         logger.info(
-            "Measurement start | metric_config=%s",
-            self.metric_config is not None,
+            "Measurement start | measure_config=%s",
+            self.measure_config is not None,
         )
-        result = measure(self.metric_config)
+        result = measure(self.measure_config)
         logger.info("Measurement results: %s", result)
         return result
 
