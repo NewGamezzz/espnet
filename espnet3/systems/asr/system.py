@@ -154,7 +154,7 @@ class ASRSystem(BaseSystem):
         # Proceed with standard training
         return super().train()
 
-    def _tokenizer_exists(self) -> bool:
+    def _has_tokenizer(self) -> bool:
         tokenizer_cfg = self.train_config.tokenizer
         output_path = Path(tokenizer_cfg.save_path)
         model = output_path / f"{tokenizer_cfg.model_type}.model"
@@ -173,7 +173,7 @@ class ASRSystem(BaseSystem):
         """
         self._reject_stage_args("train_tokenizer", args, kwargs)
 
-        if self._tokenizer_exists():
+        if self._has_tokenizer():
             logger.info("Tokenizer already exists. Skipping train_tokenizer().")
             return
         start = time.perf_counter()
