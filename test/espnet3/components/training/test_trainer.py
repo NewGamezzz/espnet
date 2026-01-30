@@ -13,7 +13,7 @@ from typeguard import TypeCheckError
 
 from espnet3.components.modeling.lightning_module import ESPnetLightningModule
 from espnet3.components.training.trainer import ESPnet3LightningTrainer
-from espnet3.utils.config import load_config_with_defaults
+from espnet3.utils.config_utils import load_config_with_defaults
 
 # ===============================================================
 # Test Case Summary for ESPnet3LightningTrainer

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from espnet3.utils.config import load_config_with_defaults
+from espnet3.utils.config_utils import load_config_with_defaults
 
 # Replace with your actual module path
 # Example: from espnet3task import get_task_cls, save_espnet_config, get_espnet_model
