@@ -36,7 +36,7 @@ def test_base_system_invokes_helpers(tmp_path, monkeypatch):
 
     monkeypatch.setattr(sysmod, "collect_stats", fake_collect)
     monkeypatch.setattr(sysmod, "train", fake_train)
-    monkeypatch.setattr(sysmod, "inference", fake_infer)
+    monkeypatch.setattr(sysmod, "infer", fake_infer)
     monkeypatch.setattr(sysmod, "measure", fake_measure)
 
     system = BaseSystem(

@@ -93,7 +93,7 @@ def test_inference_writes_scp_outputs(tmp_path, monkeypatch):
 
     monkeypatch.setattr(inference_mod, "set_parallel", fake_set_parallel)
 
-    inference_mod.inference(cfg)
+    inference_mod.infer(cfg)
 
     assert calls["parallel"] == {"env": "local"}
     for test_name in ("test_a", "test_b"):
@@ -122,7 +122,7 @@ def test_inference_rejects_async_results(tmp_path, monkeypatch):
     monkeypatch.setattr(inference_mod, "set_parallel", lambda arg: None)
 
     with pytest.raises(RuntimeError, match="Async inference is not supported"):
-        inference_mod.inference(cfg)
+        inference_mod.infer(cfg)
 
 
 def test_inference_passes_provider_params(tmp_path, monkeypatch):
@@ -148,7 +148,7 @@ def test_inference_passes_provider_params(tmp_path, monkeypatch):
 
     monkeypatch.setattr(inference_mod, "set_parallel", lambda arg: None)
 
-    inference_mod.inference(cfg)
+    inference_mod.infer(cfg)
 
     assert CaptureProvider.last_params == {
         "beam": 5,

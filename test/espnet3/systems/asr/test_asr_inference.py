@@ -1,7 +1,7 @@
 import pytest
 from omegaconf import OmegaConf
 
-from espnet3.systems.base.inference import inference
+from espnet3.systems.base.inference import infer
 from espnet3.systems.base.inference_provider import InferenceProvider
 from espnet3.systems.base.inference_runner import InferenceRunner
 
@@ -209,7 +209,7 @@ def test_inference_requires_provider_config():
         }
     )
     with pytest.raises(RuntimeError, match="infer_config.provider must be set"):
-        inference(cfg)
+        infer(cfg)
 
 
 @pytest.mark.parametrize("flip,expected", [(False, "base"), (True, "flip")])
@@ -232,7 +232,7 @@ def test_inference_params_affect_runner_forward(tmp_path, flip, expected):
         }
     )
 
-    inference(cfg)
+    infer(cfg)
 
     scp_path = tmp_path / "test" / "hyp.scp"
     assert scp_path.exists()

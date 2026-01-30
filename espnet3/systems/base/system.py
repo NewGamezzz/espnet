@@ -5,7 +5,7 @@ from pathlib import Path
 
 from omegaconf import DictConfig
 
-from espnet3.systems.base.inference import inference
+from espnet3.systems.base.inference import infer
 from espnet3.systems.base.measure import measure
 from espnet3.systems.base.train import collect_stats, train
 
@@ -133,7 +133,7 @@ class BaseSystem:
             "Inference start | infer_dir=%s",
             getattr(self.infer_config, "infer_dir", None),
         )
-        return inference(self.infer_config)
+        return infer(self.infer_config)
 
     def measure(self, *args, **kwargs):
         """Compute evaluation metrics from hypothesis/reference outputs."""
