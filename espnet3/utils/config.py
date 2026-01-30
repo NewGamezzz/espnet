@@ -79,7 +79,7 @@ def _process_dict_config_entry(entry: DictConfig, base_path: Path) -> list:
         if val is None:
             continue
 
-        # Compose config path like 'optimizer/adam.yaml'
+        # Compose config path like 'optim/adam.yaml'
         # or use as-is if path includes '/'
         composed = f"{key}/{val}" if "/" not in val else val
         config_path = _build_config_path(base_path, composed)
@@ -104,12 +104,12 @@ def load_config_with_defaults(path: str) -> OmegaConf:
         # config.yaml
         defaults:
           - model: conformer
-          - optimizer: adam
+          - optim: adam
           - _self_
 
         # This will recursively load:
         #   model/conformer.yaml
-        #   optimizer/adam.yaml
+        #   optim/adam.yaml
         # and merge them with config.yaml itself at the end.
 
     Args:

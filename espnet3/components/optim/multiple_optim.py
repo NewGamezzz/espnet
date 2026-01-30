@@ -25,9 +25,9 @@ class MultipleOptim(torch.optim.Optimizer):
     """
 
     @typechecked
-    def __init__(self, optimizers: Iterable[torch.optim.Optimizer]) -> None:
+    def __init__(self, optims: Iterable[torch.optim.Optimizer]) -> None:
         """Initialize MultipleOptim object."""
-        self.optimizers = optimizers
+        self.optims = optims
 
     @property
     def state(self) -> Dict[str, torch.Tensor]:
@@ -48,8 +48,8 @@ class MultipleOptim(torch.optim.Optimizer):
         """
         return {
             key: value
-            for optimizer in self.optimizers
-            for key, value in optimizer.state.items()
+            for optim in self.optims
+            for key, value in optim.state.items()
         }
 
     @property
@@ -57,8 +57,8 @@ class MultipleOptim(torch.optim.Optimizer):
         """Return the combined parameters for each optimizer in ``self.optimizers``."""
         return [
             element
-            for optimizer in self.optimizers
-            for element in optimizer.param_groups
+            for optim in self.optims
+            for element in optim.param_groups
         ]
 
     @property
@@ -77,34 +77,34 @@ class MultipleOptim(torch.optim.Optimizer):
         """
         return {
             key: value
-            for optimizer in self.optimizers
-            for key, value in optimizer.defaults.items()
+            for optim in self.optims
+            for key, value in optim.defaults.items()
         }
 
     def __getstate__(self) -> List[torch.optim.Optimizer]:
         """Return optimizers."""
-        return self.optimizers
+        return self.optims
 
-    def __setstate__(self, optimizers: List[torch.optim.Optimizer]) -> None:
+    def __setstate__(self, optims: List[torch.optim.Optimizer]) -> None:
         """Set optimizers."""
-        self.optimizers = optimizers
+        self.optims = optims
 
         # call remaining lines of the ``torch.optim.Optimizer.__setstate__`` method.
         # copied from:
         # https://pytorch.org/docs/stable/_modules/torch/optim/optimizer.html#Optimizer
-        for optimizer in self.optimizers:
-            optimizer._hook_for_profile()  # To support multiprocessing pickle/unpickle.
-            optimizer.defaults.setdefault("differentiable", False)
+        for optim in self.optims:
+            optim._hook_for_profile()  # To support multiprocessing pickle/unpickle.
+            optim.defaults.setdefault("differentiable", False)
 
     def __repr__(self) -> str:
         """Return the string representation of the MultipleOptim object."""
         repr_str = (
             f"``{self.__class__.__name__}`` "
-            + f"containing {len(self.optimizers)} optimizers:\n"
+            + f"containing {len(self.optims)} optimizers:\n"
         )
 
-        for optimizer in self.optimizers:
-            repr_str += "\n" + optimizer.__repr__()
+        for optim in self.optims:
+            repr_str += "\n" + optim.__repr__()
 
         return repr_str
 
@@ -116,8 +116,8 @@ class MultipleOptim(torch.optim.Optimizer):
             >>> opt = MultipleOptim([torch.optim.SGD([], lr=0.1)])  # doctest: +SKIP
             >>> opt._hook_for_profile()  # doctest: +SKIP
         """
-        for optimizer in self.optimizers:
-            optimizer._hook_for_profile()
+        for optim in self.optims:
+            optim._hook_for_profile()
 
     def state_dict(
         self,
@@ -137,7 +137,7 @@ class MultipleOptim(torch.optim.Optimizer):
                 where each parameter group is a dict
 
         """
-        return [optimizer.state_dict() for optimizer in self.optimizers]
+        return [optim.state_dict() for optim in self.optims]
 
     def load_state_dict(
         self,
@@ -157,8 +157,8 @@ class MultipleOptim(torch.optim.Optimizer):
             ``state_dict()``
 
         """
-        for state, optimizer in zip(state_dict, self.optimizers):
-            optimizer.load_state_dict(state)
+        for state, optim in zip(state_dict, self.optims):
+            optim.load_state_dict(state)
 
     def zero_grad(self, set_to_none: bool = False) -> None:
         """Set the gradients of all optimized ``torch.Tensor``s to zero.
@@ -182,8 +182,8 @@ class MultipleOptim(torch.optim.Optimizer):
                         altogether).
 
         """
-        for optimizer in self.optimizers:
-            optimizer.zero_grad(set_to_none=set_to_none)
+        for optim in self.optims:
+            optim.zero_grad(set_to_none=set_to_none)
 
     def step(self, closure: Callable[[], torch.Tensor] = None) -> torch.Tensor:
         """Perform a single optimization step.
@@ -204,7 +204,7 @@ class MultipleOptim(torch.optim.Optimizer):
             with torch.enable_grad():
                 loss = closure()
 
-        for optimizer in self.optimizers:
-            optimizer.step()
+        for optim in self.optims:
+            optim.step()
 
         return loss
