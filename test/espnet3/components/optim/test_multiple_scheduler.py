@@ -40,7 +40,7 @@ def test_multiple_lrs_basic_attributes():
     """
     mopts, scheds = create_optimizers_and_schedulers()
     schedulers = [
-        MultipleScheduler(multiple_optimizer=mopts, lr_scheduler=sch, optimizer_idx=idx)
+        MultipleScheduler(multiple_optim=mopts, lr_scheduler=sch, optim_idx=idx)
         for idx, sch in enumerate(scheds)
     ]
 

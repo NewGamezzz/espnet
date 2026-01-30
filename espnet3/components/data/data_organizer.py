@@ -51,7 +51,10 @@ def do_nothing(*x):
     Returns:
         The input object unchanged.
     """
-    return x
+    if len(x) == 1:
+        return x[0]
+    else:
+        return x
 
 
 class DataOrganizer:

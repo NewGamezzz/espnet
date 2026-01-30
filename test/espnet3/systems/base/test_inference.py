@@ -70,7 +70,7 @@ def test_inference_writes_scp_outputs(tmp_path, monkeypatch):
     cfg = OmegaConf.create(
         {
             "parallel": {"env": "local"},
-            "infer_dir": str(tmp_path / "infer"),
+            "inference_dir": str(tmp_path / "infer"),
             "dataset": {"test": [{"name": "test_a"}, {"name": "test_b"}]},
             "input_key": "speech",
             "output_fn": f"{__name__}.dummy_output_fn",
@@ -106,7 +106,7 @@ def test_inference_rejects_async_results(tmp_path, monkeypatch):
     cfg = OmegaConf.create(
         {
             "parallel": {"env": "local"},
-            "infer_dir": str(tmp_path / "infer"),
+            "inference_dir": str(tmp_path / "infer"),
             "dataset": {"test": [{"name": "test_a"}]},
             "input_key": "speech",
             "output_fn": f"{__name__}.dummy_output_fn",
@@ -129,7 +129,7 @@ def test_inference_passes_provider_params(tmp_path, monkeypatch):
     cfg = OmegaConf.create(
         {
             "parallel": {"env": "local"},
-            "infer_dir": str(tmp_path / "infer"),
+            "inference_dir": str(tmp_path / "infer"),
             "dataset": {"test": [{"name": "test_a"}]},
             "input_key": "speech",
             "output_fn": f"{__name__}.dummy_output_fn",

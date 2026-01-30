@@ -103,9 +103,8 @@ def test_multiple_optims_and_schedulers():
     )
     model = ESPnetLightningModule(DummyModel(), config)
     out = model.configure_optimizers()
-    assert hasattr(out["optimizer"], "optimizers")  # HybridOptim
-    assert isinstance(out["lr_scheduler"], list)
-    assert all("scheduler" in item for item in out["lr_scheduler"])
+    assert hasattr(out["optimizer"], "optims")  # HybridOptim
+    assert isinstance(out["lr_scheduler"]["scheduler"], list)
 
 
 def test_custom_scheduler_interval():

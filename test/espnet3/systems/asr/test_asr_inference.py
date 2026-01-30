@@ -200,7 +200,7 @@ def test_forward_requires_fields():
 def test_inference_requires_provider_config():
     cfg = OmegaConf.create(
         {
-            "infer_dir": "unused",
+            "inference_dir": "unused",
             "dataset": {"test": [{"name": "test"}]},
             "input_key": "speech",
             "output_fn": f"{__name__}._output_fn",
@@ -216,7 +216,7 @@ def test_inference_requires_provider_config():
 def test_inference_params_affect_runner_forward(tmp_path, flip, expected):
     cfg = OmegaConf.create(
         {
-            "infer_dir": str(tmp_path),
+            "inference_dir": str(tmp_path),
             "dataset": {
                 "test": [{"name": "test"}],
                 "data": [{"uttid": "utt1", "speech": "s1"}],
