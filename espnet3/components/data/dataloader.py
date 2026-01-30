@@ -150,7 +150,7 @@ class DataLoaderBuilder:
             return self._build_multiple_iterator(config)
         if config.iter_factory is not None:
             factory_config = OmegaConf.to_container(config.iter_factory, resolve=True)
-            return self._build_iterator_factory(factory_config)
+            return self._build_iter_factory(factory_config)
         return self._build_standard_dataloader(config)
 
     def _build_standard_dataloader(self, dataloader_config, dataset=None):
@@ -181,7 +181,7 @@ class DataLoaderBuilder:
             **config,
         )
 
-    def _build_iterator_factory(self, factory_config, dataset=None):
+    def _build_iter_factory(self, factory_config, dataset=None):
         if dataset is None:
             dataset = self.dataset
 
@@ -231,7 +231,7 @@ class DataLoaderBuilder:
             iter_factory_config = update_shard(
                 factory_config["iter_factory"], shard_idx
             )
-            return self._build_iterator_factory(iter_factory_config, dataset)
+            return self._build_iter_factory(iter_factory_config, dataset)
         else:
             factory_config.pop("num_shards")
             factory_config.pop("multiple_iterator")
