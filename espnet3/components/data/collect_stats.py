@@ -24,11 +24,11 @@ __all__ = [
     "CollectStatsRunner",
     "collect_stats",
     "collect_stats_multiple_iterator",
-    "batch_collect_stats",
+    "collect_stats_batch",
 ]
 
 
-def batch_collect_stats(
+def collect_stats_batch(
     idxs: List[int],
     *,
     model=None,
@@ -221,7 +221,7 @@ def _instantiate_dataset(dataset_config, mode: str):
     return dataset
 
 
-def _dataset_length(dataset_config, mode: str, shard_idx: Optional[int] = None) -> int:
+def _get_dataset_length(dataset_config, mode: str, shard_idx: Optional[int] = None) -> int:
     dataset = _instantiate_dataset(dataset_config, mode)
     if shard_idx is not None:
         if not hasattr(dataset, "shard"):
@@ -356,7 +356,7 @@ class CollectStatsRunner(BaseRunner):
         else:
             indices = [int(batch_indices)]
 
-        return batch_collect_stats(
+        return collect_stats_batch(
             indices,
             model=model,
             dataset=dataset,
@@ -384,7 +384,7 @@ def _collect_stats_common(
     count_dict: Optional[Dict] = None,
     writers: Optional[Dict] = None,
 ):
-    num_items = _dataset_length(dataset_config, mode, shard_idx)
+    num_items = _get_dataset_length(dataset_config, mode, shard_idx)
     index_batches = _chunk_indices(num_items, batch_size) if num_items else []
 
     provider = CollectStatsInferenceProvider(
