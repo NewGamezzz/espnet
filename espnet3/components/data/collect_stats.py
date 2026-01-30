@@ -301,7 +301,7 @@ class CollectStatsInferenceProvider(EnvironmentProvider):
         env["write_collected_feats"] = self.config.write_collected_feats
         return env
 
-    def make_worker_setup_fn(self):
+    def build_worker_setup_fn(self):
         """Return a Dask worker setup function that builds dataset/model."""
         dataloader_config = self.config.dataloader_config
         config = self.config

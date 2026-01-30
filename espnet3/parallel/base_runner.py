@@ -19,7 +19,7 @@ from espnet3.parallel.env_provider import EnvironmentProvider
 from espnet3.parallel.parallel import (
     get_client,
     get_parallel_config,
-    make_client,
+    build_client,
     parallel_for,
 )
 
@@ -249,7 +249,7 @@ class BaseRunner(ABC):
             - Wraps ``forward`` with :func:`wrap_func_with_worker_env` so that
               missing keyword args are injected from the worker env.
         """
-        setup_fn = self.provider.make_worker_setup_fn()
+        setup_fn = self.provider.build_worker_setup_fn()
         out = []
         func = (
             self.__class__.batch_forward
@@ -286,7 +286,7 @@ class BaseRunner(ABC):
               ``async_result_dir / f"result-<job_id>.jsonl"`` on its worker.
         """
         par_cfg = get_parallel_config()
-        client = make_client(par_cfg)
+        client = build_client(par_cfg)
         n_workers = par_cfg.get("n_workers", 1)
         try:
             chunks = _default_chunk(indices, n_workers)
@@ -425,7 +425,7 @@ def _async_worker_entry_from_spec_path(spec_path: str):
     os.environ["WORLD_SIZE"] = str(spec["world_size"])
     os.environ["WORLD_RANK"] = str(spec["world_rank"])
 
-    setup_fn = provider.make_worker_setup_fn()
+    setup_fn = provider.build_worker_setup_fn()
     env = setup_fn()
 
     extras = spec.get("extras", {}) or {}

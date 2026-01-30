@@ -74,7 +74,7 @@ class InferenceProvider(EnvironmentProvider, ABC):
         env.update(self.params)
         return env
 
-    def make_worker_setup_fn(self) -> Callable[[], Dict[str, Any]]:
+    def build_worker_setup_fn(self) -> Callable[[], Dict[str, Any]]:
         """Return a Dask worker setup function that builds dataset/model.
 
         The returned function is executed once per worker process and must
@@ -87,7 +87,7 @@ class InferenceProvider(EnvironmentProvider, ABC):
 
         Example:
             >>> provider = InferenceProvider(cfg, params={"device": "cuda:0"})
-            >>> setup_fn = provider.make_worker_setup_fn()
+            >>> setup_fn = provider.build_worker_setup_fn()
             >>> env = setup_fn()
             >>> "dataset" in env and "model" in env
             True

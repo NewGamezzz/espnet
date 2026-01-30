@@ -25,7 +25,7 @@ class InferenceProvider(EnvironmentProvider, ABC):
         super().__init__(config)
         self.params = params or {}
         # Build once for local execution to avoid redundant IO
-        self._local_env = self.make_worker_setup_fn()()
+        self._local_env = self.build_worker_setup_fn()()
 
     @staticmethod
     @abstractmethod
@@ -61,7 +61,7 @@ class InferenceProvider(EnvironmentProvider, ABC):
         """
         return dict(self._local_env)
 
-    def make_worker_setup_fn(self):
+    def build_worker_setup_fn(self):
         """Return a setup function that rebuilds the env per worker.
 
         Returns:
