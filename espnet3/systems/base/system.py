@@ -130,8 +130,8 @@ class BaseSystem:
         """Run inference on the configured datasets."""
         self._reject_stage_args("infer", args, kwargs)
         logger.info(
-            "Inference start | infer_dir=%s",
-            getattr(self.infer_config, "infer_dir", None),
+            "Inference start | inference_dir=%s",
+            getattr(self.infer_config, "inference_dir", None),
         )
         return infer(self.infer_config)
 

@@ -25,7 +25,7 @@ def get_cls_path(obj) -> str:
 
 
 def load_scp_fields(
-    infer_dir: Path,
+    inference_dir: Path,
     test_name: str,
     inputs: Union[List[str], Dict[str, str]],
     file_suffix: str = ".scp",
@@ -38,7 +38,7 @@ def load_scp_fields(
         - <alias>: list of aligned values for each key (e.g., "ref", "hyp")
 
     Args:
-        infer_dir (Path): Root directory of hypothesis/reference files.
+        inference_dir (Path): Root directory of hypothesis/reference files.
         test_name (str): Subdirectory name of the test set (e.g., "test-clean").
         inputs (Union[List[str], Dict[str, str]]): SCP keys to read.
             - List[str]: alias and filename are the same.
@@ -74,10 +74,10 @@ def load_scp_fields(
         - Utterance IDs are sorted to ensure consistent alignment.
         - Useful as direct input to `AbsMetrics.__call__()`.
     """
-    task_dir = infer_dir / test_name
+    task_dir = inference_dir / test_name
     assert (
         task_dir.exists()
-    ), f"Missing hypothesis/reference files in infer_dir: {task_dir}"
+    ), f"Missing hypothesis/reference files in inference_dir: {task_dir}"
 
     input_map = {k: k for k in inputs} if isinstance(inputs, list) else dict(inputs)
 

@@ -41,15 +41,15 @@ def measure(config: DictConfig):
                     )
                 inputs = [ref_key, hyp_key]
             data = load_scp_fields(
-                infer_dir=Path(config.infer_dir),
+                inference_dir=Path(config.inference_dir),
                 test_name=test_name,
                 inputs=inputs,
                 file_suffix=".scp",
             )
-            metric_result = metric(data, test_name, config.infer_dir)
+            metric_result = metric(data, test_name, config.inference_dir)
             results[get_cls_path(metric)].update({test_name: metric_result})
 
-    out_path = Path(config.infer_dir) / "measures.json"
+    out_path = Path(config.inference_dir) / "measures.json"
     with open(out_path, "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, ensure_ascii=False)
 

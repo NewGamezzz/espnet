@@ -66,7 +66,7 @@ class CER(AbsMetrics):
         self,
         data: Dict[str, List[str]],
         test_name: str,
-        infer_dir: Path,
+        inference_dir: Path,
     ) -> Dict[str, float]:
         """Compute CER, write alignment details, and return the metric.
 
@@ -75,7 +75,7 @@ class CER(AbsMetrics):
                 from inference-time SCP files, e.g.
                 ``{"ref": [str1, str2, ...], "hyp": [str1, str2, ...]}``.
             test_name: Test set name used for output directory naming.
-            infer_dir: Base hypothesis/reference directory for alignment outputs.
+            inference_dir: Base hypothesis/reference directory for alignment outputs.
 
         Returns:
             Dict containing CER in percentage points.
@@ -90,7 +90,7 @@ class CER(AbsMetrics):
         score = jiwer.cer(refs, hyps) * 100
         details = jiwer.process_characters(refs, hyps)
 
-        test_dir = Path(infer_dir) / test_name
+        test_dir = Path(inference_dir) / test_name
         test_dir.mkdir(parents=True, exist_ok=True)
         with (test_dir / "cer_alignment").open("w", encoding="utf-8") as f:
             f.write(jiwer.visualize_alignment(details))
