@@ -8,10 +8,10 @@ from omegaconf import OmegaConf
 
 from espnet3.parallel.parallel import (
     DictReturnWorkerPlugin,
-    get_client,
-    get_parallel_config,
     build_client,
     build_local_gpu_cluster,
+    get_client,
+    get_parallel_config,
     parallel_for,
     parallel_map,
     set_parallel,
@@ -29,7 +29,7 @@ mp.set_start_method("fork", force=True)
 # | test_set_and_get_parallel_config                 | Sets and retrieves global config|
 # | test_set_parallel_copies_options_dict            | Copies options dict, ignores    |
 # |                                                  | external mutations              |
-# | test_build_client_local                           | Creates LocalCluster client and |
+# | test_build_client_local                           | Creates LocalCluster client and|
 # |                                                  | verifies distributed mapping    |
 # | test_get_client_context_manager_and_parallel_map | Uses get_client with global     |
 # |                                                  | config to run parallel_map      |
@@ -58,9 +58,9 @@ mp.set_start_method("fork", force=True)
 # |--------------------------------------------------|---------------------------------|
 # | test_worker_env_conflict_detection               | ValueError on args conflict     |
 # | test_worker_env_conflict_detection_parallel_for  | ValueError on args conflict     |
-# | test_build_local_gpu_cluster_import_guard         | RuntimeError when dask_cuda miss|
-# | test_build_client_unknown_env_raises              | ValueError on unknown env       |
-# | test_build_client_kube_import_guard               | RuntimeError when dask_kube miss|
+# | test_build_local_gpu_cluster_import_guard        | RuntimeError when dask_cuda miss|
+# | test_build_client_unknown_env_raises             | ValueError on unknown env       |
+# | test_build_client_kube_import_guard              | RuntimeError when dask_kube miss|
 # | test_worker_plugin_setup_must_return_dict        | ValueError when setup_fn != dict|
 # | test_parallel_for_propagates_task_exception      | Propagates exception from task  |
 
@@ -69,9 +69,9 @@ mp.set_start_method("fork", force=True)
 # |--------------------------------------------------|---------------------------------|
 # | test_worker_env_conflict_detection               | ValueError                      |
 # | test_worker_env_conflict_detection_parallel_for  | ValueError                      |
-# | test_build_local_gpu_cluster_import_guard         | RuntimeError                    |
-# | test_build_client_unknown_env_raises              | ValueError                      |
-# | test_build_client_kube_import_guard               | RuntimeError                    |
+# | test_build_local_gpu_cluster_import_guard        | RuntimeError                    |
+# | test_build_client_unknown_env_raises             | ValueError                      |
+# | test_build_client_kube_import_guard              | RuntimeError                    |
 # | test_worker_plugin_setup_must_return_dict        | ValueError                      |
 # | test_parallel_for_propagates_task_exception      | RuntimeError                    |
 
@@ -377,7 +377,9 @@ def test_get_client_context_auto_shutdown(local_cfg, monkeypatch):
             return self._real.close()
 
     proxy = _ClientProxy(cli)
-    monkeypatch.setattr("espnet3.parallel.parallel.build_client", lambda cfg=None: proxy)
+    monkeypatch.setattr(
+        "espnet3.parallel.parallel.build_client", lambda cfg=None: proxy
+    )
 
     with get_client(local_cfg):
         pass

@@ -40,4 +40,6 @@ def test_load_scp_fields_missing_file_raises(tmp_path: Path):
     (inference_dir / "test-other").mkdir(parents=True, exist_ok=True)
 
     with pytest.raises(AssertionError):
-        load_scp_fields(inference_dir=inference_dir, test_name="test-other", inputs=["ref"])
+        load_scp_fields(
+            inference_dir=inference_dir, test_name="test-other", inputs=["ref"]
+        )

@@ -13,7 +13,9 @@ def test_setup_logger_returns_logger(tmp_path: Path):
 
 def test_download_progress_logs_buckets():
     logger = mock.Mock()
-    progress = download_utils.DownloadProgress(logger=logger, name="file", step_percent=10)
+    progress = download_utils.DownloadProgress(
+        logger=logger, name="file", step_percent=10
+    )
 
     # Simulate increasing blocks; ensure logger.info is called multiple times
     progress(block_num=1, block_size=10, total_size=100)
@@ -47,7 +49,9 @@ def test_download_url_accepts_none_logger(monkeypatch, tmp_path: Path, capsys):
         reporthook(1, 1, 1)
 
     monkeypatch.setattr(download_utils.urllib.request, "urlretrieve", fake_urlretrieve)
-    download_utils.download_url("http://example.com/file", tmp_path / "file", logger=None)
+    download_utils.download_url(
+        "http://example.com/file", tmp_path / "file", logger=None
+    )
     out = capsys.readouterr().out
     assert "Start download" in out
     assert "Download completed" in out
@@ -96,7 +100,9 @@ def test_extract_targz_accepts_none_logger(monkeypatch, tmp_path: Path, capsys):
         def extractall(self, path):
             pass
 
-    monkeypatch.setattr(download_utils.tarfile, "open", lambda *_args, **_kwargs: DummyTar())
+    monkeypatch.setattr(
+        download_utils.tarfile, "open", lambda *_args, **_kwargs: DummyTar()
+    )
     download_utils.extract_targz(archive, tmp_path, logger=None)
     out = capsys.readouterr().out
     assert "Extracting" in out

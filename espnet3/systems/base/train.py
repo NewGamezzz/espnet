@@ -103,5 +103,9 @@ def train(config: DictConfig) -> None:
         "Training finished in %.2fs | exp_dir=%s model=%s",
         time.perf_counter() - start,
         config.exp_dir,
-        config.model.get("_target_", None) if isinstance(config.model, DictConfig) else None,
+        (
+            config.model.get("_target_", None)
+            if isinstance(config.model, DictConfig)
+            else None
+        ),
     )

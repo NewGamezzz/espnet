@@ -159,10 +159,16 @@ def _accumulate_and_persist_batch(
 
 def _build_collate_fn(dataloader_config):
     if not isinstance(dataloader_config, DictConfig):
-        dataloader_config = OmegaConf.create(dataloader_config) \
-            if dataloader_config is not None else OmegaConf.create({})
+        dataloader_config = (
+            OmegaConf.create(dataloader_config)
+            if dataloader_config is not None
+            else OmegaConf.create({})
+        )
 
-    if hasattr(dataloader_config, "collate_fn") and dataloader_config.collate_fn is not None:
+    if (
+        hasattr(dataloader_config, "collate_fn")
+        and dataloader_config.collate_fn is not None
+    ):
         return instantiate(dataloader_config.collate_fn)
     else:
         return CommonCollateFn(int_pad_value=-1)
@@ -220,7 +226,9 @@ def _instantiate_dataset(dataset_config, mode: str):
     return dataset
 
 
-def _get_dataset_length(dataset_config, mode: str, shard_idx: Optional[int] = None) -> int:
+def _get_dataset_length(
+    dataset_config, mode: str, shard_idx: Optional[int] = None
+) -> int:
     dataset = _instantiate_dataset(dataset_config, mode)
     if shard_idx is not None:
         if not hasattr(dataset, "shard"):

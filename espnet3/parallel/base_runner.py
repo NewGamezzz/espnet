@@ -17,9 +17,9 @@ from tqdm import tqdm
 
 from espnet3.parallel.env_provider import EnvironmentProvider
 from espnet3.parallel.parallel import (
+    build_client,
     get_client,
     get_parallel_config,
-    build_client,
     parallel_for,
 )
 

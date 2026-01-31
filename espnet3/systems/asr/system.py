@@ -179,7 +179,9 @@ class ASRSystem(BaseSystem):
         start = time.perf_counter()
         tokenizer_config = getattr(self.train_config, "tokenizer", None)
         builder_config = (
-            getattr(tokenizer_config, "text_builder", None) if tokenizer_config else None
+            getattr(tokenizer_config, "text_builder", None)
+            if tokenizer_config
+            else None
         )
         if builder_config is None or not getattr(builder_config, "func", None):
             raise RuntimeError(
