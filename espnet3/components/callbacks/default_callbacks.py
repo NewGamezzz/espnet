@@ -146,11 +146,11 @@ def get_default_callbacks(
         log_interval (int): Frequency (in training steps) to refresh the progress bar.
         best_model_criterion (List[Tuple[str, int, str]]): A list of criteria for
             saving top-K checkpoints.
-            Each item is a tuple: (metric_name, top_k, mode), where:
-            - `metric_name` (str): The name of the validation metric to monitor
+            Each item is a tuple: (name, top_k, mode), where:
+            - `name` (str): The name of the validation value to monitor
                 (e.g., "val/loss").
             - `top_k` (int): Number of best models to keep.
-            - `mode` (str): "min" to keep models with lowest metric, "max" for highest.
+            - `mode` (str): "min" to keep models with lowest value, "max" for highest.
 
     Returns:
         List[Callback]: A list of callbacks to be passed to the PyTorch Lightning

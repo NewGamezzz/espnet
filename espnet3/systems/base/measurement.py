@@ -6,7 +6,7 @@ from pathlib import Path
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
-from espnet3.components.metrics.abs_metric import AbsMetrics
+from espnet3.components.measurements.abs_measurement import AbsMeasurements
 from espnet3.utils.scp_utils import get_cls_path, load_scp_fields
 
 
@@ -21,23 +21,23 @@ def measure(measure_config: DictConfig):
     """
     test_sets = [t.name for t in measure_config.dataset.test]
     results = {}
-    assert hasattr(measure_config, "metrics"), "Please specify metrics!"
+    assert hasattr(measure_config, "measurements"), "Please specify `measurements`"
 
-    for metric_config in measure_config.metrics:
-        metric = instantiate(metric_config.metric)
-        if not isinstance(metric, AbsMetrics):
-            raise TypeError(f"{type(metric)} is not a valid AbsMetrics instance")
+    for measure_config in measure_config.measurements:
+        measure = instantiate(measure_config.measure)
+        if not isinstance(measure, AbsMeasurements):
+            raise TypeError(f"{type(measure)} is not a valid AbsMeasurements instance")
 
-        results[get_cls_path(metric)] = {}
+        results[get_cls_path(measure)] = {}
         for test_name in test_sets:
-            if hasattr(metric_config, "inputs"):
-                inputs = OmegaConf.to_container(metric_config.inputs, resolve=True)
+            if hasattr(measure_config, "inputs"):
+                inputs = OmegaConf.to_container(measure_config.inputs, resolve=True)
             else:
-                ref_key = getattr(metric, "ref_key", None)
-                hyp_key = getattr(metric, "hyp_key", None)
+                ref_key = getattr(measure, "ref_key", None)
+                hyp_key = getattr(measure, "hyp_key", None)
                 if ref_key is None or hyp_key is None:
                     raise ValueError(
-                        f"Metric {get_cls_path(metric)} requires inputs in config"
+                        f"measure {get_cls_path(measure)} requires inputs in config"
                     )
                 inputs = [ref_key, hyp_key]
             data = load_scp_fields(
@@ -46,8 +46,8 @@ def measure(measure_config: DictConfig):
                 inputs=inputs,
                 file_suffix=".scp",
             )
-            metric_result = metric(data, test_name, measure_config.inference_dir)
-            results[get_cls_path(metric)].update({test_name: metric_result})
+            measure_result = measure(data, test_name, measure_config.inference_dir)
+            results[get_cls_path(measure)].update({test_name: measure_result})
 
     out_path = Path(measure_config.inference_dir) / "measurements.json"
     with open(out_path, "w", encoding="utf-8") as f:

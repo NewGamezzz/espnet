@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Dict, List
 
 
-class AbsMetrics(ABC):
+class AbsMeasurements(ABC):
     """Abstract base class for metrics used in inference evaluation.
 
     Subclasses must implement `__call__` and can return any JSON-serializable result.
@@ -37,9 +37,9 @@ class AbsMetrics(ABC):
 
                 .. code-block:: yaml
 
-                    metrics:
-                      - metric:
-                          _target_: espnet3.systems.asr.metrics.wer.WER
+                    measurements:
+                      - measure:
+                          _target_: espnet3.systems.asr.measurements.wer.WER
                           clean_types:
                         inputs:
                           ref: ref

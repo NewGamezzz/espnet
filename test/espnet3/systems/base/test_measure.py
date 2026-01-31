@@ -4,12 +4,12 @@ from pathlib import Path
 import pytest
 from omegaconf import OmegaConf
 
-from espnet3.components.metrics.abs_metric import AbsMetrics
+from espnet3.components.measurements.abs_measurement import AbsMeasurements
 from espnet3.systems.base.measurement import measure
 from espnet3.utils.scp_utils import get_cls_path
 
 
-class DummyMetric(AbsMetrics):
+class DummyMetric(AbsMeasurements):
     ref_key = "ref"
     hyp_key = "hyp"
 
@@ -17,7 +17,7 @@ class DummyMetric(AbsMetrics):
         return {"count": len(data["utt_id"])}
 
 
-class NoKeyMetric(AbsMetrics):
+class NoKeyMetric(AbsMeasurements):
     def __call__(self, data, test_name, inference_dir):
         return {"ok": True}
 
@@ -91,7 +91,7 @@ def test_measure_rejects_non_metric_instance(tmp_path):
         }
     )
 
-    with pytest.raises(TypeError, match="not a valid AbsMetrics instance"):
+    with pytest.raises(TypeError, match="not a valid AbsMeasurements instance"):
         measure(cfg)
 
 

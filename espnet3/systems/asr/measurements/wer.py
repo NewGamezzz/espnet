@@ -11,10 +11,10 @@ except ImportError:
     jiwer = None
 
 from espnet2.text.cleaner import TextCleaner
-from espnet3.components.metrics.abs_metric import AbsMetrics
+from espnet3.components.measurements.abs_measurement import AbsMeasurements
 
 
-class WER(AbsMetrics):
+class WER(AbsMeasurements):
     """Compute WER for hypotheses.
 
     This metric expects hypothesis and reference strings and produces a
