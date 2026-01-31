@@ -4,12 +4,12 @@ from pathlib import Path
 import pytest
 from omegaconf import OmegaConf
 
-from espnet3.components.measurements.abs_measurement import AbsMeasurements
-from espnet3.systems.base.measurement import measure
+from espnet3.components.metrics.abs_metric import AbsMetric
+from espnet3.systems.base.metric import metric
 from espnet3.utils.scp_utils import get_cls_path
 
 
-class DummyMetric(AbsMeasurements):
+class DummyMetric(AbsMetric):
     ref_key = "ref"
     hyp_key = "hyp"
 
@@ -17,7 +17,7 @@ class DummyMetric(AbsMeasurements):
         return {"count": len(data["utt_id"])}
 
 
-class NoKeyMetric(AbsMeasurements):
+class NoKeyMetric(AbsMetric):
     def __call__(self, data, test_name, inference_dir):
         return {"ok": True}
 
@@ -30,7 +30,7 @@ def _write_scp(path: Path, entries):
     path.write_text("\n".join(entries), encoding="utf-8")
 
 
-def test_measure_uses_metric_keys_and_writes_json(tmp_path):
+def test_metric_uses_metric_keys_and_writes_json(tmp_path):
     inference_dir = tmp_path / "infer"
     test_name = "test_a"
     task_dir = inference_dir / test_name
@@ -46,16 +46,16 @@ def test_measure_uses_metric_keys_and_writes_json(tmp_path):
         }
     )
 
-    results = measure(cfg)
+    results = metric(cfg)
 
     expected_key = get_cls_path(DummyMetric())
     assert results[expected_key][test_name] == {"count": 2}
-    measures_path = inference_dir / "measurements.json"
-    assert measures_path.is_file()
-    assert json.loads(measures_path.read_text(encoding="utf-8")) == results
+    metrics_path = inference_dir / "metrics.json"
+    assert metrics_path.is_file()
+    assert json.loads(metrics_path.read_text(encoding="utf-8")) == results
 
 
-def test_measure_uses_config_inputs_mapping(tmp_path):
+def test_metric_uses_config_inputs_mapping(tmp_path):
     inference_dir = tmp_path / "infer"
     test_name = "test_a"
     task_dir = inference_dir / test_name
@@ -76,13 +76,13 @@ def test_measure_uses_config_inputs_mapping(tmp_path):
         }
     )
 
-    results = measure(cfg)
+    results = metric(cfg)
 
     expected_key = get_cls_path(NoKeyMetric())
     assert results[expected_key][test_name] == {"ok": True}
 
 
-def test_measure_rejects_non_metric_instance(tmp_path):
+def test_metric_rejects_non_metric_instance(tmp_path):
     cfg = OmegaConf.create(
         {
             "inference_dir": str(tmp_path),
@@ -91,11 +91,11 @@ def test_measure_rejects_non_metric_instance(tmp_path):
         }
     )
 
-    with pytest.raises(TypeError, match="not a valid AbsMeasurements instance"):
-        measure(cfg)
+    with pytest.raises(TypeError, match="not a valid AbsMetric instance"):
+        metric(cfg)
 
 
-def test_measure_requires_inputs_when_metric_has_no_keys(tmp_path):
+def test_metric_requires_inputs_when_metric_has_no_keys(tmp_path):
     cfg = OmegaConf.create(
         {
             "inference_dir": str(tmp_path),
@@ -105,4 +105,4 @@ def test_measure_requires_inputs_when_metric_has_no_keys(tmp_path):
     )
 
     with pytest.raises(ValueError, match="requires inputs in config"):
-        measure(cfg)
+        metric(cfg)

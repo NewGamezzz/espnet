@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from espnet3.systems.asr.measurements.cer import CER
-from espnet3.systems.asr.measurements.wer import WER
+from espnet3.systems.asr.metrics.cer import CER
+from espnet3.systems.asr.metrics.wer import WER
 
 
 def test_wer_writes_alignment_and_score(tmp_path: Path):

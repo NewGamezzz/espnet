@@ -72,7 +72,7 @@ def load_scp_fields(
 
     Notes:
         - Utterance IDs are sorted to ensure consistent alignment.
-        - Useful as direct input to `AbsMeasurements.__call__()`.
+        - Useful as direct input to `AbsMetric.__call__()`.
     """
     task_dir = inference_dir / test_name
     assert (
