@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 from omegaconf import OmegaConf
 
-from espnet3.utils import publish
+from espnet3.utils import publish_utils
 
 
 def _make_system(*, exp_dir, publish_config, task=None, infer_config=None):
@@ -28,7 +28,7 @@ def test_pack_model_espnet3_manifest(tmp_path):
     )
 
     system = _make_system(exp_dir=exp_dir, publish_config=publish_config)
-    result = publish.pack_model(system)
+    result = publish_utils.pack_model(system)
 
     assert result == out_dir
     assert out_dir.exists()
@@ -54,7 +54,7 @@ def test_pack_model_excludes_decode_and_copies_scores(tmp_path):
     )
 
     system = _make_system(exp_dir=exp_dir, publish_config=publish_config)
-    result = publish.pack_model(system)
+    result = publish_utils.pack_model(system)
 
     assert result == out_dir
     assert out_dir.exists()
@@ -85,7 +85,7 @@ def test_pack_model_espnet2_branch(tmp_path):
     )
 
     system = _make_system(exp_dir=exp_dir, publish_config=publish_config, task="asr")
-    result = publish.pack_model(system)
+    result = publish_utils.pack_model(system)
 
     assert result == out_dir
     assert out_dir.exists()

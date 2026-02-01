@@ -16,7 +16,7 @@ from espnet3.demo.resolve import (
     resolve_provider_class,
 )
 from espnet3.demo.setup import setup_demo_assets
-from espnet3.utils.publish import _load_readme_template, _write_readme
+from espnet3.utils.publish_utils import _load_readme_template, _write_readme
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +92,7 @@ def upload_demo(system) -> None:
     if not demo_dir.exists():
         raise RuntimeError(f"Demo pack not found: {demo_dir}")
 
-    from espnet3.utils.publish import _upload_common
+    from espnet3.utils.publish_utils import _upload_common
 
     _upload_common(
         repo,

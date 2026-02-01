@@ -246,7 +246,7 @@ class ASRSystem(BaseSystem):
     def pack_model(self, *args, **kwargs):
         """Pack model artifacts into an espnet3 bundle."""
         self._reject_stage_args("pack_model", args, kwargs)
-        from espnet3.utils.publish import pack_model
+        from espnet3.utils.publish_utils import pack_model
 
         extra_paths = []
         if self.train_config is not None:

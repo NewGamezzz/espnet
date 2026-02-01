@@ -159,14 +159,14 @@ class BaseSystem:
     def pack_model(self, *args, **kwargs):
         """Pack model artifacts into an espnet3 bundle."""
         self._reject_stage_args("pack_model", args, kwargs)
-        from espnet3.utils.publish import pack_model
+        from espnet3.utils.publish_utils import pack_model
 
         return pack_model(self)
 
     def upload_model(self, *args, **kwargs):
         """Upload model bundle to HuggingFace."""
         self._reject_stage_args("upload_model", args, kwargs)
-        from espnet3.utils.publish import upload_model
+        from espnet3.utils.publish_utils import upload_model
 
         return upload_model(self)
 
