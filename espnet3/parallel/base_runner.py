@@ -199,6 +199,7 @@ class BaseRunner(ABC):
             ...         return model(xs)
         """
         raise NotImplementedError
+
     def _run_local(self, indices: Sequence[int]) -> List[Any]:
         """Run sequentially on the driver using a locally built environment.
 
@@ -213,8 +214,7 @@ class BaseRunner(ABC):
         """
         env = self.provider.build_env_local()
         return [
-            self.__class__.forward(i, **env)
-            for i in tqdm(indices, total=len(indices))
+            self.__class__.forward(i, **env) for i in tqdm(indices, total=len(indices))
         ]
 
     def _run_parallel(self, indices: Sequence[int]) -> List[Any]:
