@@ -129,10 +129,8 @@ class BaseRunner(ABC):
 
     Subclass contract:
         - Implement ``@staticmethod forward(idx, *, dataset, model, **env) -> Any``
-          without capturing ``self``.
-        - Optionally implement
-          ``@classmethod batch_forward(indices, *, dataset, model, **env)``
-          to handle batched indices explicitly.
+          without capturing ``self``. ``idx`` may be a single index or a batch
+          of indices depending on ``batch_size``.
         - Provide an :class:`EnvironmentProvider` that builds the required env
           (e.g., dataset/model) for local and worker executions.
 
@@ -172,20 +170,20 @@ class BaseRunner(ABC):
 
     @staticmethod
     @abstractmethod
-    def forward(idx: int, *, dataset, model, **env) -> Any:
-        """Compute one item for the given index (to be implemented by subclasses).
+    def forward(idx: int | Iterable[int], *, dataset, model, **env) -> Any:
+        """Compute items for the given index or batch (to be implemented by subclasses).
 
         Keep this as a ``@staticmethod`` so that it is pickle-safe for Dask
         and does not capture ``self``.
 
         Args:
-            idx (int): The input index to process.
+            idx (int | Iterable[int]): The input index or batch of indices to process.
             dataset: Dataset object provided via the environment.
             model: Model object provided via the environment.
             **env: Any additional environment entries injected by the provider.
 
         Returns:
-            Any: Result for the given index.
+            Any: Result for the given index or batch.
 
         Raises:
             NotImplementedError: Always in the base class; implement in subclass.
@@ -194,28 +192,13 @@ class BaseRunner(ABC):
             >>> class MyRunner(BaseRunner):
             ...     @staticmethod
             ...     def forward(idx, *, dataset, model, **env):
-            ...         x = dataset[idx]
-            ...         return model(x)
+            ...         if isinstance(idx, int):
+            ...             x = dataset[idx]
+            ...             return model(x)
+            ...         xs = [dataset[i] for i in idx]
+            ...         return model(xs)
         """
         raise NotImplementedError
-
-    @classmethod
-    def batch_forward(cls, indices: Iterable[int], *, dataset, model, **env) -> Any:
-        """Compute a batch by delegating to ``forward`` per index as a default.
-
-        This should be overridden by subclasses that can handle batched inputs.
-
-        Args:
-            indices (Iterable[int]): Indices to process as a batch.
-            dataset: Dataset object provided via the environment.
-            model: Model object provided via the environment.
-            **env: Any additional environment entries injected by the provider.
-
-        Returns:
-            Any: Batch result from the runner.
-        """
-        return [cls.forward(i, dataset=dataset, model=model, **env) for i in indices]
-
     def _run_local(self, indices: Sequence[int]) -> List[Any]:
         """Run sequentially on the driver using a locally built environment.
 
@@ -229,12 +212,10 @@ class BaseRunner(ABC):
             - Uses ``tqdm`` progress bar over the input sequence.
         """
         env = self.provider.build_env_local()
-        f = (
-            self.__class__.batch_forward
-            if self.batch_size is not None
-            else self.__class__.forward
-        )
-        return [f(i, **env) for i in tqdm(indices, total=len(indices))]
+        return [
+            self.__class__.forward(i, **env)
+            for i in tqdm(indices, total=len(indices))
+        ]
 
     def _run_parallel(self, indices: Sequence[int]) -> List[Any]:
         """Run with synchronous Dask mapping using per-worker environments.
@@ -251,14 +232,14 @@ class BaseRunner(ABC):
         """
         setup_fn = self.provider.build_worker_setup_fn()
         out = []
-        func = (
-            self.__class__.batch_forward
-            if self.batch_size is not None
-            else self.__class__.forward
-        )
         with get_client(get_parallel_config()) as client:
             for res in tqdm(
-                parallel_for(func, indices, setup_fn=setup_fn, client=client),
+                parallel_for(
+                    self.__class__.forward,
+                    indices,
+                    setup_fn=setup_fn,
+                    client=client,
+                ),
                 total=len(indices),
             ):
                 out.append(res)
@@ -428,12 +409,9 @@ def _async_worker_entry_from_spec_path(spec_path: str):
     setup_fn = provider.build_worker_setup_fn()
     env = setup_fn()
 
-    extras = spec.get("extras", {}) or {}
-    use_batch = bool(extras.get("batched", False))
-    f = RunnerCls.batch_forward if use_batch else RunnerCls.forward
     results = []
     for idx in spec["indices"]:
-        results.append(f(idx, **env))
+        results.append(RunnerCls.forward(idx, **env))
 
     result_path = spec.get("result_path")
     if result_path:
