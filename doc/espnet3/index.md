@@ -69,7 +69,7 @@ highlights:
         details: "Add your own stages in the System class."
         icon: fa-solid:diagram-project
 
-  - header: Core packages
+  - header: Developer resources
     bgImage: https://theme-hope-assets.vuejs.press/bg/4-light.svg
     bgImageStyle:
       background-repeat: repeat

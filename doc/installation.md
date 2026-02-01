@@ -29,7 +29,7 @@ the following packages are installed using conda, so you can skip them.)
 
 ### Supported Linux distributions and other requirements
 
-We support the following Linux distributions with CI. If you want to build your own Linux by yourself,
+We support the following Linux distributions with CI. If you want to use a different Linux distro,
 please also check our [CI configurations](https://github.com/espnet/espnet/tree/master/.github/workflows)
 to prepare the appropriate environments.
 

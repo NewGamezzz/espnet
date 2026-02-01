@@ -211,6 +211,73 @@ def replace_language_tags(content):
     return content
 
 
+def _split_fenced_code_blocks(text):
+    segments = []
+    fence_re = re.compile(r"^[ \t]*([`~]{3,}).*$")
+    in_fence = False
+    fence_marker = None
+    buffer = []
+
+    for line in text.splitlines(keepends=True):
+        if not in_fence:
+            match = fence_re.match(line)
+            if match:
+                if buffer:
+                    segments.append((False, "".join(buffer)))
+                    buffer = []
+                in_fence = True
+                fence_marker = match.group(1)[0]
+                buffer.append(line)
+            else:
+                buffer.append(line)
+        else:
+            buffer.append(line)
+            match = fence_re.match(line)
+            if match and match.group(1)[0] == fence_marker:
+                segments.append((True, "".join(buffer)))
+                buffer = []
+                in_fence = False
+                fence_marker = None
+
+    if buffer:
+        segments.append((in_fence, "".join(buffer)))
+
+    return segments
+
+
+def _split_inline_code(text):
+    segments = []
+    pattern = re.compile(r"(`+)([^`\n]*?)\1")
+    last = 0
+    for match in pattern.finditer(text):
+        if match.start() > last:
+            segments.append((False, text[last : match.start()]))
+        segments.append((True, match.group(0)))
+        last = match.end()
+    if last < len(text):
+        segments.append((False, text[last:]))
+    return segments
+
+
+def replace_tags_skip_code(content):
+    content = replace_language_tags(content)
+    fenced_segments = _split_fenced_code_blocks(content)
+    output = []
+    for is_code_block, block in fenced_segments:
+        if is_code_block:
+            output.append(block)
+            continue
+        inline_segments = _split_inline_code(block)
+        for is_inline_code, seg in inline_segments:
+            if is_inline_code:
+                output.append(seg)
+            else:
+                seg = replace_string_tags(seg)
+                seg = replace_custom_tags(seg)
+                output.append(seg)
+    return "".join(output)
+
+
 if __name__ == "__main__":
     # parser
     args = get_parser().parse_args()
@@ -223,9 +290,7 @@ if __name__ == "__main__":
         # if the tag is not in ALL_HTML_TAGS and does not have its end tag
         # we need to apply this two functions because
         # there are custom tags like: "<custom-tag a='<type>' b='<value>' />"
-        content = replace_language_tags(content)
-        content = replace_string_tags(content)
-        content = replace_custom_tags(content)
+        content = replace_tags_skip_code(content)
 
         with open(md, "w") as f:
             f.write(content)
@@ -236,9 +301,7 @@ if __name__ == "__main__":
 
         # Replace the "" and "" with "&lt;" and "&gt;", respectively
         # if the tag is not in ALL_HTML_TAGS
-        content = replace_language_tags(content)
-        content = replace_string_tags(content)
-        content = replace_custom_tags(content)
+        content = replace_tags_skip_code(content)
 
         with open(md, "w") as f:
             f.write(content)

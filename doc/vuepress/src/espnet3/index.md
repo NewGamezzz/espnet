@@ -1,84 +1,96 @@
 ---
 home: true
-icon: /assets/image/espnet.png
+icon: /assets/image/espnet3.png
 title: ESPnet3
 author:
   name: "Masao Someki"
 date: 2025-11-26
-heroImage: /assets/image/espnet_logo1.png
+heroImage: /assets/image/espnet3-logo.png
 heroImageStyle:
   - height: auto
   - width: 400px
 
-heroText: "ESPnet3: Python-first speech workflows"
-tagline: "Provider/Runner architecture, Hydra configs, and Lightning-based training from laptops to clusters."
+heroText: "ESPnet3: a modern major release"
+tagline: "Pythonic, end-to-end speech workflows—from dataset creation to training, inference, evaluation, packaging, and demo generation."
 
 highlights:
   - header: Start with ESPnet3
     bgImage: https://theme-hope-assets.vuejs.press/bg/3-light.svg
     features:
-      - title: "Docs hub"
-        details: "Where to begin and how pieces fit together."
-        icon: fa-solid:book
-        link: ./README.md
-      - title: "Provider/Runner overview"
-        details: "Understand the execution model for data prep, decode, and scoring."
-        icon: fa-solid:diagram-project
-        link: ./provider_runner.md
-      - title: "Hydra configs"
-        details: "Modular YAML for model, trainer, dataloader, and parallel backends."
-        icon: fa-solid:sliders
-        link: ./parallel.md
+      - title: "Getting Started"
+        details: "Quick start for recipes and basic workflows."
+        icon: fa-solid:rocket
+        link: ./get_started.md
+      - title: "Installation"
+        details: "Set up ESPnet3 and dependencies."
+        icon: fa-solid:download
+        link: ./install.md
+      - title: "Config overview"
+        details: "How stage YAML configs are organized and used."
+        icon: fa-solid:cog
+        link: ./config/index.md
 
-  - header: Build and train
+  - header: Stages
     bgImage: https://theme-hope-assets.vuejs.press/bg/2-light.svg
     bgImageStyle:
       background-repeat: repeat
       background-size: initial
     features:
-      - title: "Data pipeline"
-        link: ./dataset.md
-        details: "DataOrganizer, transforms, preprocessors, and sharding."
-        icon: material-symbols:database-outline
-      - title: "System entry point"
-        link: ./system.md
-        details: "Stages orchestrated by BaseSystem and task-specific systems."
+      - title: "create_dataset"
+        link: ./stages/create-dataset.md
+        details: "Download/build datasets for your recipe."
+        icon: fa-solid:database
+      - title: "collect_stats"
+        link: ./stages/collect-stats.md
+        details: "Compute feature shapes and global stats."
+        icon: fa-solid:chart-line
+      - title: "train"
+        link: ./stages/train.md
+        details: "Run Lightning training with `train.yaml`."
+        icon: fa-solid:graduation-cap
+      - title: "infer"
+        link: ./stages/inference.md
+        details: "Write `.scp` outputs under `inference_dir`."
+        icon: fa-solid:bolt
+      - title: "metric"
+        link: ./stages/metrics.md
+        details: "Compute metrics from inference outputs."
+        icon: fa-solid:ruler-combined
+      - title: "Publish-related"
+        link: ./stages/publish.md
+        details: "Pack and upload model artifacts (`pack_model` / `upload_model`)."
+        icon: fa-solid:box-archive
+      - title: "Demo stages"
+        link: ./stages/demo.md
+        details: "Generate and upload a demo UI."
+        icon: fa-solid:display
+      - title: "System-specific stages"
+        link: ./stages/system-specific.md
+        details: "Add your own stages in the System class."
         icon: fa-solid:diagram-project
-      - title: "Recipe layout"
-        link: ./recipe_directory.md
-        details: "How egs3 directories, configs, and stages are organized."
-        icon: fa-solid:folder-tree
-      - title: "Data preparation"
-        link: ./data_preparation.md
-        details: "Provider/Runner patterns for feature extraction and cleaning."
-        icon: fa-solid:hammer
-      - title: "Callbacks"
-        link: ./callbacks.md
-        details: "Default Lightning callbacks and how to customize them."
-        icon: fa-solid:bell
-      - title: "Optimizers & schedulers"
-        link: ./optimizer_configuration.md
-        details: "Single vs multi-optimizer setups enforced by ESPnet3."
-        icon: fa-solid:timeline
-      - title: "Multi-GPU / multi-node"
-        link: ./multiple_gpu.md
-        details: "Configure Lightning for distributed runs."
-        icon: fa-solid:network-wired
 
-  - header: Inference and evaluation
+  - header: Developer resources
     bgImage: https://theme-hope-assets.vuejs.press/bg/4-light.svg
     bgImageStyle:
       background-repeat: repeat
       background-size: initial
     features:
-      - title: "Inference runners"
-        link: ./provider_runner.md
-        details: "Scale decode jobs locally or on clusters."
-        icon: fa-solid:bolt
-      - title: "Evaluation pipeline"
-        link: ./evaluate.md
-        details: "InferenceRunner + ScoreRunner with YAML-driven metrics."
-        icon: fa-solid:check-double
+      - title: "Systems"
+        link: ./core/systems.md
+        details: "`espnet3/systems`: stage orchestration and task entry points."
+        icon: fa-solid:diagram-project
+      - title: "Components"
+        link: ./core/components.md
+        details: "`espnet3/components`: reusable data/training/model/metric blocks."
+        icon: fa-solid:cubes
+      - title: "Parallel"
+        link: ./core/parallel.md
+        details: "`espnet3/parallel`: Provider/Runner execution stack."
+        icon: fa-solid:server
+      - title: "Demo"
+        link: ./core/demo.md
+        details: "`espnet3/demo`: packing, runtime, and UI wiring."
+        icon: fa-solid:display
 
 footer: Apache License 2.0, Copyright © 2024-present ESPnet community
 ---

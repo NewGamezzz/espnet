@@ -11,26 +11,22 @@ ESPnet3 leans on OmegaConf/Hydra for declarative experiment setup and on Dask
 for parallel execution. This page shows how to structure configs, select
 parallel backends, and connect the pieces to training or runner-based jobs.
 
-<div class='custom-h3'><p>✅ At a glance: who owns what?</p></div>
-
+### ✅ At a glance: who owns what?
 
 | Section      | You edit in YAML                                       | ESPnet3 / libraries handle                           |
 | ------------ | ------------------------------------------------------ | ---------------------------------------------------- |
-| `model`      | Choose architecture and hyperparameters               | Instantiating via Hydra and wrapping in `LitESPnetModel` |
+| `model`      | Choose architecture and hyperparameters               | Instantiating via Hydra and wrapping in `ESPnetLightningModule` |
 | `trainer`    | Training strategy, devices, logging, callbacks        | Passing options to `lightning.pytorch.Trainer`       |
 | `parallel`   | Dask / cluster settings (env, workers, options)       | Creating clients via `espnet3.parallel.parallel.set_parallel` |
 | `dataloader` | Dataset, sampler, collate_fn configs                  | Constructing dataloaders and iterating during training |
 
----
-
-<div class='custom-h3'><p>Core config layout</p></div>
-
+### Core config layout
 
 Organise YAML files into small, purpose-driven sections. A minimal skeleton
 looks like:
 
 ```yaml
-expdir: exp/asr_example
+exp_dir: exp/asr_example
 seed: 2025
 
 model:  # ESPnet or custom model
@@ -62,10 +58,7 @@ dataloader:  # Optional: overrides for collate/sampler/datasets
 Hydra instantiates each `_target_` at runtime, so the same pattern works for
 ESPnet-provided components or your own classes.
 
----
-
-<div class='custom-h3'><p>Parallel execution with Dask</p></div>
-
+### Parallel execution with Dask
 
 `espnet3.parallel.parallel.set_parallel` reads a `parallel` config and prepares a Dask
 client. Define multiple blocks (e.g., `parallel_cpu`, `parallel_gpu`) and pick
@@ -110,47 +103,38 @@ Switch to asynchronous submission by constructing the runner with
 `async_mode=True`; job specs will be written to disk and submitted via Dask
 JobQueue.
 
----
-
-<div class='custom-h3'><p>Model definition</p></div>
-
+### Model definition
 
 Two common patterns:
 
 1. **Reuse ESPnet models**
    ```python
-   from espnet3.components.model import LitESPnetModel
-   from espnet3.utils.task import get_espnet_model
+   from espnet3.components.modeling.lightning_module import ESPnetLightningModule
+   from espnet3.utils.task_utils import get_espnet_model
 
    espnet_model = get_espnet_model(task="asr", config=cfg.model)
-   model = LitESPnetModel(espnet_model)
+   model = ESPnetLightningModule(espnet_model, cfg)
    ```
 
 2. **Instantiate custom models**
    ```python
    import hydra
-   from espnet3.components.model import LitESPnetModel
+   from espnet3.components.modeling.lightning_module import ESPnetLightningModule
 
    custom_model = hydra.utils.instantiate(cfg.model)
-   model = LitESPnetModel(custom_model)
+   model = ESPnetLightningModule(custom_model, cfg)
    ```
 
 Both feed directly into the Lightning trainer specified by `trainer`.
 
----
-
-<div class='custom-h3'><p>Optimisers and schedulers</p></div>
-
+### Optimisers and schedulers
 
 ESPnet3 supports single or multiple optimiser setups. See
-`doc/espnet3/optimizer_configuration.md` for the rules enforced by
-`LitESPnetModel.configure_optimizers` (matching parameter groups, scheduler
-counts, etc.).
+[Optimizer configuration](./core/components/optimizer_configuration.md) for the
+rules enforced by `ESPnetLightningModule.configure_optimizers` (matching
+parameter groups, scheduler counts, etc.).
 
----
-
-<div class='custom-h3'><p>Dataloader configuration</p></div>
-
+### Dataloader configuration
 
 Attach dataloader settings under `dataloader` to control collate functions,
 samplers, and dataset instantiation via Hydra. Example with Lhotse:
@@ -181,13 +165,10 @@ dataloader:
     sampler:
       _target_: lhotse.dataset.sampling.SimpleCutSampler
       max_cuts: 20
-      shuffle: false
+  shuffle: false
 ```
 
----
-
-<div class='custom-h3'><p>Trainer parameters</p></div>
-
+### Trainer parameters
 
 Most fields under `trainer` are passed straight to `lightning.pytorch.Trainer`.
 Objects that need construction (loggers, callbacks, profilers) should be listed
@@ -206,14 +187,14 @@ trainer:
 
   logger:
     - _target_: lightning.pytorch.loggers.TensorBoardLogger
-      save_dir: ${expdir}/tensorboard
+      save_dir: ${exp_dir}/tensorboard
       name: tb_logger
 
   callbacks:
     # This AverageCheckpointsCallback is included as a default callback without writing here.
     # We included this as an example.
-    - _target_: espnet3.components.callbacks.AverageCheckpointsCallback
-      output_dir: ${expdir}
+    - _target_: espnet3.components.callbacks.default_callbacks.AverageCheckpointsCallback
+      output_dir: ${exp_dir}
       best_ckpt_callbacks: []
 ```
 
