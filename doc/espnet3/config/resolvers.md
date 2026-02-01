@@ -8,7 +8,7 @@ date: 2025-11-26
 # ESPnet3 Config Resolvers
 
 ESPnet3 registers a small set of OmegaConf resolvers to pull external data into
-YAML configs at load time. These are defined in `espnet3.utils.config` and are
+YAML configs at load time. These are defined in `espnet3.utils.config_utils` and are
 available in all stage configs.
 
 ## ✅ At a glance

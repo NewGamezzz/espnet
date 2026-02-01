@@ -50,10 +50,10 @@ highlights:
         icon: fa-solid:graduation-cap
       - title: "infer"
         link: ./stages/inference.md
-        details: "Write `.scp` outputs under `infer_dir`."
+        details: "Write `.scp` outputs under `inference_dir`."
         icon: fa-solid:bolt
-      - title: "measure"
-        link: ./stages/measure.md
+      - title: "metric"
+        link: ./stages/metrics.md
         details: "Compute metrics from inference outputs."
         icon: fa-solid:ruler-combined
       - title: "Publish-related"

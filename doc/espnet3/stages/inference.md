@@ -14,7 +14,7 @@ This document explains the **inference stage** in ESPnet3, implemented in:
 * `espnet3.systems.base.inference_runner.InferenceRunner`
 
 Inference writes one or more `.scp` files (e.g., `hyp.scp`) that the
-measurement stage later consumes. See `measure.md` for metric computation.
+metrics stage later consumes. See `metrics.md` for metric computation.
 
 ## Quick usage
 
@@ -34,7 +34,7 @@ Keep the core settings in `infer.yaml`. For the full list, see
 | `model` | Hydra target for the inference model (espnet2 or custom). Instantiated with a `device` argument. |
 | `dataset` | Dataset organizer and test splits. The stage selects the test set named by `test_set`. |
 | `parallel` | Parallel execution settings (e.g., local vs Dask, worker count). |
-| `infer_dir` | Output location for `.scp` files under `infer_dir/<test_name>/`. |
+| `inference_dir` | Output location for `.scp` files under `inference_dir/<test_name>/`. |
 | `input_key` | Which dataset field(s) to pass into the model. |
 | `output_fn` | Import path to a function that formats runner outputs. |
 
@@ -49,7 +49,7 @@ See also:
 For each test set name in `dataset.test`, inference writes `.scp` files under:
 
 ```text
-<infer_dir>/<test_name>/
+<inference_dir>/<test_name>/
 ```
 
 The filenames are determined by:
@@ -102,7 +102,7 @@ results = runner(range(len(provider.build_dataset(config))))
 A minimal `infer_config` for inference looks like:
 
 ```yaml
-infer_dir: exp/asr_example/infer
+inference_dir: exp/asr_example/infer
 
 model:
   _target_: espnet2.bin.asr_inference.Speech2Text
@@ -128,7 +128,7 @@ output_fn: src.infer.output_fn
 ```
 
 For each test set name in `dataset.test`, `inference()` writes one `.scp` file
-per output key under `infer_dir/<test_name>/` (e.g., `hyp.scp`, `wav.scp`, ...).
+per output key under `inference_dir/<test_name>/` (e.g., `hyp.scp`, `wav.scp`, ...).
 
 ### `output_fn`: formatting model outputs into SCP fields
 
@@ -171,14 +171,19 @@ def forward(idx, *, dataset=None, model=None, input_key=None, output_fn_path=Non
 
 Notes:
 
-- If you set `batch_size` and your model implements `batch_forward`, `output_fn`
-  may be called with batched inputs (`data` as a list, `idx` as a list). If you
-  don't want to handle that, leave `batch_size` unset (or avoid `batch_forward`).
+- `InferenceRunner.forward` accepts either a single index or a list of indices.
+- There is no `batch_forward` hook; batching is handled by passing lists into
+  `forward` when `batch_size` is set.
+- If `batch_size` is unset, `forward` receives a single dataset item and `idx`
+  is a scalar. If `batch_size` is set (>= 1), `forward` receives a list of
+  dataset items and `idx` is a list.
 
-### Batched inference (`batch_size` / `batch_forward`)
+### Batched inference (`batch_size`)
 
-If you set `batch_size` in `infer.yaml`, `InferenceRunner` may execute
-`batch_forward()` and call your model in a batched way.
+If you set `batch_size` in `infer.yaml`, `InferenceRunner` chunks indices and
+passes a list of indices into `forward`. The model is called once per batch
+with list-valued inputs (one list per `input_key`), and `output_fn` receives
+batched data and indices.
 
 Conceptually:
 
@@ -187,21 +192,15 @@ indices = [0, 1, 2, 3]
 data_batch = [dataset[i] for i in indices]
 inputs_dict = {"speech": [d["speech"] for d in data_batch]}
 
-if hasattr(model, "batch_forward"):
-    model_output = model.batch_forward(**inputs_dict)
-    out = output_fn(data=data_batch, model_output=model_output, idx=indices)
-else:
-    out = [output_fn(data=d, model_output=model(d["speech"]), idx=i) for i, d in zip(indices, data_batch)]
+model_output = model(**inputs_dict)
+out = output_fn(data=data_batch, model_output=model_output, idx=indices)
 ```
 
-Minimal `batch_forward` example:
+Minimal batched `__call__` example:
 
 ```python
 class MyModel:
     def __call__(self, speech):
-        return {"text": "dummy"}
-
-    def batch_forward(self, speech):
         # speech: list[...] with length == batch size
         return {"text": ["dummy" for _ in speech]}
 ```
@@ -231,9 +230,9 @@ def output_fn(*, data, model_output, idx):
 ```
 
 If your task produces audio hypotheses (e.g., TTS), write the audio files under
-`<infer_dir>/<test_name>/` (or a subdirectory), and put the file paths in the
+`<inference_dir>/<test_name>/` (or a subdirectory), and put the file paths in the
 corresponding `hyp.scp` entries. Ensure the output directory exists before
-writing SCPs so `measure()` can load them reliably.
+writing SCPs so `metric()` can load them reliably.
 
 Example: audio hypotheses written as file paths
 
@@ -241,14 +240,14 @@ If you generate audio files, `hyp.scp` typically stores the generated file path
 per utterance:
 
 ```text
-utt001 <infer_dir>/<test_name>/audio/utt001.wav
-utt002 <infer_dir>/<test_name>/audio/utt002.wav
+utt001 <inference_dir>/<test_name>/audio/utt001.wav
+utt002 <inference_dir>/<test_name>/audio/utt002.wav
 ```
 
 Example directory tree:
 
 ```text
-<infer_dir>/
+<inference_dir>/
 └── <test_name>/
     ├── hyp.scp
     └── audio/
@@ -282,6 +281,6 @@ class MyInferenceRunner(BaseRunner):
 
 Then, in a custom `inference()` function or system subclass, construct this
 runner instead of the default `InferenceRunner`. The rest of the pipeline
-(`measure()`, metrics, etc.) can stay the same as long as you produce the `.scp`
-keys that your `measure.yaml` expects (via `metrics[*].inputs`), such as
+(`metric()`, metrics, etc.) can stay the same as long as you produce the `.scp`
+keys that your `metric.yaml` expects (via `metrics[*].inputs`), such as
 `hyp.scp` (and `ref.scp` if you choose to write references).

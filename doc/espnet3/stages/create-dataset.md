@@ -100,7 +100,7 @@ ${dataset_dir}/
 from OpenSLR into `dataset_dir/LibriSpeech/` without extra preprocessing.
 
 The core of the function loops over requested splits and uses
-`espnet3.utils.download.download_url` to fetch the archive:
+`espnet3.utils.download_utils.download_url` to fetch the archive:
 
 ```python
 for split in requested:

@@ -1,15 +1,15 @@
 ---
-title: 📘 ESPnet3 Inference & Measurement Framework
+title: 📘 ESPnet3 Inference & Metrics Framework
 author:
   name: "Masao Someki"
 date: 2025-11-26
 ---
 
-This document explains the **infer + measure** evaluation flow in ESPnet3,
+This document explains the **infer + metric** evaluation flow in ESPnet3,
 implemented in:
 
 * `espnet3.systems.base.inference_provider.InferenceProvider` / `InferenceRunner` / `inference`
-* `espnet3.systems.base.measure.measure` and `espnet3.components.metrics.abs_metric.AbsMetrics`
+* `espnet3.systems.base.metric.metric` and `espnet3.components.metrics.abs_metric.AbsMetric`
 
 It is designed for ASR-style evaluation but can be adapted to custom models as
 long as you follow the expected interfaces.
@@ -21,8 +21,8 @@ long as you follow the expected interfaces.
 | Model (espnet2 or custom)    | `config.model` Hydra target                            | Instantiation with a `device` argument              |
 | Dataset / test splits        | `config.dataset` (usually `DataOrganizer`)             | Selecting the requested test set via `test_set`     |
 | Decoding logic               | (Optional) custom `InferenceRunner.forward`            | Parallel execution via `BaseRunner`                 |
-| Metrics                      | `AbsMetrics` subclasses and `config.metrics` entries   | Loading SCPs and calling metrics via `measure()`    |
-| Evaluation config YAML       | All of the above (model, dataset, parallel, metrics)   | Wiring into `BaseSystem.infer()` / `measure()`      |
+| Metrics                      | `AbsMetric` subclasses and `config.metrics` entries   | Loading SCPs and calling metrics via `metric()`    |
+| Evaluation config YAML       | All of the above (model, dataset, parallel, metrics)   | Wiring into `BaseSystem.infer()` / `metric()`      |
 
 ## 🧠 Pipeline overview
 
@@ -31,16 +31,16 @@ At evaluation time, `BaseSystem` wires things as:
 ```text
 BaseSystem.infer()
 └── infer() -> espnet3.systems.base.inference.inference(infer_config)
-    └── writes infer_dir/<test_name>/{ref,hyp}.scp
+    └── writes inference_dir/<test_name>/{ref,hyp}.scp
 
-BaseSystem.measure()
-└── measure() -> espnet3.systems.base.measure.measure(measure_config)
-    └── reads those SCPs and computes metrics → writes measures.json
+BaseSystem.metric()
+└── metric() -> espnet3.systems.base.metric.metric(metric_config)
+    └── reads those SCPs and computes metrics → writes metrics.json
 ```
 
 In practice, these are run as two separate stages with two configs
-(`infer.yaml` and `measure.yaml`). They typically share the same `dataset.test`
-definitions, and measure reads the SCPs written by infer.
+(`infer.yaml` and `metric.yaml`). They typically share the same `dataset.test`
+definitions, and metric reads the SCPs written by infer.
 
 ## 🏃‍♂️ Inference with `InferenceRunner`
 
@@ -98,7 +98,7 @@ def inference(config: DictConfig):
 A minimal `infer_config` for inference looks like:
 
 ```yaml
-infer_dir: exp/asr_example/infer
+inference_dir: exp/asr_example/infer
 
 model:
   _target_: espnet2.bin.asr_inference.Speech2Text
@@ -122,8 +122,8 @@ parallel:
 For each test set name in `dataset.test`, `inference()` writes:
 
 ```text
-<infer_dir>/<test_name>/ref.scp
-<infer_dir>/<test_name>/hyp.scp
+<inference_dir>/<test_name>/ref.scp
+<inference_dir>/<test_name>/hyp.scp
 ```
 
 Each `.scp` file contains lines like:
@@ -177,13 +177,13 @@ class MyInferenceRunner(BaseRunner):
 
 Then, in a custom `inference()` function or system subclass, construct this
 runner instead of the default `InferenceRunner`. The rest of the pipeline
-(`measure()`, metrics, etc.) can stay the same as long as you still produce
+(`metric()`, metrics, etc.) can stay the same as long as you still produce
 `ref.scp` and `hyp.scp`.
 
-## 📏 Measurement with `AbsMetrics`
+## 📏 Metrics with `AbsMetric`
 
-Measurement is implemented in `espnet3.systems.base.measure.measure` and uses the
-`AbsMetrics` base class from `espnet3.components.metrics.abs_metric`:
+Metrics are implemented in `espnet3.systems.base.metric.metric` and use the
+`AbsMetric` base class from `espnet3.components.metrics.abs_metric`:
 
 ```python
 from abc import ABC, abstractmethod
@@ -191,7 +191,7 @@ from pathlib import Path
 from typing import Dict, List
 
 
-class AbsMetrics(ABC):
+class AbsMetric(ABC):
     @abstractmethod
     def __call__(
         self, data: Dict[str, List[str]], test_name: str, output_dir: Path
@@ -199,26 +199,26 @@ class AbsMetrics(ABC):
         ...
 ```
 
-`measure()` reads the SCP files, aligns utterance IDs, and then calls your metric:
+`metric()` reads the SCP files, aligns utterance IDs, and then calls your metric:
 
 ```python
 from hydra.utils import instantiate
-from espnet3.components.metrics.abs_metric import AbsMetrics
+from espnet3.components.metrics.abs_metric import AbsMetric
 from espnet3.utils.scp_utils import load_scp_fields
 
 
-def measure(config):
+def metric(config):
     test_sets = [t.name for t in config.dataset.test]
     for metric_cfg in config.metrics:
         metric = instantiate(metric_cfg.metric)
         inputs = OmegaConf.to_container(metric_cfg.inputs, resolve=True)
         data = load_scp_fields(
-            infer_dir=Path(config.infer_dir),
+            inference_dir=Path(config.inference_dir),
             test_name=test_name,
             inputs=inputs,
             file_suffix=".scp",
         )
-        result = metric(data, test_name, Path(config.infer_dir))
+        result = metric(data, test_name, Path(config.inference_dir))
         ...
 ```
 
@@ -226,7 +226,7 @@ def measure(config):
 
 Each metric entry has three important fields:
 
-- `metric`: Hydra target for your `AbsMetrics` subclass.
+- `metric`: Hydra target for your `AbsMetric` subclass.
 - `inputs`: which SCP files to read and how to name them.
 - `apply_to`: list of test set names to evaluate on.
 
@@ -245,11 +245,11 @@ metrics:
 ### 🔹 Implementing a custom metric
 
 ```python
-from espnet3.components.metrics.abs_metric import AbsMetrics
+from espnet3.components.metrics.abs_metric import AbsMetric
 import jiwer
 
 
-class WER(AbsMetrics):
+class WER(AbsMetric):
     def __call__(self, data, test_name, output_dir):
         refs = data["ref"]
         hyps = data["hyp"]
@@ -257,17 +257,17 @@ class WER(AbsMetrics):
         return {"WER": round(wer * 100, 2)}
 ```
 
-As long as the returned dict is JSON-serializable, `measure()` will write it into
-`<infer_dir>/measures.json`.
+As long as the returned dict is JSON-serializable, `metric()` will write it into
+`<inference_dir>/metrics.json`.
 
-## 🧰 Putting it together (`infer.yaml` + `measure.yaml`)
+## 🧰 Putting it together (`infer.yaml` + `metric.yaml`)
 
 A simplified end-to-end evaluation setup uses two stage configs.
 
 `infer.yaml`:
 
 ```yaml
-infer_dir: exp/asr_example/infer
+inference_dir: exp/asr_example/infer
 
 model:
   _target_: espnet2.bin.asr_inference.Speech2Text
@@ -288,10 +288,10 @@ parallel:
   n_workers: 1
 ```
 
-`measure.yaml`:
+`metric.yaml`:
 
 ```yaml
-infer_dir: exp/asr_example/infer
+inference_dir: exp/asr_example/infer
 
 dataset:
   _target_: ${load_yaml:conf/infer.yaml,dataset._target_}
@@ -309,18 +309,18 @@ metrics:
 Then run:
 
 1. `infer` → `inference(infer_config)` to create SCP files.
-2. `measure` → `measure(measure_config)` to compute metrics and write `measures.json`.
+2. `metric` → `metric(metric_config)` to compute metrics and write `metrics.json`.
 
 ## ✅ Summary
 
 | Stage   | What you must provide                                  | Files produced / consumed                      |
 | ------- | ------------------------------------------------------ | ---------------------------------------------- |
-| Infer   | Model config (espnet2 or custom), dataset, parallel    | `<infer_dir>/<test>/ref.scp`, `hyp.scp`       |
-| Measure | `AbsMetrics` subclasses and `metrics` config           | `measures.json` with per-metric, per-test scores |
+| Infer   | Model config (espnet2 or custom), dataset, parallel    | `<inference_dir>/<test>/ref.scp`, `hyp.scp`       |
+| Metric | `AbsMetric` subclasses and `metrics` config           | `metrics.json` with per-metric, per-test scores |
 
 When you bring a custom model, the main work is to either:
 
 - mimic the `Speech2Text` interface so that the default `InferenceRunner`
   continues to work, or
 - write a small `BaseRunner` subclass that returns `{"idx", "hyp", "ref"}` so
-  that the measurement side can stay unchanged.
+  that the metrics side can stay unchanged.

@@ -86,7 +86,7 @@ dataset:
 Notes:
 
 - `train` and `valid` must be both present or both omitted.
-- `test` is optional and is typically used by `infer`/`measure`, not by `train`.
+- `test` is optional and is typically used by `infer`/`metric`, not by `train`.
 - `preprocessor` is used when you want to reuse ESPnet2 preprocessors. Choose
   from the implementations in
   [espnet2/train/preprocessor.py](https://github.com/espnet/espnet/blob/72a3db47bb26bf3ac2d43b055b517572bce67e38/espnet2/train/preprocessor.py)

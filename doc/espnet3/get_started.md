@@ -73,12 +73,12 @@ from pathlib import Path
 from egs3.TEMPLATE.asr.run import main
 from espnet3.systems.asr.system import ASRSystem
 
-stages = ["create_dataset", "collect_stats", "train", "infer", "measure"]
+stages = ["create_dataset", "collect_stats", "train", "infer", "metric"]
 args = Namespace(
     stages=stages,
     train_config=Path("/path/to/train_config.yaml"),
     infer_config=Path("/path/to/infer_config.yaml"),
-    measure_config=Path("/path/to/measure_config.yaml"),
+    metric_config=Path("/path/to/metric_config.yaml"),
     publish_config=None,
     demo_config=None,
     dry_run=False,
@@ -102,7 +102,7 @@ python run.py \
     --stages all \
     --train_config conf/train.yaml \
     --infer_config conf/infer.yaml \
-    --measure_config conf/measure.yaml
+    --metric_config conf/metric.yaml
 ```
 
 # 🧠 Understanding Stages
@@ -119,24 +119,24 @@ Typical ASR pipeline:
 2. **collect_stats** (compute CMVN/statistics)
 3. **train** (fit the model)
 4. **infer** (generate hypotheses)
-5. **measure** (compute metrics)
+5. **metric** (compute metrics)
 6. **pack_model / upload_model** (package + upload artifacts)
 
 You can run selected stages:
 
 ```bash
 python run.py \
-    --stages train infer measure \
+    --stages train infer metric \
     --train_config conf/train.yaml \
     --infer_config conf/infer.yaml \
-    --measure_config conf/measure.yaml
+    --metric_config conf/metric.yaml
 ```
 
 # 🧵 Stage-specific arguments
 
 Stages do not accept arbitrary CLI arguments. Keep all stage settings in the
 YAML configs and pass the configs via `--train_config`, `--infer_config`, and
-`--measure_config`.
+`--metric_config`.
 
 No code changes inside the system class are needed.
 
@@ -185,13 +185,13 @@ python run.py --stages create_dataset --train_config conf/train.yaml
 python run.py --stages collect_stats train --train_config conf/train.yaml
 
 # Evaluation
-python run.py --stages infer measure --infer_config conf/infer.yaml --measure_config conf/measure.yaml
+python run.py --stages infer metric --infer_config conf/infer.yaml --metric_config conf/metric.yaml
 ```
 
 Outputs go to:
 
 * `exp/` – training logs + checkpoints
-* `infer_dir/` – inference outputs + measures.json
+* `inference_dir/` – inference outputs + metrics.json
 
 ## 📚 Additional ESPnet3 Documentation
 
@@ -202,7 +202,7 @@ Outputs go to:
 | Define datasets and loaders | `conf/dataset*.yaml`, `DataOrganizer` config | [DataOrganizer and dataset pipeline](./core/components/data-organizer.md) |
 | Configure training          | `conf/train.yaml` (model, trainer, optim)    | [Optimizer configuration](./core/components/optimizer_configuration.md), [Callbacks](./core/components/callbacks.md) |
 | Run multi-GPU / cluster     | `conf/train.yaml` + `parallel` blocks        | [Multi-GPU / multi-node](./core/parallel/multiple_gpu.md), [Train config](./config/train_config.md) |
-| Set up evaluation           | `conf/infer.yaml` + `conf/measure.yaml`      | [Inference](./stages/inference.md), [Measure](./stages/measure.md), [Provider / Runner](./core/parallel/provider_runner.md) |
+| Set up evaluation           | `conf/infer.yaml` + `conf/metric.yaml`      | [Inference](./stages/inference.md), [Metric](./stages/metrics.md), [Provider / Runner](./core/parallel/provider_runner.md) |
 
 ### Execution Framework
 
@@ -225,7 +225,7 @@ Outputs go to:
 
 * **Runner-based decoding:** [Provider / Runner](./core/parallel/provider_runner.md)
 * **Inference pipeline:** [Inference](./stages/inference.md)
-* **Measurement pipeline:** [Measure](./stages/measure.md)
+* **Metrics pipeline:** [Metric](./stages/metrics.md)
 
 ### Recipe Structure
 

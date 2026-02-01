@@ -23,7 +23,7 @@ Required for upload:
 
 Common optional:
 
-- `pack_model.infer_dir` (to pull metrics into README)
+- `pack_model.decode_dir` (to pull metrics into README)
 - `pack_model.include` / `pack_model.exclude`
 - `pack_model.files` / `pack_model.yaml_files`
 
@@ -59,9 +59,9 @@ pack_model:
   task: asr
   out_dir: exp/model_pack
 
-  # used to locate scores.json from the measure stage
-  # (note: some pipelines may write measures.json instead)
-  infer_dir: ${exp_dir}/infer
+  # used to locate scores.json from the metric stage
+  # (note: some pipelines may write metrics.json instead)
+  decode_dir: ${exp_dir}/infer
 
   # extra files/dirs outside exp/<exp_tag> to include in the archive
   include:

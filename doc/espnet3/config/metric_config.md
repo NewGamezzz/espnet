@@ -1,20 +1,20 @@
 ---
-title: ESPnet3 Measure Configuration
+title: ESPnet3 Metrics Configuration
 author:
   name: "Masao Someki"
 date: 2025-11-26
 ---
 
-# ESPnet3 Measure Configuration
+# ESPnet3 Metrics Configuration
 
-This page explains the `measure.yaml` schema used by the measure stage. It
-consumes inference outputs from `infer_dir` and reports metric results.
+This page explains the `metric.yaml` schema used by the metrics stage. It
+consumes inference outputs from `inference_dir` and reports metric results.
 
-## Minimum required keys (typical measurement run)
+## Minimum required keys (typical metrics run)
 
 Required:
 
-- `infer_dir`
+- `inference_dir`
 - `metrics` (at least one entry)
 - `dataset.test` (used to enumerate test names)
 
@@ -25,7 +25,7 @@ Common optional:
 Minimal example:
 
 ```yaml
-infer_dir: exp/my_exp/infer
+inference_dir: exp/my_exp/infer
 
 dataset:
   _target_: espnet3.components.data.data_organizer.DataOrganizer
@@ -47,7 +47,7 @@ metrics:
 
 | Section | Description |
 | --- | --- |
-| `recipe_dir`, `exp_dir`, `infer_dir`, ... | Path scaffold for outputs and metric result files. |
+| `recipe_dir`, `exp_dir`, `inference_dir`, ... | Path scaffold for outputs and metric result files. |
 | `dataset` | Test set definitions used to enumerate test names. |
 | `metrics` | Metric classes and input mappings. |
 
@@ -57,7 +57,7 @@ metrics:
 recipe_dir: .
 exp_tag: asr_template_eval
 exp_dir: ${recipe_dir}/exp/${exp_tag}
-infer_dir: ${exp_dir}/infer
+inference_dir: ${exp_dir}/infer
 dataset_dir: /path/to/your/dataset
 
 dataset:
@@ -84,18 +84,18 @@ Each entry in `metrics` provides a `metric` block (Hydra instantiation) and
 optional `inputs`. If `inputs` is omitted, ESPnet3 falls back to the metric's
 `ref_key` and `hyp_key` attributes.
 
-Inputs map to SCP files under `${infer_dir}/${test_name}`. For example,
+Inputs map to SCP files under `${inference_dir}/${test_name}`. For example,
 `inputs.ref: ref` expects `ref.scp` and `inputs.hyp: hyp` expects `hyp.scp`.
 
 The metric list is evaluated one by one, so each list entry produces its own
-results block in `measures.json`.
+results block in `metrics.json`.
 
 ## Output directory layout
 
 During inference, ESPnet3 writes SCP outputs under a per-test-set folder:
 
 ```
-${infer_dir}/
+${inference_dir}/
   test-clean/
     ref.scp
     hyp.scp
@@ -106,8 +106,8 @@ ${infer_dir}/
 
 Each `inputs` entry maps to a file in that test directory:
 
-- `inputs.ref: ref` -> `${infer_dir}/${test_name}/ref.scp`
-- `inputs.hyp: hyp` -> `${infer_dir}/${test_name}/hyp.scp`
+- `inputs.ref: ref` -> `${inference_dir}/${test_name}/ref.scp`
+- `inputs.hyp: hyp` -> `${inference_dir}/${test_name}/hyp.scp`
 
 The loaded inputs are passed to the metric class as a dict, so your custom
 metrics can consume any field you register in `inputs`.

@@ -52,7 +52,7 @@ Key behaviors:
 | --- | --- |
 | `strategy` | `auto` selects `espnet2` when `train_config.task` is set, otherwise `espnet3`. |
 | `out_dir` | Output directory for the package. |
-| `infer_dir` | Where `scores.json` (or `measures.json`) is searched for README metrics (if present). If unset, it falls back to `infer_config.infer_dir`. |
+| `decode_dir` | Where `scores.json` (or `metrics.json`) is searched for README metrics (if present). If unset, it falls back to `infer_config.decode_dir`. |
 | `files` / `yaml_files` | Used to generate `meta.yaml` for espnet2-style `from_pretrained`. |
 | `include` / `exclude` | Extra file globs to include or skip. |
 | `readme_template` | Optional template for README generation. |

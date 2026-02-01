@@ -15,7 +15,7 @@ parallel backends, and connect the pieces to training or runner-based jobs.
 
 | Section      | You edit in YAML                                       | ESPnet3 / libraries handle                           |
 | ------------ | ------------------------------------------------------ | ---------------------------------------------------- |
-| `model`      | Choose architecture and hyperparameters               | Instantiating via Hydra and wrapping in `LitESPnetModel` |
+| `model`      | Choose architecture and hyperparameters               | Instantiating via Hydra and wrapping in `ESPnetLightningModule` |
 | `trainer`    | Training strategy, devices, logging, callbacks        | Passing options to `lightning.pytorch.Trainer`       |
 | `parallel`   | Dask / cluster settings (env, workers, options)       | Creating clients via `espnet3.parallel.parallel.set_parallel` |
 | `dataloader` | Dataset, sampler, collate_fn configs                  | Constructing dataloaders and iterating during training |
@@ -109,20 +109,20 @@ Two common patterns:
 
 1. **Reuse ESPnet models**
    ```python
-   from espnet3.components.model import LitESPnetModel
-   from espnet3.utils.task import get_espnet_model
+   from espnet3.components.modeling.lightning_module import ESPnetLightningModule
+   from espnet3.utils.task_utils import get_espnet_model
 
    espnet_model = get_espnet_model(task="asr", config=cfg.model)
-   model = LitESPnetModel(espnet_model)
+   model = ESPnetLightningModule(espnet_model, cfg)
    ```
 
 2. **Instantiate custom models**
    ```python
    import hydra
-   from espnet3.components.model import LitESPnetModel
+   from espnet3.components.modeling.lightning_module import ESPnetLightningModule
 
    custom_model = hydra.utils.instantiate(cfg.model)
-   model = LitESPnetModel(custom_model)
+   model = ESPnetLightningModule(custom_model, cfg)
    ```
 
 Both feed directly into the Lightning trainer specified by `trainer`.
@@ -193,7 +193,7 @@ trainer:
   callbacks:
     # This AverageCheckpointsCallback is included as a default callback without writing here.
     # We included this as an example.
-    - _target_: espnet3.components.callbacks.AverageCheckpointsCallback
+    - _target_: espnet3.components.callbacks.default_callbacks.AverageCheckpointsCallback
       output_dir: ${exp_dir}
       best_ckpt_callbacks: []
 ```

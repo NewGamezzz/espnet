@@ -286,7 +286,7 @@ trainer:
   callbacks:
     # This AverageCheckpointsCallback is included as a default callback without writing here.
     # We included this as an example.
-    - _target_: espnet3.components.callbacks.AverageCheckpointsCallback
+    - _target_: espnet3.components.callbacks.default_callbacks.AverageCheckpointsCallback
       output_dir: ${exp_dir}
       best_ckpt_callbacks: []
 

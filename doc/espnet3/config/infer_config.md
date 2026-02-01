@@ -17,7 +17,7 @@ Required:
 
 - `model` (Hydra target; instantiated with a `device` argument)
 - `dataset.test` (at least one test set; names are used as output subfolders)
-- `infer_dir` (root output directory for `.scp` files)
+- `inference_dir` (root output directory for `.scp` files)
 - `input_key` (which dataset field(s) to pass into the model)
 - `output_fn` (import path to a function that formats runner outputs)
 
@@ -32,7 +32,7 @@ Common optional:
 Minimal example:
 
 ```yaml
-infer_dir: exp/my_exp/infer
+inference_dir: exp/my_exp/infer
 
 dataset:
   _target_: espnet3.components.data.data_organizer.DataOrganizer
@@ -53,7 +53,7 @@ output_fn: src.infer.output_fn
 
 | Section | Description |
 | --- | --- |
-| `recipe_dir`, `exp_dir`, `infer_dir`, ... | Path scaffold for outputs and inference results. |
+| `recipe_dir`, `exp_dir`, `inference_dir`, ... | Path scaffold for outputs and inference results. |
 | `dataset` | Test set definitions. |
 | `model` | Inference model entrypoint and parameters (instantiated with `device=`). |
 | `input_key` | Dataset field name (or list of names) passed into the model. |
@@ -68,7 +68,7 @@ recipe_dir: .
 exp_tag: asr_template_eval
 exp_dir: ${recipe_dir}/exp/${exp_tag}
 stats_dir: ${recipe_dir}/exp/stats
-infer_dir: ${exp_dir}/infer
+inference_dir: ${exp_dir}/infer
 dataset_dir: /path/to/your/dataset
 
 dataset:
@@ -106,10 +106,10 @@ contract and model construction details.
 
 ## Output directory layout
 
-Inference writes `.scp` outputs under `infer_dir`, one folder per test set name:
+Inference writes `.scp` outputs under `inference_dir`, one folder per test set name:
 
 ```
-${infer_dir}/
+${inference_dir}/
   test-clean/
     hyp.scp
     hyp0.scp
@@ -125,18 +125,19 @@ The exact filenames are determined by:
 
 ## Batched execution (`batch_size`)
 
-If `batch_size` is set, ESPnet3 may call `InferenceRunner.batch_forward()`.
-When the model implements `batch_forward`, it is preferred and receives lists
-of inputs (one list per `input_key`).
+If `batch_size` is set, `InferenceRunner.forward` receives a list of indices
+and passes list-valued inputs to the model (one list per `input_key`). There is
+no `batch_forward`; batching is handled entirely through `forward`.
 
-In that case, `output_fn` may be called with:
+In that case, `output_fn` is called with:
 
 - `data`: a list of dataset items
 - `idx`: a list of indices
 - `model_output`: your model's batched output structure
 
-If you don't want to handle batched `output_fn`, leave `batch_size` unset (or
-avoid providing `batch_forward` on the model).
+If you don't want to handle batched `output_fn`, leave `batch_size` unset. When
+`batch_size` is unset, `forward` is called with a scalar index and `data` is a
+single dataset item.
 
 ## Parallel execution
 

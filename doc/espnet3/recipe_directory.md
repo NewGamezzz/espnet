@@ -56,9 +56,9 @@ if __name__ == "__main__":
     main(args=args, system_cls=ASRSystem, stages=stages_to_run)
 ```
 
-- **Stages** (`DEFAULT_STAGES`) define the lifecycle: `create_dataset`, `train_tokenizer`, `collect_stats`, `train`, `infer`, `measure`, `pack_model`, `upload_model`, `publish`.
+- **Stages** (`DEFAULT_STAGES`) define the lifecycle: `create_dataset`, `train_tokenizer`, `collect_stats`, `train`, `infer`, `metric`, `pack_model`, `upload_model`, `publish`.
 - CLI flags select stages (`--stages train infer`) and configs
-  (`--train_config conf/train.yaml`, `--infer_config conf/infer.yaml`, `--measure_config conf/measure.yaml`).
+  (`--train_config conf/train.yaml`, `--infer_config conf/infer.yaml`, `--metric_config conf/metric.yaml`).
 
 ## Basic directory structure
 

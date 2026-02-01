@@ -31,7 +31,7 @@ Examples:
 
 Recipe `run.py` defines the available stage names and passes them to the
 argument parser via `--stages`. Internally, stage names are resolved and then
-invoked by `espnet3.utils.stages.run_stages()` as **methods on the System
+invoked by `espnet3.utils.stages_utils.run_stages()` as **methods on the System
 instance**.
 
 In other words:
@@ -104,7 +104,7 @@ When a new system-specific stage needs its own config (instead of reusing
    system = system_cls(
        train_config=train_config,
        infer_config=infer_config,
-       measure_config=measure_config,
+       metric_config=metric_config,
        publish_config=publish_config,
        demo_config=demo_config,
        export_config=export_config,  # new
@@ -128,7 +128,7 @@ When a new system-specific stage needs its own config (instead of reusing
        "collect_stats": train_config,
        "train": train_config,
        "infer": infer_config,
-       "measure": measure_config,
+       "metric": metric_config,
        "pack_model": train_config,
        "upload_model": publish_config,
        "pack_demo": demo_config,
@@ -149,7 +149,7 @@ When a new system-specific stage needs its own config (instead of reusing
 5. **Log config metadata per stage**
 
    The template runner wires an `on_stage_start` hook into
-   `espnet3.utils.stages.run_stages()`. Extend that hook to include your new
+   `espnet3.utils.stages_utils.run_stages()`. Extend that hook to include your new
    config when relevant.
 
    ```python
@@ -160,7 +160,7 @@ When a new system-specific stage needs its own config (instead of reusing
            log,
            train_config=train_config,
            infer_config=infer_config,
-           measure_config=measure_config,
+           metric_config=metric_config,
            publish_config=publish_config,
            demo_config=demo_config,
            export_config=export_config,  # new
@@ -192,10 +192,10 @@ When a new system-specific stage needs its own config (instead of reusing
   `export_onnx`).
 - Keep stages idempotent when possible (safe to re-run).
 - Reuse the standard stages (`create_dataset`, `collect_stats`, `train`, `infer`,
-  `measure`) and add only what your task needs.
+  `metric`) and add only what your task needs.
 
 ## Related docs
 
 - [Systems overview](../core/systems.md)
 - [Stage configs](../config/index.md)
-- Stages: [train](./train.md), [infer](./inference.md), [measure](./measure.md)
+- Stages: [train](./train.md), [infer](./inference.md), [metric](./metrics.md)
