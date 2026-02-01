@@ -139,11 +139,11 @@ class BaseSystem:
         """Compute evaluation metrics from hypothesis/reference outputs."""
         self._reject_stage_args("metric", args, kwargs)
         logger.info(
-            "metricment start | metric_config=%s",
+            "metric start | metric_config=%s",
             self.metric_config is not None,
         )
         result = metric(self.metric_config)
-        logger.info("metricment results: %s", result)
+        logger.info("metric results: %s", result)
         return result
 
     def publish(self, *args, **kwargs):

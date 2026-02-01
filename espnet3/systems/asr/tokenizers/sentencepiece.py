@@ -120,7 +120,7 @@ def train_sentencepiece(
     Examples:
         >>> train_sentencepiece(
         ...     dump_text_path='path/to/train.txt',
-        ...     output_path='path/to/output',
+        ...     save_path='path/to/output',
         ...     vocab_size=8000,
         ...     character_coverage=0.995,
         ...     model_type='unigram',

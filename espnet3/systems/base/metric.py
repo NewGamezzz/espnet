@@ -14,7 +14,7 @@ def metric(metrics_config: DictConfig):
     """Compute metrics for each test set and write a metrics JSON file.
 
     Args:
-        config: Hydra/omegaconf configuration with inference and metric settings.
+        metrics_config: Omegaconf configuration with inference and metric settings.
 
     Returns:
         Nested dict keyed by metric class path and test set name.
