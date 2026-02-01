@@ -114,10 +114,7 @@ def set_global_parallel(local_cfg):
 def test_set_parallel_copies_options_dict(local_cfg):
     cfg = local_cfg
     set_parallel(cfg)
-    got = getattr(
-        __import__("espnet3.parallel.parallel", fromlist=["get_parallel_config"]),
-        "get_parallel_config",
-    )()
+    got = get_parallel_config()
     # mutate original options
     cfg.options["threads_per_worker"] = 999
     # The held object of get_parallel_config should not be affected

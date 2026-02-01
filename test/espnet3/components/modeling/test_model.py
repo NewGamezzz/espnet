@@ -257,8 +257,8 @@ def test_mixed_optim_scheduler_raises(tmp_path, dummy_model, dummy_dataset_confi
         {
             "exp_dir": str(tmp_path / "exp"),
             "dataset": dummy_dataset_config,
-            "optim": {"_target_": "torch.optim.Adam"},
-            "optims": [{"_target_": "torch.optim.SGD"}],
+            "optimizer": {"_target_": "torch.optim.Adam"},
+            "optimizers": [{"_target_": "torch.optim.SGD"}],
             "scheduler": {"_target_": "torch.optim.lr_scheduler.StepLR"},
             "dataloader": make_standard_dataloader_config(),
             "num_device": 1,
@@ -266,7 +266,7 @@ def test_mixed_optim_scheduler_raises(tmp_path, dummy_model, dummy_dataset_confi
     )
     model = ESPnetLightningModule(dummy_model, config)
     with pytest.raises(
-        AssertionError, match="Mixture of `optim` and `optims` is not allowed."
+        AssertionError, match="Mixture of `optimizer` and `optimizers` is not allowed."
     ):
         model.configure_optimizers()
 
@@ -285,6 +285,8 @@ def test_missing_optimizer_and_scheduler_raises(
     )
     model = ESPnetLightningModule(dummy_model, config)
     with pytest.raises(
-        ValueError, match="Must specify either `optim` or `optims` and `scheduler` or"
+        ValueError,
+        match="Must specify either `optimizer` or `optimizers` and `scheduler` or"
+        "`schedulers`",
     ):
         model.configure_optimizers()

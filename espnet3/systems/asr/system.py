@@ -11,7 +11,7 @@ from importlib import import_module
 from pathlib import Path
 from typing import Iterable
 
-from espnet3.systems.asr.tokenizer.sentencepiece import train_sentencepiece
+from espnet3.systems.asr.tokenizers.sentencepiece import train_sentencepiece
 from espnet3.systems.base.system import BaseSystem
 
 logger = logging.getLogger(__name__)
@@ -148,7 +148,11 @@ class ASRSystem(BaseSystem):
             raise RuntimeError("train_config.dataset_dir must be set for training.")
 
         # Train tokenizer if not trained previously
-        if not self._tokenizer_exists():
+        tokenizer_path = (
+            Path(self.train_config.tokenizer.save_path)
+            / f"{self.train_config.tokenizer.model_type}.model"
+        )
+        if not tokenizer_path.exists():
             self.train_tokenizer()
 
         # Proceed with standard training
