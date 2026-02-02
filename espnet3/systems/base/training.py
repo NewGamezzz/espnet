@@ -13,7 +13,7 @@ from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
 from espnet3.components.modeling.lightning_module import ESPnetLightningModule
-from espnet3.components.training.trainer import ESPnet3LightningTrainer
+from espnet3.components.trainers.trainer import ESPnet3LightningTrainer
 from espnet3.parallel.parallel import set_parallel
 from espnet3.utils.task_utils import get_espnet_model, save_espnet_config
 

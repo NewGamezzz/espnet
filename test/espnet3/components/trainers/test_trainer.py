@@ -12,7 +12,7 @@ from omegaconf import OmegaConf  # ListConfig,
 from typeguard import TypeCheckError
 
 from espnet3.components.modeling.lightning_module import ESPnetLightningModule
-from espnet3.components.training.trainer import ESPnet3LightningTrainer
+from espnet3.components.trainers.trainer import ESPnet3LightningTrainer
 from espnet3.utils.config_utils import load_config_with_defaults
 
 # ===============================================================
