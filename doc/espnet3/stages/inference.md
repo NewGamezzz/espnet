@@ -264,6 +264,7 @@ default runner or provide a custom runner.
 #### Write your own InferenceRunner
 
 
+
 If your model has a different interface (e.g., already returns `(hyp, ref)`), you
 can subclass `BaseRunner` and change only the `forward` method:
 

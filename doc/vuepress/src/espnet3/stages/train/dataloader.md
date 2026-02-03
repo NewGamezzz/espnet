@@ -189,6 +189,7 @@ dataloader:
 <div class='custom-h4'><p>SequenceIterFactory</p></div>
 
 
+
 Use this for standard sequence batching. It works with the common `batches`
 types like `sorted`, `unsorted`, `folded`, `length`, and `numel`.
 
@@ -206,6 +207,7 @@ dataloader:
 ```
 
 <div class='custom-h4'><p>ChunkIterFactory</p></div>
+
 
 
 Use this when you want fixed-length chunks from long sequences. It builds
@@ -226,6 +228,7 @@ dataloader:
 <div class='custom-h4'><p>CategoryIterFactory</p></div>
 
 
+
 Use this when you need category-balanced sampling. It pairs with `catbel`,
 `catpow`, or `catpow_balance_dataset`.
 
@@ -241,6 +244,7 @@ dataloader:
 ```
 
 <div class='custom-h4'><p>CategoryChunkIterFactory</p></div>
+
 
 
 Use this for category-balanced chunking (long sequences + category balancing).
@@ -319,6 +323,7 @@ shape files.
 <div class='custom-h4'><p>SortedBatchSampler</p></div>
 
 
+
 ```yaml
 dataloader:
   train:
@@ -333,6 +338,7 @@ dataloader:
 <div class='custom-h4'><p>UnsortedBatchSampler</p></div>
 
 
+
 ```yaml
 dataloader:
   train:
@@ -345,6 +351,7 @@ dataloader:
 ```
 
 <div class='custom-h4'><p>FoldedBatchSampler</p></div>
+
 
 
 `fold_lengths` tells the sampler what length thresholds to use when shrinking
@@ -374,6 +381,7 @@ dataloader:
 <div class='custom-h4'><p>LengthBatchSampler</p></div>
 
 
+
 `batch_bins` sets the target total length per batch. The sampler groups samples
 so the sum of lengths in a batch stays near this value.
 
@@ -392,6 +400,7 @@ dataloader:
 <div class='custom-h4'><p>NumElementsBatchSampler</p></div>
 
 
+
 `batch_bins` sets the target total element count per batch (e.g., frames × dims),
 so batches have similar overall size even if sequence lengths differ.
 
@@ -408,6 +417,7 @@ dataloader:
 ```
 
 <div class='custom-h4'><p>CategoryBalancedSampler</p></div>
+
 
 
 CategoryBalancedSampler keeps class/category balance within each batch. Use it
@@ -436,6 +446,7 @@ cat_c utt6
 <div class='custom-h4'><p>CategoryPowerSampler</p></div>
 
 
+
 CategoryPowerSampler balances categories with a power-law distribution. Use it
 when you want to upsample low-resource categories without full balancing.
 `min_batch_size`/`max_batch_size` bound the batch size, and
@@ -461,6 +472,7 @@ dataloader:
 ```
 
 <div class='custom-h4'><p>CategoryDatasetPowerSampler</p></div>
+
 
 
 `category_upsampling_factor` balances categories within each dataset, while

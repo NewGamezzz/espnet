@@ -72,6 +72,7 @@ config and wires inputs/outputs directly to your inference runner.
 
 #### Resolution order
 
+
 1. If `demo.yaml` includes `ui`, it is merged with system defaults from
    `build_ui_default()` (when available).
 2. If `ui` is missing, ESPnet3 calls `build_ui(demo_cfg)` from
@@ -79,6 +80,7 @@ config and wires inputs/outputs directly to your inference runner.
 3. If neither is available, `ui` is required in `demo.yaml`.
 
 #### UI fields
+
 
 | Field | Description |
 | --- | --- |
