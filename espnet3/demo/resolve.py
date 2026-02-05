@@ -13,20 +13,23 @@ Expected module path conventions (by system name):
   - Inference defaults function:
       ``espnet3.systems.<system>.demo.build_inference_default``
 
-If a system does not follow these conventions, demo.yaml must set explicit
-``inference.provider_class`` and/or ``inference.runner_class`` so the
-resolver can load the correct implementation.
+If a system does not follow these conventions, infer.yaml must set explicit
+``provider._target_`` and/or ``runner._target_`` so the resolver can load the
+correct implementation.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
+import logging
 from typing import Any, Dict
 
 from hydra.utils import get_class, get_method
 from omegaconf import DictConfig, OmegaConf
 
-from espnet3.utils.config import load_config_with_defaults
+from espnet3.utils.config_utils import load_config_with_defaults
+
+logger = logging.getLogger(__name__)
 
 
 def load_demo_config(demo_dir: Path) -> DictConfig:
@@ -38,6 +41,12 @@ def load_demo_config(demo_dir: Path) -> DictConfig:
         DictConfig produced by load_config_with_defaults.
     Raises:
         FileNotFoundError: When demo.yaml does not exist.
+
+    Example:
+        >>> from pathlib import Path
+        >>> cfg = load_demo_config(Path("exp/demo"))
+        >>> cfg.system  # doctest: +SKIP
+        'asr'
     """
     return load_config_with_defaults(str(demo_dir / "demo.yaml"))
 
@@ -50,6 +59,11 @@ def resolve_infer_path(infer_config, demo_cfg_path: Path | None) -> Path | None:
         demo_cfg_path: Path to the demo.yaml file, if available.
     Returns:
         Absolute Path to the inference config, or None if infer_config is empty.
+
+    Example:
+        >>> from pathlib import Path
+        >>> resolve_infer_path("infer.yaml", Path("exp/demo/demo.yaml"))
+        Path('.../exp/demo/infer.yaml')  # doctest: +ELLIPSIS
     """
     if not infer_config:
         return None
@@ -66,6 +80,11 @@ def load_infer_config(infer_path: Path) -> DictConfig:
         infer_path: Absolute path to an inference YAML file.
     Returns:
         DictConfig with all OmegaConf interpolations resolved.
+
+    Example:
+        >>> cfg = load_infer_config(Path("exp/demo/config/infer.yaml"))
+        >>> isinstance(cfg, DictConfig)
+        True
     """
     return OmegaConf.create(
         OmegaConf.to_container(load_config_with_defaults(str(infer_path)), resolve=True)
@@ -82,6 +101,11 @@ def resolve_absolute_path(path_value, *, base: Path) -> Path:
         Absolute Path.
     Raises:
         ValueError: If path_value is None.
+
+    Example:
+        >>> from pathlib import Path
+        >>> resolve_absolute_path("infer.yaml", base=Path("exp/demo"))
+        Path('.../exp/demo/infer.yaml')  # doctest: +ELLIPSIS
     """
     if path_value is None:
         raise ValueError("absolute path could not be resolved.")
@@ -101,6 +125,12 @@ def resolve_output_keys(demo_cfg) -> Dict[str, str]:
         demo_cfg: Demo configuration object.
     Returns:
         Mapping of UI output names to result dict keys. Empty when unset.
+
+    Example:
+        >>> from omegaconf import OmegaConf
+        >>> demo_cfg = OmegaConf.create({"output_keys": {"text": "hyp"}})
+        >>> resolve_output_keys(demo_cfg)
+        {'text': 'hyp'}
     """
     mapping = getattr(demo_cfg, "output_keys", None)
     if mapping is not None:
@@ -124,6 +154,12 @@ def resolve_extra_kwargs(demo_cfg) -> Dict[str, Any]:
         demo_cfg: Demo configuration object.
     Returns:
         Mapping of keyword arguments to pass into runner.forward.
+
+    Example:
+        >>> from omegaconf import OmegaConf
+        >>> demo_cfg = OmegaConf.create({"extra_kwargs": {"beam_size": 10}})
+        >>> resolve_extra_kwargs(demo_cfg)
+        {'beam_size': 10}
     """
     mapping = getattr(demo_cfg, "extra_kwargs", None)
     if mapping is not None:
@@ -136,11 +172,34 @@ def resolve_extra_kwargs(demo_cfg) -> Dict[str, Any]:
     return {}
 
 
-def resolve_provider_class(demo_cfg):
-    """Resolve inference provider class from demo.yaml or system convention.
+def resolve_infer_kwargs(infer_cfg: DictConfig | None) -> Dict[str, Any]:
+    """Resolve inference runner kwargs derived from infer_config.
+
+    This extracts inference-required settings like input keys and the output
+    function path so demos can reuse the same infer.yaml configuration.
+
+    Args:
+        infer_cfg: Loaded inference config, or None.
+    Returns:
+        Mapping of keyword arguments to pass into runner.forward.
+    """
+    if infer_cfg is None:
+        return {}
+    mapping: Dict[str, Any] = {}
+    input_key = getattr(infer_cfg, "input_key", None)
+    if input_key is not None:
+        mapping["input_key"] = input_key
+    output_fn = getattr(infer_cfg, "output_fn", None)
+    if output_fn:
+        mapping["output_fn_path"] = output_fn
+    return mapping
+
+
+def resolve_provider_class(demo_cfg, infer_cfg: DictConfig | None = None):
+    """Resolve inference provider class from infer.yaml or convention.
 
     Resolution order:
-      1) demo_cfg.inference.provider_class if present.
+      1) infer_cfg.provider._target_ (or provider_class) if present.
       2) Convention-based path using demo_cfg.system.
 
     Conventions assume:
@@ -148,23 +207,41 @@ def resolve_provider_class(demo_cfg):
 
     Args:
         demo_cfg: Demo configuration object.
+        infer_cfg: Inference config object (optional).
     Returns:
         Provider class object, or None if no system is defined.
+
+    Example:
+        >>> from omegaconf import OmegaConf
+        >>> cfg = OmegaConf.create({"system": "asr"})
+        >>> resolve_provider_class(cfg)  # doctest: +SKIP
     """
-    path = getattr(getattr(demo_cfg, "inference", None), "provider_class", None)
-    if path:
-        return get_class(str(path))
+    if infer_cfg is not None:
+        provider_cfg = getattr(infer_cfg, "provider", None)
+        if provider_cfg is not None:
+            path = getattr(provider_cfg, "_target_", None) or getattr(
+                provider_cfg, "provider_class", None
+            )
+            if path:
+                return get_class(str(path))
     system = str(getattr(demo_cfg, "system", "")).lower()
     if not system:
         return None
-    return get_class(f"espnet3.systems.{system}.inference.InferenceProvider")
+    try:
+        return get_class(f"espnet3.systems.{system}.inference.InferenceProvider")
+    except Exception:
+        logger.warning(
+            "Provider class for system '%s' not found; using base InferenceProvider.",
+            system,
+        )
+        return get_class("espnet3.systems.base.inference_provider.InferenceProvider")
 
 
-def resolve_runner_class(demo_cfg):
-    """Resolve inference runner class from demo.yaml or system convention.
+def resolve_runner_class(demo_cfg, infer_cfg: DictConfig | None = None):
+    """Resolve inference runner class from infer.yaml or convention.
 
     Resolution order:
-      1) demo_cfg.inference.runner_class if present.
+      1) infer_cfg.runner._target_ (or runner_class) if present.
       2) Convention-based path using demo_cfg.system.
 
     Conventions assume:
@@ -172,16 +249,34 @@ def resolve_runner_class(demo_cfg):
 
     Args:
         demo_cfg: Demo configuration object.
+        infer_cfg: Inference config object (optional).
     Returns:
         Runner class object, or None if no system is defined.
+
+    Example:
+        >>> from omegaconf import OmegaConf
+        >>> cfg = OmegaConf.create({"system": "asr"})
+        >>> resolve_runner_class(cfg)  # doctest: +SKIP
     """
-    path = getattr(getattr(demo_cfg, "inference", None), "runner_class", None)
-    if path:
-        return get_class(str(path))
+    if infer_cfg is not None:
+        runner_cfg = getattr(infer_cfg, "runner", None)
+        if runner_cfg is not None:
+            path = getattr(runner_cfg, "_target_", None) or getattr(
+                runner_cfg, "runner_class", None
+            )
+            if path:
+                return get_class(str(path))
     system = str(getattr(demo_cfg, "system", "")).lower()
     if not system:
         return None
-    return get_class(f"espnet3.systems.{system}.inference.InferenceRunner")
+    try:
+        return get_class(f"espnet3.systems.{system}.inference.InferenceRunner")
+    except Exception:
+        logger.warning(
+            "Runner class for system '%s' not found; using base InferenceRunner.",
+            system,
+        )
+        return get_class("espnet3.systems.base.inference_runner.InferenceRunner")
 
 
 def _load_system_inference_defaults(demo_cfg):

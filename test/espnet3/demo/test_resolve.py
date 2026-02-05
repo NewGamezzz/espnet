@@ -1,11 +1,23 @@
 from __future__ import annotations
 
 from pathlib import Path
+import sys
 
 import pytest
 from omegaconf import OmegaConf
 
 from espnet3.demo import resolve
+
+
+class DummyProvider:
+    pass
+
+
+class DummyRunner:
+    pass
+
+
+sys.modules.setdefault("test.espnet3.demo.test_resolve", sys.modules[__name__])
 
 
 def test_resolve_absolute_path(tmp_path: Path) -> None:
@@ -34,9 +46,33 @@ def test_resolve_extra_kwargs_from_config() -> None:
     assert mapping == {"beam_size": 1}
 
 
+def test_resolve_infer_kwargs_from_config() -> None:
+    infer_cfg = OmegaConf.create({"input_key": "speech", "output_fn": "src.infer.fn"})
+    mapping = resolve.resolve_infer_kwargs(infer_cfg)
+    assert mapping == {"input_key": "speech", "output_fn_path": "src.infer.fn"}
+
+
 def test_resolve_provider_runner_class_from_system() -> None:
     cfg = OmegaConf.create({"system": "asr"})
     provider_cls = resolve.resolve_provider_class(cfg)
     runner_cls = resolve.resolve_runner_class(cfg)
     assert provider_cls.__name__ == "InferenceProvider"
     assert runner_cls.__name__ == "InferenceRunner"
+
+
+def test_resolve_provider_runner_class_from_infer_cfg() -> None:
+    demo_cfg = OmegaConf.create({"system": "dummy"})
+    infer_cfg = OmegaConf.create(
+        {
+            "provider": {
+                "_target_": "test.espnet3.demo.test_resolve.DummyProvider",
+            },
+            "runner": {
+                "_target_": "test.espnet3.demo.test_resolve.DummyRunner",
+            },
+        }
+    )
+    provider_cls = resolve.resolve_provider_class(demo_cfg, infer_cfg)
+    runner_cls = resolve.resolve_runner_class(demo_cfg, infer_cfg)
+    assert provider_cls is DummyProvider
+    assert runner_cls is DummyRunner

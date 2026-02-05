@@ -13,7 +13,7 @@ data_dir: ${recipe_dir}/data
 exp_tag: asr_template_train
 exp_dir: ${recipe_dir}/exp/${exp_tag}
 stats_dir: ${recipe_dir}/exp/stats
-decode_dir: ${exp_dir}/decode
+inference_dir: ${exp_dir}/inference
 dataset_dir: /path/to/your/dataset
 # Dataset creation function (downloads into dataset_dir cache).
 create_dataset:
@@ -22,7 +22,7 @@ create_dataset:
 
 # Dataset definition for training/validation splits.
 dataset:
-  _target_: espnet3.components.data_organizer.DataOrganizer
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
   train:
     - name: train-split
       dataset:
@@ -59,8 +59,6 @@ dataloader:
     _target_: espnet2.train.collate_fn.CommonCollateFn
     int_pad_value: -1
   train:
-    multiple_iterator: false
-    num_shards: 1
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
       shuffle: true
@@ -72,8 +70,6 @@ dataloader:
         batch_size: 4
         batch_bins: 4000000
   valid:
-    multiple_iterator: false
-    num_shards: 1
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
       shuffle: false
@@ -87,7 +83,7 @@ dataloader:
 
 
 # Optimizer and scheduler are intentionally lightweight defaults.
-optim:
+optimizer:
   _target_: torch.optim.Adam
   lr: 0.002
   weight_decay: 0.000001

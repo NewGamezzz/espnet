@@ -28,6 +28,11 @@ def load_function(path):
 
     Raises:
         (Exception): Propagated import or attribute lookup errors.
+
+    Example:
+        >>> fn = load_function(\"math.sqrt\")
+        >>> fn(9)
+        3.0
     """
     module_path, func_name = path.rsplit(".", 1)
     module = import_module(module_path)
@@ -78,8 +83,8 @@ class ASRSystem(BaseSystem):
           - ``train_tokenizer``: ``train_config.tokenizer.save_path``.
           - ``collect_stats``: ``train_config.stats_dir``.
           - ``train``/``publish``: ``train_config.exp_dir``.
-          - ``infer``: ``infer_config.decode_dir``.
-          - ``measure``: ``metric_config.decode_dir`` or ``infer_config.decode_dir``.
+          - ``infer``: ``infer_config.infer_dir``.
+          - ``measure``: ``metric_config.infer_dir`` or ``infer_config.infer_dir``.
 
         If none of the stage-specific paths are configured, it falls back to
         ``BaseSystem.get_stage_log_dir`` (``train_config.exp_dir`` or
@@ -119,16 +124,16 @@ class ASRSystem(BaseSystem):
             if exp_dir:
                 return Path(exp_dir)
         elif stage == "infer":
-            decode_dir = getattr(self.infer_config, "decode_dir", None)
-            if decode_dir:
-                return Path(decode_dir)
+            infer_dir = getattr(self.infer_config, "infer_dir", None)
+            if infer_dir:
+                return Path(infer_dir)
         elif stage == "measure":
-            decode_dir = getattr(self.metric_config, "decode_dir", None)
-            if decode_dir:
-                return Path(decode_dir)
-            decode_dir = getattr(self.infer_config, "decode_dir", None)
-            if decode_dir:
-                return Path(decode_dir)
+            infer_dir = getattr(self.metric_config, "infer_dir", None)
+            if infer_dir:
+                return Path(infer_dir)
+            infer_dir = getattr(self.infer_config, "infer_dir", None)
+            if infer_dir:
+                return Path(infer_dir)
         return super().get_stage_log_dir(stage)
 
     def train(self, *args, **kwargs):
@@ -148,11 +153,7 @@ class ASRSystem(BaseSystem):
             raise RuntimeError("train_config.dataset_dir must be set for training.")
 
         # Train tokenizer if not trained previously
-        tokenizer_path = (
-            Path(self.train_config.tokenizer.save_path)
-            / f"{self.train_config.tokenizer.model_type}.model"
-        )
-        if not tokenizer_path.exists():
+        if not self._has_tokenizer():
             self.train_tokenizer()
 
         # Proceed with standard training

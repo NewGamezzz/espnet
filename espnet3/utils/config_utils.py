@@ -20,6 +20,14 @@ def load_line(path):
 
     Returns:
         List[str]: A list of stripped lines from the file.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist.
+        PermissionError: If the file cannot be read.
+
+    Example:
+        >>> from omegaconf import OmegaConf
+        >>> cfg = OmegaConf.create({\"vocab\": \"${load_line:tokens.txt}\"})  # doctest: +SKIP
     """
     try:
         with open(path, "r") as f:
@@ -44,6 +52,15 @@ def load_yaml(path, key=None):
 
     Returns:
         Any: The selected value or the full config if key is None.
+
+    Raises:
+        FileNotFoundError: If ``path`` does not exist.
+        PermissionError: If the file cannot be read.
+        KeyError: If ``key`` is provided but not present in the YAML.
+
+    Example:
+        >>> from omegaconf import OmegaConf
+        >>> cfg = OmegaConf.create({\"tag\": \"${load_yaml:conf/train.yaml,exp_tag}\"})  # doctest: +SKIP
     """
     try:
         cfg = OmegaConf.load(path)
@@ -153,6 +170,7 @@ def load_config_with_defaults(path: str) -> OmegaConf:
     if "defaults" in final_config:
         del final_config["defaults"]
 
+    _ensure_target_convert_all(final_config)
     return final_config
 
 

@@ -13,6 +13,7 @@ from omegaconf import DictConfig
 from espnet3.demo.resolve import (
     load_infer_config,
     resolve_extra_kwargs,
+    resolve_infer_kwargs,
     resolve_output_keys,
     resolve_provider_class,
     resolve_runner_class,
@@ -51,10 +52,30 @@ class SingleItemDataset:
 
 
 def build_runtime(demo_cfg, demo_dir: Path) -> DemoRuntime:
-    """Build demo runtime from config and demo directory."""
+    """Build demo runtime (model + runner wiring) from the demo config.
+
+    This resolves the inference provider/runner classes and builds the model via
+    ``InferenceProvider.build_model(infer_cfg)``.
+
+    Args:
+        demo_cfg: Loaded demo configuration (typically from ``demo.yaml``).
+        demo_dir (Path): Demo directory used to resolve relative paths.
+
+    Returns:
+        DemoRuntime: Runtime container holding the resolved model, runner class,
+            output mapping, and extra kwargs.
+
+    Raises:
+        RuntimeError: If inference provider is not configured or infer_config is missing.
+
+    Example:
+        >>> runtime = build_runtime(demo_cfg, Path(\"exp/demo\"))
+        >>> runtime.model is not None  # doctest: +SKIP
+        True
+    """
     infer_cfg = _load_infer_config(demo_cfg, demo_dir)
-    provider_cls = resolve_provider_class(demo_cfg)
-    runner_cls = resolve_runner_class(demo_cfg)
+    provider_cls = resolve_provider_class(demo_cfg, infer_cfg)
+    runner_cls = resolve_runner_class(demo_cfg, infer_cfg)
     if provider_cls is None:
         raise RuntimeError("inference provider is not configured for this system.")
     model = None
@@ -63,12 +84,14 @@ def build_runtime(demo_cfg, demo_dir: Path) -> DemoRuntime:
             raise RuntimeError("infer_config is required to build the demo model.")
         model = provider_cls.build_model(infer_cfg)
     output_keys = resolve_output_keys(demo_cfg)
+    extra_kwargs = resolve_infer_kwargs(infer_cfg)
+    extra_kwargs.update(resolve_extra_kwargs(demo_cfg))
     return DemoRuntime(
         infer_config=infer_cfg,
         model=model,
         runner_cls=runner_cls,
         output_keys=output_keys,
-        extra_kwargs=resolve_extra_kwargs(demo_cfg),
+        extra_kwargs=extra_kwargs,
     )
 
 
@@ -79,7 +102,32 @@ def run_inference(
     ui_values: List[Any],
     output_names: List[str],
 ) -> List[Any]:
-    """Run a single inference pass and map outputs for the UI."""
+    """Run a single inference pass and map outputs for the UI.
+
+    This helper builds a one-item dataset from the UI inputs and then calls the
+    configured runner (or the model directly if no runner is configured).
+
+    Args:
+        runtime (DemoRuntime): Demo runtime built by :func:`build_runtime`.
+        ui_names (List[str]): UI input names (component names).
+        ui_values (List[Any]): UI input values (aligned with ``ui_names``).
+        output_names (List[str]): UI output names to return values for.
+
+    Returns:
+        List[Any]: Output values aligned with ``output_names``.
+
+    Raises:
+        ValueError: If output mapping is missing/mismatched for multi-output UIs.
+        RuntimeError: If no runner is configured and the model is not callable.
+
+    Example:
+        >>> run_inference(
+        ...     runtime,
+        ...     ui_names=["speech"],
+        ...     ui_values=["sample.wav"],
+        ...     output_names=["text"],
+        ... )  # doctest: +SKIP
+    """
     inputs = dict(zip(ui_names, ui_values))
     item = _build_dataset_item(inputs)
     extras = dict(runtime.extra_kwargs)
@@ -96,7 +144,7 @@ def _run_runner(
             primary = dataset[0]
             if len(primary) != 1:
                 raise ValueError(
-                    "Demo runner is missing; provide inference.runner_class or "
+                    "Demo runner is missing; provide runner in infer_config or "
                     "reduce inputs to a single entry."
                 )
             value = list(primary.values())[0]

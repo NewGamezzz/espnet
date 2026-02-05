@@ -5,7 +5,7 @@ from pathlib import Path
 
 from omegaconf import DictConfig
 
-from espnet3.systems.base.inference import infer
+from espnet3.systems.base.inference import inference
 from espnet3.systems.base.metric import metric
 from espnet3.systems.base.training import collect_stats, train
 
@@ -54,7 +54,7 @@ class BaseSystem:
             self.exp_dir = None
         logger.info(
             "Initialized %s with train_config=%s infer_config=%s "
-            "metric_config=%s exp_dir=%s",
+            "metric_config=%s publish_config=%s demo_config=%s exp_dir=%s",
             self.__class__.__name__,
             train_config is not None,
             infer_config is not None,

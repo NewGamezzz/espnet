@@ -5,6 +5,9 @@ from omegaconf import DictConfig
 from hydra.utils import instantiate
 from typing import Any, Callable, Dict, List, Optional, Union
 
+from hydra.utils import instantiate
+from omegaconf import DictConfig
+
 from espnet2.train.preprocessor import AbsPreprocessor
 from espnet3.components.data.dataset import CombinedDataset, DatasetWithTransform
 
@@ -50,6 +53,12 @@ def do_nothing(*x):
 
     Returns:
         The input object unchanged.
+
+    Example:
+        >>> do_nothing_transform(1)
+        1
+        >>> do_nothing_transform(1, 2)
+        (1, 2)
     """
     if len(x) == 1:
         return x[0]

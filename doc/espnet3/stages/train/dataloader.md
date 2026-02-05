@@ -188,7 +188,6 @@ dataloader:
 
 #### SequenceIterFactory
 
-
 Use this for standard sequence batching. It works with the common `batches`
 types like `sorted`, `unsorted`, `folded`, `length`, and `numel`.
 
@@ -207,7 +206,6 @@ dataloader:
 
 #### ChunkIterFactory
 
-
 Use this when you want fixed-length chunks from long sequences. It builds
 chunks before collation.
 
@@ -225,7 +223,6 @@ dataloader:
 
 #### CategoryIterFactory
 
-
 Use this when you need category-balanced sampling. It pairs with `catbel`,
 `catpow`, or `catpow_balance_dataset`.
 
@@ -241,7 +238,6 @@ dataloader:
 ```
 
 #### CategoryChunkIterFactory
-
 
 Use this for category-balanced chunking (long sequences + category balancing).
 
@@ -318,7 +314,6 @@ shape files.
 
 #### SortedBatchSampler
 
-
 ```yaml
 dataloader:
   train:
@@ -332,7 +327,6 @@ dataloader:
 
 #### UnsortedBatchSampler
 
-
 ```yaml
 dataloader:
   train:
@@ -345,7 +339,6 @@ dataloader:
 ```
 
 #### FoldedBatchSampler
-
 
 `fold_lengths` tells the sampler what length thresholds to use when shrinking
 batch size for long sequences. `batch_size` is the base size for short samples,
@@ -373,7 +366,6 @@ dataloader:
 
 #### LengthBatchSampler
 
-
 `batch_bins` sets the target total length per batch. The sampler groups samples
 so the sum of lengths in a batch stays near this value.
 
@@ -391,7 +383,6 @@ dataloader:
 
 #### NumElementsBatchSampler
 
-
 `batch_bins` sets the target total element count per batch (e.g., frames × dims),
 so batches have similar overall size even if sequence lengths differ.
 
@@ -408,7 +399,6 @@ dataloader:
 ```
 
 #### CategoryBalancedSampler
-
 
 CategoryBalancedSampler keeps class/category balance within each batch. Use it
 when you want each minibatch to contain a more even mix of categories.
@@ -435,7 +425,6 @@ cat_c utt6
 
 #### CategoryPowerSampler
 
-
 CategoryPowerSampler balances categories with a power-law distribution. Use it
 when you want to upsample low-resource categories without full balancing.
 `min_batch_size`/`max_batch_size` bound the batch size, and
@@ -461,7 +450,6 @@ dataloader:
 ```
 
 #### CategoryDatasetPowerSampler
-
 
 `category_upsampling_factor` balances categories within each dataset, while
 `dataset_upsampling_factor` balances across datasets. `dataset_scaling_factor`

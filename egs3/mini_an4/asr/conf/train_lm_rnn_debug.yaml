@@ -10,7 +10,7 @@ data_dir: ${recipe_dir}/data
 exp_tag: train_lm_rnn_debug
 exp_dir: ${recipe_dir}/exp/${exp_tag}
 stats_dir: ${recipe_dir}/exp/stats
-decode_dir: ${exp_dir}/decode
+inference_dir: ${exp_dir}/infer
 dataset_dir: ${data_dir}/mini_an4
 
 create_dataset:
@@ -47,8 +47,6 @@ dataloader:
     _target_: espnet2.train.collate_fn.CommonCollateFn
     int_pad_value: -1
   train:
-    multiple_iterator: false
-    num_shards: 1
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
       shuffle: true
@@ -61,8 +59,6 @@ dataloader:
         batch_size: 32
         batch_bins: 200000
   valid:
-    multiple_iterator: false
-    num_shards: 1
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
       shuffle: false
@@ -74,7 +70,7 @@ dataloader:
         batch_size: ${dataloader.train.iter_factory.batches.batch_size}
         batch_bins: ${dataloader.train.iter_factory.batches.batch_bins}
 
-optim:
+optimizer:
   _target_: torch.optim.Adam
   lr: 0.005
 

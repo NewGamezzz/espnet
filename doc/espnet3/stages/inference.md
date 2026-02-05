@@ -171,19 +171,14 @@ def forward(idx, *, dataset=None, model=None, input_key=None, output_fn_path=Non
 
 Notes:
 
-- `InferenceRunner.forward` accepts either a single index or a list of indices.
-- There is no `batch_forward` hook; batching is handled by passing lists into
-  `forward` when `batch_size` is set.
-- If `batch_size` is unset, `forward` receives a single dataset item and `idx`
-  is a scalar. If `batch_size` is set (>= 1), `forward` receives a list of
-  dataset items and `idx` is a list.
+- If you set `batch_size` and your model implements `batch_forward`, `output_fn`
+  may be called with batched inputs (`data` as a list, `idx` as a list). If you
+  don't want to handle that, leave `batch_size` unset (or avoid `batch_forward`).
 
-### Batched inference (`batch_size`)
+### Batched inference (`batch_size` / `batch_forward`)
 
-If you set `batch_size` in `infer.yaml`, `InferenceRunner` chunks indices and
-passes a list of indices into `forward`. The model is called once per batch
-with list-valued inputs (one list per `input_key`), and `output_fn` receives
-batched data and indices.
+If you set `batch_size` in `infer.yaml`, `InferenceRunner` may execute
+`batch_forward()` and call your model in a batched way.
 
 Conceptually:
 
@@ -262,7 +257,6 @@ your **own** model or inference wrapper, you can either adapt your model to the
 default runner or provide a custom runner.
 
 #### Write your own InferenceRunner
-
 
 
 If your model has a different interface (e.g., already returns `(hyp, ref)`), you

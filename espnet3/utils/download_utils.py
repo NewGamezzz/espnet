@@ -29,6 +29,11 @@ def setup_logger(
 
     Returns:
         logging.Logger: Configured logger instance.
+
+    Example:
+        >>> logger = setup_logger(\"espnet3.download\")
+        >>> logger.name
+        'espnet3.download'
     """
     logger = logging.getLogger(name)
     logger.setLevel(level)
@@ -77,11 +82,11 @@ class DownloadProgress:
     step_percent: int = 5
 
     def __post_init__(self) -> None:
-        """Initialize internal state for step-based progress logging."""
+        """Initialize the internal progress bucket."""
         self._last_bucket: int | None = None
 
     def __call__(self, block_num: int, block_size: int, total_size: int) -> None:
-        """Log progress updates for urllib downloads."""
+        """Log progress for the current urllib download callback."""
         if total_size <= 0:
             return
 
@@ -93,9 +98,11 @@ class DownloadProgress:
             self._last_bucket = bucket
             _log(
                 self.logger,
-                f"Downloading {self.name}: {percent}% "
-                f"({downloaded / 1024 / 1024:.1f}MB / "
-                f"{total_size / 1024 / 1024:.1f}MB)",
+                (
+                    f"Downloading {self.name}: {percent}% "
+                    f"({downloaded / 1024 / 1024:.1f}MB / "
+                    f"{total_size / 1024 / 1024:.1f}MB)"
+                ),
             )
 
 
@@ -118,9 +125,16 @@ def download_url(
             If None, messages are printed to stdout.
         step_percent (int): Percentage step for progress logging.
 
+    Returns:
+        None
+
     Raises:
         URLError: If the download fails.
         HTTPError: If the server returns an error response.
+
+    Example:
+        >>> from pathlib import Path
+        >>> download_url(\"https://example.com/file.tgz\", Path(\"./data/file.tgz\"))  # doctest: +SKIP
     """
     dst_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -148,8 +162,19 @@ def extract_targz(
         dst_dir (Path): Directory to extract files into.
         logger (logging.Logger | None): Logger to emit progress messages.
 
+    Returns:
+        None
+
     Raises:
         tarfile.TarError: If the archive is invalid or extraction fails.
+
+    Notes:
+        - This uses :meth:`tarfile.TarFile.extractall`, which may be unsafe for
+          untrusted archives (path traversal). Only extract archives from trusted
+          sources.
+
+    Example:
+        >>> extract_targz(Path(\"./data/file.tgz\"), Path(\"./data/out\"))  # doctest: +SKIP
     """
     _log(logger, f"Extracting: {archive_path.name}")
     with tarfile.open(archive_path, "r:gz") as tar:

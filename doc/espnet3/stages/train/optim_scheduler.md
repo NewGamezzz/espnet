@@ -68,10 +68,10 @@ optimizers:
 
 schedulers:
   - scheduler:
-      _target_: torch.optimizer.lr_scheduler.StepLR
+      _target_: torch.optim.lr_scheduler.StepLR
       step_size: 10
   - scheduler:
-      _target_: torch.optimizer.lr_scheduler.ReduceLROnPlateau
+      _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
       patience: 2
 ```
 
