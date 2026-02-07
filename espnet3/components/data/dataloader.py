@@ -1,12 +1,16 @@
 """DataLoader builder for ESPnet3 trainer."""
 
 import copy
+import logging
 
 import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 
 from espnet2.samplers.build_batch_sampler import build_batch_sampler
+from espnet3.utils.logging_utils import log_dataloader
+
+logger = logging.getLogger(__name__)
 
 
 class DataLoaderBuilder:
@@ -170,10 +174,10 @@ class DataLoaderBuilder:
             )
         if config.iter_factory is not None:
             factory_config = OmegaConf.to_container(config.iter_factory, resolve=True)
-            return self._build_iter_factory(factory_config, dataset)
-        return self._build_standard_dataloader(config, dataset)
+            return self._build_iter_factory(factory_config, dataset, mode=mode)
+        return self._build_standard_dataloader(config, dataset, mode=mode)
 
-    def _build_standard_dataloader(self, dataloader_config, dataset=None):
+    def _build_standard_dataloader(self, dataloader_config, dataset=None, *, mode: str):
         if dataset is None:
             dataset = self.dataset
 
@@ -193,15 +197,23 @@ class DataLoaderBuilder:
         # Remove default config for espnet's data loader
         config.pop("iter_factory")
 
-        return torch.utils.data.DataLoader(
+        loader = torch.utils.data.DataLoader(
             dataset,
             sampler=sampler,
             batch_sampler=batch_sampler,
             collate_fn=self.collate_fn,
             **config,
         )
+        log_dataloader(
+            logger,
+            loader,
+            label=f"{mode}",
+            sampler=sampler,
+            batch_sampler=batch_sampler,
+        )
+        return loader
 
-    def _build_iter_factory(self, factory_config, dataset=None):
+    def _build_iter_factory(self, factory_config, dataset=None, *, mode: str):
         if dataset is None:
             dataset = self.dataset
 
@@ -225,5 +237,12 @@ class DataLoaderBuilder:
             factory_kwargs = dict(factory_config)
             factory_kwargs.pop("batches", None)
         iter_factory = instantiate(factory_kwargs, dataset, batches=batches)
-
-        return iter_factory.build_iter(self.epoch, shuffle=False)
+        iterator = iter_factory.build_iter(self.epoch, shuffle=False)
+        log_dataloader(
+            logger,
+            iterator,
+            label=f"{mode}",
+            iter_factory=iter_factory,
+            batches=batches,
+        )
+        return iterator

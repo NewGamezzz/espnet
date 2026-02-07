@@ -46,6 +46,9 @@ class ESPnetLightningModule(lightning.LightningModule):
         self.config = config
         self.model = model
         data_organizer = instantiate(config.dataset)
+        from espnet3.utils.logging_utils import log_data_organizer
+
+        log_data_organizer(logger, data_organizer)
         self.train_dataset = data_organizer.train
         self.valid_dataset = data_organizer.valid
         self.nan_countdown = 0
@@ -372,6 +375,15 @@ class ESPnetLightningModule(lightning.LightningModule):
         else:
             lr_scheduler = _build_lr_scheduler_config(scheduler)
 
+        from espnet3.utils.logging_utils import log_training_summary
+
+        log_training_summary(
+            logger,
+            self.model,
+            optimizer=optimizer,
+            scheduler=scheduler,
+        )
+
         return {
             "optimizer": optimizer,
             "lr_scheduler": lr_scheduler,
@@ -383,6 +395,8 @@ class ESPnetLightningModule(lightning.LightningModule):
         Returns:
             DataLoader: The training DataLoader.
         """
+        from espnet3.utils.logging_utils import log_stage
+
         self.train_dataset.use_espnet_collator = isinstance(
             self.collate_fn, CommonCollateFn
         )
@@ -393,7 +407,8 @@ class ESPnetLightningModule(lightning.LightningModule):
             num_device=self.config.num_device,
             epoch=self.current_epoch,
         )
-        return builder.build(mode="train")
+        with log_stage("train"):
+            return builder.build(mode="train")
 
     def val_dataloader(self):
         """Build the validation DataLoader using ESPnet's DataLoaderBuilder.
@@ -401,6 +416,8 @@ class ESPnetLightningModule(lightning.LightningModule):
         Returns:
             DataLoader: The validation DataLoader.
         """
+        from espnet3.utils.logging_utils import log_stage
+
         self.valid_dataset.use_espnet_collator = isinstance(
             self.collate_fn, CommonCollateFn
         )
@@ -411,7 +428,8 @@ class ESPnetLightningModule(lightning.LightningModule):
             num_device=self.config.num_device,
             epoch=self.current_epoch,
         )
-        return builder.build(mode="valid")
+        with log_stage("valid"):
+            return builder.build(mode="valid")
 
     def state_dict(self, *args, **kwargs):
         """Return the state dict of the model."""
