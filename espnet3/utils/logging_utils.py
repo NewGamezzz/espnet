@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import argparse
 import contextvars
 import logging
 import os
@@ -9,19 +10,27 @@ import shlex
 import socket
 import subprocess
 import sys
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 from shutil import which
-from typing import Iterable, Mapping
+from typing import Any, Mapping
 
-from humanfriendly import format_number, format_size
+import torch
+from omegaconf import OmegaConf
 
 LOG_FORMAT = (
     "[%(hostname)s] %(asctime)s (%(filename)s:%(lineno)d) "
     "%(levelname)s:\t[%(stage)s] %(message)s"
 )
-DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+DATE_FORMAT = "%Y-%m-%d %H:%M:%S %Z"
+
+# =============================================================================
+# Logging Record Setup
+# =============================================================================
+_LOG_STAGE = contextvars.ContextVar("espnet3_log_stage", default="main")
+_BASE_RECORD_FACTORY = logging.getLogRecordFactory()
 
 _LOG_STAGE = contextvars.ContextVar("espnet3_log_stage", default="main")
 _BASE_RECORD_FACTORY = logging.getLogRecordFactory()
@@ -51,7 +60,139 @@ def log_stage(name: str):
         _LOG_STAGE.reset(token)
 
 
-def _next_rotated_log_path(target: Path) -> Path:
+def _build_record(*args, **kwargs):
+    # Inject custom fields used by LOG_FORMAT (stage/hostname) into each LogRecord.
+    record = _BASE_RECORD_FACTORY(*args, **kwargs)
+    record.stage = _LOG_STAGE.get()
+    record.hostname = socket.gethostname()
+    return record
+
+
+logging.setLogRecordFactory(_build_record)
+
+
+@contextmanager
+def log_stage(name: str):
+    """Temporarily set the logging stage label used in log records."""
+    token = _LOG_STAGE.set(name)
+    try:
+        yield
+    finally:
+        _LOG_STAGE.reset(token)
+
+
+def log_stage_metadata(
+    logger: logging.Logger,
+    system: Any,
+    args: argparse.Namespace | None,
+) -> None:
+    """Write per-stage metadata into the active stage log.
+
+    This helper records the invocation context that is useful when auditing a
+    stage log after the fact: CLI command line, selected config file paths,
+    environment metadata, and the resolved in-memory configs attached to the
+    system object.
+
+    Args:
+        logger (logging.Logger): Logger that should receive the metadata
+            entries. In practice this is the stage logger configured immediately
+            before a stage starts.
+        system (Any): Instantiated system object. When present, the attributes
+            ``training_config``, ``inference_config``, and ``metrics_config`` are read
+            and dumped as resolved YAML for reproducibility.
+        args (argparse.Namespace | None): Parsed CLI namespace. The function
+            reads ``training_config``, ``inference_config``, ``metrics_config``, and
+            ``write_requirements`` from this namespace when available.
+
+    Returns:
+        None: This function is logging-only and does not return a value.
+
+    Examples:
+        >>> from argparse import Namespace
+        >>> class DummySystem:
+        ...     training_config = {"exp_dir": "./exp/train"}
+        ...     inference_config = None
+        ...     metrics_config = None
+        >>> log_stage_metadata(
+        ...     logging.getLogger("espnet3"),
+        ...     system=DummySystem(),
+        ...     args=Namespace(
+        ...         training_config="conf/training.yaml",
+        ...         inference_config=None,
+        ...         metrics_config=None,
+        ...         write_requirements=False,
+        ...     ),
+        ... )
+
+    """
+    training_config = getattr(system, "training_config", None)
+    inference_config = getattr(system, "inference_config", None)
+    metrics_config = getattr(system, "metrics_config", None)
+
+    log_run_metadata(
+        logger,
+        argv=sys.argv,
+        configs={
+            "Training": (
+                Path(args.training_config)
+                if args is not None and getattr(args, "training_config", None)
+                else None
+            ),
+            "Inference": (
+                Path(args.inference_config)
+                if args is not None and getattr(args, "inference_config", None)
+                else None
+            ),
+            "Metrics": (
+                Path(args.metrics_config)
+                if args is not None and getattr(args, "metrics_config", None)
+                else None
+            ),
+        },
+        write_requirements=bool(
+            getattr(args, "write_requirements", False) if args is not None else False
+        ),
+    )
+    log_env_metadata(logger)
+    if training_config is not None:
+        logger.info(
+            "Training config content:\n%s",
+            OmegaConf.to_yaml(training_config, resolve=True),
+        )
+    if inference_config is not None:
+        logger.info(
+            "Inference config content:\n%s",
+            OmegaConf.to_yaml(inference_config, resolve=True),
+        )
+    if metrics_config is not None:
+        logger.info(
+            "Metrics config content:\n%s",
+            OmegaConf.to_yaml(metrics_config, resolve=True),
+        )
+
+
+def set_log_format(
+    log_format: str | None = None,
+    date_format: str | None = None,
+    apply: bool = True,
+) -> None:
+    """Override global log format/date format (optionally update live handlers)."""
+    global LOG_FORMAT, DATE_FORMAT
+    if log_format is not None:
+        LOG_FORMAT = log_format
+    if date_format is not None:
+        DATE_FORMAT = date_format
+    if apply:
+        formatter = logging.Formatter(fmt=LOG_FORMAT, datefmt=DATE_FORMAT)
+        root = logging.getLogger()
+        for handler in root.handlers:
+            handler.setFormatter(formatter)
+
+
+# =============================================================================
+# Logging Configuration (Handlers/Formatters)
+# =============================================================================
+def _get_next_rotated_log_path(target: Path) -> Path:
     """Return the next available rotated log path (e.g., run1.log)."""
     suffixes = target.suffixes
     suffix = "".join(suffixes)
@@ -66,7 +207,6 @@ def _next_rotated_log_path(target: Path) -> Path:
 
 
 def configure_logging(
-    *,
     log_dir: Path | None = None,
     level: int = logging.INFO,
     filename: str = "run.log",
@@ -76,7 +216,30 @@ def configure_logging(
     This sets up:
       - A root logger with a stream handler (console).
       - An optional file handler at `log_dir/filename`.
+      - If `log_dir/filename` already exists, it is rotated to the next
+        available suffix (e.g., `run1.log`) and a fresh `run.log` is created.
       - Warning capture into the logging system.
+
+    Example usage:
+        ```python
+        from pathlib import Path
+        from espnet3.utils.logging_utils import configure_logging
+
+        logger = configure_logging(log_dir=Path("exp/run1"), level=logging.INFO)
+        logger.info("hello")
+        ```
+
+    Example log output:
+        ```
+        [babel-t9-28] 2026-02-11 03:57:16 EST (logging_utils.py:376) INFO: [main] hello
+        ```
+
+    Example directory tree (when `log_dir/filename` already exists):
+        ```
+        exp/run1/
+        ├── run.log          # new logs (current run)
+        └── run1.log         # rotated older logs
+        ```
 
     Args:
         log_dir (Path | None): Directory to store the log file.
@@ -115,7 +278,7 @@ def configure_logging(
         )
         if not has_file:
             if target.exists():
-                rotated = _next_rotated_log_path(target)
+                rotated = _get_next_rotated_log_path(target)
                 os.replace(target, rotated)
             file_handler = logging.FileHandler(target)
             file_handler.setFormatter(formatter)
@@ -126,9 +289,7 @@ def configure_logging(
 
 
 def set_stage_log_handler(
-    logger: logging.Logger,
     log_dir: Path | None,
-    *,
     filename: str,
 ) -> Path | None:
     """Attach a file handler for a stage log, replacing any prior stage handler.
@@ -148,17 +309,6 @@ def set_stage_log_handler(
 
     Returns:
         Path | None: Resolved log file path when installed, otherwise None.
-
-    Example:
-        >>> import logging
-        >>> from pathlib import Path
-        >>> p = set_stage_log_handler(
-        ...     logging.getLogger("espnet3"),
-        ...     Path("exp/logs"),
-        ...     filename="train.log",
-        ... )
-        >>> p is None
-        False
     """
     if log_dir is None:
         return None
@@ -174,8 +324,9 @@ def set_stage_log_handler(
 
     formatter = logging.Formatter(fmt=LOG_FORMAT, datefmt=DATE_FORMAT)
     if target.exists():
-        rotated = _next_rotated_log_path(target)
+        rotated = _get_next_rotated_log_path(target)
         os.replace(target, rotated)
+
     file_handler = logging.FileHandler(target)
     file_handler.setFormatter(formatter)
     file_handler._espnet3_stage_log = True
@@ -184,6 +335,9 @@ def set_stage_log_handler(
     return target
 
 
+# =============================================================================
+# Run Metadata (Command/Git/Requirements)
+# =============================================================================
 def _run_git_command(cmd: list[str], cwd: Path | None) -> str | None:
     """Run a git command and return stdout, or None on failure."""
     try:
@@ -220,9 +374,6 @@ def get_git_metadata(cwd: Path | None = None) -> dict[str, str]:
         >>> meta.get(\"short_commit\")  # doctest: +SKIP
     """
     cwd = cwd or Path.cwd()
-    head = _run_git_command(["git", "rev-parse", "HEAD"], cwd)
-    branch = _run_git_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd)
-    short = _run_git_command(["git", "rev-parse", "--short", "HEAD"], cwd)
     status = _run_git_command(["git", "status", "--short"], cwd)
 
     dirty = "clean"
@@ -231,57 +382,33 @@ def get_git_metadata(cwd: Path | None = None) -> dict[str, str]:
     elif status:
         dirty = "dirty"
 
-    meta: dict[str, str] = {}
-    if head:
-        meta["commit"] = head
-    if short:
-        meta["short_commit"] = short
-    if branch:
-        meta["branch"] = branch
+    meta = {
+        "commit": _run_git_command(["git", "rev-parse", "HEAD"], cwd),
+        "short_commit": _run_git_command(["git", "rev-parse", "--short", "HEAD"], cwd),
+        "branch": _run_git_command(["git", "rev-parse", "--abbrev-ref", "HEAD"], cwd),
+    }
     meta["worktree"] = dirty
     return meta
 
 
-def format_command(argv: Iterable[str] | None = None) -> str:
-    """Format command arguments into a shell-escaped string.
-
-    Args:
-        argv (Iterable[str] | None): Command arguments. If ``None``, uses ``sys.argv``.
-
-    Returns:
-        str: A single string with each argument shell-escaped.
-
-    Example:
-        >>> format_command([\"python\", \"train.py\", \"--exp\", \"my run\"])
-        \"python train.py --exp 'my run'\"
-    """
-    argv = list(argv) if argv is not None else sys.argv
-    return " ".join(shlex.quote(str(a)) for a in argv)
-
-
-def _run_pip_freeze() -> str | None:
-    """Return `pip freeze` output, or None on failure."""
-    try:
+def _run_pip_freeze() -> str:
+    """Return dependency snapshot output."""
+    if which("uv") is not None:
         completed = subprocess.run(
-            [sys.executable, "-m", "pip", "freeze"],
+            ["uv", "pip", "freeze"],
             check=True,
             capture_output=True,
             text=True,
         )
         return completed.stdout.strip()
-    except Exception:
-        if which("uv") is None:
-            return None
-        try:
-            completed = subprocess.run(
-                ["uv", "pip", "freeze"],
-                check=True,
-                capture_output=True,
-                text=True,
-            )
-            return completed.stdout.strip()
-        except Exception:
-            return None
+
+    completed = subprocess.run(
+        [sys.executable, "-m", "pip", "freeze"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    return completed.stdout.strip()
 
 
 def _get_log_dir_from_logger(logger: logging.Logger) -> Path | None:
@@ -306,24 +433,28 @@ def _write_requirements_snapshot(logger: logging.Logger) -> None:
     """Write a requirements snapshot alongside the configured log file."""
     log_dir = _get_log_dir_from_logger(logger)
     if log_dir is None:
-        logger.warning("Skipping requirements export: no file logger configured.")
+        logger.log(
+            logging.WARNING,
+            "Skipping requirements export: no file logger configured.",
+            stacklevel=2,
+        )
         return
 
     requirements = _run_pip_freeze()
-    if requirements is None:
-        logger.warning("Failed to export requirements via pip freeze.")
-        return
 
     target = log_dir / "requirements.txt"
     target.write_text(requirements + "\n", encoding="utf-8")
-    logger.info("Wrote requirements snapshot: %s", target)
+    logger.log(
+        logging.INFO,
+        "Wrote requirements snapshot: %s",
+        target,
+        stacklevel=2,
+    )
 
 
 def log_run_metadata(
     logger: logging.Logger,
-    *,
     argv: Iterable[str] | None = None,
-    workdir: Path | None = None,
     configs: Mapping[str, Path | None] | None = None,
     write_requirements: bool = False,
 ) -> None:
@@ -332,16 +463,50 @@ def log_run_metadata(
     Logged fields include:
       - Start timestamp.
       - Python executable and command-line arguments.
-      - Working directory.
+      - Working directory (current process directory).
       - Python version.
       - Config paths (if provided).
       - Git metadata (commit/branch/dirty), when available.
       - Optional requirements snapshot (pip freeze).
 
+    Example usage:
+        ```python
+        from pathlib import Path
+        from espnet3.utils.logging_utils import configure_logging, log_run_metadata
+
+        logger = configure_logging(log_dir=Path("exp/run1"))
+        log_run_metadata(
+            logger,
+            argv=["espnet3-train", "--config", "conf/train.yaml"],
+        configs={"train": Path("conf/train.yaml")},
+        )
+        ```
+
+    Example log output (wrapped for readability):
+        ```
+        [hostname] 2026-02-11 03:57:16 EST (logging_utils.py:376) INFO: [train] \
+            === ESPnet3 run started: 2026-02-11T03:57:16.826337 ===
+        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
+            === ESPnet3 run started: 2026-02-11T03:57:16.826430 ===
+        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
+            Command: /path/to/espnet3/tools/.venv/bin/python run.py ...
+        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
+            Python: 3.10.18 (main, Aug 18 2025, 19:18:25) [Clang 20.1.4 ]
+        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
+            Working directory: /path/to/espnet3/egs3/librispeech_100/asr
+        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO:	[train] \
+            train config: /path/to/espnet3/egs3/librispeech_100/asr/conf/train.yaml
+        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO:	[train] \
+            infer config: /path/to/espnet3/egs3/librispeech_100/asr/conf/inference.yaml
+        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO:	[train] \
+            measure config: /path/to/espnet3/egs3/librispeech_100/asr/conf/measure.yaml
+        [hostname] 2026-02-11 03:57:17 EST (run.py:244) INFO:	[train] \
+            Git: commit=..., short_commit=..., branch=master, worktree=clean
+        ```
+
     Args:
         logger (logging.Logger): Logger used to emit metadata.
         argv (Iterable[str] | None): Command arguments; defaults to sys.argv.
-        workdir (Path | None): Working directory to report.
         configs (Mapping[str, Path | None] | None): Named config paths to log.
         write_requirements (bool): If True, export pip freeze output to
             requirements.txt alongside the log file.
@@ -354,29 +519,56 @@ def log_run_metadata(
         >>> log_run_metadata(logging.getLogger(\"espnet3\"))  # doctest: +SKIP
     """
     logger.info("=== ESPnet3 run started: %s ===", datetime.now().isoformat())
-    logger.info("Command: %s %s", sys.executable, format_command(argv))
-    logger.info("Python: %s", sys.version.replace("\n", " "))
+    logger.log(
+        logging.INFO,
+        "=== ESPnet3 run started: %s ===",
+        datetime.now().isoformat(),
+        stacklevel=2,
+    )
+    cmd_argv = list(argv) if argv is not None else sys.argv
+    cmd_text = " ".join(shlex.quote(str(a)) for a in cmd_argv)
+    logger.log(
+        logging.INFO,
+        "Command: %s %s",
+        sys.executable,
+        cmd_text,
+        stacklevel=2,
+    )
+    logger.log(
+        logging.INFO,
+        "Python: %s",
+        sys.version.replace("\n", " "),
+        stacklevel=2,
+    )
 
-    cwd = workdir or Path.cwd()
-    logger.info("Working directory: %s", cwd)
+    cwd = Path.cwd()
+    logger.log(logging.INFO, "Working directory: %s", cwd, stacklevel=2)
 
     if configs:
         for name, path in configs.items():
             if path is None:
                 continue
-            logger.info("%s config: %s", name, Path(path).resolve())
+            logger.log(
+                logging.INFO,
+                "%s config: %s",
+                name,
+                Path(path).resolve(),
+                stacklevel=2,
+            )
 
     git_info = get_git_metadata(cwd)
     if git_info:
         git_parts = [f"{k}={v}" for k, v in git_info.items()]
-        logger.info("Git: %s", ", ".join(git_parts))
+        logger.log(logging.INFO, "Git: %s", ", ".join(git_parts), stacklevel=2)
 
     if write_requirements:
         _write_requirements_snapshot(logger)
 
 
+# =============================================================================
+# Environment Metadata (Cluster/Runtime/Torch)
+# =============================================================================
 def _collect_env(
-    *,
     prefixes: Iterable[str] | None = None,
     keys: Iterable[str] | None = None,
 ) -> dict[str, str]:
@@ -400,7 +592,6 @@ def _collect_env(
 
 def log_env_metadata(
     logger: logging.Logger,
-    *,
     cluster_prefixes: Iterable[str] | None = None,
     runtime_prefixes: Iterable[str] | None = None,
     runtime_keys: Iterable[str] | None = None,
@@ -410,6 +601,65 @@ def log_env_metadata(
     The output includes two blocks:
       - Cluster environment variables (scheduler/runtime IDs).
       - Runtime environment variables (CUDA/NCCL/OMP/PATH, etc.).
+
+    Environment variables collected by default:
+
+    Cluster prefixes:
+    | Prefix    | Purpose                                              |
+    |-----------|------------------------------------------------------|
+    | `SLURM_`  | Slurm job/step metadata (job id, task id, node info) |
+    | `PBS_`    | PBS/Torque job metadata                              |
+    | `LSF_`    | LSF job metadata                                     |
+    | `SGE_`    | SGE job metadata                                     |
+    | `COBALT_` | Cobalt job metadata                                  |
+    | `OMPI_`   | Open MPI runtime metadata                            |
+    | `PMI_`    | PMI (Process Management Interface) metadata          |
+    | `MPI_`    | MPI runtime metadata (generic prefix)                |
+
+    Runtime prefixes:
+    | Prefix      | Purpose                             |
+    |-------------|-------------------------------------|
+    | `NCCL_`     | NCCL configuration (multi-GPU comms)|
+    | `CUDA_`     | CUDA runtime configuration          |
+    | `ROCM_`     | ROCm runtime configuration          |
+    | `OMP_`      | OpenMP threading configuration      |
+    | `MKL_`      | Intel MKL configuration             |
+    | `OPENBLAS_` | OpenBLAS configuration              |
+    | `UCX_`      | UCX communication configuration     |
+    | `NVIDIA_`   | NVIDIA runtime configuration        |
+
+    Explicit runtime keys:
+    | Key                   | Purpose                          |
+    |-----------------------|----------------------------------|
+    | `PATH`                | Executable search path           |
+    | `PYTHONPATH`          | Python module search path        |
+    | `LD_LIBRARY_PATH`     | Shared library search path       |
+    | `CUDA_VISIBLE_DEVICES`| GPU visibility mask              |
+    | `RANK`                | Global rank (distributed)        |
+    | `LOCAL_RANK`          | Local rank on node               |
+    | `NODE_RANK`           | Node rank in job                 |
+    | `WORLD_SIZE`          | Total process count              |
+    | `MASTER_ADDR`         | Distributed master address       |
+    | `MASTER_PORT`         | Distributed master port          |
+
+    Example usage:
+        ```python
+        from pathlib import Path
+        from espnet3.utils.logging_utils import configure_logging, log_env_metadata
+
+        logger = configure_logging(log_dir=Path("exp/run1"))
+        log_env_metadata(logger)
+        ```
+
+    Example log output:
+        ```
+        [hostname] 2026-02-11 03:57:17 EST (run.py:256) INFO:	[train] Cluster env:
+            SLURM_JOB_ID=6335268
+        [hostname] 2026-02-11 03:57:17 EST (run.py:256) INFO:	[train] Runtime env:
+            CUDA_VISIBLE_DEVICES=0
+            NCCL_DEBUG=INFO
+            PATH=/usr/local/bin:/usr/bin:...
+        ```
 
     Args:
         logger (logging.Logger): Logger used to emit metadata.
@@ -463,20 +713,16 @@ def log_env_metadata(
     cluster_dump = "\n".join(f"{k}={v}" for k, v in cluster_env.items()) or "(none)"
     runtime_dump = "\n".join(f"{k}={v}" for k, v in runtime_env.items()) or "(none)"
     logger.info("Cluster env:\n%s", cluster_dump)
-    logger.info("Runtime env:\n%s", runtime_dump)
-
-    try:
-        import torch
-    except Exception:
-        logger.info("PyTorch: unavailable")
-        return
+    logger.log(logging.INFO, "Cluster env:\n%s", cluster_dump, stacklevel=2)
+    logger.log(logging.INFO, "Runtime env:\n%s", runtime_dump, stacklevel=2)
 
     try:
         cudnn_version = torch.backends.cudnn.version()
     except Exception:
         cudnn_version = None
 
-    logger.info(
+    logger.log(
+        logging.INFO,
         "PyTorch: version=%s, cuda.available=%s, cudnn.version=%s, "
         "cudnn.benchmark=%s, cudnn.deterministic=%s",
         getattr(torch, "__version__", "unknown"),
@@ -484,295 +730,317 @@ def log_env_metadata(
         cudnn_version,
         torch.backends.cudnn.benchmark,
         torch.backends.cudnn.deterministic,
+        stacklevel=2,
     )
 
 
-def _format_param_count(value: int) -> str:
-    if value >= 1_000_000_000:
-        return f"{value / 1_000_000_000:.2f} B"
-    if value >= 1_000_000:
-        return f"{value / 1_000_000:.2f} M"
-    if value >= 1_000:
-        return f"{value / 1_000:.2f} K"
-    return format_number(value)
+# =============================================================================
+# Introspection Helpers
+# =============================================================================
+def build_qualified_name(obj) -> str:
+    """Return a compact, fully-qualified name for objects or classes.
 
+    Description:
+        Produces a stable, human-readable identifier for logging and debugging.
+        For objects, it prefers the object's class path. For builtins without a
+        module path, it falls back to a truncated string, and includes length
+        when available.
 
-def _format_size(num_bytes: int) -> str:
-    return format_size(num_bytes)
+    Args:
+        obj: Any object or class.
 
+    Returns:
+        str: A fully-qualified name or a compact string representation.
 
-def _collect_param_name_map(model) -> dict[int, str]:
-    return {id(p): name for name, p in model.named_parameters()}
+    Notes:
+        - Builtin types (e.g., list, dict) return "ListClass(len=...)" when
+          possible, otherwise a truncated string.
+        - For classes, the class module and name are returned.
 
+    Examples:
+        ```python
+        from pathlib import Path
+        build_qualified_name(Path("/tmp"))
+        # => 'pathlib.PosixPath'
 
-def _summarize_param_modules(model, params: Iterable) -> str | None:
-    try:
-        param_name_map = _collect_param_name_map(model)
-    except Exception:
-        return None
+        build_qualified_name(Path)
+        # => 'pathlib.Path'
 
-    counts: dict[str, int] = {}
-    total = 0
-    for p in params:
-        numel = int(getattr(p, "numel", lambda: 0)())
-        total += numel
-        name = param_name_map.get(id(p))
-        if not name:
-            key = "unknown"
-        else:
-            key = name.split(".", 1)[0]
-        counts[key] = counts.get(key, 0) + numel
-
-    if total == 0:
-        return None
-
-    items = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)
-    parts = [f"{k}({v / total * 100:.1f}%)" for k, v in items]
-    return ", ".join(parts)
-
-
-def log_training_summary(
-    logger: logging.Logger,
-    model,
-    *,
-    optimizer=None,
-    scheduler=None,
-) -> None:
-    """Log model architecture/summary and optimizer/scheduler details."""
-    logger.info("Model:\n%s", model)
-
-    params = list(model.parameters())
-    total_params = sum(p.numel() for p in params)
-    trainable_params = sum(p.numel() for p in params if p.requires_grad)
-    size_bytes = sum(p.numel() * p.element_size() for p in params)
-
-    dtype_counts: dict[str, int] = {}
-    for p in params:
-        dtype_counts[str(p.dtype)] = dtype_counts.get(str(p.dtype), 0) + p.numel()
-    dtype_items = sorted(dtype_counts.items(), key=lambda kv: kv[1], reverse=True)
-    dtype_desc = ", ".join(
-        f"{k}({v / total_params * 100:.1f}%)" for k, v in dtype_items
-    )
-
-    logger.info("Model summary:")
-    logger.info("    Class Name: %s", type(model).__name__)
-    logger.info("    Total Number of model parameters: %s", _format_param_count(total_params))
-    logger.info(
-        "    Number of trainable parameters: %s (%.1f%%)",
-        _format_param_count(trainable_params),
-        (trainable_params / total_params * 100.0) if total_params else 0.0,
-    )
-    logger.info("    Size: %s", _format_size(size_bytes))
-    logger.info("    Type: %s", dtype_desc)
-
-    if optimizer is None:
-        return
-
-    try:
-        from espnet3.components.optimizers.multiple_optimizer import MultipleOptimizer
-    except Exception:
-        MultipleOptimizer = None
-
-    optimizers = []
-    if MultipleOptimizer is not None and isinstance(optimizer, MultipleOptimizer):
-        optimizers = list(optimizer.optimizers)
-    else:
-        optimizers = [optimizer]
-
-    for idx, optim in enumerate(optimizers):
-        logger.info("Optimizer[%d]:", idx)
-        logger.info("%s", optim)
-        try:
-            all_params = [p for g in optim.param_groups for p in g.get("params", [])]
-        except Exception:
-            all_params = []
-        module_summary = _summarize_param_modules(model, all_params)
-        if module_summary:
-            logger.info("    modules: %s", module_summary)
-
-    if scheduler is None:
-        return
-
-    if isinstance(scheduler, list):
-        schedulers = scheduler
-    else:
-        schedulers = [scheduler]
-    for idx, sch in enumerate(schedulers):
-        logger.info("Scheduler[%d]:", idx)
-        logger.info("%s", sch)
-
-
-def _qualified_name(obj) -> str:
+        build_qualified_name([1, 2, 3])
+        # => 'list(len=3)'
+        ```
+    """
     cls = obj if isinstance(obj, type) else type(obj)
+    if not isinstance(obj, type) and cls.__module__ == "builtins":
+        if hasattr(obj, "__len__"):
+            try:
+                return f"{cls.__name__}(len={len(obj)})"
+            except Exception:
+                pass
+        return _truncate_text(str(obj))
     return f"{cls.__module__}.{cls.__name__}"
 
 
-def _summarize_value(value) -> str:
-    if isinstance(value, (str, int, float, bool)):
-        return repr(value)
-    if isinstance(value, Path):
-        return repr(str(value))
-    if isinstance(value, (list, tuple)):
-        parts = []
-        for item in value:
-            if isinstance(item, (str, int, float, bool)):
-                parts.append(repr(item))
-            elif isinstance(item, Path):
-                parts.append(repr(str(item)))
-            else:
-                parts.append(_qualified_name(item))
-        return f"[{', '.join(parts)}]"
-    if isinstance(value, dict):
-        items = []
-        for k, v in value.items():
-            items.append(f"{k}={_summarize_value(v)}")
-        return "{" + ", ".join(items) + "}"
-    return _qualified_name(value)
+def build_callable_name(func) -> str:
+    """Return a fully-qualified name for callables when possible.
+
+    Description:
+        Uses module + qualname for callables (functions, methods, classes with
+        __call__). Falls back to build_qualified_name for non-standard callables.
+
+    Args:
+        func: Callable object or any object that may be callable.
+
+    Returns:
+        str: A fully-qualified callable name if available, else a fallback name.
+
+    Notes:
+        - For functions and methods, uses __module__ + __qualname__.
+        - For callable instances without __qualname__, falls back to
+          build_qualified_name.
+
+    Examples:
+        ```python
+        def my_fn(x): ...
+        build_callable_name(my_fn)
+        # => 'my_module.my_fn'
+
+        class MyClass:
+            def __call__(self, x): ...
+        build_callable_name(MyClass())
+        # => 'my_module.MyClass'
+
+        build_callable_name(len)
+        # => 'builtins.len'
+        ```
+    """
+    if hasattr(func, "__qualname__") and hasattr(func, "__module__"):
+        return f"{func.__module__}.{func.__qualname__}"
+    return build_qualified_name(func)
 
 
-def _summarize_attrs(obj) -> str:
+def _iter_attrs(obj) -> Iterable[tuple[str, object]]:
     if not hasattr(obj, "__dict__"):
-        return ""
-    items = []
-    for key in sorted(obj.__dict__.keys()):
-        value = obj.__dict__[key]
-        if key.startswith("_"):
-            continue
-        items.append(f"{key}={_summarize_value(value)}")
-    return ", ".join(items)
+        return []
+    return sorted(
+        ((k, v) for k, v in obj.__dict__.items() if not k.startswith("_")),
+        key=lambda kv: kv[0],
+    )
 
 
-def _callable_name(fn) -> str:
-    if hasattr(fn, "__module__") and hasattr(fn, "__name__"):
-        return f"{fn.__module__}.{fn.__name__}"
-    return _qualified_name(fn)
+def _truncate_text(text: str, max_len: int = 200) -> str:
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 3] + "..."
 
 
-def _log_dataset(
+def _dump_attrs(
     logger: logging.Logger,
-    dataset,
-    *,
-    label: str,
-    indent: str = "    ",
-    depth: int = 0,
+    obj,
+    indent: str,
+    depth: int,
+    max_depth: int,
+    seen: set[int],
 ) -> None:
-    from espnet3.components.data.dataset import CombinedDataset, DatasetWithTransform
+    """Log public attributes for an object with bounded recursion depth."""
+    if depth > max_depth:
+        logger.log(logging.INFO, "%s...", indent, stacklevel=3)
+        return
+    obj_id = id(obj)
+    if obj_id in seen:
+        return
+    seen.add(obj_id)
 
-    prefix = indent * (depth + 1)
-    logger.info("%s%s class: %s", indent * depth, label, _qualified_name(dataset))
-    try:
-        length = len(dataset)
-    except Exception:
-        length = None
-    if length is not None:
-        logger.info("%slen: %s", prefix, length)
+    for key, value in _iter_attrs(obj):
+        if isinstance(value, torch.utils.data.Dataset):
+            logger.log(
+                logging.INFO,
+                "%s%s: %r",
+                indent,
+                key,
+                value,
+                stacklevel=3,
+            )
+            continue
+        if isinstance(value, torch.nn.Module):
+            logger.log(
+                logging.INFO,
+                "%s%s: %s",
+                indent,
+                key,
+                build_qualified_name(value),
+                stacklevel=3,
+            )
+            continue
+        if isinstance(value, Iterator):
+            logger.log(
+                logging.INFO,
+                "%s%s: %s",
+                indent,
+                key,
+                _truncate_text(str(value)),
+                stacklevel=3,
+            )
+            continue
+        if value is None:
+            summary = "None"
+        elif isinstance(value, (str, bytes, int, float, bool)):
+            summary = repr(value)
+        elif isinstance(value, Path):
+            summary = repr(str(value))
+        else:
+            summary = None
 
-    attrs = _summarize_attrs(dataset)
-    if attrs:
-        logger.info("%sattrs: %s", prefix, attrs)
+        if summary is not None:
+            logger.log(
+                logging.INFO,
+                "%s%s: %s",
+                indent,
+                key,
+                summary,
+                stacklevel=3,
+            )
+            continue
 
-    if isinstance(dataset, CombinedDataset):
-        logger.info("%sdatasets: %d", prefix, len(dataset.datasets))
-        logger.info("%slengths: %s", prefix, dataset.lengths)
-        for i, (child, (transform, preprocessor)) in enumerate(
-            zip(dataset.datasets, dataset.transforms)
-        ):
-            logger.info("%scombined[%d]:", prefix, i)
-            logger.info(
-                "%s  transform: %s", prefix, _callable_name(transform)
-            )
-            logger.info(
-                "%s  preprocessor: %s", prefix, _callable_name(preprocessor)
-            )
-            _log_dataset(
-                logger,
-                child,
-                label="dataset",
-                indent=indent,
-                depth=depth + 2,
-            )
-    elif isinstance(dataset, DatasetWithTransform):
-        logger.info("%stransform: %s", prefix, _callable_name(dataset.transform))
-        logger.info("%spreprocessor: %s", prefix, _callable_name(dataset.preprocessor))
-        _log_dataset(
+        logger.log(
+            logging.INFO,
+            "%s%s: %s",
+            indent,
+            key,
+            build_qualified_name(value),
+            stacklevel=3,
+        )
+        _dump_attrs(
             logger,
-            dataset.dataset,
-            label="dataset",
-            indent=indent,
+            value,
+            indent=indent * 2,
             depth=depth + 1,
+            max_depth=max_depth,
+            seen=seen,
         )
 
 
-def log_data_organizer(logger: logging.Logger, data_organizer) -> None:
-    """Log dataset organizer and dataset details."""
-    logger.info("Data organizer: %s", _qualified_name(data_organizer))
-
-    train = getattr(data_organizer, "train", None)
-    valid = getattr(data_organizer, "valid", None)
-    test = getattr(data_organizer, "test", None)
-
-    if train is None:
-        logger.info("train dataset: None")
-    else:
-        _log_dataset(logger, train, label="train")
-
-    if valid is None:
-        logger.info("valid dataset: None")
-    else:
-        _log_dataset(logger, valid, label="valid")
-
-    if not test:
-        logger.info("test datasets: None")
-        return
-
-    if isinstance(test, dict):
-        logger.info("test datasets: %d", len(test))
-        for name, ds in test.items():
-            _log_dataset(logger, ds, label=f"test[{name}]")
-    else:
-        _log_dataset(logger, test, label="test")
-
-
-def log_dataloader(
+def log_component(
     logger: logging.Logger,
-    loader,
-    *,
+    kind: str,
     label: str,
-    sampler=None,
-    batch_sampler=None,
-    iter_factory=None,
-    batches=None,
+    obj,
+    max_depth: int,
 ) -> None:
-    """Log dataloader/iterator details including samplers and iter factories."""
-    logger.info("DataLoader[%s] class: %s", label, _qualified_name(loader))
-    logger.info("DataLoader[%s]:\n%s", label, loader)
+    """Log a component instance with class info, repr, and attributes.
 
-    if sampler is not None:
-        logger.info("Sampler[%s] class: %s", label, _qualified_name(sampler))
-        logger.info("Sampler[%s]: %s", label, sampler)
+    Description:
+        Emits a structured log block for a single object. The block includes
+        a class line, a representation line, and a recursive attribute dump
+        up to the specified depth.
 
-    if batch_sampler is not None:
-        logger.info("BatchSampler[%s] class: %s", label, _qualified_name(batch_sampler))
-        logger.info("BatchSampler[%s]: %s", label, batch_sampler)
+    Args:
+        logger (logging.Logger): Logger used to emit messages.
+        kind (str): Label prefix for the entry (e.g., "Component", "Env").
+        label (str): Human-readable label identifying the entry.
+        obj: Object instance to log. If None, the function returns early.
+        max_depth (int): Maximum depth for recursive attribute dumping.
 
-    if iter_factory is not None:
-        logger.info("IterFactory[%s] class: %s", label, _qualified_name(iter_factory))
-        logger.info("IterFactory[%s]: %s", label, iter_factory)
+    Raises:
+        None
 
-    if batches is not None:
-        try:
-            batch_count = len(batches)
-        except Exception:
-            batch_count = None
-        if batch_count is not None:
-            logger.info("IterBatches[%s]: %d batches", label, batch_count)
-            if batch_count:
-                try:
-                    first_batch = batches[0]
-                    logger.info(
-                        "IterBatches[%s]: first batch size=%s",
-                        label,
-                        len(first_batch),
-                    )
-                except Exception:
-                    pass
+    Returns:
+        None
+
+    Example:
+        ```python
+        from espnet3.utils.logging_utils import log_component
+
+        # Custom class instance.
+        class CustomThing:
+            def __init__(self, name: str, value: int):
+                self.name = name
+                self.value = value
+
+        log_component(logger, "Custom", "example", CustomThing("demo", 7))
+        ```
+
+        Example log output:
+        ```
+        Custom[example] class: my_module.CustomThing
+        Custom[example]: <my_module.CustomThing object at ...>
+          name: 'demo'
+          value: 7
+        ```
+
+    Notes:
+        - The logger uses `stacklevel=2` so log lines point at the caller.
+        - Attribute dumping uses `build_qualified_name` for readable class names.
+        - Set `max_depth` to 0 to log only the class and repr lines.
+    """
+    if obj is None:
+        return
+    logger.log(
+        logging.INFO,
+        "%s[%s] class: %s",
+        kind,
+        label,
+        build_qualified_name(obj),
+        stacklevel=2,
+    )
+    logger.log(logging.INFO, "%s[%s]: %r", kind, label, obj, stacklevel=2)
+    _dump_attrs(
+        logger,
+        obj,
+        indent="  ",
+        depth=0,
+        max_depth=max_depth,
+        seen=set(),
+    )
+
+
+def log_instance_dict(
+    logger: logging.Logger,
+    kind: str,
+    entries: dict[str, object],
+    max_depth: int = 2,
+) -> None:
+    """Log a dictionary of instances with a common kind label.
+
+    Description:
+        Iterates over the provided mapping and logs each value using the shared
+        `kind` label. This is useful for dumping collections of structured
+        objects (e.g., environment info blocks or component registries) in a
+        consistent, readable format.
+
+    Args:
+        logger (logging.Logger): Logger used to emit messages.
+        kind (str): Label prefix for each entry (e.g., "Env", "Component").
+        entries (dict[str, object]): Mapping from entry keys to objects.
+        max_depth (int): Maximum depth for attribute dumping.
+
+    Returns:
+        None
+
+    Notes:
+        - Empty mappings are ignored.
+        - Each entry is logged via `log_component`, which emits a class line,
+          a repr line, and selected public attributes.
+
+    Examples:
+        ```python
+        log_instance_dict(
+            logger,
+            kind="Env",
+            entries={"CUDA": torch.cuda, "NCCL": nccl_module},
+        )
+        ```
+
+    Raises:
+        None
+    """
+    if not entries:
+        return
+    for key, value in entries.items():
+        log_component(
+            logger,
+            kind=kind,
+            label=str(key),
+            obj=value,
+            max_depth=max_depth,
+        )

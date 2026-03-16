@@ -4,19 +4,17 @@
 from __future__ import annotations
 
 import argparse
-import sys
+import logging
 from pathlib import Path
-from typing import Any, Callable, List, Optional, Sequence, Tuple, Type
+from typing import List, Sequence
 
-from omegaconf import OmegaConf
-
-from espnet3.utils.config_utils import load_config_with_defaults
-from espnet3.utils.logging_utils import (
-    configure_logging,
-    log_env_metadata,
-    log_run_metadata,
+from espnet3.utils.config_utils import load_and_merge_config
+from espnet3.utils.logging_utils import configure_logging
+from espnet3.utils.stages_utils import (
+    parse_cli_and_stage_args,
+    resolve_stages,
+    run_stages,
 )
-from espnet3.utils.stages_utils import resolve_stages, run_stages
 
 # Default stage list (can be extended/overridden by callers)
 DEFAULT_STAGES: List[str] = [
@@ -25,28 +23,14 @@ DEFAULT_STAGES: List[str] = [
     "collect_stats",
     "train",
     "infer",
-    "metric",
-    "pack_model",
-    "upload_model",
+    "measure",
 ]
 
-DEMO_STAGES: List[str] = [
-    "pack_demo",
-    "upload_demo",
-]
-
-ALL_STAGES: List[str] = DEFAULT_STAGES + DEMO_STAGES
-
-# Type alias for a System class
-SystemCls = Type[Any]
-AddArgsFn = Callable[[argparse.ArgumentParser], None]
+logger = logging.getLogger(__name__)
 
 
 def build_parser(
     stages: Sequence[str],
-    *,
-    default_stages: Sequence[str] | None = None,
-    add_arguments: Optional[AddArgsFn] = None,
 ) -> argparse.ArgumentParser:
     """Build base ArgumentParser and let caller extend it."""
     parser = argparse.ArgumentParser()
@@ -55,11 +39,11 @@ def build_parser(
         "--stages",
         choices=list(stages) + ["all"],
         nargs="+",
-        default=list(default_stages or stages),
+        default=["all"],
         help="Which stages to run. Multiple values allowed.",
     )
     parser.add_argument(
-        "--train_config",
+        "--training_config",
         default=None,
         type=Path,
         help=(
@@ -68,28 +52,16 @@ def build_parser(
         ),
     )
     parser.add_argument(
-        "--infer_config",
+        "--inference_config",
         default=None,
         type=Path,
-        help="Hydra config for inference/decoding stage.",
+        help="Hydra config for infer stage.",
     )
     parser.add_argument(
-        "--metric_config",
+        "--metrics_config",
         default=None,
         type=Path,
-        help="Hydra config for metric/scoring stage.",
-    )
-    parser.add_argument(
-        "--publish_config",
-        default=None,
-        type=Path,
-        help="Hydra config for pack/upload stages.",
-    )
-    parser.add_argument(
-        "--demo_config",
-        default=None,
-        type=Path,
-        help="Hydra config for demo pack/upload stages.",
+        help="Hydra config for measure stage.",
     )
     parser.add_argument(
         "--dry_run",
@@ -101,81 +73,47 @@ def build_parser(
         action="store_true",
         help="Write requirements.txt alongside each stage log.",
     )
-
-    # Stage-specific arguments can be added here if needed
-    parser.add_argument(
-        "--train.dataset_dir",
-        default=None,
-        type=Path,
-        help="dataset directory for training (used in some stages).",
-    )
-
-    # Let caller add custom CLI arguments
-    if add_arguments is not None:
-        add_arguments(parser)
-
     return parser
-
-
-def parse_cli_and_stage_args(
-    parser: argparse.ArgumentParser,
-    *,
-    stages: Sequence[str],
-) -> Tuple[argparse.Namespace, List[str]]:
-    args = parser.parse_args()
-    stages_to_run = resolve_stages(args.stages, stages)
-
-    return args, stages_to_run
 
 
 def main(
     args,
-    system_cls: SystemCls,
-    *,
-    stages: Sequence[str] = ALL_STAGES,
+    system_cls,
+    stages: Sequence[str] = DEFAULT_STAGES,
 ) -> None:
     stages_to_run = resolve_stages(args.stages, stages)
 
     # -----------------------------------------
     # Load configs
     # -----------------------------------------
-    train_config = (
-        None
-        if args.train_config is None
-        else load_config_with_defaults(args.train_config)
+    # Keep default_package explicit so the recipe declares which package
+    # provides the default configs, instead of relying on path-based
+    # inference from the user-supplied config location.
+    training_config = load_and_merge_config(
+        args.training_config,
+        config_name="training.yaml",
+        default_package=__package__,
     )
-    infer_config = (
-        None
-        if args.infer_config is None
-        else load_config_with_defaults(args.infer_config)
+    inference_config = load_and_merge_config(
+        args.inference_config,
+        config_name="inference.yaml",
+        default_package=__package__,
     )
-    metric_config = (
-        None
-        if args.metric_config is None
-        else load_config_with_defaults(args.metric_config)
+    metrics_config = load_and_merge_config(
+        args.metrics_config,
+        config_name="metrics.yaml",
+        default_package=__package__,
     )
-    publish_config = (
-        None
-        if args.publish_config is None
-        else load_config_with_defaults(args.publish_config)
-    )
-    demo_config = (
-        None
-        if args.demo_config is None
-        else load_config_with_defaults(args.demo_config)
-    )
+
     logger = configure_logging()
 
     # -----------------------------------------
     # Instantiate system
     # -----------------------------------------
     system = system_cls(
-        train_config=train_config,
-        infer_config=infer_config,
-        metric_config=metric_config,
-        publish_config=publish_config,
-        demo_config=demo_config,
-        demo_config_path=args.demo_config,
+        training_config=training_config,
+        inference_config=inference_config,
+        metrics_config=metrics_config,
     )
 
     # -----------------------------------------
@@ -193,16 +131,8 @@ def main(
         "train",
     }
     required_configs = {}
-    required_configs.update({stage: train_config for stage in pretrain_stages})
-    required_configs.update({"infer": infer_config, "metric": metric_config})
-    required_configs.update(
-        {
-            "pack_model": train_config,
-            "upload_model": publish_config,
-            "pack_demo": demo_config,
-            "upload_demo": demo_config,
-        }
-    )
+    required_configs.update({stage: training_config for stage in pretrain_stages})
+    required_configs.update({"infer": inference_config, "measure": metrics_config})
     missing = [
         s
         for s in stages_to_run
@@ -212,78 +142,26 @@ def main(
         missing_str = ", ".join(missing)
         raise ValueError(
             f"Config not provided for stage(s): {missing_str}. "
-            "Use --train_config/--infer_config/--metric_config."
+            "Use --training_config/--inference_config/--metrics_config."
         )
     run_stages(
         system=system,
         stages_to_run=stages_to_run,
-        dry_run=args.dry_run,
+        args=args,
         log=logger,
-        on_stage_start=lambda stage, log: _log_stage_metadata(
-            log,
-            args=args,
-            train_config=train_config,
-            infer_config=infer_config,
-            metric_config=metric_config,
-            publish_config=publish_config,
-            demo_config=demo_config,
-        ),
     )
-
-
-def _log_stage_metadata(
-    logger,
-    *,
-    args: argparse.Namespace,
-    train_config,
-    infer_config,
-    metric_config,
-    publish_config,
-    demo_config,
-) -> None:
-    log_run_metadata(
-        logger,
-        argv=sys.argv,
-        configs={
-            "train": Path(args.train_config) if args.train_config else None,
-            "infer": Path(args.infer_config) if args.infer_config else None,
-            "metric": Path(args.metric_config) if args.metric_config else None,
-            "publish": Path(args.publish_config) if args.publish_config else None,
-            "demo": Path(args.demo_config) if args.demo_config else None,
-        },
-        write_requirements=args.write_requirements,
-    )
-    log_env_metadata(logger)
-    if train_config is not None:
-        logger.info(
-            "Train config content:\n%s", OmegaConf.to_yaml(train_config, resolve=True)
-        )
-    if infer_config is not None:
-        logger.info(
-            "Infer config content:\n%s", OmegaConf.to_yaml(infer_config, resolve=True)
-        )
-    if metric_config is not None:
-        logger.info(
-            "metric config content:\n%s",
-            OmegaConf.to_yaml(metric_config, resolve=True),
-        )
-    if publish_config is not None:
-        logger.info(
-            "Publish config content:\n%s",
-            OmegaConf.to_yaml(publish_config, resolve=True),
-        )
 
 
 if __name__ == "__main__":
-    parser = build_parser(stages=ALL_STAGES, default_stages=DEFAULT_STAGES)
-    args, stages_to_run = parse_cli_and_stage_args(parser, stages=ALL_STAGES)
+    parser = build_parser(stages=DEFAULT_STAGES)
+    args, _ = parse_cli_and_stage_args(parser, stages=DEFAULT_STAGES)
 
     # Here you should replace `YourSystemClass` with the actual system class
     # you want to use for your experiment.
-    from espnet3.systems.asr.system import ASRSystem  # Example import
+    from espnet3.systems.asr.system import ASRSystem
 
     main(
         args=args,
         system_cls=ASRSystem,
-        stages=ALL_STAGES,
+        stages=DEFAULT_STAGES,
     )

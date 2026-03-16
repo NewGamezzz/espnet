@@ -7,10 +7,10 @@ import pytest
 from espnet3.utils.config_utils import load_config_with_defaults
 
 # Replace with your actual module path
-# Example: from espnet3task import get_task_cls, save_espnet_config, get_espnet_model
+# Example: from espnet3task import get_task_class, save_espnet_config, get_espnet_model
 from espnet3.utils.task_utils import (
     get_espnet_model,
-    get_task_cls,
+    get_task_class,
     save_espnet_config,
 )
 
@@ -18,10 +18,10 @@ from espnet3.utils.task_utils import (
 # Test Case Summary for Task Wrapper (espnet3.utils.task_utils)
 # ===============================================================
 #
-# Tests for `get_task_cls(task_name)`
+# Tests for `get_task_class(task_name)`
 # | Test Name                               | Description                      |
 # |----------------------------------------|-----------------------------------|
-# | test_get_task_cls_returns_correct_class  | Maps "asr" to ASRTask         |
+# | test_get_task_class_returns_correct_class  | Maps "asr" to ASRTask         |
 #
 
 
@@ -52,9 +52,9 @@ from espnet3.utils.task_utils import (
     ],
 )
 @pytest.mark.execution_timeout(30)
-def test_get_task_cls_returns_correct_class(task_path, expected_cls_name):
+def test_get_task_class_returns_correct_class(task_path, expected_cls_name):
     try:
-        cls = get_task_cls(task_path)
+        cls = get_task_class(task_path)
     except RuntimeError as e:
         # Skip when optional dependencies pull in broken binary wheels (e.g., sklearn)
         if "numpy.dtype size changed" in str(e):
@@ -83,3 +83,32 @@ def test_save_espnet_config(tmp_path):
         "espnet2.tasks.asr.ASRTask", load_config_with_defaults(config_path), output_file
     )
     assert output_file.exists()
+
+
+def test_save_espnet_config_accepts_output_directory(tmp_path):
+    config_path = Path("test_utils") / "espnet3" / "config" / "model_ctc.yaml"
+    output_dir = tmp_path / "saved_config"
+    save_espnet_config(
+        "espnet2.tasks.asr.ASRTask", load_config_with_defaults(config_path), output_dir
+    )
+    assert (output_dir / "config.yaml").exists()
+
+
+def test_save_espnet_config_avoids_yaml_aliases(tmp_path):
+    shared_obj = {"a": 1, "b": [1, 2, 3]}
+    config = {
+        "model": {
+            "_target_": "espnet2.asr.ctc.CTC",
+            "shared_1": shared_obj,
+            "shared_2": shared_obj,
+        },
+        "dataset": None,
+        "token_list": ["<blank>", "a", "b", "c"],
+    }
+    output_file = tmp_path / "config.yaml"
+
+    save_espnet_config("espnet2.tasks.asr.ASRTask", config, output_file)
+
+    content = output_file.read_text(encoding="utf-8")
+    assert "&id" not in content
+    assert "*id" not in content

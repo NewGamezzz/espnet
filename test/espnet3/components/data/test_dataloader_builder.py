@@ -10,6 +10,20 @@ from espnet3.components.data.dataloader import DataLoaderBuilder
 from espnet3.components.data.dataset import ShardedDataset
 from espnet3.utils.config_utils import load_config_with_defaults
 
+# | Test Name                                         | Description                                                    | # noqa: E501
+# |--------------------------------------------------|----------------------------------------------------------------| # noqa: E501
+# | test_batch_sampler_only                          | Builds loader using batch_sampler without batch_size/shuffle   | # noqa: E501
+# | test_sampler_only                                | Builds loader using sampler                                    | # noqa: E501
+# | test_collate_fn_none                             | Uses default_collate when collate_fn is None                   | # noqa: E501
+# | test_common_collate_fn                           | Uses CommonCollateFn and checks audio/audio_lengths in batch   | # noqa: E501
+# | test_custom_collate_fn                           | Uses custom collate function and checks batch structure        | # noqa: E501
+# | test_sampler_and_batch_sampler_conflict          | Raises when sampler and batch_sampler are both set             | # noqa: E501
+# | test_iter_factory_from_default_yaml_with_organizer | Builds iter_factory from YAML and validates batch            | # noqa: E501
+# | test_iter_factory_with_collate_fn                | Prefers config-defined collate_fn over argument                | # noqa: E501
+# | test_iter_factory_drops_tail_batches_for_ddp     | Drops tail batches for DDP to match world size                 | # noqa: E501
+# | test_multiple_iterator_shard_initialization      | Selects correct shard at epoch 0                               | # noqa: E501
+# | test_multiple_iterator_epoch_shard_switching     | Switches shard with epoch index                                | # noqa: E501
+
 # ===============================================================
 # Test Case Summary for DataLoaderBuilder
 # ===============================================================
@@ -96,40 +110,13 @@ def dummy_collate_fn(batch):
     return {"custom_collated": batch}
 
 
-class DummyShardedDataset(ShardedDataset):
-    def __init__(self, shard_id: int = 0, num_shards: int = 2, world_shard_size: int = 1):
-        self.shard_id = shard_id
-        self.num_shards = num_shards
-        self.world_shard_size = world_shard_size
-        self.data = [
-            {"text": f"shard{shard_id}_sample0"},
-            {"text": f"shard{shard_id}_sample1"},
-        ]
+class DummyIterFactory:
+    def __init__(self, dataset, batches, **kwargs):
+        self.dataset = dataset
+        self.batches = list(batches)
 
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        return self.data[idx]
-
-    def shard(self, idx: int):
-        return DummyShardedDataset(
-            shard_id=idx,
-            num_shards=self.num_shards,
-            world_shard_size=self.world_shard_size,
-        )
-
-
-class DummyMissingShardMethod:
-    def __init__(self, num_shards=2, world_shard_size=1):
-        self.num_shards = num_shards
-        self.world_shard_size = world_shard_size
-
-    def __len__(self):
-        return 0
-
-    def __getitem__(self, idx):
-        raise IndexError
+    def build_iter(self, epoch, shuffle=False):
+        return list(self.batches)
 
 
 # -------- Config mocks --------
@@ -236,7 +223,7 @@ def test_sampler_and_batch_sampler_conflict():
     with pytest.raises(
         AssertionError, match="Cannot specify both sampler and batch_sampler"
     ):
-        _ = builder._build_standard_dataloader(config.dataloader.train)
+        _ = builder._build_standard_dataloader(config.dataloader.train, mode="train")
 
 
 # -------- IterFactory Mode & YAML-based Integration --------
@@ -345,14 +332,45 @@ dataloader:
     assert "audio_lengths" in batch[1]
 
 
-@pytest.mark.parametrize("flag", [True, False])
-def test_multiple_iterator_is_rejected(flag):
+@pytest.mark.parametrize("rank", [0, 1])
+def test_iter_factory_drops_tail_batches_for_ddp(monkeypatch, rank):
+    import espnet3.components.data.dataloader as dl
+
+    # 5 total batches -> for world_size=2, drop 1 tail batch, keep 4
+    def _fake_build_batch_sampler(**kwargs):
+        return [[0, 1], [2, 3], [4, 5], [6, 7], [8, 9]]
+
+    monkeypatch.setattr(dl, "build_batch_sampler", _fake_build_batch_sampler)
+    monkeypatch.setattr(dl.torch.distributed, "get_world_size", lambda: 2)
+    monkeypatch.setattr(dl.torch.distributed, "get_rank", lambda: rank)
+
+    config = OmegaConf.create(
+        {
+            "dataloader": {
+                "train": {
+                    "iter_factory": {
+                        "_target_": (
+                            "test.espnet3.components.data."
+                            "test_dataloader_builder.DummyIterFactory"
+                        ),
+                        "batches": {"dummy": 1},
+                    }
+                }
+            }
+        }
+    )
+
     dataset = DummyDataset()
-    config = make_standard_dataloader_config()
-    config.dataloader.train.multiple_iterator = flag
-    builder = DataLoaderBuilder(dataset, config, collate_fn=None, num_device=1, epoch=0)
-    with pytest.raises(RuntimeError, match="multiple_iterator"):
-        builder.build("train")
+    builder = DataLoaderBuilder(
+        dataset=dataset, config=config, collate_fn=None, num_device=2, epoch=0
+    )
+    iterator = builder.build("train")
+
+    assert len(iterator) == 2
+    assert all(batch[0] != 8 for batch in iterator)
+
+
+# --- Multiple Iterator Mode (Sharded Dataset) ---
 
 
 def _collect_shard_ids(loader):

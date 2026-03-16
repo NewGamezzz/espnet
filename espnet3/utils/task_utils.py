@@ -5,15 +5,15 @@ from argparse import Namespace
 from pathlib import Path
 from typing import Dict, Union
 
-import yaml
 from hydra.utils import get_class
 from omegaconf import DictConfig, OmegaConf
 from typeguard import typechecked
 
 from espnet2.train.abs_espnet_model import AbsESPnetModel
+from espnet2.utils.yaml_no_alias_safe_dump import yaml_no_alias_safe_dump
 
 
-def get_task_cls(task_path: str):
+def get_task_class(task_path: str):
     """Resolve and return an ESPnet2 Task class from a dotted class path.
 
     Args:
@@ -63,7 +63,7 @@ def get_espnet_model(task: str, config: Union[Dict, DictConfig]) -> AbsESPnetMod
         ...     {"frontend": "default"},
         ... )  # doctest: +SKIP
     """
-    ez_task = get_task_cls(task)
+    ez_task = get_task_class(task)
 
     # workaround for calling get_default_config
     original_argv = sys.argv
@@ -108,7 +108,7 @@ def save_espnet_config(
     Example:
         >>> save_espnet_config(\"espnet2.tasks.asr.ASRTask\", cfg, \"exp\")  # doctest: +SKIP
     """
-    ez_task = get_task_cls(task)
+    ez_task = get_task_class(task)
 
     # workaround for calling get_default_config
     original_argv = sys.argv
@@ -149,8 +149,13 @@ def save_espnet_config(
             default_config[k] = list(v)
 
     # Save the config to the output directory
-    output_dir = Path(output_dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / "config.yaml"
+    output_path = Path(output_dir)
+    if output_path.suffix:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        output_path.mkdir(parents=True, exist_ok=True)
+        output_path = output_path / "config.yaml"
+    # Use the no-alias dumper so the generated training config stays fully
+    # readable.
     with open(output_path, "w", encoding="utf-8") as f:
-        yaml.dump(default_config, f)
+        f.write(yaml_no_alias_safe_dump(default_config, indent=4, sort_keys=False))
