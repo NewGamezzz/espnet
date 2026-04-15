@@ -1,6 +1,5 @@
 # tests/test_collect_stats.py
 import multiprocessing as mp
-import os
 from pathlib import Path
 
 import numpy as np
@@ -177,10 +176,8 @@ def make_dataloader_cfg(use_custom_collate: bool = True):
     if use_custom_collate:
         return OmegaConf.create(
             {
-                "train": {
-                },
-                "valid": {
-                },
+                "train": {},
+                "valid": {},
                 "collate_fn": {
                     "_target_": TEST_COLLATE_TARGET,
                     "int_pad_value": -1,
@@ -191,10 +188,8 @@ def make_dataloader_cfg(use_custom_collate: bool = True):
         # Fallback path to CommonCollateFn (not used here)
         return OmegaConf.create(
             {
-                "train": {
-                },
-                "valid": {
-                },
+                "train": {},
+                "valid": {},
             }
         )
 
@@ -358,3 +353,23 @@ def test_collect_stats_entrypoint_valid(tmp_path: Path, use_parallel):
         assert (mode_dir / f"{k}_stats.npz").exists()
         assert (mode_dir / "collect_feats" / f"{k}.scp").exists()
 
+
+@pytest.mark.parametrize("flag", [True, False])
+def test_collect_stats_rejects_multiple_iterator(tmp_path: Path, flag):
+    model_cfg = make_model_cfg(scale=1.0)
+    ds_cfg = make_dataset_cfg(n_train=4, n_valid=0, base_len=3, dim=4)
+    dl_cfg = make_dataloader_cfg(use_custom_collate=True)
+    dl_cfg.train.multiple_iterator = flag
+
+    with pytest.raises(RuntimeError, match="multiple_iterator"):
+        collect_stats(
+            model_config=model_cfg,
+            dataset_config=ds_cfg,
+            dataloader_config=dl_cfg,
+            mode="train",
+            output_dir=tmp_path / "out_reject",
+            task=None,
+            parallel_config=None,
+            write_collected_feats=False,
+            batch_size=2,
+        )

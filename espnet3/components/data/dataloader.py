@@ -2,7 +2,6 @@
 
 import copy
 import logging
-from typing import Union
 
 import torch
 from hydra.utils import instantiate
@@ -92,12 +91,14 @@ class DataLoaderBuilder:
         return rank, world_size
 
     def _maybe_shard_dataset(self, dataset):
-        if not hasattr(dataset, "num_shards"):
+        # Since we can assume the dataset is a CombinedDataset,
+        # we should look at dataset.datasets[:] for actual sharded dataset.
+        if not hasattr(dataset.datasets[0], "num_shards"):
             return dataset
-        if not hasattr(dataset, "shard"):
+        if not hasattr(dataset.datasets[0], "shard"):
             raise RuntimeError("num_shards is set but shard() is not implemented.")
-        num_shards = getattr(dataset, "num_shards")
-        world_shard_size = getattr(dataset, "world_shard_size", None)
+        num_shards = getattr(dataset.datasets[0], "num_shards")
+        world_shard_size = getattr(dataset.datasets[0], "world_shard_size", None)
         if world_shard_size is None:
             raise RuntimeError(
                 "ShardedDataset requires world_shard_size to be set when used "
@@ -119,16 +120,10 @@ class DataLoaderBuilder:
         shards_per_rank = num_shards // world_size
         start = (self.epoch * world_size) % num_shards
         shard_indices = [
-            (start + rank + world_size * i) % num_shards
-            for i in range(shards_per_rank)
+            (start + rank + world_size * i) % num_shards for i in range(shards_per_rank)
         ]
-        if len(shard_indices) == 1:
-            return dataset.shard(shard_indices[0])
-        shards = [dataset.shard(i) for i in shard_indices]
-        concat = torch.utils.data.ConcatDataset(shards)
-        if hasattr(shards[0], "use_espnet_collator"):
-            concat.use_espnet_collator = shards[0].use_espnet_collator
-        return concat
+        # Use the first shard for the GPU and for the epoch.
+        return dataset.shard(shard_indices[0])
 
     def build(self, mode: str):
         """Build and return a DataLoader for the specified mode ("train" or "valid").
@@ -182,12 +177,29 @@ class DataLoaderBuilder:
         mode_config = getattr(self.config.dataloader, mode, DictConfig({}))
 
         config = copy.copy(mode_config)
-        if hasattr(config, "multiple_iterator") and config.multiple_iterator:
-            return self._build_multiple_iterator(config, mode=mode)
+        dataset = self._maybe_shard_dataset(self.dataset)
+        if hasattr(config, "multiple_iterator"):
+            raise RuntimeError(
+                "ESPnet3 does not support multiple_iterator. "
+                "If you need sharding, select a shard explicitly "
+                "(e.g., point the dataset/shape files to split.*) "
+                "and use a standard iter_factory."
+            )
+        target = None
+        if config.iter_factory is not None:
+            target = getattr(config.iter_factory, "_target_", None)
+            if target is None and isinstance(config.iter_factory, dict):
+                target = config.iter_factory.get("_target_")
+        if target is not None and "MultipleIterFactory" in target:
+            raise RuntimeError(
+                "MultipleIterFactory is not supported in ESPnet3. "
+                "Use a standard iter_factory (Sequence/Chunk/Category*) and "
+                "select a single shard explicitly if needed."
+            )
         if config.iter_factory is not None:
             factory_config = OmegaConf.to_container(config.iter_factory, resolve=True)
-            return self._build_iter_factory(factory_config, mode=mode)
-        return self._build_standard_dataloader(config, mode=mode)
+            return self._build_iter_factory(factory_config, dataset)
+        return self._build_standard_dataloader(config, dataset)
 
     def _build_standard_dataloader(self, dataloader_config, dataset=None, mode="train"):
         if dataset is None:
@@ -208,7 +220,6 @@ class DataLoaderBuilder:
 
         # Remove default config for espnet's data loader
         config.pop("iter_factory")
-
         loader = torch.utils.data.DataLoader(
             dataset,
             sampler=sampler,
@@ -277,32 +288,3 @@ class DataLoaderBuilder:
             label=mode,
         )
         return iterator
-
-    def _build_multiple_iterator(self, factory_config, mode="train"):
-        assert self.dataset.multiple_iterator, (
-            "All dataset must be a subclass of"
-            "espnet3.components.data.dataset.ShardedDataset"
-        )
-
-        assert hasattr(
-            factory_config, "num_shards"
-        ), "When using multiple iterator, please specify the number of shards."
-
-        num_shards = factory_config.num_shards
-        shuffle = factory_config.get("shuffle", False)
-        seed = self.config.get("seed", 0)
-        rng = np.random.RandomState(self.epoch + seed)
-        shard_idx = rng.choice(num_shards) if shuffle else self.epoch % num_shards
-
-        dataset = self.dataset.shard(shard_idx)
-
-        if factory_config["iter_factory"] is not None:
-            # update shape files
-            iter_factory_config = update_shard(
-                factory_config["iter_factory"], shard_idx
-            )
-            return self._build_iter_factory(iter_factory_config, dataset, mode=mode)
-        else:
-            factory_config.pop("num_shards")
-            factory_config.pop("multiple_iterator")
-            return self._build_standard_dataloader(factory_config, dataset, mode=mode)

@@ -252,7 +252,7 @@ def configure_logging(
 
     Example:
         >>> from pathlib import Path
-        >>> logger = configure_logging(log_dir=Path(\"exp/logs\"))
+        >>> logger = configure_logging(log_dir=Path("exp/logs"))
         >>> logger.name
         'espnet3'
     """
@@ -309,6 +309,17 @@ def set_stage_log_handler(
 
     Returns:
         Path | None: Resolved log file path when installed, otherwise None.
+
+    Example:
+        >>> import logging
+        >>> from pathlib import Path
+        >>> p = set_stage_log_handler(
+        ...     logging.getLogger("espnet3"),
+        ...     Path("exp/logs"),
+        ...     filename="train.log",
+        ... )
+        >>> p is None
+        False
     """
     if log_dir is None:
         return None
@@ -371,7 +382,7 @@ def get_git_metadata(cwd: Path | None = None) -> dict[str, str]:
 
     Example:
         >>> meta = get_git_metadata()  # doctest: +SKIP
-        >>> meta.get(\"short_commit\")  # doctest: +SKIP
+        >>> meta.get("short_commit")  # doctest: +SKIP
     """
     cwd = cwd or Path.cwd()
     status = _run_git_command(["git", "status", "--short"], cwd)
@@ -516,7 +527,7 @@ def log_run_metadata(
 
     Example:
         >>> import logging
-        >>> log_run_metadata(logging.getLogger(\"espnet3\"))  # doctest: +SKIP
+        >>> log_run_metadata(logging.getLogger("espnet3"))  # doctest: +SKIP
     """
     logger.info("=== ESPnet3 run started: %s ===", datetime.now().isoformat())
     logger.log(
@@ -672,7 +683,7 @@ def log_env_metadata(
 
     Example:
         >>> import logging
-        >>> log_env_metadata(logging.getLogger(\"espnet3\"))  # doctest: +SKIP
+        >>> log_env_metadata(logging.getLogger("espnet3"))  # doctest: +SKIP
     """
     cluster_prefixes = cluster_prefixes or (
         "SLURM_",

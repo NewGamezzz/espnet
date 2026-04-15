@@ -3,6 +3,7 @@
 import asyncio
 import importlib
 import json
+import logging
 import os
 import sys
 from abc import ABC, abstractmethod
@@ -22,6 +23,8 @@ from espnet3.parallel.parallel import (
     get_parallel_config,
     parallel_for,
 )
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -88,7 +91,7 @@ def convert_paths(obj):
 
     Example:
         >>> from pathlib import Path
-        >>> convert_paths({\"p\": Path(\"a/b\")})
+        >>> convert_paths({"p": Path("a/b")})
         {'p': 'a/b'}
     """
     if isinstance(obj, dict):
@@ -296,11 +299,6 @@ class BaseRunner(ABC):
         """
         setup_fn = self.provider.build_worker_setup_fn()
         out = []
-        func = (
-            self.__class__.batch_forward
-            if self.batch_size is not None
-            else self.__class__.forward
-        )
         with get_client(get_parallel_config()) as client:
             for res in tqdm(
                 parallel_for(
@@ -379,7 +377,7 @@ class BaseRunner(ABC):
                     out = await client.cluster.job_cls._submit_job(
                         client.cluster.job_cls, tf
                     )
-                    print(out)  # Print job submission output.
+                    logger.info("Async job submission output: %s", out)
 
                 job_meta.append(
                     {
@@ -389,8 +387,8 @@ class BaseRunner(ABC):
                     }
                 )
 
-            print(
-                "Detached async submission. Scheduler:",
+            logger.info(
+                "Detached async submission. Scheduler: %s",
                 getattr(client, "scheduler_info", lambda: {})().get("address", "?"),
             )
             return job_meta

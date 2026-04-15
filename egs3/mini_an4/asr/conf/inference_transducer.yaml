@@ -1,24 +1,36 @@
-# Mini AN4 ASR inference config for ESPnet3 integration tests.
+##########################################################
+#                   Inference SETTING                    #
+##########################################################
+# Quick usage:
+#   python run.py --stages infer --inference_config conf/inference.yaml
+#
+##########################################################
+#                    PATHS AND INPUTS                    #
+##########################################################
 
-recipe_dir: .
-data_dir: ${recipe_dir}/data
-exp_tag: ${load_yaml:conf/train.yaml,exp_tag}
-exp_dir: ${recipe_dir}/exp/${exp_tag}
-inference_dir: ${exp_dir}/infer
-dataset_dir: ${data_dir}/mini_an4
-
+##########################################################
+#                    DATASET DEFINITION                  #
+##########################################################
+# Each test entry is a dataset reference consumed by `DataOrganizer`.
+# - `name` becomes `${inference_dir}/<name>/`
+# - `data_src` is omitted, so ESPnet3 loads
+#   `${recipe_dir}/dataset/__init__.py`
+# - `data_src_args` is passed directly to `MiniAn4Dataset(...)`
+#
+# Dataset splits:
+#   test:
+#     - split="test" from `MiniAn4Dataset`
+# Notes:
+#   - actual data sources are defined via `${recipe_dir}`
 dataset:
-  _target_: espnet3.components.data.data_organizer.DataOrganizer
   test:
     - name: test
-      dataset:
-        _target_: src.dataset.MiniAN4Dataset
-        manifest_path: ${dataset_dir}/manifest/test.tsv
+      data_src_args:
+        split: test
 
-parallel:
-  env: local
-  n_workers: 1
-
+##########################################################
+#                    MODEL AND OUTPUT                    #
+##########################################################
 model:
   _target_: espnet2.bin.asr_transducer_inference.Speech2Text
   asr_train_config: ${exp_dir}/config.yaml
@@ -26,4 +38,4 @@ model:
   beam_size: 1
 
 input_key: speech
-output_fn: src.infer.output_fn_transducer
+output_fn: src.inference.build_output_transducer

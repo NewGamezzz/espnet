@@ -71,7 +71,10 @@ def resolve_stages(
         List[str]: Stages to run, in the order of ``stages``.
 
     Example:
-        >>> resolve_stages([\"train\", \"infer\"], [\"collect_stats\", \"train\", \"infer\"])
+        >>> resolve_stages(
+        ...     ["train", "infer"],
+        ...     ["collect_stats", "train", "infer"],
+        ... )
         ['train', 'infer']
     """
     if "all" in requested:
@@ -129,8 +132,6 @@ def run_stages(
     stages_to_run: Iterable[str],
     args: argparse.Namespace | None = None,
     log: logging.Logger | None = None,
-    stage_log_dir_fn: Callable[[str], Path | None] | None = None,
-    on_stage_start: Callable[[str, logging.Logger], None] | None = None,
 ) -> None:
     """Invoke stage methods on ``system`` in order with logging and timing.
 
@@ -140,13 +141,6 @@ def run_stages(
         args: Parsed CLI arguments. ``dry_run`` and ``write_requirements`` are
             read from here when present.
         log: Optional logger instance; defaults to module logger.
-        stage_log_dir_fn: Optional callable that returns a stage log directory.
-            When provided (or resolved from ``system.get_stage_log_dir``),
-            a per-stage file handler is configured using
-            ``<log_dir>/<stage>.log`` before executing each stage.
-        on_stage_start: Optional hook invoked after stage logging is configured.
-            This can be used to emit per-stage metadata (configs, environment,
-            requirements snapshots, etc.) into the newly attached log file.
 
     Raises:
         AttributeError: If a named stage method is missing on ``system``.
