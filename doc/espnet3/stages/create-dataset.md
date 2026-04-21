@@ -2,180 +2,214 @@
 title: ESPnet3 Create Dataset Stage
 author:
   name: "Masao Someki"
-date: 2025-11-26
+date: 2026-04-15
 ---
 
 # ESPnet3 Create Dataset Stage
 
-The `create_dataset` stage prepares raw data for training. It is the place to
-download archives, extract corpora, and build manifests or directory layouts
-that later stages consume.
-
 ## How to run
 
 ```bash
-python run.py --stages create_dataset --train_config conf/train.yaml
+python run.py --stages create_dataset --training_config conf/training.yaml
 ```
-
-The log directory for this stage is set to `create_dataset.dataset_dir` (or
-`dataset_dir` / `data_dir` as a fallback). The dataset is also created under the
-same directory, so logs and generated data live together in the dataset output
-path.
-
-In ESPnet3, `create_dataset` is driven by a callable defined in your
-`train.yaml` config (see the [train config reference](../config/train_config.md)).
-The system resolves the function and passes the remaining config keys as keyword
-arguments.
 
 ## Where it is configured
 
-In `conf/train*.yaml`, set `create_dataset.func` and any required arguments:
+`create_dataset` is configured from the `create_dataset` block in
+`training.yaml`.
+
+Example:
+
+```yaml
+dataset_dir: ${recipe_dir}/data/mini_an4
+
+create_dataset:
+  recipe_dir: ${recipe_dir}
+  dataset_dir: ${dataset_dir}
+```
+
+Those values are forwarded as keyword arguments to the builder methods.
+
+## What the stage does
+
+`create_dataset()` walks over `training_config.dataset.train`,
+`training_config.dataset.valid`, and `training_config.dataset.test`.
+
+For each unique dataset source, it:
+
+1. resolves the dataset module
+2. instantiates `DatasetBuilder`
+3. runs `is_source_prepared(**create_dataset)`
+4. runs `prepare_source(**create_dataset)` if needed
+5. runs `is_built(**create_dataset)`
+6. runs `build(**create_dataset)` if needed
+
+The same dataset source is only prepared once per stage run.
+
+## Builder lifecycle
+
+The current contract is:
+
+- `is_source_prepared(**kwargs) -> bool`
+- `prepare_source(**kwargs) -> None`
+- `is_built(**kwargs) -> bool`
+- `build(**kwargs) -> None`
+
+The intended split is:
+
+- source preparation: download, extract, validate, or locate raw assets
+- build: run task-ready preprocessing or other recipe-local dumping data
+
+## Where builder kwargs come from
+
+The arguments passed to the builder methods come from the `create_dataset`
+block in `training.yaml`.
+
+Example:
 
 ```yaml
 create_dataset:
-  func: src.create_dataset.create_dataset
-  dataset_dir: ${dataset_dir}
-  # optional args specific to the recipe
-  archive_path: ${recipe_dir}/../../egs2/mini_an4/asr1/downloads.tar.gz
+  recipe_dir: ${recipe_dir}
+  source_dir: ${dataset_dir}
 ```
 
-Config keys map to function arguments. For example, if your recipe defines:
+That means the stage calls:
 
 ```python
-def create_dataset(dataset_dir: Path, *, archive_path: Path | None = None) -> None:
-    dataset_dir = Path(dataset_dir)
-    archive = Path(archive_path) if archive_path else None
-
-    an4_root = ensure_extracted(archive, dataset_dir)
-    sph2pipe = shutil.which("sph2pipe")
-    train = prepare_split(an4_root, dataset_dir, "train", sph2pipe)
-    test = prepare_split(an4_root, dataset_dir, "test", sph2pipe)
-
-    manifest_dir = dataset_dir / "manifest"
-    write_manifest(manifest_dir / "train_dev.tsv", train[:1])
-    write_manifest(manifest_dir / "train_nodev.tsv", train[1:])
-    write_manifest(manifest_dir / "test.tsv", test)
+builder.is_source_prepared(recipe_dir=..., source_dir=...)
+builder.prepare_source(recipe_dir=..., source_dir=...)
+builder.is_built(recipe_dir=..., source_dir=...)
+builder.build(recipe_dir=..., source_dir=...)
 ```
-
-then the stage will call it with the values from your config block.
 
 ## Where the code lives
 
 Typical recipe structure:
 
-```
-egs3/<recipe>/<system>/
+```text
+egs3/<recipe>/<task>/
   conf/
-    train.yaml
-  src/
-    create_dataset.py
+    training.yaml
+  dataset/
+    __init__.py
+    builder.py
     dataset.py
 ```
 
-`create_dataset.py` prepares files and manifests. `dataset.py` defines the
-Torch dataset class consumed by `train.yaml`.
+`builder.py` handles source preparation and build-time side effects.
+`dataset.py` defines the runtime `Dataset` class used by train and inference.
 
-## Example: Mini AN4 (manifest-based)
+## `dataset/__init__.py`
 
-`egs3/mini_an4/asr/src/create_dataset.py`:
+`dataset/__init__.py` should export these two names:
 
-- Extracts the archive.
-- Converts SPH to WAV using `sph2pipe`.
-- Writes tab-separated manifests under `dataset_dir/manifest/`.
+- `Dataset`
+- `DatasetBuilder`
 
-Resulting layout:
+`create_dataset` looks up `DatasetBuilder`.
+Training and inference look up `Dataset`.
 
-```
-${dataset_dir}/
-  wav/
-    train/
-    test/
-  manifest/
-    train_dev.tsv
-    train_nodev.tsv
-    test.tsv
-```
-
-## Example: LibriSpeech 100h (download + extract)
-
-`egs3/librispeech_100/asr/src/create_dataset.py` downloads and extracts splits
-from OpenSLR into `dataset_dir/LibriSpeech/` without extra preprocessing.
-
-### Minimal conceptual code (from `egs3/librispeech_100/asr/src/create_dataset.py`)
-
-Below is the smallest conceptual snippet that shows the intent. The real
-implementation adds split checks and re-run safety.
+Minimal example:
 
 ```python
-dataset_dir = Path(dataset_dir)
-librispeech_root = dataset_dir / "LibriSpeech"
+from egs3.my_recipe.asr.dataset.builder import MyDatasetBuilder as DatasetBuilder
+from egs3.my_recipe.asr.dataset.dataset import MyDataset as Dataset
 
-for split in requested_splits:
-    filename = SPLITS[split]
-    url = f"{OPENSLR_BASE_URL}/{filename}"
-    archive_path = dataset_dir / filename
-    extracted_dir = librispeech_root / filename.replace(".tar.gz", "")
-
-    if not extracted_dir.exists():
-        download_url(url=url, dst_path=archive_path, logger=logger)
-        extract_targz(archive_path, dataset_dir, logger)
+__all__ = ["Dataset", "DatasetBuilder"]
 ```
 
-### Planned usage (from `egs3/librispeech_100/asr/src/dataset.py`)
+This is the contract for all three resolution modes:
 
-The dataset loader is expected to read the on-disk tree under
-`dataset_dir/LibriSpeech/...` directly. A minimal usage looks like:
+- dataset tag
+- explicit module path
+- omitted `data_src` -> `${recipe_dir}/dataset/__init__.py`
+
+## How dataset modules are resolved
+
+Dataset resolution is shared with the normal dataset loading path:
+
+1. `data_src: mini_an4/asr`
+2. `data_src: egs3.mini_an4.asr.dataset`
+3. omitted `data_src`, which loads `${recipe_dir}/dataset/__init__.py`
+
+Details are in:
+
+- [Dataset references and builders](../core/components/datasets.md)
+
+## Example: `mini_an4`
+
+`egs3/mini_an4/asr/dataset/builder.py` is a full build example.
+
+Behavior:
+
+- `prepare_source()` extracts the AN4 archive under the recipe dataset area
+- `build()` converts audio and writes manifest TSVs under `data/manifest/`
+
+The resulting tree is roughly:
+
+```text
+egs3/mini_an4/asr/
+  data/
+    manifest/
+      train.tsv
+      valid.tsv
+      test.tsv
+    wav/
+      train/
+      test/
+```
+
+Minimal conceptual export:
 
 ```python
-dataset = LibriSpeechDataset(
-    data_dir=dataset_dir,         # or data_dir=dataset_dir / "LibriSpeech"
-    split="train-clean-100",
-)
+from egs3.mini_an4.asr.dataset.builder import MiniAn4Builder as DatasetBuilder
+from egs3.mini_an4.asr.dataset.dataset import MiniAn4Dataset as Dataset
 
-item = dataset[0]
-speech = item["speech"]  # np.float32 waveform
-text = item["text"]      # transcript string
+__all__ = ["Dataset", "DatasetBuilder"]
 ```
 
-Below is a tiny conceptual snippet of how the dataset is built internally:
+## Example: `librispeech_100`
+
+`egs3/librispeech_100/asr/dataset/builder.py` is the contrasting pattern.
+
+Behavior:
+
+- `prepare_source()` only validates that the LibriSpeech tree exists
+- `is_built()` simply reuses source readiness
+- `build()` is effectively a no-op validation path
+
+This recipe reads the original corpus layout directly instead of generating
+separate manifests.
+
+This is the contrasting pattern to `mini_an4`: the builder still participates
+in the stage lifecycle, but the recipe chooses not to materialize a separate
+manifest representation.
+
+## Recommended implementation pattern
+
+A new recipe dataset module should export:
 
 ```python
-class LibriSpeechDataset:
-    def __init__(self, data_dir, split):
-        root = resolve_librispeech_root(data_dir)
-        split_dir = root / split
+from egs3.my_recipe.asr.dataset.builder import MyBuilder as DatasetBuilder
+from egs3.my_recipe.asr.dataset.dataset import MyDataset as Dataset
 
-        self.examples = []
-        for transcript_path in walk("*.trans.txt", split_dir):
-            for line in transcript_path.read_text().splitlines():
-                utt_id, *words = line.split()
-                flac_path = transcript_path.parent / f"{utt_id}.flac"
-                if flac_path.is_file():
-                    self.examples.append((flac_path, " ".join(words)))
-
-    def __getitem__(self, idx):
-        flac_path, text = self.examples[idx]
-        speech = soundfile.read(flac_path, dtype="float32")
-        return {"speech": speech, "text": text}
+__all__ = ["Dataset", "DatasetBuilder"]
 ```
 
-Example logs when the download package runs:
+with:
 
-```
-INFO:espnet3.systems.asr.system:ASRSystem.create_dataset(): starting dataset creation process
-INFO:espnet3.systems.asr.system:Creating dataset with function src.create_dataset.create_dataset
-2026-01-21 01:50:52 | INFO | create_dataset | Start processing split: train.clean.100
-2026-01-21 01:50:52 | INFO | create_dataset | Start download: train-clean-100.tar.gz
-2026-01-21 01:50:52 | INFO | create_dataset | Target directory: /data/user_data/msomeki/espnet3/egs3/librispeech_100/asr/download/LibriSpeech
-2026-01-21 01:50:53 | INFO | create_dataset | Downloading train-clean-100.tar.gz: 0% (0.0MB / 6091.4MB)
-2026-01-21 01:51:04 | INFO | create_dataset | Downloading train-clean-100.tar.gz: 5% (304.6MB / 6091.4MB)
-2026-01-21 01:51:14 | INFO | create_dataset | Downloading train-clean-100.tar.gz: 10% (609.1MB / 6091.4MB)
-2026-01-21 01:51:24 | INFO | create_dataset | Downloading train-clean-100.tar.gz: 15% (913.7MB / 6091.4MB)
-2026-01-21 01:51:34 | INFO | create_dataset | Downloading train-clean-100.tar.gz: 20% (1218.3MB / 6091.4MB)
-```
+- `DatasetBuilder` for `create_dataset`
+- `Dataset` for training / inference dataset instantiation
 
-### Notes
+## Notes
 
-- The `create_dataset` stage should be deterministic and safe to re-run.
-- Keep outputs in `dataset_dir` so later stages can reuse them without
-  rebuilding.
+- `create_dataset` should be deterministic and safe to re-run
+- source preparation and build are intentionally separate checks
+- the same dataset source is only prepared once even if it appears in multiple
+  splits
+
+## Related pages
+
+- [Dataset references and builders](../core/components/datasets.md)
+- [DataOrganizer](../core/components/data-organizer.md)
+- [Training dataset config](./train/dataset.md)

@@ -33,7 +33,7 @@ class CombinedDataset:
     applied sequentially to each sample. It also supports optional UID handling for
     ESPnet-style preprocessing.
 
-    CombinedDataset supports two indexing modes:
+    **Indexing modes.**
         * Numeric mode (default): every underlying dataset accepts integer indices
           and the combined dataset behaves like a contiguous sequence.
         * String mode: if any dataset requires string-based utterance IDs, the

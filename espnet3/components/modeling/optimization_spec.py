@@ -15,7 +15,7 @@ class OptimizationStep:
     path, `loss` becomes either one `OptimizationStep` or a list of them so the
     training loop knows which named optimizer should consume each loss.
 
-    Example:
+    Examples:
         `OptimizationStep(loss=g_loss, name="generator")`
 
     means "apply `g_loss` to the optimizer and scheduler pair named
@@ -31,24 +31,24 @@ class OptimizationStep:
 class OptimizerSpec:
     """Describe one named optimizer block from `config.optimizers`.
 
-    This dataclass is the normalized, validated form of one user-facing config
-    entry such as:
+    This dataclass is the normalized, validated form of one user-facing config.
+    **Example config.**
 
-    ```yaml
-    optimizers:
-      generator:
-        optimizer:
-          _target_: torch.optim.Adam
-          lr: 0.0002
-        params: generator
-        accum_grad_steps: 2
-        step_every_n_iters: 1
-        gradient_clip_val: 1.0
-        gradient_clip_algorithm: norm
-    ```
+    .. code-block:: yaml
 
-    It does not store the instantiated optimizer object itself. Instead, it
-    records the policy needed by the Lightning module to:
+        optimizers:
+          generator:
+            optimizer:
+              _target_: torch.optim.Adam
+              lr: 0.0002
+            params: generator
+            accum_grad_steps: 2
+            step_every_n_iters: 1
+            gradient_clip_val: 1.0
+            gradient_clip_algorithm: norm
+
+    It does not store the instantiated optimizer object itself. The resulting
+    object records the policy needed by the Lightning module to:
     - select which parameters belong to this optimizer,
     - decide when accumulated gradients are large enough to step,
     - decide how often this optimizer should update,
@@ -124,29 +124,29 @@ class OptimizerSpec:
 class SchedulerSpec:
     """Describe one named scheduler block from `config.schedulers`.
 
-    This is the normalized, validated form of user-facing scheduler metadata
-    such as:
+    This is the normalized, validated form of user-facing scheduler metadata.
+    **Scheduler config example.**
 
-    ```yaml
-    schedulers:
-      generator:
-        scheduler:
-          _target_: torch.optim.lr_scheduler.LinearLR
-          total_iters: 1000
-        interval: step
-    ```
+    .. code-block:: yaml
 
-    or:
+        schedulers:
+          generator:
+            scheduler:
+              _target_: torch.optim.lr_scheduler.LinearLR
+              total_iters: 1000
+            interval: step
 
-    ```yaml
-    schedulers:
-      discriminator:
-        scheduler:
-          _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
-          patience: 2
-        interval: epoch
-        monitor: valid/discriminator/loss
-    ```
+    **Another example.**
+
+    .. code-block:: yaml
+
+        schedulers:
+          discriminator:
+            scheduler:
+              _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+              patience: 2
+            interval: epoch
+            monitor: valid/discriminator/loss
 
     Like `OptimizerSpec`, this stores configuration, not the
     instantiated scheduler object. The Lightning module uses it to decide
@@ -206,7 +206,8 @@ class OptimizerRuntimeState:
 
     Lightning already checkpoints optimizer and scheduler `state_dict()` values.
     This dataclass exists only for extra ESPnet3 runtime state that Lightning
-    does not manage for named multi-optimizer training:
+    does not manage for named multi-optimizer training.
+
     - `accum_counter`: how many backward passes have been accumulated since the
       last optimizer step,
     - `update_step`: how many times this optimizer has actually been updated.

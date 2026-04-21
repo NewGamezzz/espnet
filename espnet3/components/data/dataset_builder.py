@@ -12,7 +12,7 @@ class DatasetBuilder(ABC):
     ``create_dataset`` stage when a dataset source such as
     ``data_src: mini_an4/asr`` appears in a training or inference config.
     Concrete builders separate source acquisition from task-specific artifact
-    generation so the system can skip work precisely:
+    generation so the system can skip work precisely.
 
     1. ``is_source_prepared(**kwargs)`` checks whether the raw source tree is
        already available.
@@ -33,23 +33,25 @@ class DatasetBuilder(ABC):
         reserve heavier work for ``prepare_source`` and ``build``.
 
     Examples:
-        A recipe config can trigger a builder through a dataset reference:
-        ```yaml
-        dataset:
-          train:
-            - data_src: mini_an4/asr
-              data_src_args:
-                split: train
-        ```
+        **A recipe config can trigger a builder through a dataset reference.**
 
-        The system then follows the builder lifecycle:
-        ```python
-        builder = DatasetBuilderSubclass()
-        if not builder.is_source_prepared(recipe_dir="."):
-            builder.prepare_source(recipe_dir=".")
-        if not builder.is_built(recipe_dir="."):
-            builder.build(recipe_dir=".")
-        ```
+        .. code-block:: yaml
+
+            dataset:
+              train:
+                - data_src: mini_an4/asr
+                  data_src_args:
+                    split: train
+
+        **The system then follows the builder lifecycle.**
+
+        .. code-block:: python
+
+            builder = DatasetBuilderSubclass()
+            if not builder.is_source_prepared(recipe_dir="."):
+                builder.prepare_source(recipe_dir=".")
+            if not builder.is_built(recipe_dir="."):
+                builder.build(recipe_dir=".")
     """
 
     @abstractmethod
@@ -80,16 +82,16 @@ class DatasetBuilder(ABC):
             to determine whether heavier preparation work can be skipped.
 
         Examples:
-            ```python
-            if builder.is_source_prepared(recipe_dir="."):
-                print("source already available")
-            ```
+            .. code-block:: python
 
-            A task-scoped dataset may treat an extracted directory as the source
-            readiness marker:
-            ```python
-            ready = (source_root / "an4").is_dir()
-            ```
+                if builder.is_source_prepared(recipe_dir="."):
+                    print("source already available")
+
+            **Readiness marker example.**
+
+            .. code-block:: python
+
+                ready = (source_root / "an4").is_dir()
         """
 
     @abstractmethod
@@ -114,14 +116,15 @@ class DatasetBuilder(ABC):
             successful completion.
 
         Examples:
-            ```python
-            builder.prepare_source(recipe_dir="egs3/mini_an4/asr")
-            ```
+            .. code-block:: python
 
-            An implementation may extract a bundled archive into ``source/``:
-            ```python
-            prepare_source(source_dir=source_root, archive_path=archive_path)
-            ```
+                builder.prepare_source(recipe_dir="egs3/mini_an4/asr")
+
+            **An implementation may extract a bundled archive into ``source/``.**
+
+            .. code-block:: python
+
+                prepare_source(source_dir=source_root, archive_path=archive_path)
         """
 
     @abstractmethod
@@ -151,15 +154,18 @@ class DatasetBuilder(ABC):
             planning, not for performing repairs or partial generation.
 
         Examples:
-            ```python
-            if not builder.is_built(recipe_dir="."):
-                builder.build(recipe_dir=".")
-            ```
+            .. code-block:: python
 
-            A manifest-based recipe might check for a small fixed set of files:
-            ```python
-            ready = all((root / relpath).is_file() for relpath in required_files)
-            ```
+                if not builder.is_built(recipe_dir="."):
+                    builder.build(recipe_dir=".")
+
+            **A manifest-based recipe might check for a small fixed set of files.**
+
+            .. code-block:: python
+
+                ready = all(
+                    (root / relpath).is_file() for relpath in required_files
+                )
         """
 
     @abstractmethod
@@ -183,13 +189,13 @@ class DatasetBuilder(ABC):
             ``prepare_source`` have been handled by the system.
 
         Examples:
-            ```python
-            builder.build(recipe_dir="egs3/mini_an4/asr")
-            ```
+            .. code-block:: python
 
-            A task-scoped builder can consume shared source assets and emit
-            recipe-local manifests:
-            ```python
-            build_dataset(dataset_dir=dataset_root, source_dir=source_root)
-            ```
+                builder.build(recipe_dir="egs3/mini_an4/asr")
+
+            **Recipe-local manifest example.**
+
+            .. code-block:: python
+
+                build_dataset(dataset_dir=dataset_root, source_dir=source_root)
         """

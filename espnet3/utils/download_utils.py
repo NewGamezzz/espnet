@@ -17,7 +17,7 @@ def setup_logger(
 ) -> logging.Logger:
     """Set up a logger with console and optional file handlers.
 
-    This helper configures a named logger with a standard formatter and:
+    **Configured handlers.**
       - A stream handler for console output (added once per logger).
       - A file handler that writes to `download.log` in `log_dir`, if provided.
 

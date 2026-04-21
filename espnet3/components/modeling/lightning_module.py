@@ -28,11 +28,11 @@ logger = logging.getLogger("lightning")
 class ESPnetLightningModule(lightning.LightningModule):
     """ESPnet3 LightningModule wrapper for model training and data integration.
 
-    This wrapper keeps the common ESPnet3 model contract unchanged:
+    The common ESPnet3 model contract is shown below.
 
-    ```python
-    loss, stats, weight = model(**batch)
-    ```
+    .. code-block:: python
+
+        loss, stats, weight = model(**batch)
 
     Most models should continue to return a single scalar loss tensor. The training
     loop then behaves exactly like conventional Lightning single-optimizer training.
@@ -44,37 +44,37 @@ class ESPnetLightningModule(lightning.LightningModule):
     the type of `loss` changes.
 
     Example:
-        Single optimizer path:
-        ```python
-        def forward(self, **batch):
-            loss = ...
-            stats = {"loss": loss.detach(), "acc": acc.detach()}
-            weight = torch.tensor(batch_size, device=loss.device)
-            return loss, stats, weight
-        ```
+        **Single optimizer path.**
+        .. code-block:: python
 
-        GAN-style path updating both optimizers in a single batch:
-        ```python
-        def forward(self, **batch):
-            g_loss = ...
-            d_loss = ...
-            stats = {
-                "generator_loss": g_loss.detach(),
-                "discriminator_loss": d_loss.detach(),
-            }
-            return [
-                OptimizationStep(loss=g_loss, name="generator"),
-                OptimizationStep(loss=d_loss, name="discriminator"),
-            ], stats, None
-        ```
+            def forward(self, **batch):
+                loss = ...
+                stats = {"loss": loss.detach(), "acc": acc.detach()}
+                weight = torch.tensor(batch_size, device=loss.device)
+                return loss, stats, weight
 
-        GAN-style path updating only the generator for one batch:
-        ```python
-        def forward(self, **batch):
-            g_loss = ...
-            stats = {"generator_loss": g_loss.detach()}
-            return OptimizationStep(loss=g_loss, name="generator"), stats, None
-        ```
+        **GAN-style path updating both optimizers in a single batch.**
+        .. code-block:: python
+
+            def forward(self, **batch):
+                g_loss = ...
+                d_loss = ...
+                stats = {
+                    "generator_loss": g_loss.detach(),
+                    "discriminator_loss": d_loss.detach(),
+                }
+                return [
+                    OptimizationStep(loss=g_loss, name="generator"),
+                    OptimizationStep(loss=d_loss, name="discriminator"),
+                ], stats, None
+
+        **GAN-style path updating only the generator for one batch.**
+        .. code-block:: python
+
+            def forward(self, **batch):
+                g_loss = ...
+                stats = {"generator_loss": g_loss.detach()}
+                return OptimizationStep(loss=g_loss, name="generator"), stats, None
 
     Notes:
         - Returning `OptimizationStep` with the single optimizer is forbidden.
@@ -165,7 +165,7 @@ class ESPnetLightningModule(lightning.LightningModule):
     ) -> bool:
         """Check one or more losses for NaN/Inf and synchronize a full batch skip.
 
-        This method is shared by both optimization modes:
+        **Shared across both optimization modes.**
 
         - Single-optimizer-path mode, where the model returns one scalar loss tensor.
         - Multiple-path mode, where the model returns one or more
@@ -221,7 +221,7 @@ class ESPnetLightningModule(lightning.LightningModule):
     def _validate_multi_loss_steps(self, loss) -> List[OptimizationStep]:
         """Validate and normalize multi-optimizer loss output into step objects.
 
-        Checks:
+        **Checks.**
             - `loss` is either one `OptimizationStep` or a list of them.
             - The list is not empty.
             - Every list element is an `OptimizationStep`.
@@ -329,7 +329,7 @@ class ESPnetLightningModule(lightning.LightningModule):
         ensure that every trainable parameter is assigned to exactly one named
         optimizer before any optimizer objects are instantiated.
 
-        Concretely, it checks that:
+        **Checks.**
             - every optimizer spec matches at least one trainable parameter
             - no trainable parameter is matched by more than one optimizer spec
             - every trainable parameter is covered by some optimizer spec
@@ -409,49 +409,49 @@ class ESPnetLightningModule(lightning.LightningModule):
 
         This includes the paired scheduler configuration.
 
-        Single-optimizer-path training keeps the traditional ESPnet contract:
+        **Single-optimizer-path training.**
 
-        ```yaml
-        optimizer:
-          _target_: torch.optim.Adam
-          lr: 0.001
+        .. code-block:: yaml
 
-        scheduler:
-          _target_: torch.optim.lr_scheduler.StepLR
-          step_size: 10
-          gamma: 0.5
+            optimizer:
+              _target_: torch.optim.Adam
+              lr: 0.001
 
-        scheduler_interval: step
-        ```
+            scheduler:
+              _target_: torch.optim.lr_scheduler.StepLR
+              step_size: 10
+              gamma: 0.5
 
-        The model keeps returning a plain tensor loss:
+            scheduler_interval: step
 
-        ```python
-        def forward(self, **batch):
-            loss = ...
-            stats = {"loss": loss.detach(), "acc": acc.detach()}
-            weight = torch.tensor(batch_size, device=loss.device)
-            return loss, stats, weight
-        ```
+        **Matching model return.**
+
+        .. code-block:: python
+
+            def forward(self, **batch):
+                loss = ...
+                stats = {"loss": loss.detach(), "acc": acc.detach()}
+                weight = torch.tensor(batch_size, device=loss.device)
+                return loss, stats, weight
 
         Single-optimizer-path schedulers follow standard Lightning behavior.
-        Example with a validation-monitored `ReduceLROnPlateau`:
+        **Validation-monitored `ReduceLROnPlateau` example.**
 
-        ```yaml
-        optimizer:
-          _target_: torch.optim.Adam
-          lr: 0.001
+        .. code-block:: yaml
 
-        scheduler:
-          _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
-          patience: 2
-          factor: 0.5
+            optimizer:
+              _target_: torch.optim.Adam
+              lr: 0.001
 
-        scheduler_interval: epoch
-        scheduler_monitor: valid/loss
-        ```
+            scheduler:
+              _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+              patience: 2
+              factor: 0.5
 
-        In this case Lightning receives:
+            scheduler_interval: epoch
+            scheduler_monitor: valid/loss
+
+        **Lightning receives.**
         - `interval="epoch"`
         - `monitor="valid/loss"`
 
@@ -462,80 +462,83 @@ class ESPnetLightningModule(lightning.LightningModule):
         `schedulers`. The names become the routing keys used by
         `OptimizationStep(name=...)`.
 
-        ```yaml
-        optimizers:
-          generator:
-            optimizer:
-              _target_: torch.optim.Adam
-              lr: 0.0002
-            params: generator
-            accum_grad_steps: 1
-            step_every_n_iters: 1
-            gradient_clip_val: 1.0
-            gradient_clip_algorithm: norm
+        .. code-block:: yaml
 
-          discriminator:
-            optimizer:
-              _target_: torch.optim.Adam
-              lr: 0.0002
-            params: discriminator
-            accum_grad_steps: 1
-            step_every_n_iters: 1
+            optimizers:
+              generator:
+                optimizer:
+                  _target_: torch.optim.Adam
+                  lr: 0.0002
+                params: generator
+                accum_grad_steps: 1
+                step_every_n_iters: 1
+                gradient_clip_val: 1.0
+                gradient_clip_algorithm: norm
 
-        schedulers:
-          generator:
-            scheduler:
-              _target_: torch.optim.lr_scheduler.LinearLR
-              start_factor: 1.0
-              end_factor: 0.5
-              total_iters: 1000
-            interval: step
+              discriminator:
+                optimizer:
+                  _target_: torch.optim.Adam
+                  lr: 0.0002
+                params: discriminator
+                accum_grad_steps: 1
+                step_every_n_iters: 1
 
-          discriminator:
-            scheduler:
-              _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
-              patience: 2
-              factor: 0.5
-            interval: epoch
-            monitor: valid/discriminator/loss
-        ```
+            schedulers:
+              generator:
+                scheduler:
+                  _target_: torch.optim.lr_scheduler.LinearLR
+                  start_factor: 1.0
+                  end_factor: 0.5
+                  total_iters: 1000
+                interval: step
 
-        The matching model return may update both branches in one batch:
+              discriminator:
+                scheduler:
+                  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+                  patience: 2
+                  factor: 0.5
+                interval: epoch
+                monitor: valid/discriminator/loss
 
-        ```python
-        return [
-            OptimizationStep(loss=g_loss, name="generator"),
-            OptimizationStep(loss=d_loss, name="discriminator"),
-        ], {
-            "generator_loss": g_loss.detach(),
-            "discriminator_loss": d_loss.detach(),
-        }, None
-        ```
+        **Update both branches in one batch.**
 
-        Or update only one branch:
+        .. code-block:: python
 
-        ```python
-        return OptimizationStep(loss=g_loss, name="generator"), {
-            "generator_loss": g_loss.detach(),
-        }, None
-        ```
+            return [
+                OptimizationStep(loss=g_loss, name="generator"),
+                OptimizationStep(loss=d_loss, name="discriminator"),
+            ], {
+                "generator_loss": g_loss.detach(),
+                "discriminator_loss": d_loss.detach(),
+            }, None
 
-        Important rules:
+        **Update only one branch.**
+
+        .. code-block:: python
+
+            return OptimizationStep(loss=g_loss, name="generator"), {
+                "generator_loss": g_loss.detach(),
+            }, None
+
+        **Important rules.**
         - Single-optimizer-path training must return a tensor loss directly.
         - Multiple-path training must return `OptimizationStep` or
           `list[OptimizationStep]` as `loss` so that ESPnet3 knows which optimizer
           should be used to update parameters.
         - Optimizer and scheduler names must match exactly.
-          Valid:
-          ```yaml
-          optimizers: {generator: {...}, discriminator: {...}}
-          schedulers: {generator: {...}, discriminator: {...}}
-          ```
-          Error example:
-          ```yaml
-          optimizers: {generator: {...}, discriminator: {...}}
-          schedulers: {generator: {...}, decoder: {...}}
-          ```
+          **Valid.**
+
+          .. code-block:: yaml
+
+              optimizers: {generator: {...}, discriminator: {...}}
+              schedulers: {generator: {...}, discriminator: {...}}
+
+          **Error example.**
+
+          .. code-block:: yaml
+
+              optimizers: {generator: {...}, discriminator: {...}}
+              schedulers: {generator: {...}, decoder: {...}}
         - In the multiple-path configuration, gradient clipping is configured per
           optimizer via `gradient_clip_val` and `gradient_clip_algorithm`.
           Trainer-level global clipping settings must not be used.
@@ -654,7 +657,7 @@ class ESPnetLightningModule(lightning.LightningModule):
     ) -> None:
         """Log model/optimizer/scheduler details for training runs.
 
-        Description:
+        **Description.**
             Emits a compact summary of the model, parameter counts, dtype
             composition, and optimizer/scheduler configuration. This mirrors the
             previous utility implementation but keeps logging close to where
@@ -676,21 +679,23 @@ class ESPnetLightningModule(lightning.LightningModule):
             - The summary is logged at INFO level.
 
         Examples:
-            ```python
-            self._log_training_summary(logger, self.model, optimizer, scheduler)
-            ```
+            .. code-block:: python
 
-            Sample output:
-            ```
-            Model summary:
-                Class Name: DummyModel
-                Total Number of model parameters: 1,024
-                Trainable model parameters: 1,024 (100.0%)
-                Model size: 4.0 KB
-                DType composition: torch.float32(100.0%)
-            Optimizer[0]:
-            Scheduler[0]:
-            ```
+                self._log_training_summary(logger, self.model, optimizer, scheduler)
+
+            **Sample output.**
+
+            .. code-block:: text
+
+                Model summary:
+                    Class Name: DummyModel
+                    Total Number of model parameters: 1,024
+                    Trainable model parameters: 1,024 (100.0%)
+                    Model size: 4.0 KB
+                    DType composition: torch.float32(100.0%)
+                Optimizer[0]:
+                Scheduler[0]:
+
             When multiple optimizers or schedulers are configured, additional
             `Optimizer[i]` and `Scheduler[i]` sections are emitted for each item in
             the instantiated list.
@@ -767,13 +772,13 @@ class ESPnetLightningModule(lightning.LightningModule):
         rebuilding a `name -> optimizer` mapping using the configured optimizer order.
 
         Example:
-            ```python
-            steps = [OptimizationStep(loss=g_loss, name="generator")]
-            named_optimizers = self._get_named_optimizers()
-            generator_optimizer = named_optimizers["generator"]
-            generator_optimizer.step()
-            # "discriminator" is not touched in this batch.
-            ```
+            .. code-block:: python
+
+                steps = [OptimizationStep(loss=g_loss, name="generator")]
+                named_optimizers = self._get_named_optimizers()
+                generator_optimizer = named_optimizers["generator"]
+                generator_optimizer.step()
+                # "discriminator" is not touched in this batch.
         """
         if self._named_optimizers_cache is not None:
             return self._named_optimizers_cache
@@ -795,12 +800,12 @@ class ESPnetLightningModule(lightning.LightningModule):
         `name -> scheduler` mapping from Lightning's scheduler collection.
 
         Example:
-            ```python
-            named_schedulers = self._get_named_schedulers()
-            generator_scheduler = named_schedulers["generator"]
-            generator_scheduler.step()
-            # "discriminator" is not stepped in this batch.
-            ```
+            .. code-block:: python
+
+                named_schedulers = self._get_named_schedulers()
+                generator_scheduler = named_schedulers["generator"]
+                generator_scheduler.step()
+                # "discriminator" is not stepped in this batch.
         """
         if self._named_schedulers_cache is not None:
             return self._named_schedulers_cache
@@ -841,7 +846,7 @@ class ESPnetLightningModule(lightning.LightningModule):
 
         This path exists to support GAN and other multi-loss training without
         introducing a new model hook. The model still returns `(loss, stats, weight)`.
-        Only the `loss` field changes shape:
+        **Only the `loss` field changes shape.**
 
         - single optimizer path: a tensor
         - multiple path: `OptimizationStep` or `list[OptimizationStep]`
@@ -895,14 +900,14 @@ class ESPnetLightningModule(lightning.LightningModule):
     def _step(self, batch, batch_idx, mode):
         """Run one train/valid iteration for single or multiple optimizer modes.
 
-        Expected model return:
-        - Single-optimizer-path training or validation:
+        **Expected model return.**
+        - Single-optimizer-path training or validation.
           `loss: torch.Tensor, stats: dict, weight: Optional[Tensor]`
-        - Multiple-optimizer training or validation:
+        - Multiple-optimizer training or validation.
           `loss: OptimizationStep | list[OptimizationStep], stats: dict,
           weight: Optional[Tensor]`
 
-        Training behavior differs between the two paths:
+        **Training behavior differs between the two paths.**
         - Single optimizer path keeps Lightning automatic optimization enabled.
           This method
           only prepares and returns the loss tensor, and Lightning performs the
@@ -1005,7 +1010,7 @@ class ESPnetLightningModule(lightning.LightningModule):
 
         Lightning already saves and restores the instantiated optimizer and
         scheduler `state_dict()` objects, so this hook only stores the extra
-        runtime state introduced by ESPnet3's named multi-optimizer path:
+        runtime state introduced by ESPnet3's named multi-optimizer path.
 
         - `accum_counter`
         - `update_step`

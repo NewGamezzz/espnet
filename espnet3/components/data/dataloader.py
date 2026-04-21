@@ -45,7 +45,7 @@ class DataLoaderBuilder:
     """Builder class for constructing training and validation DataLoaders in ESPnet3.
 
     This class provides a unified interface for setting up PyTorch or ESPnet-specific
-    DataLoaders based on the configuration. It supports advanced features such as:
+    DataLoaders based on the configuration. Supported features include:
 
     - Custom collate functions (e.g., CommonCollateFn)
     - Sequence-based batch sampling with batch_bins or batch_size
@@ -128,7 +128,7 @@ class DataLoaderBuilder:
     def build(self, mode: str):
         """Build and return a DataLoader for the specified mode ("train" or "valid").
 
-        This method supports two modes of operation depending on the configuration:
+        **Supported modes.**
         (1) **ESPnet-style iterator**: Custom sampling and iteration logic.
         (2) **Standard PyTorch DataLoader**: Simpler use-case with fixed batch size.
 
@@ -142,34 +142,36 @@ class DataLoaderBuilder:
             torch.utils.data.DataLoader: Configured DataLoader instance for training or
                 validation.
 
-        Config-driven branching logic:
+        **Config-driven branching logic.**
             Case 1: ESPnet SequenceIterFactory is used
-            Example config:
-            ```
-            dataloader:
-            train:
-                iter_factory:
-                _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
-                shuffle: true
-                collate_fn: ${dataloader.collate_fn}
-                batches:
-                    _target_: espnet2.samplers.build_batch_sampler.build_batch_sampler
-                    type: numel
-                    shape_files:
-                    batch_bins: 4000000
-                    min_batch_size: 2
-            ```
+            **Example config.**
+
+            .. code-block:: yaml
+
+                dataloader:
+                  train:
+                    iter_factory:
+                      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+                      shuffle: true
+                      collate_fn: ${dataloader.collate_fn}
+                      batches:
+                        _target_: espnet2.samplers.build_batch_sampler.build_batch_sampler
+                        type: numel
+                        shape_files:
+                        batch_bins: 4000000
+                        min_batch_size: 2
 
             Case 2: Standard PyTorch DataLoader is used
-            Example config:
-            ```
-            dataloader:
-            train:
-              iter_factory: # Set iter_factory to None
-              batch_size: 4
-              num_workers: 2
-              shuffle: true
-            ```
+            **Example config.**
+
+            .. code-block:: yaml
+
+                dataloader:
+                  train:
+                    iter_factory: null
+                    batch_size: 4
+                    num_workers: 2
+                    shuffle: true
 
         Raises:
             ValueError: If the provided mode is neither "train" nor "valid".

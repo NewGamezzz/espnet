@@ -2,43 +2,41 @@
 title: ESPnet3 Systems
 author:
   name: "Masao Someki"
-date: 2025-11-26
+date: 2026-04-15
 ---
 
 # ESPnet3 Systems (`espnet3/systems`)
 
-ESPnet3 training is driven by **System** classes. A System is the entry point
-that binds configs to stage functions (create_dataset, collect_stats, train,
-infer, metric, pack_model, upload_model, pack_demo, upload_demo).
-This document explains the base interface, how stages are invoked, and how to
+ESPnet3 training is driven by **System** classes.
+A System binds configs to stage methods such as `create_dataset`, `train`,
+`infer`, and `measure`.
+
+This page explains the base interface, how stages are invoked, and how to
 extend it for custom tasks.
 
-## 🧠 BaseSystem at a glance
+## BaseSystem at a glance
 
-`espnet3.systems.base.system.BaseSystem` implements the common stage hooks:
+`espnet3.systems.base.system.BaseSystem` is the common stage wrapper.
+
+Current constructor:
 
 ```python
 class BaseSystem:
     def __init__(
         self,
-        *,
-        train_config=None,
-        infer_config=None,
-        metric_config=None,
-        publish_config=None,
-        demo_config=None,
+        training_config=None,
+        inference_config=None,
+        metrics_config=None,
+        publication_config=None,
+        stage_log_mapping=None,
     ):
-        self.train_config = train_config
-        self.infer_config = infer_config
-        self.metric_config = metric_config
-        self.publish_config = publish_config
-        self.demo_config = demo_config
+        ...
 
     def create_dataset(self): ...
     def collect_stats(self): ...
     def train(self): ...
     def infer(self): ...
-    def metric(self): ...
+    def measure(self): ...
 
     def pack_model(self): ...
     def upload_model(self): ...
@@ -46,129 +44,241 @@ class BaseSystem:
     def upload_demo(self): ...
 ```
 
-- Stage methods reject arbitrary CLI arguments; keep settings in YAML configs.
-- Defaults delegate to stage functions in `espnet3.systems.base.{train,inference,metric}`.
+Current base stages:
 
+| Stage | Method | Default target |
+| --- | --- | --- |
+| create dataset | `create_dataset()` | dataset module `DatasetBuilder` |
+| collect stats | `collect_stats()` | `espnet3.systems.base.training.collect_stats` |
+| train | `train()` | `espnet3.systems.base.training.train` |
+| infer | `infer()` | `espnet3.systems.base.inference.infer` |
+| measure | `measure()` | `espnet3.systems.base.metric.measure` |
+| pack model | `pack_model()` | `espnet3.utils.publish_utils.pack_model` |
+| upload model | `upload_model()` | `espnet3.utils.publish_utils.upload_model` |
+| pack demo | `pack_demo()` | `espnet3.demo.pack.pack_demo` |
+| upload demo | `upload_demo()` | `espnet3.demo.pack.upload_demo` |
+
+Notes:
+
+- stage methods do not accept free-form CLI arguments
+- keep settings in YAML configs
 
 ## How stages are executed
 
-Stage execution in ESPnet3 is **recipe-driven**: a recipe `run.py` constructs a
-System instance and then executes stage names by calling
-`espnet3.utils.stages_utils.run_stages()`.
-
-The key mechanism is that `run_stages()` resolves each stage name into a method
-call on the System instance (via `getattr`) and then invokes it.
+Stage execution is recipe-driven.
+A recipe `run.py` builds one System instance and passes stage names to
+`run_stages()`.
 
 Minimal sketch:
 
 ```python
 from espnet3.utils.stages_utils import run_stages
 
-system = system_cls(...)  # e.g., ASRSystem(...)
-run_stages(system=system, stages_to_run=["train", "infer", "metric"])
+system = system_cls(
+    training_config=training_config,
+    inference_config=inference_config,
+    metrics_config=metrics_config,
+    publication_config=publication_config,
+)
+run_stages(system=system, stages_to_run=["train", "infer", "measure"])
 ```
 
-Inside `run_stages()`, the core logic is essentially:
+The core idea is:
 
 ```python
 for stage in stages_to_run:
-    fn = getattr(system, stage, None)
-    fn()  # called with no extra CLI arguments
+    fn = getattr(system, stage)
+    fn()
 ```
 
-**Note:** A `stage` is simply a method exposed by the System object.
-If you add a new method (e.g., `export()`), and include `"export"` in your recipe's stage list, then `run_stages()` will call `system.export()`.
+A stage is just a method on the System object.
+
+If you add a new method such as `export()`, and the recipe stage list includes
+`"export"`, then `run_stages()` calls `system.export()`.
+
+## Constructor surface
+
+Current config slots are:
+
+| Argument | Used by |
+| --- | --- |
+| `training_config` | `create_dataset`, `collect_stats`, `train`, `pack_model` |
+| `inference_config` | `infer` |
+| `metrics_config` | `measure` |
+| `publication_config` | `pack_model`, `upload_model` |
+| `stage_log_mapping` | optional log-directory override |
+
+`BaseSystem` also stores aliases:
+
+- `train_config -> training_config`
+- `infer_config -> inference_config`
+
+## Stage log mapping
+
+`BaseSystem` resolves one log directory per stage.
+
+Base defaults:
+
+| Stage | Path reference |
+| --- | --- |
+| `create_dataset` | `training_config.data_dir` |
+| `collect_stats` | `training_config.stats_dir` |
+| `train` | `training_config.exp_dir` |
+| `infer` | `inference_config.inference_dir` |
+| `measure` | `metrics_config.inference_dir` |
+| `pack_model` | `training_config.exp_dir` |
+| `upload_model` | `training_config.exp_dir` |
+
+Missing values fall back to:
+
+- `training_config.exp_dir` when available
+- otherwise `<cwd>/logs`
+
+Example:
+
+```python
+system = BaseSystem(
+    training_config=train_cfg,
+    inference_config=infer_cfg,
+    metrics_config=metrics_cfg,
+    stage_log_mapping={
+        "infer": "training_config.exp_dir",
+        "measure": "training_config.exp_dir",
+    },
+)
+```
 
 ## Updating or adding stages
 
-Stage sets are defined and enforced by each recipe's `run.py` (stage list,
-required config guardrails), while the System class provides the actual stage
-methods.
+Stage lists and guardrails live in each recipe's `run.py`.
+The System class provides the actual methods.
 
-For a step-by-step guide to adding a new stage (and optionally a new config),
-see: [System-specific Stages](../stages/system-specific.md).
+If you want a new stage:
 
-## Directory layout (where things live)
+1. add a method to the System
+2. add the stage name to the recipe stage list
+3. add config loading and required-config checks in `run.py` if needed
 
-When creating a new System or debugging the stage pipeline, it helps to know
-where each "layer" lives:
+You do not have to put every override under `espnet3/systems/...`.
+Recipe-local overrides can live under:
+
+```text
+egs3/<recipe>/<task>/src/system.py
+```
+
+This is useful when the behavior is recipe-specific and should not become a
+shared system implementation.
+
+Minimal example:
+
+```python
+from espnet3.systems.asr.system import ASRSystem
+
+
+class RecipeSystem(ASRSystem):
+    def export_debug(self):
+        output_dir = self.exp_dir / "debug_export"
+        output_dir.mkdir(parents=True, exist_ok=True)
+        return output_dir
+```
+
+Then `run.py` can use that class and expose the new stage:
+
+```python
+from src.system import RecipeSystem
+
+DEFAULT_STAGES = [
+    "create_dataset",
+    "collect_stats",
+    "train",
+    "infer",
+    "measure",
+    "export_debug",
+]
+
+main(args=args, system_cls=RecipeSystem)
+```
+
+See [System-specific stages](../stages/system-specific.md).
+
+## Directory layout
+
+This section is mainly for contributors who add or modify systems in
+`espnet3/` itself.
+
+If you are only writing a recipe-local override under `egs3/.../src/`, you can
+skip this section.
+
+When you send a PR that changes ESPnet3 core systems, it helps to know where
+each layer lives.
 
 ```text
 espnet3/
   systems/
     base/
       system.py        # BaseSystem: stage methods + common wiring
-      train.py         # collect_stats(cfg), train(cfg)
-      inference.py     # inference(cfg): writes .scp outputs under inference_dir
-      metric.py       # metric(cfg): writes metrics.json under inference_dir
+      training.py      # collect_stats(cfg), train(cfg)
+      inference.py     # infer(cfg): writes SCP/artifact outputs
+      metric.py        # measure(cfg): writes metrics.json
     <system>/
-      system.py        # Task System (e.g., ASRSystem) overrides/extra stages
-      models/          # (Optional) system-owned model definitions (reusable across recipes)
-      metrics/         # (Optional) system-owned metric implementations for the metric stage
-  components/          # Reusable building blocks (data/training/modeling/metrics/callbacks)
-  parallel/            # Provider/Runner runtime (EnvironmentProvider, BaseRunner, backends)
-  demo/                # Demo packing/runtime helpers (pack_demo, upload_demo, UI)
+      system.py        # task System (e.g., ASRSystem) overrides/extra stages
+      models/          # optional system-owned models
+      metrics/         # optional system-owned metrics
+  components/          # reusable data/modeling/training pieces
+  parallel/            # provider/runner runtime
+  demo/                # optional demo packing/runtime
 ```
 
-Recipe structure (what lives under `egs3/`) is documented separately; see
-[Recipe directory layout](../recipe_directory.md).
+Recipe structure under `egs3/` is documented separately.
+See [Recipe directory layout](../recipe_directory.md).
 
-## Creating a new System (practical checklist)
+## Creating a new System
 
-This section focuses on authoring a **System implementation** under
-`espnet3/systems/` (not recipe glue code).
-
-### 1) Implement a System class
+### 1. Add a System class
 
 Create `espnet3/systems/<your_task>/system.py` and subclass `BaseSystem`.
-Start by overriding only what your task needs on top of the base pipeline.
 
 ```python
 from espnet3.systems.base.system import BaseSystem
 
 
 class MySystem(BaseSystem):
-    # Example: task-specific training wrapper
     def train(self):
-        # e.g., prepare extra artifacts, choose a task-specific entrypoint,
-        # or post-process checkpoints after base training.
         ...
 
-    # Example: task-specific packaging
     def pack_model(self):
-        # e.g., select additional artifacts, export formats, customize README/meta.
         ...
 ```
 
-### 2) Decide what you override vs. what stays in base entrypoints
+Override only the stages your task really needs.
 
-Typical System-specific customization points:
+### 2. Decide what stays in base entrypoints
 
-- `train()` / `collect_stats()`: add pre/post hooks around the training pipeline
-- `infer()` / `metric()`: customize inference outputs or evaluation behavior
-- `pack_model()` / `upload_model()`: include extra artifacts, export formats, customize README/meta
-- `pack_demo()` / `upload_demo()`: generate a task-specific demo bundle
-- Extra stages: add new System methods and expose them in the recipe stage list
+Common override points:
 
-If you add extra stages, follow: [System-specific Stages](../stages/system-specific.md).
+- `train()` / `collect_stats()`
+- `infer()` / `measure()`
+- `pack_model()` / `upload_model()`
+- extra custom stages
 
-### 3) Keep recipe-specific behavior out of the System
+Keep the boundary clean:
 
-As a rule of thumb, keep the boundary clean:
+- `espnet3/systems/...`: task-level behavior
+- `egs3/...`: recipe configs, datasets, local assets
 
-- **System (`espnet3/systems/...`)**: task-level policy + orchestration (how stages behave)
-- **Recipe (`egs3/...`)**: dataset preparation, concrete configs, and experiment assets
+### 3. Put reusable task code in the system package
 
-If your task needs reusable, system-owned implementations (shared across many
-recipes), put them inside the system package:
+If code is shared across many recipes, keep it under the system package.
+
+Example:
 
 ```text
 espnet3/systems/<system>/
-  models/   # system-owned models
-  metrics/  # system-owned metrics for the metric stage
+  models/
+  metrics/
 ```
 
-Then reference them from YAML via `_target_` like any other importable class:
+Then reference it from YAML:
 
 ```yaml
 metrics:
@@ -176,26 +286,31 @@ metrics:
       _target_: espnet3.systems.<system>.metrics.my_metric.MyMetric
 ```
 
-## Add a matching recipe template (TEMPLATE)
+## Add a matching template
 
-When you introduce a new System, also add a matching recipe template under
-`egs3/TEMPLATE/<system>/` so new recipes can start from a known-good runner and
-default stage list.
+If you add a new System, also add a matching recipe template under
+`egs3/TEMPLATE/<task>/`.
 
-At minimum, mirror what `egs3/TEMPLATE/asr/` provides:
+At minimum:
 
 ```text
-egs3/TEMPLATE/<system>/
-  run.py   # stage list + CLI entrypoint that calls run_stages()
-  conf/    # baseline configs (train/infer/metric/publish/demo as needed)
-  src/     # recipe-local code placeholders (models, output_fn, etc.)
+egs3/TEMPLATE/<task>/
+  run.py
+  conf/
+  src/
 ```
 
-If you plan to create a PR that adds or changes a System/template, also update the
-integration tests so the template stays runnable:
+`run.py` should:
 
-- `ci/test_integration_espnet3.sh` (template-based integration)
-- `ci/test_integration_demo.sh` (demo integration)
+- define the stage list
+- load the needed configs
+- instantiate the System
+- call `run_stages()`
 
-In particular, keep the MiniAN4-based pipeline working (used by the CI tests)
-and extend the tests when your new stages/configs need coverage.
+## Related pages
+
+- [System-specific stages](../stages/system-specific.md)
+- [Recipe directory layout](../recipe_directory.md)
+- [Training stage](../stages/train.md)
+- [Inference stage](../stages/inference.md)
+- [Measure stage](../stages/measure.md)

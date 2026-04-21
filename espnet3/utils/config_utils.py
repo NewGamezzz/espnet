@@ -31,7 +31,7 @@ def load_line(path):
         FileNotFoundError: If ``path`` does not exist.
         PermissionError: If the file cannot be read.
 
-    Example:
+    Examples:
         >>> from omegaconf import OmegaConf
         >>> cfg = OmegaConf.create(
         ...     {"vocab": "${load_line:tokens.txt}"}
@@ -72,11 +72,11 @@ def self_name(path):
         primarily consumed from YAML rather than called directly from Python.
 
     Examples:
-        In a config file named `training.yaml`:
+        **In a config file named `training.yaml`.**
 
             exp_tag: ${self_name:}
 
-        The expression is rewritten during loading to:
+        **The expression is rewritten during loading to.**
 
             training
     """
@@ -196,7 +196,7 @@ def load_config_with_defaults(path: str, resolve: bool = True) -> OmegaConf:
     without using Hydra's runtime, which makes it suitable for standalone YAML handling
     (e.g., for distributed training or script-based training setups).
 
-    Supported formats inside `defaults`:
+    **Supported formats inside `defaults`.**
     - `"subconfig"` → loads `subconfig.yaml`
     - `{"key": "value"}` → loads `key/value.yaml`
     - `"_self_"` → appends the current config in-place
@@ -250,14 +250,11 @@ def load_default_config(
     `load_and_merge_config()`.
 
     Example:
-        If `default_package` is `egs3.TEMPLATE.asr` and
-        `config_name` is `training.yaml`, this loads:
+        **Template example.**
 
             egs3/TEMPLATE/asr/conf/training.yaml
 
-        If you want to base a new recipe on an existing one, you can also
-        point `default_package` to that recipe package. For example, using
-        `egs3.librispeech.asr` with `training.yaml` would load:
+        **Recipe example.**
 
             egs3/librispeech/asr/conf/training.yaml
 
@@ -299,12 +296,12 @@ def load_and_merge_config(
     installed recipe package can be used if it provides the same config file
     under its own `conf/` directory.
 
-    Example:
-        If a recipe config lives at:
+    Examples:
+        **If a recipe config lives at.**
 
             egs3/mini_an4/asr/conf/training.yaml
 
-        and `config_name` is `training.yaml`, this function can infer
+        With `config_name="training.yaml"`, this function can infer
         `default_package="egs3.TEMPLATE.asr"` and merge:
 
             egs3/TEMPLATE/asr/conf/training.yaml

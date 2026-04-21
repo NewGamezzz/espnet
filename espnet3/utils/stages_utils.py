@@ -101,7 +101,7 @@ def parse_cli_and_stage_args(
             current runner, for example ``["create_dataset", "train", "infer"]``.
 
     Returns:
-        Tuple[argparse.Namespace, List[str]]: A pair containing:
+        Tuple[argparse.Namespace, List[str]]: A pair containing
             - the parsed CLI namespace returned by ``parser.parse_args()``
             - the resolved list of stages to execute, preserving the canonical
               order from ``stages``

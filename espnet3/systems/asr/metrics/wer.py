@@ -89,7 +89,7 @@ class WER(BaseMetric):
                 aligned by utterance ID.
 
         Example:
-            The expected inputs are paths, not preloaded string lists:
+            The expected inputs are paths, not preloaded string lists.
 
             >>> metric(
             ...     {

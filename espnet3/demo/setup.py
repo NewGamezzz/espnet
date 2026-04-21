@@ -34,7 +34,7 @@ def setup_demo_assets(
 ) -> None:
     """Create demo app scaffolding under a demo directory.
 
-    This writes:
+    **Generated files.**
       - ``app.py``: a small launcher that calls
         :func:`espnet3.demo.app_builder.build_demo_app`.
       - ``requirements.txt``: either from the config, explicit ``requirements``,

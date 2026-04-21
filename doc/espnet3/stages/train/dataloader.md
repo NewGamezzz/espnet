@@ -9,9 +9,10 @@ date: 2025-11-26
 
 This page summarizes how `dataloader` and `collate_fn` work in ESPnet3. It
 supports both the ESPnet iterator setup and the standard PyTorch DataLoader; we
-explain the ESPnet flow first. For
-full configuration options, see
-[train config reference](../../config/train_config.md).
+explain the ESPnet flow first. For full configuration options, see
+[training config reference](../../config/train_config.md).
+
+The same dataloader block is reused by both `collect_stats` and `train`.
 
 In training, these dataloaders are built inside the LightningModule
 implementation: `espnet3/components/modeling/lightning_module.py`
@@ -28,8 +29,6 @@ dataloader:
     _target_: espnet2.train.collate_fn.CommonCollateFn
     int_pad_value: -1
   train:
-    multiple_iterator: false
-    num_shards: 1
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
       shuffle: true
@@ -39,8 +38,6 @@ dataloader:
         shape_files:
           - ${stats_dir}/train/feats_shape
   valid:
-    multiple_iterator: false
-    num_shards: 1
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
       shuffle: false
@@ -55,7 +52,7 @@ dataloader:
 
 A collate function takes a list of dataset samples and turns them into a single
 batch (padding, stacking, and length bookkeeping). In ESPnet3 you can provide a
-custom collate function, or use ESPnet2's `CommonCollateFn`.
+custom collate function, or use ESPnet2's `CommonCollateFn`. 
 
 For `CommonCollateFn`, see the
 [CommonCollateFn implementation](https://espnet.github.io/espnet/guide/espnet2/train/CommonCollateFn.html).
@@ -117,8 +114,8 @@ class MyCustomCollateFn:
         return self.base(noisy_items)
 ```
 
-If the collate function is recipe-specific, define it under `egs3/<recipe>/<task>/src/`
-and reference it in `train.yaml`:
+If the collate function is recipe-specific, define it under
+`egs3/<recipe>/<task>/src/` and reference it in `training.yaml`:
 
 ```yaml
 dataloader:
@@ -176,6 +173,8 @@ dataloader:
         batch_bins: 12000000
 ```
 
+`multiple_iterator` is not supported in current ESPnet3.
+
 ### Iterator factories (ESPnet2)
 
 | Iterator | Supported batch types | Description |
@@ -186,7 +185,9 @@ dataloader:
 | [`CategoryChunkIterFactory`](https://espnet.github.io/espnet/guide/espnet2/iterators/CategoryChunkIterFactory.html) | Per-sample batches (`batch_size: 1`) | Combines category balancing with chunked iteration for long-sequence tasks. |
 <!-- | [`MultipleIterFactory`](https://espnet.github.io/espnet/guide/espnet2/iterators/MultipleIterFactory.html) | Depends on wrapped iterators | Chains multiple iterators to mix different datasets or sampling strategies in one epoch. | -->
 
-#### SequenceIterFactory
+<div class='custom-h4'><p>SequenceIterFactory</p></div>
+
+
 
 Use this for standard sequence batching. It works with the common `batches`
 types like `sorted`, `unsorted`, `folded`, `length`, and `numel`.
@@ -204,7 +205,9 @@ dataloader:
           - ${stats_dir}/train/feats_shape
 ```
 
-#### ChunkIterFactory
+<div class='custom-h4'><p>ChunkIterFactory</p></div>
+
+
 
 Use this when you want fixed-length chunks from long sequences. It builds
 chunks before collation.
@@ -221,7 +224,9 @@ dataloader:
         - [utt2]
 ```
 
-#### CategoryIterFactory
+<div class='custom-h4'><p>CategoryIterFactory</p></div>
+
+
 
 Use this when you need category-balanced sampling. It pairs with `catbel`,
 `catpow`, or `catpow_balance_dataset`.
@@ -237,7 +242,9 @@ dataloader:
         batch_size: 32
 ```
 
-#### CategoryChunkIterFactory
+<div class='custom-h4'><p>CategoryChunkIterFactory</p></div>
+
+
 
 Use this for category-balanced chunking (long sequences + category balancing).
 
@@ -252,46 +259,6 @@ dataloader:
       sampler_args:
         category2utt_file: ${stats_dir}/train/utt2category
         batch_size: 32
-```
-
-## Sharded iteration (multiple_iterator)
-
-Sharding means splitting a huge dataset into smaller pieces (shards) so you
-don't have to load or iterate the entire dataset at once. This becomes
-important at trainin with million‑hour scale data where loading/training with
-the entire data every epoch is too heavy.
-
-When `multiple_iterator: true`, ESPnet3 selects one shard per epoch and builds
-the iterator on that shard only. `num_shards` controls how many pieces you
-split the dataset into:
-
-- `num_shards: 1` keeps the full dataset as a single shard (no sharding).
-- `num_shards: 10` splits the dataset into 10 parts and uses one part per epoch.
-
-```yaml
-dataloader:
-  train:
-    multiple_iterator: true
-    num_shards: 10
-    iter_factory:
-      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
-      shuffle: true
-      collate_fn: ${dataloader.collate_fn}
-      batches:
-        type: sorted
-        shape_files:
-          - ${stats_dir}/train/feats_shape.{shard_idx}
-  valid:
-    multiple_iterator: true
-    num_shards: 10
-    iter_factory:
-      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
-      shuffle: false
-      collate_fn: ${dataloader.collate_fn}
-      batches:
-        type: sorted
-        shape_files:
-          - ${stats_dir}/valid/feats_shape.{shard_idx}
 ```
 
 ### Batch samplers (ESPnet2)
@@ -312,7 +279,9 @@ shape files.
 
 ### Sampler config examples
 
-#### SortedBatchSampler
+<div class='custom-h4'><p>SortedBatchSampler</p></div>
+
+
 
 ```yaml
 dataloader:
@@ -325,7 +294,9 @@ dataloader:
           - ${stats_dir}/train/feats_shape
 ```
 
-#### UnsortedBatchSampler
+<div class='custom-h4'><p>UnsortedBatchSampler</p></div>
+
+
 
 ```yaml
 dataloader:
@@ -338,7 +309,9 @@ dataloader:
           - ${stats_dir}/train/feats_shape
 ```
 
-#### FoldedBatchSampler
+<div class='custom-h4'><p>FoldedBatchSampler</p></div>
+
+
 
 `fold_lengths` tells the sampler what length thresholds to use when shrinking
 batch size for long sequences. `batch_size` is the base size for short samples,
@@ -364,7 +337,9 @@ dataloader:
           - 800
 ```
 
-#### LengthBatchSampler
+<div class='custom-h4'><p>LengthBatchSampler</p></div>
+
+
 
 `batch_bins` sets the target total length per batch. The sampler groups samples
 so the sum of lengths in a batch stays near this value.
@@ -381,7 +356,9 @@ dataloader:
         batch_bins: 12000000
 ```
 
-#### NumElementsBatchSampler
+<div class='custom-h4'><p>NumElementsBatchSampler</p></div>
+
+
 
 `batch_bins` sets the target total element count per batch (e.g., frames × dims),
 so batches have similar overall size even if sequence lengths differ.
@@ -398,7 +375,9 @@ dataloader:
         batch_bins: 12000000
 ```
 
-#### CategoryBalancedSampler
+<div class='custom-h4'><p>CategoryBalancedSampler</p></div>
+
+
 
 CategoryBalancedSampler keeps class/category balance within each batch. Use it
 when you want each minibatch to contain a more even mix of categories.
@@ -423,7 +402,9 @@ cat_b utt4 utt5
 cat_c utt6
 ```
 
-#### CategoryPowerSampler
+<div class='custom-h4'><p>CategoryPowerSampler</p></div>
+
+
 
 CategoryPowerSampler balances categories with a power-law distribution. Use it
 when you want to upsample low-resource categories without full balancing.
@@ -449,7 +430,9 @@ dataloader:
         dataset_scaling_factor: 1.2
 ```
 
-#### CategoryDatasetPowerSampler
+<div class='custom-h4'><p>CategoryDatasetPowerSampler</p></div>
+
+
 
 `category_upsampling_factor` balances categories within each dataset, while
 `dataset_upsampling_factor` balances across datasets. `dataset_scaling_factor`

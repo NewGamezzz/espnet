@@ -87,7 +87,7 @@ def save_espnet_config(
 ) -> None:
     """Save an ESPnet2-compatible training config snapshot to disk.
 
-    This builds the full config by merging:
+    **Merged sources.**
       - The task's default config
       - The resolved model config (flattened into root keys)
       - Selected dataset preprocessor config (flattened into root keys)

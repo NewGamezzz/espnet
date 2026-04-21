@@ -70,15 +70,19 @@ Keep the core settings in `demo.yaml`. For the full list, see
 UI is configured under `ui` in `demo.yaml`. The demo app is generated from this
 config and wires inputs/outputs directly to your inference runner.
 
-#### Resolution order
+<div class='custom-h4'><p>Resolution order</p></div>
+
+
 
 1. If `demo.yaml` includes `ui`, it is merged with system defaults from
    `build_ui_default()` (when available).
 2. If `ui` is missing, ESPnet3 calls `build_ui(demo_cfg)` from
-   `espnet3.systems.<system>.demo`.
+   `espnet3.systems.*system*.demo`.
 3. If neither is available, `ui` is required in `demo.yaml`.
 
-#### UI fields
+<div class='custom-h4'><p>UI fields</p></div>
+
+
 
 | Field | Description |
 | --- | --- |

@@ -24,12 +24,12 @@ def write_artifact(
     This function implements the artifact serialization rules used by
     ``espnet3.systems.base.inference.infer()`` for non-scalar outputs.
 
-    Default serialization rules:
+    **Default serialization rules.**
 
     1. ``dict`` values are saved as JSON.
        Nested lists inside the dict are preserved through JSON serialization.
 
-       Example:
+       **Example.**
 
        .. code-block:: python
 
@@ -38,7 +38,7 @@ def write_artifact(
                Path("infer/test-clean/meta/utt1"),
            )
 
-       Result:
+       **Result.**
 
        .. code-block:: text
 
@@ -46,7 +46,7 @@ def write_artifact(
 
     2. ``numpy.ndarray`` values are saved as ``.npy`` by default.
 
-       Example:
+       **Example.**
 
        .. code-block:: python
 
@@ -55,7 +55,7 @@ def write_artifact(
                Path("infer/test-clean/posterior/utt1"),
            )
 
-       Result:
+       **Result.**
 
        .. code-block:: text
 
@@ -66,7 +66,7 @@ def write_artifact(
 
     4. Unknown Python objects are saved with pickle by default.
 
-       Example:
+       **Example.**
 
        .. code-block:: python
 
@@ -75,7 +75,7 @@ def write_artifact(
                Path("infer/test-clean/debug_obj/utt1"),
            )
 
-       Result:
+       **Result.**
 
        .. code-block:: text
 
@@ -85,7 +85,7 @@ def write_artifact(
        The input value is still a normal NumPy array (or CPU tensor); the
        writer configuration decides that it should be serialized as ``.wav``.
 
-       Example:
+       **Example.**
 
        .. code-block:: python
 
@@ -95,7 +95,7 @@ def write_artifact(
                field_config={"type": "wav", "sample_rate": 16000},
            )
 
-       Result:
+       **Result.**
 
        .. code-block:: text
 
@@ -104,7 +104,7 @@ def write_artifact(
     6. Custom serialization can be configured through ``field_config`` using
        a function writer.
 
-       Example config:
+       **Example config.**
 
        .. code-block:: python
 
@@ -115,7 +115,7 @@ def write_artifact(
                }
            }
 
-       Expected writer signature:
+       **Expected writer signature.**
 
        .. code-block:: python
 
@@ -126,7 +126,7 @@ def write_artifact(
        The custom writer must be a function. It must return the written file
        path, and that path must already exist when returned.
 
-    Unsupported values:
+    **Unsupported values.**
 
     - Bare top-level ``list`` / ``tuple`` values are not supported by the
       inference entrypoint. If structured content is needed, wrap it in a

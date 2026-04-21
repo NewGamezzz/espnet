@@ -213,33 +213,33 @@ def configure_logging(
 ) -> logging.Logger:
     """Configure logging for an ESPnet3 run.
 
-    This sets up:
+    **Configured logging outputs.**
       - A root logger with a stream handler (console).
       - An optional file handler at `log_dir/filename`.
       - If `log_dir/filename` already exists, it is rotated to the next
         available suffix (e.g., `run1.log`) and a fresh `run.log` is created.
       - Warning capture into the logging system.
 
-    Example usage:
-        ```python
-        from pathlib import Path
-        from espnet3.utils.logging_utils import configure_logging
+    **Example usage.**
+        .. code-block:: python
 
-        logger = configure_logging(log_dir=Path("exp/run1"), level=logging.INFO)
-        logger.info("hello")
-        ```
+            from pathlib import Path
+            from espnet3.utils.logging_utils import configure_logging
 
-    Example log output:
-        ```
-        [babel-t9-28] 2026-02-11 03:57:16 EST (logging_utils.py:376) INFO: [main] hello
-        ```
+            logger = configure_logging(log_dir=Path("exp/run1"), level=logging.INFO)
+            logger.info("hello")
 
-    Example directory tree (when `log_dir/filename` already exists):
-        ```
-        exp/run1/
-        ├── run.log          # new logs (current run)
-        └── run1.log         # rotated older logs
-        ```
+    **Example log output.**
+        .. code-block:: text
+
+            [babel-t9-28] 2026-02-11 03:57:16 EST (logging_utils.py:376) INFO: [main] hello
+
+    **Example directory tree.**
+        .. code-block:: text
+
+            exp/run1/
+            ├── run.log          # new logs (current run)
+            └── run1.log         # rotated older logs
 
     Args:
         log_dir (Path | None): Directory to store the log file.
@@ -374,7 +374,7 @@ def get_git_metadata(cwd: Path | None = None) -> dict[str, str]:
         cwd (Path | None): Directory within the target git repo.
 
     Returns:
-        dict[str, str]: Collected metadata keys, possibly including:
+        dict[str, str]: Collected metadata keys. Common keys include:
             - "commit": Full commit hash.
             - "short_commit": Abbreviated commit hash.
             - "branch": Current branch name.
@@ -471,7 +471,7 @@ def log_run_metadata(
 ) -> None:
     """Log runtime metadata for the current run.
 
-    Logged fields include:
+    **Logged fields.**
       - Start timestamp.
       - Python executable and command-line arguments.
       - Working directory (current process directory).
@@ -480,40 +480,40 @@ def log_run_metadata(
       - Git metadata (commit/branch/dirty), when available.
       - Optional requirements snapshot (pip freeze).
 
-    Example usage:
-        ```python
-        from pathlib import Path
-        from espnet3.utils.logging_utils import configure_logging, log_run_metadata
+    **Example usage.**
+        .. code-block:: python
 
-        logger = configure_logging(log_dir=Path("exp/run1"))
-        log_run_metadata(
-            logger,
-            argv=["espnet3-train", "--config", "conf/train.yaml"],
-        configs={"train": Path("conf/train.yaml")},
-        )
-        ```
+            from pathlib import Path
+            from espnet3.utils.logging_utils import configure_logging, log_run_metadata
 
-    Example log output (wrapped for readability):
-        ```
-        [hostname] 2026-02-11 03:57:16 EST (logging_utils.py:376) INFO: [train] \
-            === ESPnet3 run started: 2026-02-11T03:57:16.826337 ===
-        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
-            === ESPnet3 run started: 2026-02-11T03:57:16.826430 ===
-        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
-            Command: /path/to/espnet3/tools/.venv/bin/python run.py ...
-        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
-            Python: 3.10.18 (main, Aug 18 2025, 19:18:25) [Clang 20.1.4 ]
-        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
-            Working directory: /path/to/espnet3/egs3/librispeech_100/asr
-        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO:	[train] \
-            train config: /path/to/espnet3/egs3/librispeech_100/asr/conf/train.yaml
-        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO:	[train] \
-            infer config: /path/to/espnet3/egs3/librispeech_100/asr/conf/inference.yaml
-        [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO:	[train] \
-            measure config: /path/to/espnet3/egs3/librispeech_100/asr/conf/measure.yaml
-        [hostname] 2026-02-11 03:57:17 EST (run.py:244) INFO:	[train] \
-            Git: commit=..., short_commit=..., branch=master, worktree=clean
-        ```
+            logger = configure_logging(log_dir=Path("exp/run1"))
+            log_run_metadata(
+                logger,
+                argv=["espnet3-train", "--config", "conf/train.yaml"],
+                configs={"train": Path("conf/train.yaml")},
+            )
+
+    **Example log output.**
+        .. code-block:: text
+
+            [hostname] 2026-02-11 03:57:16 EST (logging_utils.py:376) INFO: [train] \
+                === ESPnet3 run started: 2026-02-11T03:57:16.826337 ===
+            [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
+                === ESPnet3 run started: 2026-02-11T03:57:16.826430 ===
+            [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
+                Command: /path/to/espnet3/tools/.venv/bin/python run.py ...
+            [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
+                Python: 3.10.18 (main, Aug 18 2025, 19:18:25) [Clang 20.1.4 ]
+            [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
+                Working directory: /path/to/espnet3/egs3/librispeech_100/asr
+            [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
+                train config: /path/to/espnet3/egs3/librispeech_100/asr/conf/train.yaml
+            [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
+                infer config: /path/to/espnet3/egs3/librispeech_100/asr/conf/inference.yaml
+            [hostname] 2026-02-11 03:57:16 EST (run.py:244) INFO: [train] \
+                measure config: /path/to/espnet3/egs3/librispeech_100/asr/conf/measure.yaml
+            [hostname] 2026-02-11 03:57:17 EST (run.py:244) INFO: [train] \
+                Git: commit=..., short_commit=..., branch=master, worktree=clean
 
     Args:
         logger (logging.Logger): Logger used to emit metadata.
@@ -609,68 +609,62 @@ def log_env_metadata(
 ) -> None:
     """Log selected cluster and runtime environment variables.
 
-    The output includes two blocks:
+    **Output blocks.**
       - Cluster environment variables (scheduler/runtime IDs).
       - Runtime environment variables (CUDA/NCCL/OMP/PATH, etc.).
 
-    Environment variables collected by default:
+    **Default environment variables.**
 
-    Cluster prefixes:
-    | Prefix    | Purpose                                              |
-    |-----------|------------------------------------------------------|
-    | `SLURM_`  | Slurm job/step metadata (job id, task id, node info) |
-    | `PBS_`    | PBS/Torque job metadata                              |
-    | `LSF_`    | LSF job metadata                                     |
-    | `SGE_`    | SGE job metadata                                     |
-    | `COBALT_` | Cobalt job metadata                                  |
-    | `OMPI_`   | Open MPI runtime metadata                            |
-    | `PMI_`    | PMI (Process Management Interface) metadata          |
-    | `MPI_`    | MPI runtime metadata (generic prefix)                |
+    **Cluster prefixes.**
+        - ``SLURM_``: Slurm job/step metadata.
+        - ``PBS_``: PBS/Torque job metadata.
+        - ``LSF_``: LSF job metadata.
+        - ``SGE_``: SGE job metadata.
+        - ``COBALT_``: Cobalt job metadata.
+        - ``OMPI_``: Open MPI runtime metadata.
+        - ``PMI_``: PMI metadata.
+        - ``MPI_``: Generic MPI runtime metadata.
 
-    Runtime prefixes:
-    | Prefix      | Purpose                             |
-    |-------------|-------------------------------------|
-    | `NCCL_`     | NCCL configuration (multi-GPU comms)|
-    | `CUDA_`     | CUDA runtime configuration          |
-    | `ROCM_`     | ROCm runtime configuration          |
-    | `OMP_`      | OpenMP threading configuration      |
-    | `MKL_`      | Intel MKL configuration             |
-    | `OPENBLAS_` | OpenBLAS configuration              |
-    | `UCX_`      | UCX communication configuration     |
-    | `NVIDIA_`   | NVIDIA runtime configuration        |
+    **Runtime prefixes.**
+        - ``NCCL_``: NCCL configuration.
+        - ``CUDA_``: CUDA runtime configuration.
+        - ``ROCM_``: ROCm runtime configuration.
+        - ``OMP_``: OpenMP threading configuration.
+        - ``MKL_``: Intel MKL configuration.
+        - ``OPENBLAS_``: OpenBLAS configuration.
+        - ``UCX_``: UCX communication configuration.
+        - ``NVIDIA_``: NVIDIA runtime configuration.
 
-    Explicit runtime keys:
-    | Key                   | Purpose                          |
-    |-----------------------|----------------------------------|
-    | `PATH`                | Executable search path           |
-    | `PYTHONPATH`          | Python module search path        |
-    | `LD_LIBRARY_PATH`     | Shared library search path       |
-    | `CUDA_VISIBLE_DEVICES`| GPU visibility mask              |
-    | `RANK`                | Global rank (distributed)        |
-    | `LOCAL_RANK`          | Local rank on node               |
-    | `NODE_RANK`           | Node rank in job                 |
-    | `WORLD_SIZE`          | Total process count              |
-    | `MASTER_ADDR`         | Distributed master address       |
-    | `MASTER_PORT`         | Distributed master port          |
+    **Explicit runtime keys.**
+        - ``PATH``: Executable search path.
+        - ``PYTHONPATH``: Python module search path.
+        - ``LD_LIBRARY_PATH``: Shared library search path.
+        - ``CUDA_VISIBLE_DEVICES``: GPU visibility mask.
+        - ``RANK``: Global rank.
+        - ``LOCAL_RANK``: Local rank on node.
+        - ``NODE_RANK``: Node rank in job.
+        - ``WORLD_SIZE``: Total process count.
+        - ``MASTER_ADDR``: Distributed master address.
+        - ``MASTER_PORT``: Distributed master port.
 
-    Example usage:
-        ```python
-        from pathlib import Path
-        from espnet3.utils.logging_utils import configure_logging, log_env_metadata
+    **Example usage.**
+        .. code-block:: python
 
-        logger = configure_logging(log_dir=Path("exp/run1"))
-        log_env_metadata(logger)
-        ```
+            from pathlib import Path
+            from espnet3.utils.logging_utils import configure_logging, log_env_metadata
 
-    Example log output:
-        ```
-        [hostname] 2026-02-11 03:57:17 EST (run.py:256) INFO:	[train] Cluster env:
-            SLURM_JOB_ID=6335268
-        [hostname] 2026-02-11 03:57:17 EST (run.py:256) INFO:	[train] Runtime env:
-            CUDA_VISIBLE_DEVICES=0
-            NCCL_DEBUG=INFO
-            PATH=/usr/local/bin:/usr/bin:...
-        ```
+            logger = configure_logging(log_dir=Path("exp/run1"))
+            log_env_metadata(logger)
+
+    **Example log output.**
+        .. code-block:: text
+
+            [hostname] 2026-02-11 03:57:17 EST (run.py:256) INFO: [train] Cluster env:
+                SLURM_JOB_ID=6335268
+            [hostname] 2026-02-11 03:57:17 EST (run.py:256) INFO: [train] Runtime env:
+                CUDA_VISIBLE_DEVICES=0
+                NCCL_DEBUG=INFO
+                PATH=/usr/local/bin:/usr/bin:...
 
     Args:
         logger (logging.Logger): Logger used to emit metadata.
@@ -751,7 +745,7 @@ def log_env_metadata(
 def build_qualified_name(obj) -> str:
     """Return a compact, fully-qualified name for objects or classes.
 
-    Description:
+    **Description.**
         Produces a stable, human-readable identifier for logging and debugging.
         For objects, it prefers the object's class path. For builtins without a
         module path, it falls back to a truncated string, and includes length
@@ -769,17 +763,18 @@ def build_qualified_name(obj) -> str:
         - For classes, the class module and name are returned.
 
     Examples:
-        ```python
-        from pathlib import Path
-        build_qualified_name(Path("/tmp"))
-        # => 'pathlib.PosixPath'
+        .. code-block:: python
 
-        build_qualified_name(Path)
-        # => 'pathlib.Path'
+            from pathlib import Path
 
-        build_qualified_name([1, 2, 3])
-        # => 'list(len=3)'
-        ```
+            build_qualified_name(Path("/tmp"))
+            # => 'pathlib.PosixPath'
+
+            build_qualified_name(Path)
+            # => 'pathlib.Path'
+
+            build_qualified_name([1, 2, 3])
+            # => 'list(len=3)'
     """
     cls = obj if isinstance(obj, type) else type(obj)
     if not isinstance(obj, type) and cls.__module__ == "builtins":
@@ -795,7 +790,7 @@ def build_qualified_name(obj) -> str:
 def build_callable_name(func) -> str:
     """Return a fully-qualified name for callables when possible.
 
-    Description:
+    **Description.**
         Uses module + qualname for callables (functions, methods, classes with
         __call__). Falls back to build_qualified_name for non-standard callables.
 
@@ -811,19 +806,21 @@ def build_callable_name(func) -> str:
           build_qualified_name.
 
     Examples:
-        ```python
-        def my_fn(x): ...
-        build_callable_name(my_fn)
-        # => 'my_module.my_fn'
+        .. code-block:: python
 
-        class MyClass:
-            def __call__(self, x): ...
-        build_callable_name(MyClass())
-        # => 'my_module.MyClass'
+            def my_fn(x): ...
 
-        build_callable_name(len)
-        # => 'builtins.len'
-        ```
+            build_callable_name(my_fn)
+            # => 'my_module.my_fn'
+
+            class MyClass:
+                def __call__(self, x): ...
+
+            build_callable_name(MyClass())
+            # => 'my_module.MyClass'
+
+            build_callable_name(len)
+            # => 'builtins.len'
     """
     if hasattr(func, "__qualname__") and hasattr(func, "__module__"):
         return f"{func.__module__}.{func.__qualname__}"
@@ -940,7 +937,7 @@ def log_component(
 ) -> None:
     """Log a component instance with class info, repr, and attributes.
 
-    Description:
+    **Description.**
         Emits a structured log block for a single object. The block includes
         a class line, a representation line, and a recursive attribute dump
         up to the specified depth.
@@ -959,25 +956,24 @@ def log_component(
         None
 
     Example:
-        ```python
-        from espnet3.utils.logging_utils import log_component
+        .. code-block:: python
 
-        # Custom class instance.
-        class CustomThing:
-            def __init__(self, name: str, value: int):
-                self.name = name
-                self.value = value
+            from espnet3.utils.logging_utils import log_component
 
-        log_component(logger, "Custom", "example", CustomThing("demo", 7))
-        ```
+            class CustomThing:
+                def __init__(self, name: str, value: int):
+                    self.name = name
+                    self.value = value
 
-        Example log output:
-        ```
-        Custom[example] class: my_module.CustomThing
-        Custom[example]: <my_module.CustomThing object at ...>
-          name: 'demo'
-          value: 7
-        ```
+            log_component(logger, "Custom", "example", CustomThing("demo", 7), 1)
+
+        **Example log output.**
+        .. code-block:: text
+
+            Custom[example] class: my_module.CustomThing
+            Custom[example]: <my_module.CustomThing object at ...>
+              name: 'demo'
+              value: 7
 
     Notes:
         - The logger uses `stacklevel=2` so log lines point at the caller.
@@ -1013,7 +1009,7 @@ def log_instance_dict(
 ) -> None:
     """Log a dictionary of instances with a common kind label.
 
-    Description:
+    **Description.**
         Iterates over the provided mapping and logs each value using the shared
         `kind` label. This is useful for dumping collections of structured
         objects (e.g., environment info blocks or component registries) in a
@@ -1034,13 +1030,13 @@ def log_instance_dict(
           a repr line, and selected public attributes.
 
     Examples:
-        ```python
-        log_instance_dict(
-            logger,
-            kind="Env",
-            entries={"CUDA": torch.cuda, "NCCL": nccl_module},
-        )
-        ```
+        .. code-block:: python
+
+            log_instance_dict(
+                logger,
+                kind="Env",
+                entries={"CUDA": torch.cuda, "NCCL": nccl_module},
+            )
 
     Raises:
         None

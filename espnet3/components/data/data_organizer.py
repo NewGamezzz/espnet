@@ -41,7 +41,7 @@ class DatasetConfig:
             configs that still carry it as metadata.
 
     Examples:
-        Recipe-backed dataset entry:
+        **Recipe-backed dataset entry.**
             >>> config_dict = {
             ...     "name": "custom",
             ...     "data_src": "mini_an4/asr",
@@ -54,7 +54,7 @@ class DatasetConfig:
             >>> config.data_src
             'mini_an4/asr'
 
-        Local recipe dataset entry:
+        **Local recipe dataset entry.**
             >>> config = DatasetConfig(
             ...     name="local_eval",
             ...     data_src_args={"split": "eval"},
@@ -143,7 +143,7 @@ class DataOrganizer:
         AssertionError: If `preprocessor` is not callable.
 
     Note:
-        The `DataOrganizer` is designed to support both training and testing workflows:
+        **Supported workflows.**
 
         - For training: provide both `train` and `valid`.
         - For testing only: provide `test` and omit `train` / `valid`.
@@ -152,7 +152,7 @@ class DataOrganizer:
         If any of the `train`, `valid`, or `test` are omitted, the corresponding
             attributes will be set to `None` or empty.
 
-    Example (training + validation):
+    **Example (training + validation).**
         >>> organizer = DataOrganizer(
         ...     train=training_configs,
         ...     valid=valid_configs,
@@ -161,7 +161,7 @@ class DataOrganizer:
         >>> sample = organizer.train[0]
         >>> test_sample = organizer.test["test_clean"][0]
 
-    Example (testing only):
+    **Example (testing only).**
         >>> organizer = DataOrganizer(
         ...     test=test_configs,
         ...     preprocessor=MyPreprocessor()

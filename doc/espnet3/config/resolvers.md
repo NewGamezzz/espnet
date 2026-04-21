@@ -2,31 +2,23 @@
 title: ESPnet3 Config Resolvers
 author:
   name: "Masao Someki"
-date: 2025-11-26
+date: 2026-04-15
 ---
 
 # ESPnet3 Config Resolvers
 
-ESPnet3 registers a small set of OmegaConf resolvers to pull external data into
-YAML configs at load time. These are defined in `espnet3.utils.config_utils` and are
-available in all stage configs.
-
-## ✅ At a glance
+## At a glance
 
 | Resolver | Description |
 | --- | --- |
-| `load_line` | Load lines from a text file into a list. |
-| `load_yaml` | Load a YAML file or a specific key from it. |
+| `load_line` | load lines from a text file into a list |
+| `self_name` | use the current config file stem |
 
-## load_line
-
-Use `load_line` to read a text file (one entry per line) and inject it into a
-config. This is commonly used for ASR or speech-to-text token lists, which are
-often easier to manage in a separate text file than inline YAML.
+## `load_line`
 
 Sample file:
 
-```
+```text
 <blank>
 <sos/eos>
 <unk>
@@ -36,41 +28,43 @@ Sample file:
 token_list: ${load_line:conf/token_list.txt}
 ```
 
-When the config is loaded, `token_list` becomes:
+When Python reads this config, `token_list` becomes:
 
-```yaml
-token_list:
-  - "<blank>"
-  - "<sos/eos>"
-  - "<unk>"
+```python
+["<blank>", "<sos/eos>", "<unk>"]
 ```
 
-## load_yaml
+So `load_line` is just a way to write a string list in a text file instead of
+inline YAML.
 
-Use `load_yaml` to load an entire YAML file or a single value from it.
+## `self_name`
 
-Sample file (`conf/train.yaml`):
+`self_name` resolves to the current config file stem.
+
+Example:
 
 ```yaml
-exp_tag: asr_template_train
+exp_tag: ${self_name:}
 exp_dir: ${recipe_dir}/exp/${exp_tag}
 ```
 
-```yaml
-exp_tag: ${load_yaml:conf/train.yaml,exp_tag}
-full_cfg: ${load_yaml:conf/train.yaml}
-```
-
-When the config is loaded, the values are resolved from the referenced file.
-
-Example of the resolved result in a second config:
+If the file is `conf/tuning/training_e_branchformer.yaml`, then:
 
 ```yaml
-exp_tag: asr_template_train
-full_cfg:
-  exp_tag: asr_template_train
-  exp_dir: ${recipe_dir}/exp/${exp_tag}
+exp_tag: training_e_branchformer
+exp_dir: ./exp/training_e_branchformer
 ```
 
-When a key is provided, it uses dot notation and raises an error if the key is
-missing.
+This is how TEMPLATE configs derive default names from the config filename.
+
+## Common use cases
+
+- keep large token lists out of YAML
+- read one-item-per-line vocab or symbol files
+- derive `exp_tag` from the config filename
+
+## Notes
+
+- use a path relative to the config file
+- each line becomes one list item
+- `self_name` uses the current config stem, not the full path

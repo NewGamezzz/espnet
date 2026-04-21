@@ -57,7 +57,7 @@ class AverageCheckpointsCallback(Callback):
     This can be useful to smooth out fluctuations in weights across the best-performing
     models and can lead to improved generalization performance at inference time.
 
-    Behavior:
+    **Behavior.**
         - Loads the state_dict from each of the top-K checkpoints saved by given
           ModelCheckpoint callbacks.
         - Averages the model parameters (keys starting with `model.`).
@@ -163,7 +163,7 @@ class MetricsLogger(Callback):
     """Log compact train and validation metric summaries.
 
     This callback owns the human-readable metric logging for the default ESPnet3
-    training loop. It handles three reporting points in one place:
+    training loop. It handles three reporting points in one place.
 
     - interval-based training batch summaries
     - end-of-epoch training summaries
@@ -190,10 +190,10 @@ class MetricsLogger(Callback):
         >>> cb = MetricsLogger(log_every_n_steps=200)
         >>> trainer = Trainer(callbacks=[cb, ...])
 
-        Example train log output:
+        **Example train log output.**
         `20epoch:train:4201-4400batch: iter_time=6.212e-05, loss=46.669`
 
-        Example validation log output:
+        **Example validation log output.**
         `epoch_summary:20epoch:valid: valid_time=1.42, acc=0.91, loss=0.83`
     """
 
@@ -394,7 +394,7 @@ def get_default_callbacks(
 ) -> List[Callback]:
     """Return a list of callbacks tailored for most training workflows.
 
-    Includes:
+    **Includes.**
         - `ModelCheckpoint` for saving the last model checkpoint (`save_last`)
         - One or more `ModelCheckpoint`s for saving the top-K checkpoints according to
             specific metrics
@@ -409,7 +409,7 @@ def get_default_callbacks(
         log_interval (int): Frequency (in training steps) to refresh the progress bar.
         best_model_criterion (List[Tuple[str, int, str]]): A list of criteria for
             saving top-K checkpoints.
-            Each item is a tuple: (name, top_k, mode), where:
+        Each item is a tuple ``(name, top_k, mode)`` where:
             - `name` (str): The name of the validation value to monitor
                 (e.g., "val/loss").
             - `top_k` (int): Number of best models to keep.

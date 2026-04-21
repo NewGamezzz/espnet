@@ -125,7 +125,7 @@ class LJSpeechTTSDataset(TorchDataset):
             corpus lives outside the recipe directory.
 
     Returns:
-        A Torch dataset whose items are dicts containing:
+        A Torch dataset whose items are dicts with:
         - ``speech``: float32 waveform array
         - ``text``: normalized transcript string
         - ``utt_id``: included only when ``include_utt_id=True``

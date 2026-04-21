@@ -2,7 +2,7 @@
 title: ESPnet3 Parallel
 author:
   name: "Masao Someki"
-date: 2025-11-26
+date: 2026-04-15
 ---
 
 # ⚡ ESPnet3 Parallel (`espnet3/parallel`) — developer landing
@@ -34,10 +34,10 @@ or capturing `self`.
 
 | Name | File | What you implement / use |
 | --- | --- | --- |
-| `EnvironmentProvider` | `espnet3/parallel/env_provider.py` | `build_env_local()` and `make_worker_setup_fn()` |
+| `EnvironmentProvider` | `espnet3/parallel/env_provider.py` | `build_env_local()` and `build_worker_setup_fn()` |
 | `InferenceProvider` | `espnet3/parallel/inference_provider.py` | Convenience provider for inference-time dataset/model |
 | `BaseRunner` | `espnet3/parallel/base_runner.py` | `forward(...)` (optional `batch_forward`) |
-| `set_parallel`, `make_client`, `parallel_for/map` | `espnet3/parallel/parallel.py` | Dask cluster selection and task submission |
+| `set_parallel`, `build_client`, `parallel_for/map` | `espnet3/parallel/parallel.py` | Dask cluster selection and task submission |
 
 ### Minimal contracts
 
@@ -57,7 +57,7 @@ See the full examples in: [Provider / Runner](./parallel/provider_runner.md)
 ### 2) Synchronous Dask (`parallel_map`/`parallel_for`)
 
 - You configure `cfg.parallel` and call `set_parallel(cfg.parallel)`
-- `BaseRunner` calls `provider.make_worker_setup_fn()` and registers it as a
+- `BaseRunner` calls `provider.build_worker_setup_fn()` and registers it as a
   Dask WorkerPlugin
 - tasks are submitted with worker-env injection (name-matching) and gathered
   back to the driver
@@ -82,7 +82,7 @@ stay alive while the cluster runs.
 ## ⚙️ Parallel config surface
 
 Parallel backends are selected by `cfg.parallel.env` and `cfg.parallel.options`.
-Implementation: `espnet3/parallel/parallel.py` (`make_client` / `_make_client`).
+Implementation: `espnet3/parallel/parallel.py` (`build_client` / `_build_client`).
 
 Supported `env` values include:
 
@@ -94,8 +94,13 @@ Supported `env` values include:
 
 Where to set this in a recipe:
 
-- training: `conf/train.yaml` → `parallel:`
-- see also: [Train config](../config/train_config.md)
+- training: `training.yaml` → `parallel:`
+- inference: `inference.yaml` → `parallel:`
+
+See also:
+
+- [Train config](../config/train_config.md)
+- [Inference config](../config/infer_config.md)
 
 ## 🧰 Design notes and pitfalls
 
@@ -107,6 +112,6 @@ Where to set this in a recipe:
 ## 📚 Next pages
 
 - [Provider / Runner](./parallel/provider_runner.md) — contracts, examples, execution modes
-- [Inference providers](./parallel/inference_provider.md) — example pattern for inference envs
+- [Inference provider](./parallel/inference_provider.md) — example pattern for inference envs
 - [Data preparation](./parallel/data_preparation.md) — example pipeline using provider/runner
 - [Multi-GPU / multi-node](./parallel/multiple_gpu.md) — example configs for Lightning/DDP + runners

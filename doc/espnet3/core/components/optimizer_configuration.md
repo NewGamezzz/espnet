@@ -1,87 +1,194 @@
 ---
-title: ESPnet3 - Optimiser and Scheduler Configuration
+title: ESPnet3 Optimizer And Scheduler Configuration
 author:
   name: "Masao Someki"
-date: 2025-11-26
+date: 2026-04-15
 ---
 
-## ⚙️ ESPnet3: Optimiser and Scheduler Configuration
+# ESPnet3 Optimizer And Scheduler Configuration
 
-ESPnet3 wraps PyTorch Lightning so that optimisers and schedulers can be defined
-purely from the Hydra configuration.  Two modes are supported by
-`espnet3.components.modeling.lightning_module.ESPnetLightningModule.configure_optimizers`:
+ESPnet3 wraps PyTorch Lightning so that optimizers and schedulers can be
+defined from YAML.
 
-1. a single optimiser/scheduler pair (`optimizer` + `scheduler`)
-2. multiple optimiser/scheduler pairs (`optimizers` + `schedulers`)
+Current implementation:
 
-The sections below describe both.
+- `espnet3.components.modeling.lightning_module.ESPnetLightningModule.configure_optimizers`
+- `espnet3.components.modeling.optimization_spec`
 
-### ✅ What lives in `configure_optimizers` vs YAML
+Two modes are supported:
 
-| Layer           | You control via YAML                               | ESPnet3 (`ESPnetLightningModule`) ensures            |
-| --------------- | -------------------------------------------------- | --------------------------------------------- |
-| `optimizer` / `optimizers` blocks   | Which optimiser classes and their hyperparameters | Correct parameter grouping and uniqueness     |
-| `scheduler` / `schedulers`  | Scheduler types and decay schedules    | Matching schedulers 1:1 with optimisers       |
-| Model parameter names       | Which parts of the model each entry sees | That every trainable param is assigned once |
+1. single optimizer path: `optimizer` + `scheduler`
+2. named multi-optimizer path: `optimizers` + `schedulers`
 
-### 1. Single optimiser
+## What lives in `configure_optimizers` vs YAML
 
-Use `optimizer` and `scheduler` when the entire model shares one optimiser.  The
-entries are passed directly to `hydra.utils.instantiate`, so any optimiser or
-scheduler from PyTorch (or a custom class) is supported.
+| Layer | You control via YAML | ESPnet3 ensures |
+| --- | --- | --- |
+| `optimizer` / `optimizers` | optimizer classes and hyperparameters | correct parameter grouping and uniqueness |
+| `scheduler` / `schedulers` | scheduler classes and decay settings | matching schedulers to optimizers |
+| model parameter names | which parameters each optimizer sees | every trainable parameter is assigned exactly once |
+
+## 1. Single optimizer path
+
+Use `optimizer` and `scheduler` when the whole model shares one optimizer.
 
 ```yaml
 optimizer:
-  _target_: torch.optimizer.AdamW
+  _target_: torch.optim.AdamW
   lr: 0.001
   weight_decay: 1.0e-2
 
 scheduler:
-  _target_: torch.optimizer.lr_scheduler.CosineAnnealingLR
+  _target_: torch.optim.lr_scheduler.CosineAnnealingLR
   T_max: 100000
+
+scheduler_interval: step
+scheduler_monitor:
 ```
 
-No additional wiring is necessary because ESPnet3 instantiates both objects, attaches
-the scheduler to the optimiser, and returns them to Lightning.
+Important points:
 
-### 2. Multiple optimisers
+- use `torch.optim.*`, not `torch.optimizer.*`
+- `optimizer` is instantiated with all trainable parameters
+- `scheduler` is instantiated with that optimizer
+- `scheduler_interval` must be `step` or `epoch`
+- `scheduler_monitor` is only needed for monitored epoch schedulers such as
+  `ReduceLROnPlateau`
 
-When different parts of the model need their own optimiser, switch to `optimizers`
-and `schedulers`.  Each entry contains a nested `optimizer` block and a `params`
-string that selects parameters whose names contain the substring.
+Example with a monitored scheduler:
+
+```yaml
+optimizer:
+  _target_: torch.optim.Adam
+  lr: 0.001
+
+scheduler:
+  _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  patience: 2
+  factor: 0.5
+
+scheduler_interval: epoch
+scheduler_monitor: valid/loss
+```
+
+## 2. Named multi-optimizer path
+
+Use `optimizers` and `schedulers` when different parameter groups need
+independent updates.
+
+This is the normal path for GAN training.
 
 ```yaml
 optimizers:
-  - optimizer:
-      _target_: torch.optimizer.Adam
-      lr: 0.0005
-    params: encoder
-  - optimizer:
-      _target_: torch.optimizer.Adam
-      lr: 0.001
-    params: decoder
+  generator:
+    optimizer:
+      _target_: torch.optim.Adam
+      lr: 0.0002
+    params: generator
+    accum_grad_steps: 1
+    step_every_n_iters: 1
+    gradient_clip_val: 1.0
+    gradient_clip_algorithm: norm
+
+  discriminator:
+    optimizer:
+      _target_: torch.optim.Adam
+      lr: 0.0002
+    params: discriminator
+    accum_grad_steps: 1
+    step_every_n_iters: 1
 
 schedulers:
-  - scheduler:
-      _target_: torch.optimizer.lr_scheduler.StepLR
-      step_size: 5
-      gamma: 0.5
-  - scheduler:
-      _target_: torch.optimizer.lr_scheduler.StepLR
-      step_size: 10
-      gamma: 0.1
+  generator:
+    scheduler:
+      _target_: torch.optim.lr_scheduler.LinearLR
+      start_factor: 1.0
+      end_factor: 0.5
+      total_iters: 1000
+    interval: step
+
+  discriminator:
+    scheduler:
+      _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+      patience: 2
+      factor: 0.5
+    interval: epoch
+    monitor: valid/discriminator/loss
 ```
 
-Important rules enforced by `configure_optimizers`:
+Important rules:
 
-- Do not mix the single- and multi-optimiser modes.  Either use `optimizer` +
-  `scheduler` or `optimizers` + `schedulers`.
-- Every optimiser entry must include `params` and `optimizer`.
-- Each trainable parameter must match exactly one optimiser.  ESPnet3 raises an
-  error if parameters are missing or assigned twice.
-- The number of scheduler entries must equal the number of optimisers.  They are
-  matched by position, so the first scheduler controls the first optimiser, etc.
+- names under `optimizers` and `schedulers` must match exactly
+- every optimizer entry must include `params` and `optimizer`
+- every trainable parameter must match exactly one optimizer
+- top-level `scheduler_interval` and `scheduler_monitor` are not used here
+- per-optimizer grad settings live under `optimizers.<name>`
 
-Under the hood ESPnet3 wraps the instantiated optimisers with
-`MultipleOptim`/`MultipleScheduler` so that Lightning sees them as a single
-optimiser while still stepping all underlying objects together.
+## Parameter routing
+
+`params` is a dot-boundary-aware selector over parameter names.
+
+That means the YAML decides which part of the model each optimizer updates.
+
+If parameters are:
+
+- missing from all optimizers
+- or matched by more than one optimizer
+
+ESPnet3 raises an error.
+
+## Per-optimizer grad controls
+
+Each named optimizer may define:
+
+- `accum_grad_steps`
+- `step_every_n_iters`
+- `gradient_clip_val`
+- `gradient_clip_algorithm`
+
+These are enforced by ESPnet3's manual optimization path, not by Lightning's
+global trainer settings.
+
+## Scheduler stepping rules
+
+Single optimizer path:
+
+- `scheduler_interval: step|epoch`
+- optional `scheduler_monitor`
+
+Named multi-optimizer path:
+
+- `schedulers.<name>.interval: step|epoch`
+- `schedulers.<name>.monitor`
+
+Step-based schedulers are stepped immediately after that optimizer updates.
+Epoch-based schedulers are stepped at epoch end.
+
+## Model-side contract
+
+Single optimizer path expects the model to return a plain tensor loss.
+
+Named multi-optimizer path expects:
+
+- `OptimizationStep`
+- or `list[OptimizationStep]`
+
+This is how ESPnet3 knows which optimizer should update.
+
+See [Multiple optimizers and schedulers](./multiple_optimizers_schedulers.md)
+for the full model-side contract.
+
+## What not to mix
+
+Do not mix:
+
+- `optimizer` with `optimizers`
+- `scheduler` with `schedulers`
+
+ESPnet3 rejects mixed configuration.
+
+## Related pages
+
+- [Multiple optimizers and `OptimizationStep`](./multiple_optimizers_schedulers.md)
+- [Training optimizer user guide](../../stages/train/optim_scheduler.md)
+- [Training configuration](../../config/train_config.md)

@@ -170,7 +170,7 @@ class MiniAn4Builder(DatasetBuilder):
             subprocess.CalledProcessError: If audio conversion command fails.
 
         Notes:
-            Build flow:
+            **Build flow.**
             1. Read AN4 transcripts for configured splits.
             2. Convert source SPH to mono WAV (via ``sph2pipe``) under
                ``data/wav/<split>/``.

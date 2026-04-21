@@ -1,84 +1,157 @@
 ---
-title: 📘 ESPnet3 Measurement Stage
+title: 📘 ESPnet3 Measure Stage
 author:
   name: "Masao Someki"
-date: 2025-11-26
+date: 2026-04-15
 ---
 
-# ESPnet3 Measurement Stage
+# ESPnet3 Measure Stage
 
-This document explains the **measurement stage** in ESPnet3, implemented in:
+This page describes the current measurement flow in ESPnet3.
 
-* `espnet3.systems.base.measure.measure`
-* `espnet3.components.metrics.abs_metric.AbsMetrics`
+The stage entrypoint is:
 
-Measurement reads the `ref.scp` and `hyp.scp` files produced by inference and
-writes a `measures.json` summary.
+- `espnet3.systems.base.metric.measure`
 
-For the full metric interface (how `AbsMetrics` is called, how SCPs are aligned,
-and how to implement custom metrics), see:
+Custom metrics are implemented with:
 
-- [ESPnet3 Metrics](../core/components/metrics.md)
+- `espnet3.components.metrics.base_metric.BaseMetric`
+
+`measure` reads inference outputs under `inference_dir/<test_name>/`, computes
+one or more metrics, and writes a single summary file:
+
+```text
+<inference_dir>/metrics.json
+```
 
 ## Quick usage
 
-### Run
-
 ```bash
-python run.py --stages measure --measure_config conf/measure.yaml
+python run.py --stages measure --metrics_config conf/metrics.yaml
 ```
 
-### Configure (in `measure.yaml`)
+The template config is:
 
-Keep the core settings in `measure.yaml`. For the full list, see
-[Measurement configuration](../config/measure_config.md).
+- `egs3/TEMPLATE/asr/conf/metrics.yaml`
 
-| Config section | Description |
-| -------------- | ----------- |
-| `dataset` | Dataset organizer and test splits. Measurement uses this to iterate test set names. |
-| `metrics` | List of metric definitions. Each entry specifies `metric` and optional `inputs`. |
-| `infer_dir` | Location of `.scp` files under `infer_dir/<test_name>/`. |
 
-<!-- TODO(masao): update this section after the PR that removes the dataset dependency in measure(). -->
+## What gets passed to a metric
 
-### Outputs
+Each entry in `metrics.yaml` is handled like this:
 
-Measurement writes:
+1. instantiate `metrics_config.metrics[*].metric`
+2. resolve input SCP paths for one `test_name`
+3. call the metric class
 
-```text
-<infer_dir>/measures.json
-```
 
-## Developer Notes
 
-### 🧩 Config fields used during measurement
+`measure()` does not preload SCP contents into lists. It resolves file paths and
+passes them directly to each metric.
 
-A minimal `measure_config` for measurement looks like:
+Example config:
 
 ```yaml
-infer_dir: exp/asr_example/infer
+metrics:
+  - metric:
+      _target_: espnet3.systems.asr.metrics.wer.WER
+      ref_key: ref
+      hyp_key: hyp
+```
 
-dataset:
-  _target_: espnet3.components.data.data_organizer.DataOrganizer
-  test:
-    - name: test-clean
-      dataset:
-        _target_: ...
-    - name: test-other
-      dataset:
-        _target_: ...
+For `test_name = test-clean`, `measure()` instantiates that class and passes:
+
+```python
+{
+    "ref": Path("exp/.../inference/test-clean/ref.scp"),
+    "hyp": Path("exp/.../inference/test-clean/hyp.scp"),
+}
+```
+
+So the metric contract is:
+
+- `data`: `Dict[str, Path]`
+- `test_name`: current test-set name
+- `output_dir`: the root `inference_dir`
+
+That means the metric class itself reads SCP contents.
+
+For aligned SCP inputs, the normal implementation pattern is
+`BaseMetric.iter_inputs(...)`.
+
+## Sample config
+
+```yaml
+recipe_dir: .
+exp_tag:
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+inference_dir: ${exp_dir}/${self_name:}
 
 metrics:
   - metric:
       _target_: espnet3.systems.asr.metrics.wer.WER
+      ref_key: ref
+      hyp_key: hyp
+      clean_types:
+
+  - metric:
+      _target_: espnet3.systems.asr.metrics.cer.CER
+      ref_key: ref
+      hyp_key: hyp
+      clean_types:
+```
+
+## Test-set resolution
+
+`measure()` resolves test sets in this order:
+
+1. If `metrics_config.dataset.test` exists, use each item's `name`.
+2. Otherwise, scan `metrics_config.inference_dir` for subdirectories.
+
+This is why the current template no longer requires duplicating test-set
+definitions in `metrics.yaml`.
+
+## Inputs and SCP filenames
+
+Each metric can receive inputs in two ways.
+
+If `inputs` is defined in config:
+
+```yaml
+metrics:
+  - metric:
+      _target_: my_pkg.metrics.MyMetric
     inputs:
       ref: ref
       hyp: hyp
+      prompt: prompt
 ```
 
-### Metric interface
+then ESPnet3 resolves:
 
-Metric classes are defined as `AbsMetrics` subclasses and are instantiated from
-`measure.yaml`. See the core documentation for details:
+- `data["ref"] -> <test_name>/ref.scp`
+- `data["hyp"] -> <test_name>/hyp.scp`
+- `data["prompt"] -> <test_name>/prompt.scp`
 
-- [ESPnet3 Metrics](../core/components/metrics.md)
+If `inputs` is omitted, `measure()` falls back to the metric instance's
+`ref_key` and `hyp_key`.
+
+## Outputs
+
+The summary file format is:
+
+```text
+<inference_dir>/
+  metrics.json
+  test-clean/
+    ref.scp
+    hyp.scp
+    wer_alignment
+    cer_alignment
+```
+
+`metrics.json` is keyed by metric class path, then by test-set name.
+
+## Related pages
+
+- [Metrics configuration](../config/measure_config.md)
+- [Custom metrics](../core/components/metrics.md)

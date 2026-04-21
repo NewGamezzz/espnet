@@ -42,7 +42,7 @@ def _resolve_test_sets(metrics_config: DictConfig) -> list[str]:
 def measure(metrics_config: DictConfig):
     """Compute metrics for each test set and write a metrics JSON file.
 
-    Test sets are resolved in the following order:
+    **Test-set resolution order.**
 
         1. If ``metrics_config.dataset.test`` is defined, use the configured
            ``name`` fields as-is.
@@ -50,7 +50,7 @@ def measure(metrics_config: DictConfig):
            non-hidden subdirectory as a test set.
 
     Example:
-        If ``inference_dir`` contains:
+        **If ``inference_dir`` contains.**
 
         .. code-block:: text
 

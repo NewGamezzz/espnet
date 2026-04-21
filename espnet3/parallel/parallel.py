@@ -262,7 +262,7 @@ def wrap_func_with_worker_env(func: Callable) -> Callable:
     when they match parameter names of the function and are not explicitly
     provided by the caller.
 
-    **Conflict detection**:
+    **Conflict detection.**
         If both the worker environment and the call's `kwargs` provide the same
         argument name, the wrapper raises a ``ValueError`` before calling the
         underlying function.
@@ -274,17 +274,15 @@ def wrap_func_with_worker_env(func: Callable) -> Callable:
             a ``**kwargs`` catch-all.
 
     Returns:
-        Callable:
-            A wrapped function that:
-              1. Runs on the worker.
-              2. Retrieves the environment dict from ``worker.plugins["env"]``.
-              3. Detects and errors on conflicts with explicit keyword arguments.
-              4. Supplies any missing keyword arguments from the environment.
+        Callable: Wrapped function that
+            1. runs on the worker,
+            2. retrieves the environment dict from ``worker.plugins["env"]``,
+            3. detects conflicts with explicit keyword arguments, and
+            4. supplies missing keyword arguments from the environment.
 
     Raises:
-        ValueError:
-            If there is at least one parameter name that is present both in the
-            worker environment and in the keyword arguments provided to the call.
+        ValueError: If a parameter name is present both in the worker
+            environment and in the keyword arguments provided to the call.
 
     Notes:
         - Only environment keys that match the function's parameter names
@@ -434,7 +432,7 @@ def parallel_map(
 ) -> list:
     """Apply a function to an iterable of inputs in parallel using Dask.
 
-    This helper takes care of:
+    **This helper takes care of.**
       - Creating (or reusing) a Dask client according to the global or
         provided configuration.
       - Optionally registering a per-worker environment via `setup_fn`,
@@ -505,7 +503,7 @@ def parallel_for(
 ) -> Generator:
     """Dispatch tasks to Dask and iterate over results as they complete.
 
-    This helper:
+    **This helper.**
       - Creates (or reuses) a Dask client based on the global/explicit config.
       - Optionally registers a per-worker environment via `setup_fn` and makes
         its returned dict available to `func` automatically.
@@ -515,7 +513,7 @@ def parallel_for(
       - Wraps `func` with `wrap_func_with_worker_env` so any missing keyword
         parameters can be injected from the worker environment.
 
-    Iteration order:
+    **Iteration order.**
         Results are yielded in **completion order** (using `as_completed`),
         not in the original order of `args`.
 

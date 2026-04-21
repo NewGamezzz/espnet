@@ -173,12 +173,12 @@ def get_job_class(cluster, spec_path=None):
 class BaseRunner(ABC):
     """A thin orchestration layer to run static ``forward`` over indices.
 
-    This class handles:
+    **This class handles.**
         - Switching among local, parallel, and asynchronous (distributed) modes.
         - Injecting per-worker environments supplied by an :class:`EnvironmentProvider`.
         - Keeping ``forward`` as a ``@staticmethod`` for pickle-safety.
 
-    Subclass contract:
+    **Subclass contract.**
         - Implement ``@staticmethod forward(idx, dataset, model, **env) -> Any``
           without capturing ``self``. ``idx`` may be a single index or a batch
           of indices depending on ``batch_size``.
@@ -315,7 +315,7 @@ class BaseRunner(ABC):
     async def _run_async(self, indices: Sequence[int]) -> List[Any] | None:
         """Submit shards to a Dask cluster and gather or write results.
 
-        Workflow:
+        **Workflow.**
             1) Emit per-shard JSON specs to ``async_specs_dir``.
             2) Submit worker entrypoints that reconstruct runner/provider and run.
             3) Write results to ``async_result_dir``.

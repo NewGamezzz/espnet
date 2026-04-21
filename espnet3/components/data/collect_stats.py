@@ -38,7 +38,7 @@ def collect_stats_batch(
 ):
     """Compute feature statistics for a batch of dataset items.
 
-    This helper:
+    **This helper.**
       - Materializes a list of dataset items for the given indices.
       - Collates them into a mini-batch using ``collate_fn``.
       - Runs ``model.collect_feats(...)`` under ``torch.no_grad()``.

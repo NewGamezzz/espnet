@@ -88,13 +88,13 @@ def infer(config: DictConfig):
 
     This entrypoint expects each inference result to be a dict containing a
     sample identifier under ``utt_id`` (or the configured ``idx_key``), plus
-    one value per output field. The final SCP files are always written under:
+    one value per output field. The final SCP files are always written under.
 
     .. code-block:: text
 
         ${inference_dir}/<test_name>/<field>.scp
 
-    where each line is:
+    **Each SCP line.**
 
     .. code-block:: text
 
@@ -102,14 +102,14 @@ def infer(config: DictConfig):
 
     Primitive values are written directly into SCP files.
 
-    Example return value from ``output_fn`` or directly from the inference
-    model:
+    **Example return value from ``output_fn`` or directly from the inference
+    model.**
 
     .. code-block:: python
 
         {"utt_id": "utt1", "hyp": "hello world"}
 
-    Generated SCP:
+    **Generated SCP.**
 
     .. code-block:: text
 
@@ -120,7 +120,7 @@ def infer(config: DictConfig):
     :func:`espnet3.utils.writer_utils.write_artifact`. That function documents
     the detailed rules for JSON, NPY, pickle, WAV, and custom writer cases.
 
-    Example WAV configuration:
+    **Example WAV configuration.**
 
     .. code-block:: yaml
 
@@ -129,7 +129,7 @@ def infer(config: DictConfig):
             type: wav
             sample_rate: 16000
 
-    Example return value from ``output_fn``:
+    **Example return value from ``output_fn``.**
 
     .. code-block:: python
 

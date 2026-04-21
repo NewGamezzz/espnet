@@ -231,7 +231,7 @@ class InferenceSession:
     for use outside the stage runner, for example from a ``pixi shell`` session
     or a standalone Python environment after installing the model dependencies.
 
-    The session can be built from:
+    **Construction paths.**
 
     - an inference config via :meth:`from_config`
     - a packaged model tag via :meth:`from_pretrained`

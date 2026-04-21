@@ -235,7 +235,7 @@ class ASRTransducerTask(AbsTask):
             args: Task arguments.
             train: Training mode.
 
-        Return:
+        Returns:
             : Callable collate function.
 
         """
@@ -253,7 +253,7 @@ class ASRTransducerTask(AbsTask):
             args: Task arguments.
             train: Training mode.
 
-        Return:
+        Returns:
             : Callable pre-processing function.
 
         """
@@ -297,7 +297,7 @@ class ASRTransducerTask(AbsTask):
             train: Training mode.
             inference: Inference mode.
 
-        Return:
+        Returns:
             retval: Required task data.
 
         """
@@ -319,7 +319,7 @@ class ASRTransducerTask(AbsTask):
             train: Training mode.
             inference: Inference mode.
 
-        Return:
+        Returns:
             retval: Optional task data.
 
         """
@@ -336,7 +336,7 @@ class ASRTransducerTask(AbsTask):
             cls: ASRTransducerTask object.
             args: Task arguments.
 
-        Return:
+        Returns:
             model: ASR Transducer model.
 
         """

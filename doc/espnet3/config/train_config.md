@@ -1,207 +1,219 @@
 ---
-title: ESPnet3 Train Configuration
+title: ESPnet3 Training Configuration
 author:
   name: "Masao Someki"
-date: 2025-11-26
+date: 2026-04-15
 ---
 
-## 🧩 ESPnet3 Train Configuration
+# ESPnet3 Training Configuration
 
-This page explains the `train.yaml` schema used by the train stage.
-For how configs map to stages, see [Config overview](./index.md).
+This page describes the current `training.yaml` used by:
 
-## Minimum required keys (typical train run)
-
-The exact required keys depend on your system and model, but a standard
-train stage usually needs:
-
-Required:
-
-- `model` or `task` (one of them) for model construction
-- `dataset` (train/valid definitions)
-- `dataloader`
-- `optimizer` and `scheduler` (or `optimizers` and `schedulers`)
-- `trainer`
-- `exp_dir` and `stats_dir`
-
-Common optional:
-
-- `create_dataset` (only for the create_dataset stage)
-- `tokenizer` (ASR-style text processing)
-- `num_device`, `num_nodes`
-- `dataset_dir`, `data_dir`, `recipe_dir`
-
-Minimal example (custom model path):
-
-```yaml
-exp_dir: exp/my_exp
-stats_dir: exp/my_exp/stats
-
-model:
-  _target_: src.my_model.MyModel
-
-dataset:
-  _target_: espnet3.components.data.data_organizer.DataOrganizer
-  train: []
-  valid: []
-
-dataloader:
-  collate_fn:
-    _target_: espnet2.train.collate_fn.CommonCollateFn
-    int_pad_value: -1
-  train:
-    iter_factory: null
-    batch_size: 4
-    shuffle: true
-  valid:
-    iter_factory: null
-    batch_size: 4
-    shuffle: false
-
-optimizer:
-  _target_: torch.optimizer.Adam
-  lr: 0.001
-
-scheduler:
-  _target_: espnet2.schedulers.warmup_lr.WarmupLR
-  warmup_steps: 1000
-
-trainer:
-  accelerator: auto
-  devices: 1
-  max_epochs: 1
+```bash
+python run.py --stages create_dataset collect_stats train --training_config conf/training.yaml
 ```
 
-### ✅ Config sections overview
+## Minimum required keys
+
+Typical training runs need:
+
+- `task` or `model`
+- `dataset`
+- `dataloader`
+- `trainer`
+- `optimizer` and `scheduler`, or `optimizers` and `schedulers`
+- `exp_dir`
+- `stats_dir`
+
+Common optional sections:
+
+- `create_dataset`
+- `tokenizer`
+- `parallel`
+- `fit`
+- `best_model_criterion`
+
+## Config sections overview
 
 | Section | Description |
 | --- | --- |
-| `num_device`, `num_nodes` | Resource counts for training. |
-| `task` | Task class and model-related settings used by the ESPnet task stack. |
-| `recipe_dir`, `data_dir`, `exp_dir`, ... | Path scaffold for outputs, logs, and cached assets. |
-| `create_dataset` | Dataset creation function and parameters for the create_dataset stage. |
-| `dataset` | Train/valid dataset splits and DataOrganizer definitions. |
-| `tokenizer` | Optional tokenizer text builder/config (mostly for ASR-style recipes). |
-| `dataloader` | Collate, iterator, sampler, and sharding settings. |
-| `optimizer`, `scheduler`, `best_model_criterion` | Optimization setup used by training. |
-| `trainer`, `fit` | Lightning Trainer arguments and fit-time options. |
+| `num_device`, `num_nodes` | resource counts for training |
+| `task` | ESPnet task entrypoint used to build an ESPnet2-style model |
+| `recipe_dir`, `data_dir`, `exp_dir`, ... | path scaffold for outputs and cached assets |
+| `create_dataset` | dataset builder kwargs used by `create_dataset` |
+| `dataset` | train and valid dataset definitions resolved by `DataOrganizer` |
+| `tokenizer` | optional tokenizer or text-builder settings |
+| `dataloader` | collate, iterator, sampler, and sharding settings |
+| `optimizer`, `scheduler`, `optimizers`, `schedulers` | optimization setup |
+| `trainer`, `fit` | Lightning trainer arguments and fit-time options |
 
-### Core config layout
+## Default values
 
-Organise YAML files into small, purpose-driven sections. The example below is
-from an ASR recipe, so it includes `tokenizer` settings that may not appear in
-all tasks.
+| Key | Default value |
+| --- | --- |
+| `num_device` | `1` |
+| `num_nodes` | `1` |
+| `recipe_dir` | `.` |
+| `data_dir` | `${recipe_dir}/data` |
+| `exp_tag` | `${self_name:}` |
+| `exp_dir` | `${recipe_dir}/exp/${exp_tag}` |
+| `stats_dir` | `${recipe_dir}/exp/stats` |
+| `optimizer._target_` | `torch.optim.Adam` |
+| `optimizer.lr` | `0.002` |
+| `scheduler._target_` | `espnet2.schedulers.warmup_lr.WarmupLR` |
+| `scheduler.warmup_steps` | `15000` |
+| `scheduler_interval` | `step` |
+| `parallel.env` | `local` |
+| `parallel.n_workers` | `1` |
 
-TODO: Add a link to a real recipe config example here.
+
+## Typical path scaffold
 
 ```yaml
 num_device: 1
 num_nodes: 1
-task:  # Task class and model-related config
 
 recipe_dir: .
 data_dir: ${recipe_dir}/data
-exp_tag: asr_template_train
+exp_tag: ${self_name:}
 exp_dir: ${recipe_dir}/exp/${exp_tag}
 stats_dir: ${recipe_dir}/exp/stats
 dataset_dir: /path/to/your/dataset
+```
+
+`exp_tag` is important because it participates directly in experiment directory
+naming.
+
+By default, TEMPLATE `training.yaml` uses:
+
+```yaml
+exp_tag: ${self_name:}
+```
+
+That means `exp_tag` defaults to the config filename. For example,
+`training_e_branchformer.yaml` resolves to:
+
+```yaml
+exp_tag: training_e_branchformer
+```
+
+See [Resolvers](./resolvers.md) for `self_name`.
+
+## Core config layout
+
+This section should be read as a user-authored override config, not as the full
+TEMPLATE default.
+
+`mini_an4` and `librispeech_100` both keep the default path scaffold from
+`egs3/TEMPLATE/asr/conf/training.yaml` and only override the task-specific
+parts they need.
+
+```yaml
+task: espnet2.tasks.asr.ASRTask
 
 create_dataset:
-  func: src.create_dataset.create_dataset
-  dataset_dir: ${dataset_dir}
+  recipe_dir: ${recipe_dir}
 
 dataset:
-  _target_: espnet3.components.data.data_organizer.DataOrganizer
-  train: []
-  valid: []
+  train:
+    - data_src_args:
+        split: train
+  valid:
+    - data_src_args:
+        split: valid
 
 tokenizer:
-  text_builder:
-    func: src.tokenizer.gather_training_text
-    dataset_dir: ${dataset_dir}
+  vocab_size: 5000
 
 dataloader:
-  collate_fn:
-    _target_: espnet2.train.collate_fn.CommonCollateFn
-    int_pad_value: -1
+  train:
+    iter_factory:
+      batches:
+        type: sorted
+        batch_size: 16
 
 optimizer:
-  _target_: torch.optimizer.Adam
   lr: 0.002
 
 scheduler:
-  _target_: espnet2.schedulers.warmup_lr.WarmupLR
   warmup_steps: 15000
 
 trainer:
-  accelerator: auto
-  devices: ${num_device}
-  num_nodes: ${num_nodes}
+  log_every_n_steps: 100
+  max_epochs: 10
 ```
 
-Hydra instantiates each `_target_` at runtime, so the same pattern works for
-ESPnet-provided components or your own classes.
+This example matches how real recipes usually work:
 
-### Parallel execution
-Parallel execution is documented separately:
+- default path values usually stay in TEMPLATE:
 
-- [Provider / Runner](../core/parallel/provider_runner.md)
-- [Multi-GPU / multi-node](../core/parallel/multiple_gpu.md)
+| Key | Default value |
+| --- | --- |
+| `recipe_dir` | `.` |
+| `data_dir` | `${recipe_dir}/data` |
+| `exp_tag` | `${self_name:}` |
+| `exp_dir` | `${recipe_dir}/exp/${exp_tag}` |
+| `stats_dir` | `${recipe_dir}/exp/stats` |
+- local recipes often omit `data_src` and use `${recipe_dir}/dataset/__init__.py`
 
-### Model definition
-If `task` is set, ESPnet3 uses the ESPnet2 task-side model definition. This lets
-you reuse ESPnet2 recipe configs by placing the familiar model fields under
-`model` and keeping the ESPnet2-style structure intact.
+## `create_dataset`
 
-If you want a custom model (or an ESPnet3-only model that is not part of the
-ESPnet2 task stack), leave `task` unset and instantiate the model directly via
-Hydra.
+`create_dataset` is the config block for the `create_dataset` stage.
+
+The values in this block are forwarded to `DatasetBuilder` methods.
+
+```yaml
+create_dataset:
+  recipe_dir: ${recipe_dir}
+  source_dir: ${dataset_dir}
+```
+
+See these pages for details:
+
+- [Create dataset stage](../stages/create-dataset.md)
+- [Dataset references and builders](../core/components/datasets.md)
 
 
-Two common patterns:
+## `dataset`
 
-1. **Reuse ESPnet models**
-   ```python
-   from omegaconf import OmegaConf
+Dataset entries use `DataOrganizer` and dataset references.
 
-   from espnet3.components.modeling.lightning_module import ESPnetLightningModule
-   from espnet3.utils.task_utils import get_espnet_model
+```yaml
+dataset:
+  recipe_dir: ${recipe_dir}
+  train:
+    - data_src_args:
+        split: train
+    - data_src: egs3.librispeech_100.asr.dataset
+      data_src_args:
+        split: train-clean-100
+  valid:
+    - data_src_args:
+        split: valid
+```
 
-   model_cfg = OmegaConf.to_container(cfg.model, resolve=True)
-   espnet_model = get_espnet_model(cfg.task, model_cfg)
-   lit_model = ESPnetLightningModule(espnet_model, cfg)
-   ```
+Each dataset entry may resolve by:
 
-2. **Instantiate custom models**
-   ```python
-   from hydra.utils import instantiate
+- dataset tag
+- explicit module path
+- omitted `data_src` -> `${recipe_dir}/dataset/__init__.py`
 
-   from espnet3.components.modeling.lightning_module import ESPnetLightningModule
+Only `data_src_args` is passed to `Dataset(...)`.
 
-   custom_model = instantiate(cfg.model)
-   lit_model = ESPnetLightningModule(custom_model, cfg)
-   ```
+See [Dataset references and builders](../core/components/datasets.md) for
+`data_src` details.
 
-Both feed directly into the Lightning trainer specified by `trainer`.
+## `dataloader`
 
-### Optimisers and schedulers
+Two common modes:
 
-ESPnet3 supports single or multiple optimiser setups. See
-`../core/components/optimizer_configuration.md` for the rules enforced by
-`ESPnetLightningModule.configure_optimizers` (matching parameter groups, scheduler
-counts, etc.).
+1. ESPnet iterator mode through `iter_factory`
+2. plain PyTorch DataLoader mode with `iter_factory: null`
 
-### Dataloader configuration
+See [Dataloader and Collate](../stages/train/dataloader.md) for `iter_factory`
+details, supported iterator factories, and full config examples.
 
-`dataloader` controls the collate function and the iterator strategy for
-`train` and `valid`. ESPnet3 supports two paths:
-
-1. **ESPnet iterator (SequenceIterFactory)**: use `iter_factory` + `batches`
-   to build sequence-based batch samplers (the default in templates).
-2. **Standard PyTorch DataLoader**: set `iter_factory: null` and use
-   `batch_size`, `num_workers`, and `shuffle`.
-
-**SequenceIterFactory example**
+Sequence iterator example:
 
 ```yaml
 dataloader:
@@ -209,8 +221,6 @@ dataloader:
     _target_: espnet2.train.collate_fn.CommonCollateFn
     int_pad_value: -1
   train:
-    multiple_iterator: false
-    num_shards: 1
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
       shuffle: true
@@ -221,22 +231,11 @@ dataloader:
           - ${stats_dir}/train/feats_shape
         batch_size: 4
         batch_bins: 4000000
-  valid:
-    multiple_iterator: false
-    num_shards: 1
-    iter_factory:
-      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
-      shuffle: false
-      collate_fn: ${dataloader.collate_fn}
-      batches:
-        type: numel
-        shape_files:
-          - ${stats_dir}/valid/feats_shape
-        batch_size: 4
-        batch_bins: 4000000
 ```
 
-**Standard DataLoader example**
+`multiple_iterator` in ESPnet2 is not supported in current ESPnet3.
+
+Standard DataLoader example:
 
 ```yaml
 dataloader:
@@ -255,46 +254,186 @@ dataloader:
     shuffle: false
 ```
 
-To enable sharded datasets, set `multiple_iterator: true` and `num_shards`,
-and use `{shard_idx}` in `shape_files` so the builder can swap in the shard
-index at runtime.
+## `optimizer` / `scheduler`
 
-### Trainer parameters
+Single optimizer path:
 
-Most fields under `trainer` are passed straight to `lightning.pytorch.Trainer`.
-Objects that need construction (loggers, callbacks, profilers) should be listed
-with `_target_` entries so ESPnet3 can instantiate them before handing them to
-Lightning.
+```yaml
+optimizer:
+  _target_: torch.optim.Adam
+  lr: 0.001
+
+scheduler:
+  _target_: espnet2.schedulers.warmup_lr.WarmupLR
+  warmup_steps: 1000
+
+scheduler_interval: step
+scheduler_monitor:
+```
+
+`scheduler_interval` and `scheduler_monitor` work as follows:
+
+| Tag | Description |
+| --- | --- |
+| `scheduler_interval: step` | step the scheduler after optimizer updates |
+| `scheduler_interval: epoch` | step the scheduler at epoch boundaries |
+| `scheduler_monitor` | metric name used by monitored schedulers such as `ReduceLROnPlateau` |
+
+Notes:
+
+- `step` is the common choice for schedulers such as `WarmupLR`
+- `epoch` is used when the scheduler should react once per epoch
+- `scheduler_monitor` is only needed for schedulers that require a monitored value
+- use the same metric key that appears in logs, for example `valid/loss`
+
+Named multi-optimizer path:
+
+See [Multiple optimizers and schedulers](../core/components/multiple_optimizers_schedulers.md)
+for the full behavior.
+
+```yaml
+optimizers:
+  generator:
+    optimizer:
+      _target_: torch.optim.Adam
+      lr: 0.0002
+    params: generator
+    gradient_clip_val: 1.0
+    gradient_clip_algorithm: norm
+
+  discriminator:
+    optimizer:
+      _target_: torch.optim.Adam
+      lr: 0.0002
+    params: discriminator
+
+schedulers:
+  generator:
+    scheduler:
+      _target_: torch.optim.lr_scheduler.LinearLR
+      total_iters: 1000
+    interval: step
+
+  discriminator:
+    scheduler:
+      _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+      patience: 2
+    interval: epoch
+    monitor: valid/discriminator/loss
+```
+
+## `trainer`
+
+`trainer` maps to Lightning trainer construction through
+`ESPnet3LightningTrainer`.
+
+Example:
 
 ```yaml
 trainer:
-  accelerator: gpu
-  devices: 4
-  num_nodes: 1
-  accumulate_grad_batches: 1
-  gradient_clip_val: 1.0
-  log_every_n_steps: 500
-  max_epochs: 70
-
-  logger:
-    - _target_: lightning.pytorch.loggers.TensorBoardLogger
-      save_dir: ${exp_dir}/tensorboard
-      name: tb_logger
-    - _target_: lightning.pytorch.loggers.WandbLogger
-      project: espnet3
-      name: ${exp_tag}
-      save_dir: ${exp_dir}/wandb
-
-  callbacks:
-    # This AverageCheckpointsCallback is included as a default callback without writing here.
-    # We included this as an example.
-    - _target_: espnet3.components.callbacks.default_callbacks.AverageCheckpointsCallback
-      output_dir: ${exp_dir}
-      best_ckpt_callbacks: []
-
-fit:
-  ckpt_path: ${exp_dir}/checkpoints/last.ckpt
+  accelerator: auto
+  devices: ${num_device}
+  num_nodes: ${num_nodes}
+  max_epochs: 10
+  log_every_n_steps: 100
 ```
 
-With this structure, ESPnet3 configurations stay modular while scaling from
-single-GPU experiments to large cluster runs with minimal changes.
+In multi-optimizer mode, trainer-level gradient clipping should not be used.
+See [Multiple optimizers and schedulers](../core/components/multiple_optimizers_schedulers.md)
+for details.
+
+## Parallel execution
+
+Minimal local example:
+
+```yaml
+parallel:
+  env: local
+  n_workers: 1
+```
+
+Minimal SLURM example:
+
+```yaml
+parallel:
+  env: slurm
+  n_workers: 8
+  options:
+    queue: gpu
+    cores: 8
+    processes: 1
+    memory: 16GB
+    walltime: 30:00
+    job_extra_directives:
+      - "--gres=gpu:1"
+```
+
+Parallel execution details are documented here:
+
+- [Provider / Runner](../core/parallel/provider_runner.md)
+- [Multi-GPU / multi-node](../core/parallel/multiple_gpu.md)
+
+## Model definition
+
+If `task` is set, ESPnet3 uses the ESPnet2 task-side model definition. This is
+the normal way to reuse ESPnet2-style model config blocks.
+
+If you want a custom model, leave `task` unset and instantiate the model
+directly via Hydra in `model`.
+
+Example with `task`:
+
+```yaml
+task: espnet2.tasks.asr.ASRTask
+
+model:
+  frontend: default
+  encoder: e_branchformer
+  decoder: transformer
+  normalize: global_mvn
+  normalize_conf:
+    stats_file: ${stats_dir}/train/feats_stats.npz
+```
+
+In this case, `model` is interpreted as the task-side model config.
+This is usually the copy-and-adapt path from an ESPnet2 recipe config.
+
+Example without `task`:
+
+```yaml
+task:
+
+model:
+  _target_: my_project.models.MyASRModel
+  vocab_size: 5000
+  hidden_size: 256
+```
+
+In this case, `model._target_` is required because ESPnet3 instantiates the
+model directly through Hydra.
+
+## `fit`
+
+`training_config.fit` is forwarded to `trainer.fit(...)`.
+
+```yaml
+fit: {}
+```
+
+This is where runtime fit-time overrides belong.
+
+Resume example:
+
+```yaml
+fit:
+  ckpt_path: ${exp_dir}/last.ckpt
+```
+
+This resumes training from the given checkpoint.
+
+## Related pages
+
+- [Train stage](../stages/train.md)
+- [Create dataset stage](../stages/create-dataset.md)
+- [Dataset references and builders](../core/components/datasets.md)
+- [Optimizer configuration](../core/components/optimizer_configuration.md)

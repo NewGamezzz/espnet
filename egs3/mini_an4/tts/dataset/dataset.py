@@ -77,7 +77,7 @@ class MiniAn4TTSDataset(TorchDataset):
             utterance ids.
 
     Returns:
-        A Torch dataset whose items are dicts containing:
+        A Torch dataset whose items are dicts with:
         - ``speech``: float32 waveform array
         - ``text``: transcript string
         - ``utt_id``: included only when ``include_utt_id=True``

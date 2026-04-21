@@ -20,7 +20,9 @@ class BaseMetric(ABC):
                 and ``hyp.scp``, but callers may also provide other file or
                 directory paths for metrics that invoke external tools.
                 Concrete metrics may stream SCP contents, materialize lists, or
-                pass paths directly to subprocesses. For example:
+                pass paths directly to subprocesses.
+
+                **Example.**
 
                 .. code-block:: python
 
@@ -31,7 +33,7 @@ class BaseMetric(ABC):
                 The keys are taken from inference-time SCP files and should match
                 what the concrete metric class expects (e.g., ``ref``/``hyp``).
                 To add extra inputs (e.g., a ``prompt`` field), define them in
-                the metrics config ``inputs`` and provide a matching SCP file:
+                the metrics config ``inputs`` and provide a matching SCP file.
 
                 .. code-block:: yaml
 
@@ -54,13 +56,13 @@ class BaseMetric(ABC):
             Dict[str, float]: Computed metric result(s).
 
         Example:
-            A metric that consumes aligned reference/hypothesis text can use:
+            **Aligned text metric example.**
 
             >>> for utt_id, row in self.iter_inputs(data, "ref", "hyp"):
             ...     ref = row["ref"]
             ...     hyp = row["hyp"]
 
-            A metric backed by an external CLI can instead use:
+            **External CLI metric example.**
 
             >>> ref_path = data["ref"]
             >>> hyp_dir = data["hyp_dir"]

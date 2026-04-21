@@ -1,148 +1,111 @@
 ---
-title: ESPnet3 - Callback Mechanisms in Training
+title: ESPnet3 Callbacks
 author:
   name: "Masao Someki"
-date: 2025-11-26
+date: 2026-04-15
 ---
 
-## 🎛 ESPnet3: Callback Mechanisms in Training
+# ESPnet3 Callbacks
 
-ESPnet3 relies on PyTorch Lightning for training orchestration, so the vast
-majority of Lightning callbacks are immediately available.  On top of that, the
-`espnet3.components.callbacks` module ships a curated stack of defaults that are
-applied when a recipe calls `get_default_callbacks`.  This document explains the
-default behaviour and how to extend it in your own experiments.
+ESPnet3's default training callbacks are implemented in:
 
-### Default callback stack
+- `espnet3.components.callbacks.default_callbacks`
 
-`get_default_callbacks` returns the following callbacks, all pre-configured to
-write into the experiment directory:
+The default stack is created by:
 
-| Callback | Purpose |
-| --- | --- |
-| `ModelCheckpoint` (last) | Saves the latest checkpoint (resume entrypoint). |
-| `ModelCheckpoint` (best-k) | Saves top-K checkpoints for each metric in `best_model_criterion`. |
-| `AverageCheckpointsCallback` | Averages the selected top-K checkpoints and saves a `.pth` file. |
-| `LearningRateMonitor` | Logs learning rate values. |
-| `TQDMProgressBar` | Shows the progress bar during training. |
+- `get_default_callbacks(...)`
 
-1. **`ModelCheckpoint` (last)** – keeps the latest checkpoint under
-   `${expdir}` so that training can be resumed.
-2. **`ModelCheckpoint` (best-k)** – one instance per entry in
-   `best_model_criterion`, each tracking a validation metric and keeping the
-   top-*k* checkpoints.
-3. **`AverageCheckpointsCallback`** – averages the best checkpoints tracked by
-   the callbacks above and writes `&lt;metric&gt;.ave_&lt;k&gt;best.pth` once validation
-   finishes.
-4. **`LearningRateMonitor`** – logs optimiser learning rates so that they are
-   visible in TensorBoard or any Lightning-compatible logger.
-5. **`TQDMProgressBar`** – provides an interactive progress bar whose refresh
-   rate can be controlled from the configuration file.
+## Default callback stack
 
-All of these callbacks live in
-[`espnet3/components/callbacks.py`](../../espnet3/components/callbacks.py) and are
-instantiated automatically unless you override the callback list explicitly.
+The current default list is:
 
-### Controlling checkpoint selection
+- last-checkpoint `ModelCheckpoint`
+- best-k `ModelCheckpoint`
+- `AverageCheckpointsCallback`
+- `LearningRateMonitor`
+- `MetricsLogger`
+- `TQDMProgressBar`
 
-The metrics that drive checkpoint selection are configured through
-`best_model_criterion` in the experiment YAML:
+These are added automatically by `ESPnet3LightningTrainer`.
 
-```yaml
-best_model_criterion:
-  - - valid/loss
-    - 3
-    - min
-  - - valid/wer
-    - 2
-    - min
-```
+## `MetricsLogger`
 
-Each item is interpreted as `(monitor, top_k, mode)`. In this example, ESPnet3
-tracks best checkpoints for `valid/loss` and `valid/wer` and (optionally) averages
-them via `AverageCheckpointsCallback`.
+`MetricsLogger` is the main human-readable training log callback in current
+ESPnet3.
 
-```yaml
-best_model_criterion:
-  - - your_metrics
-    - 3     # number of ckpts
-    - min   # keep the checkpoint if the value is minimal
-```
+Implementation:
 
-### Example output layout
+- `espnet3.components.callbacks.default_callbacks.MetricsLogger`
 
-When checkpoint averaging is enabled, typical outputs under `exp_dir` look like:
+### Why it exists
+
+Instead of scattering summary logging across multiple callbacks or stage code,
+ESPnet3 centralizes compact train/validation summaries in one callback.
+
+### What it logs
+
+`MetricsLogger` handles three reporting points:
+
+- interval train-batch summaries
+- end-of-epoch train summaries
+- end-of-epoch validation summaries
+
+It also tracks timing-style keys such as:
+
+- `iter_time`
+- `forward_time`
+- `backward_time`
+- `optim_step_time`
+- `train_time`
+- `valid_time`
+
+and includes optimizer learning rates such as `optim0_lr0`.
+
+### Metric key normalization
+
+The callback normalizes keys before printing:
+
+- training summaries drop the `train/` prefix
+- validation summaries drop the `valid/` prefix
+- validation sanity-check runs are ignored
+
+This is why logs stay compact even though the underlying metric names are stored
+as `train/...` and `valid/...`.
+
+### Example log lines
+
+Typical output looks like:
 
 ```text
-${exp_dir}/
-  last.ckpt
-  epoch0_step1_valid.loss.ckpt
-  valid.loss.ave_3best.pth
+1epoch:train:1-500batch: loss=12.34 iter_time=0.02 forward_time=0.01 backward_time=0.01 optim_step_time=0.00 train_time=0.03 optim0_lr0=0.0020
+epoch_summary:1epoch:train: loss=8.91 iter_time=0.02 forward_time=0.01 backward_time=0.01 optim_step_time=0.00 train_time=0.03 optim0_lr0=0.0020
+epoch_summary:1epoch:valid: loss=7.85 cer=18.4 valid_time=12.6
 ```
 
-### Adjusting progress logging
+## `AverageCheckpointsCallback`
 
-The `TQDMProgressBar` refresh interval defaults to 500 steps.  Override the
-value by passing `log_interval` when calling `get_default_callbacks` from your
-recipe:
+This callback averages the top-k checkpoint weights chosen by the monitored
+`ModelCheckpoint` callbacks and writes:
 
-```python
-from espnet3.components.callbacks import get_default_callbacks
-
-callbacks = get_default_callbacks(
-    expdir=str(expdir),
-    log_interval=50,
-    best_model_criterion=[("valid/loss", 5, "min")],
-)
+```text
+<monitor>.ave_<K>best.pth
 ```
 
-Because callbacks are regular Python objects, you can append or replace entries
-before constructing the Lightning trainer.
+Only model weights under `model.*` are exported into the averaged `.pth`.
 
-### Providing custom callbacks through Hydra
+## Extending callbacks
 
-Recipes can also instantiate callbacks directly from the YAML configuration via
-Hydra/OmegaConf.  Simply disable the default stack and enumerate your desired
-callbacks in `trainer.callbacks`:
+Custom callbacks can still be appended from config:
 
 ```yaml
 trainer:
   callbacks:
-    - _target_: espnet3.components.callbacks.default_callbacks.AverageCheckpointsCallback
-      output_dir: ${expdir}
-      best_ckpt_callbacks:
-        - _target_: lightning.pytorch.callbacks.ModelCheckpoint
-          monitor: valid/cer
-          save_top_k: 5
-          mode: min
+    - _target_: my_project.callbacks.MyCallback
 ```
 
-Mixing both approaches is perfectly valid; use `get_default_callbacks` for the
-common utilities and append any domain-specific callbacks that your project
-requires.
+The default stack remains, and custom callbacks are appended after it.
 
-### `AverageCheckpointsCallback` (checkpoint averaging)
+## Related pages
 
-This callback loads the top-K checkpoints selected by `best_model_criterion`,
-averages model weights, and writes a single `.pth` file.
-
-Key behaviors:
-
-- Output filename: `<metric>.ave_<K>best.pth`
-- Averages only parameters under `model.*`
-- Runs only on global rank 0
-- Uses the checkpoint set produced by the corresponding `ModelCheckpoint` callback(s)
-
-You can reuse the callback outside the defaults by instantiating it directly:
-
-```python
-from espnet3.components.callbacks import AverageCheckpointsCallback
-
-ave_ckpt = AverageCheckpointsCallback(
-    output_dir=str(expdir),
-    best_ckpt_callbacks=[valid_loss_ckpt, valid_wer_ckpt],
-)
-```
-
-This mirrors the behaviour of `get_default_callbacks` while leaving room for
-experiments that require a custom checkpoint policy.
+- [Trainer](./trainer.md)
+- [Training stage](../../stages/train.md)

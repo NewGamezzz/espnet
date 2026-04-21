@@ -1,7 +1,6 @@
 """Utilities for resolving and instantiating dataset modules.
 
-This module standardizes how ESPnet3 resolves dataset sources used in configs
-such as:
+This module standardizes how ESPnet3 resolves dataset sources used in configs.
 
 .. code-block:: yaml
 
@@ -11,7 +10,7 @@ such as:
           data_src_args:
             split: train
 
-It supports:
+Supported forms are listed below.
 
 1. Tag notation (``mini_an4/asr``) -> ``egs3.mini_an4.asr.dataset``.
 2. Direct dotted module paths.
@@ -122,7 +121,7 @@ def load_dataset_module(
     """Load a dataset module from a dataset source or local recipe path.
 
     Args:
-        data_src: Dataset source reference. Supported forms:
+        data_src: Dataset source reference. Supported forms are listed below.
             - ``None``: load local ``recipe_dir/dataset`` module.
             - tag form: ``mini_an4/asr``.
             - module path form: ``egs3.mini_an4.asr.dataset``.
@@ -174,7 +173,7 @@ def parse_dataset_reference_config(
     """Extract dataset source fields from one dataset config entry.
 
     Args:
-        config: Dataset entry mapping. Expected keys are:
+        config: Dataset entry mapping. Expected keys are listed below.
             - ``data_src``: optional dataset source reference.
             - ``data_src_args``: optional constructor kwargs for ``Dataset``.
 
@@ -215,7 +214,7 @@ def instantiate_dataset_reference(
     """Instantiate a dataset class from a dataset entry config.
 
     Args:
-        config: Dataset entry mapping. Expected keys are:
+        config: Dataset entry mapping. Expected keys are listed below.
             - ``data_src``: optional dataset source reference.
             - ``data_src_args``: optional constructor kwargs for ``Dataset``.
         recipe_dir: Recipe root used when resolving local modules.
@@ -240,7 +239,7 @@ def instantiate_dataset_reference(
         >>> hasattr(ds, "__len__")
         True
 
-        Local dataset module loading (no data_src):
+        **Local dataset module loading.**
         >>> cfg = {"data_src_args": {"split": "test"}}
         >>> _ = instantiate_dataset_reference(cfg, recipe_dir="egs3/mini_an4/asr")
     """

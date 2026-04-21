@@ -22,14 +22,13 @@ class InferenceRunner(BaseRunner):
     fields. ``idx_key`` is the key used to map each inference result to
     its source dataset index when writing SCP files.
 
-    Output format requirements:
+    **Output format requirements.**
         - The result is a dict with the configured keys plus any extra fields.
         - A sample identifier key must exist under ``idx_key`` so SCP outputs
           can map each result back to the corresponding dataset sample.
         - The sample identifier must be a single value, not a list or tuple.
-        - ``hyp_key`` and ``ref_key`` values may be scalars or lists/tuples.
-          If lists are returned, each entry is written to its own SCP file
-          (e.g., ``hyp0.scp``, ``hyp1.scp``).
+        - ``hyp_key`` and ``ref_key`` values must be single values.
+          Top-level lists and tuples are not supported.
     """
 
     def __init__(

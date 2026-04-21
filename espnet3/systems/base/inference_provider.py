@@ -23,7 +23,7 @@ class InferenceProvider(EnvironmentProvider, ABC):
     ``model`` and returning them as environment entries. It is suitable
     for both local and distributed execution.
 
-    Design:
+    **Design.**
         - ``build_*`` helpers are defined as ``@staticmethod``/class methods
           so they are easily serializable and reusable on workers.
         - The worker setup function must **not** capture ``self`` to remain
@@ -56,7 +56,7 @@ class InferenceProvider(EnvironmentProvider, ABC):
         """Build the environment once on the driver for local inference.
 
         Returns:
-            Dict[str, Any]: Environment dict with at least:
+            Dict[str, Any]: Environment dict with at least these keys:
                 - ``"dataset"``: The instantiated dataset.
                 - ``"model"``: The instantiated model.
               Any additional fields from ``params`` are also included.
@@ -225,7 +225,7 @@ class InferenceProvider(EnvironmentProvider, ABC):
     def _resolve_device(config: DictConfig) -> str:
         """Resolve the logical device visible to the current process.
 
-        Resolution order:
+        **Resolution order.**
             1. Explicit `config.device`
             2. Logical index from `config.device_index`
             3. Logical index from `config.local_rank`

@@ -2,114 +2,210 @@
 title: ESPnet3 Measure Configuration
 author:
   name: "Masao Someki"
-date: 2025-11-26
+date: 2026-04-15
 ---
 
 # ESPnet3 Measure Configuration
 
-This page explains the `measure.yaml` schema used by the measure stage. It
-consumes inference outputs from `infer_dir` and reports metric results.
+This page describes the current config used by:
 
-## Minimum required keys (typical measurement run)
+```bash
+python run.py --stages measure --metrics_config conf/metrics.yaml
+```
+
+## Minimum required keys
 
 Required:
 
-- `infer_dir`
-- `metrics` (at least one entry)
-- `dataset.test` (used to enumerate test names)
+- `inference_dir`
+- `metrics`
 
-Common optional:
+Optional:
 
-- `recipe_dir`, `exp_dir`, `dataset_dir` (path scaffold)
+- `dataset.test`
+- `recipe_dir`
+- `exp_tag`
+- `exp_dir`
 
-Minimal example:
+`dataset.test` is optional because `measure()` can discover test-set names from
+`inference_dir`.
+
+## Minimal example
 
 ```yaml
-infer_dir: exp/my_exp/infer
+inference_dir: ${recipe_dir}/exp/inference_beam5/inference
 
+metrics:
+  - metric:
+      _target_: espnet3.systems.asr.metrics.wer.WER
+      ref_key: ref
+      hyp_key: hyp
+      clean_types:
+```
+
+## Config sections
+
+| Section | Purpose |
+| --- | --- |
+| `recipe_dir`, `exp_tag`, `exp_dir`, `inference_dir` | Output and experiment naming |
+| `dataset.test` | Optional explicit test-set names |
+| `metrics` | Metric definitions to instantiate and run |
+
+## Default values
+
+| Key | Default value |
+| --- | --- |
+| `recipe_dir` | `.` |
+| `exp_tag` | empty |
+| `exp_dir` | `${recipe_dir}/exp/${exp_tag}` |
+| `inference_dir` | `${exp_dir}/${self_name:}` |
+| `dataset.test` | omitted |
+
+## Naming behavior
+
+If `inference_config` is also loaded in the same `run.py` invocation, measure
+inherits the inference-side context and uses the same `inference_dir`.
+
+Example 1: measure inherits `inference_dir`.
+
+`inference.yaml`:
+
+```yaml
+exp_tag: inference_beam5
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+inference_dir: ${exp_dir}/${self_name:}
+```
+
+`metrics.yaml`:
+
+```yaml
+metrics:
+  - metric:
+      _target_: espnet3.systems.asr.metrics.wer.WER
+      ref_key: ref
+      hyp_key: hyp
+```
+
+Run:
+
+```bash
+python run.py \
+  --stages infer measure \
+  --inference_config conf/inference.yaml \
+  --metrics_config conf/metrics.yaml
+```
+
+In this case, measure uses:
+
+```text
+exp/inference_beam5/inference/
+```
+
+Example 2: measure uses its own `metrics.yaml`.
+
+```yaml
+exp_tag: measure_beam5
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+inference_dir: ${recipe_dir}/exp/inference_beam5/inference
+
+metrics:
+  - metric:
+      _target_: espnet3.systems.asr.metrics.wer.WER
+      ref_key: ref
+      hyp_key: hyp
+```
+
+Run:
+
+```bash
+python run.py \
+  --stages measure \
+  --metrics_config conf/metrics.yaml
+```
+
+In this case, measure does not inherit inference context, so `inference_dir`
+must be set in `metrics.yaml`.
+
+## Optional explicit test sets
+
+If you want to pin the measured test sets explicitly, add:
+
+```yaml
 dataset:
-  _target_: espnet3.components.data.data_organizer.DataOrganizer
   test:
-    - name: test
-      dataset:
-        _target_: src.dataset.MyDataset
-        data_dir: /path/to/data
+    - name: test-clean
+    - name: test-other
+```
 
+If you omit this block, the stage scans:
+
+```text
+<inference_dir>/
+  test-clean/
+  test-other/
+```
+
+and computes metrics for all test-set directories under `inference_dir`.
+
+## Metric entries
+
+Each entry in `metrics` has:
+
+- `metric`: a Hydra target for a `BaseMetric` subclass
+- `inputs`: optional alias-to-filename mapping
+
+Example:
+
+```yaml
 metrics:
   - metric:
       _target_: my_pkg.metrics.MyMetric
     inputs:
       ref: ref
       hyp: hyp
+      prompt: prompt
 ```
 
-## ✅ Config sections overview
+`measure()` resolves these paths and passes them to the metric class
+`__call__` method:
 
-| Section | Description |
-| --- | --- |
-| `recipe_dir`, `exp_dir`, `infer_dir`, ... | Path scaffold for outputs and metric result files. |
-| `dataset` | Test set definitions used to enumerate test names. |
-| `metrics` | Metric classes and input mappings. |
-
-## Core config layout (ASR example)
-
-```yaml
-recipe_dir: .
-exp_tag: asr_template_eval
-exp_dir: ${recipe_dir}/exp/${exp_tag}
-infer_dir: ${exp_dir}/infer
-dataset_dir: /path/to/your/dataset
-
-dataset:
-  _target_: espnet3.components.data.data_organizer.DataOrganizer
-  test:
-    - name: test-clean
-      dataset:
-        _target_: src.dataset.LibriSpeechDataset
-        data_dir: ${dataset_dir}
-        split: test-clean
-
-metrics:
-  - metric:
-      _target_: espnet3.systems.asr.metrics.wer.WER
-      clean_types: ["whisper_basic"]
-    inputs:
-      ref: ref
-      hyp: hyp
+```python
+{
+    "ref": Path("<inference_dir>/<test_name>/ref.scp"),
+    "hyp": Path("<inference_dir>/<test_name>/hyp.scp"),
+    "prompt": Path("<inference_dir>/<test_name>/prompt.scp"),
+}
 ```
 
-## Metrics and inputs
+In other words, the metric class receives SCP paths, not loaded string lists.
+The metric implementation should read those SCP files and compute the metric.
 
-Each entry in `metrics` provides a `metric` block (Hydra instantiation) and
-optional `inputs`. If `inputs` is omitted, ESPnet3 falls back to the metric's
-`ref_key` and `hyp_key` attributes.
+See [Custom metrics](../core/components/metrics.md) for metric class details.
 
-Inputs map to SCP files under `${infer_dir}/${test_name}`. For example,
-`inputs.ref: ref` expects `ref.scp` and `inputs.hyp: hyp` expects `hyp.scp`.
+Typical implementation:
 
-The metric list is evaluated one by one, so each list entry produces its own
-results block in `measures.json`.
-
-## Output directory layout
-
-During inference, ESPnet3 writes SCP outputs under a per-test-set folder:
-
-```
-${infer_dir}/
-  test-clean/
-    ref.scp
-    hyp.scp
-  test-other/
-    ref.scp
-    hyp.scp
+```python
+class MyMetric(BaseMetric):
+    def __call__(self, data, test_name, output_dir):
+        for utt_id, row in self.iter_inputs(data, "ref", "hyp"):
+            ref = row["ref"]
+            hyp = row["hyp"]
+            ...
+        return {"score": 0.0}
 ```
 
-Each `inputs` entry maps to a file in that test directory:
+If `inputs` is omitted, the stage falls back to the metric instance's
+`ref_key` and `hyp_key`.
 
-- `inputs.ref: ref` -> `${infer_dir}/${test_name}/ref.scp`
-- `inputs.hyp: hyp` -> `${infer_dir}/${test_name}/hyp.scp`
+## Output file
 
-The loaded inputs are passed to the metric class as a dict, so your custom
-metrics can consume any field you register in `inputs`.
+Results are written to:
 
-If you want to write custom metrics, see [Custom metrics](../core/components/metrics.md).
+```text
+<inference_dir>/metrics.json
+```
+
+## Related pages
+
+- [Measure stage](../stages/measure.md)
+- [Custom metrics](../core/components/metrics.md)

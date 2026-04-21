@@ -5,12 +5,12 @@ the demo runtime and pack pipeline. It intentionally relies on module path
 conventions for ESPnet3 systems so callers can omit explicit imports in
 demo.yaml when the system name is known.
 
-Expected module path conventions (by system name):
-  - Provider class:
+**Expected module path conventions.**
+  - Provider class.
       ``espnet3.systems.<system>.inference.InferenceProvider``
-  - Runner class:
+  - Runner class.
       ``espnet3.systems.<system>.inference.InferenceRunner``
-  - Inference defaults function:
+  - Inference defaults function.
       ``espnet3.systems.<system>.demo.build_inference_default``
 
 If a system does not follow these conventions, infer.yaml must set explicit
@@ -198,11 +198,11 @@ def resolve_infer_kwargs(infer_cfg: DictConfig | None) -> Dict[str, Any]:
 def resolve_provider_class(demo_cfg, infer_cfg: DictConfig | None = None):
     """Resolve inference provider class from infer.yaml or convention.
 
-    Resolution order:
+    **Resolution order.**
       1) infer_cfg.provider._target_ (or provider_class) if present.
       2) Convention-based path using demo_cfg.system.
 
-    Conventions assume:
+    **Conventions.**
       ``espnet3.systems.<system>.inference.InferenceProvider`` exists.
 
     Args:
@@ -240,11 +240,11 @@ def resolve_provider_class(demo_cfg, infer_cfg: DictConfig | None = None):
 def resolve_runner_class(demo_cfg, infer_cfg: DictConfig | None = None):
     """Resolve inference runner class from infer.yaml or convention.
 
-    Resolution order:
+    **Resolution order.**
       1) infer_cfg.runner._target_ (or runner_class) if present.
       2) Convention-based path using demo_cfg.system.
 
-    Conventions assume:
+    **Conventions.**
       ``espnet3.systems.<system>.inference.InferenceRunner`` exists.
 
     Args:
@@ -282,7 +282,7 @@ def resolve_runner_class(demo_cfg, infer_cfg: DictConfig | None = None):
 def _load_system_inference_defaults(demo_cfg):
     """Resolve system-level inference defaults via convention-based import.
 
-    This expects each system to expose a function at:
+    **Expected system hook.**
       ``espnet3.systems.<system>.demo.build_inference_default``
     and returns the dict it produces.
 

@@ -183,92 +183,92 @@ def apply_training_experiment_context(
         it only normalizes already-loaded configs before stage execution.
 
     Examples:
-        Insert missing experiment identity from training:
+        **Insert missing experiment identity from training.**
 
-        ```python
-        training_config = OmegaConf.create(
-            {"exp_tag": "train_asr_rnn", "exp_dir": "./exp/train_asr_rnn"}
-        )
-        inference_config = OmegaConf.create(
-            {"inference_dir": "${exp_dir}/inference"}
-        )
-        apply_training_experiment_context(
-            training_config=training_config,
-            inference_config=inference_config,
-            metrics_config=None,
-            log=logging.getLogger("example"),
-        )
-        # Logs:
-        #   INFO Inserted inference_config.exp_tag from training_config
-        #   INFO Inserted inference_config.exp_dir from training_config
-        # Result:
-        #   inference_config.exp_tag == "train_asr_rnn"
-        #   inference_config.exp_dir == "./exp/train_asr_rnn"
-        ```
+        .. code-block:: python
 
-        Override conflicting experiment identity in inference:
+            training_config = OmegaConf.create(
+                {"exp_tag": "train_asr_rnn", "exp_dir": "./exp/train_asr_rnn"}
+            )
+            inference_config = OmegaConf.create(
+                {"inference_dir": "${exp_dir}/inference"}
+            )
+            apply_training_experiment_context(
+                training_config=training_config,
+                inference_config=inference_config,
+                metrics_config=None,
+                log=logging.getLogger("example"),
+            )
+            # Logs:
+            #   INFO Inserted inference_config.exp_tag from training_config
+            #   INFO Inserted inference_config.exp_dir from training_config
+            # Expected values:
+            #   inference_config.exp_tag == "train_asr_rnn"
+            #   inference_config.exp_dir == "./exp/train_asr_rnn"
 
-        ```python
-        training_config = OmegaConf.create(
-            {"exp_tag": "train_asr_rnn", "exp_dir": "./exp/train_asr_rnn"}
-        )
-        inference_config = OmegaConf.create(
-            {"exp_tag": "manual_tag", "exp_dir": "./exp/manual_tag"}
-        )
-        apply_training_experiment_context(
-            training_config=training_config,
-            inference_config=inference_config,
-            metrics_config=None,
-            log=logging.getLogger("example"),
-        )
-        # Logs:
-        #   WARNING Overriding inference_config.exp_tag with
-        #   training_config value: 'manual_tag' -> 'train_asr_rnn'
-        #   WARNING Overriding inference_config.exp_dir with
-        #   training_config value: './exp/manual_tag' -> './exp/train_asr_rnn'
-        ```
+        **Override conflicting experiment identity in inference.**
 
-        Align metrics with a custom inference output directory:
+        .. code-block:: python
 
-        ```python
-        inference_config = OmegaConf.create(
-            {
-                "exp_tag": "eval_debug",
-                "exp_dir": "./exp/eval_debug",
-                "inference_dir": "./custom/eval_outputs",
-            }
-        )
-        metrics_config = OmegaConf.create({"inference_dir": None})
-        apply_training_experiment_context(
-            training_config=None,
-            inference_config=inference_config,
-            metrics_config=metrics_config,
-            log=logging.getLogger("example"),
-        )
-        # Logs:
-        #   INFO Inserted metrics_config.exp_tag from inference_config
-        #   INFO Inserted metrics_config.exp_dir from inference_config
-        #   INFO Inserted metrics_config.inference_dir from inference_config
-        # Result:
-        #   metrics_config.inference_dir == "./custom/eval_outputs"
-        #   metrics_config.exp_dir == "./exp/eval_debug"
-        #   metrics_config.exp_tag == "eval_debug"
-        ```
+            training_config = OmegaConf.create(
+                {"exp_tag": "train_asr_rnn", "exp_dir": "./exp/train_asr_rnn"}
+            )
+            inference_config = OmegaConf.create(
+                {"exp_tag": "manual_tag", "exp_dir": "./exp/manual_tag"}
+            )
+            apply_training_experiment_context(
+                training_config=training_config,
+                inference_config=inference_config,
+                metrics_config=None,
+                log=logging.getLogger("example"),
+            )
+            # Logs:
+            #   WARNING Overriding inference_config.exp_tag with
+            #   training_config value: 'manual_tag' -> 'train_asr_rnn'
+            #   WARNING Overriding inference_config.exp_dir with
+            #   training_config value: './exp/manual_tag' -> './exp/train_asr_rnn'
 
-        Leave standalone inference unchanged when no training config is given:
+        **Align metrics with a custom inference output directory.**
 
-        ```python
-        inference_config = OmegaConf.create(
-            {"exp_tag": "whisper_eval", "exp_dir": "./exp/whisper_eval"}
-        )
-        apply_training_experiment_context(
-            training_config=None,
-            inference_config=inference_config,
-            metrics_config=None,
-            log=logging.getLogger("example"),
-        )
-        # No logs are emitted and inference_config is unchanged.
-        ```
+        .. code-block:: python
+
+            inference_config = OmegaConf.create(
+                {
+                    "exp_tag": "eval_debug",
+                    "exp_dir": "./exp/eval_debug",
+                    "inference_dir": "./custom/eval_outputs",
+                }
+            )
+            metrics_config = OmegaConf.create({"inference_dir": None})
+            apply_training_experiment_context(
+                training_config=None,
+                inference_config=inference_config,
+                metrics_config=metrics_config,
+                log=logging.getLogger("example"),
+            )
+            # Logs:
+            #   INFO Inserted metrics_config.exp_tag from inference_config
+            #   INFO Inserted metrics_config.exp_dir from inference_config
+            #   INFO Inserted metrics_config.inference_dir from inference_config
+            # Expected values:
+            #   metrics_config.inference_dir == "./custom/eval_outputs"
+            #   metrics_config.exp_dir == "./exp/eval_debug"
+            #   metrics_config.exp_tag == "eval_debug"
+
+        **Leave standalone inference unchanged when no training config is given.**
+
+        .. code-block:: python
+
+            inference_config = OmegaConf.create(
+                {"exp_tag": "whisper_eval", "exp_dir": "./exp/whisper_eval"}
+            )
+            apply_training_experiment_context(
+                training_config=None,
+                inference_config=inference_config,
+                metrics_config=None,
+                log=logging.getLogger("example"),
+            )
+            # No logs are emitted and inference_config is unchanged.
     """
     if training_config is not None:
         if inference_config is not None:
@@ -310,7 +310,7 @@ def validate_experiment_context(
 ) -> None:
     """Validate that runtime configs have enough experiment identity.
 
-    This helper enforces the two supported runner modes:
+    **Supported runner modes.**
 
     1. Training-backed mode, where `training_config` is present and provides
        experiment identity for inference and metrics.
@@ -343,54 +343,54 @@ def validate_experiment_context(
         Allow standalone inference when the config already defines its
         experiment identity:
 
-        ```python
-        inference_config = OmegaConf.create(
-            {"exp_tag": "whisper_eval", "exp_dir": "./exp/whisper_eval"}
-        )
-        validate_experiment_context(
-            training_config=None,
-            inference_config=inference_config,
-            metrics_config=None,
-            stages_to_run=["infer"],
-        )
-        # Succeeds because standalone inference can derive exp_dir.
-        ```
+        .. code-block:: python
 
-        Reject standalone inference when experiment identity is missing:
+            inference_config = OmegaConf.create(
+                {"exp_tag": "whisper_eval", "exp_dir": "./exp/whisper_eval"}
+            )
+            validate_experiment_context(
+                training_config=None,
+                inference_config=inference_config,
+                metrics_config=None,
+                stages_to_run=["infer"],
+            )
+            # Succeeds because standalone inference can derive exp_dir.
 
-        ```python
-        inference_config = OmegaConf.create(
-            {"inference_dir": "${exp_dir}/inference"}
-        )
-        validate_experiment_context(
-            training_config=None,
-            inference_config=inference_config,
-            metrics_config=None,
-            stages_to_run=["infer"],
-        )
-        # Raises:
-        #   ValueError: infer stage requires --training_config or a
-        #   standalone inference_config with exp_tag/exp_dir.
-        ```
+        **Reject standalone inference when experiment identity is missing.**
+
+        .. code-block:: python
+
+            inference_config = OmegaConf.create(
+                {"inference_dir": "${exp_dir}/inference"}
+            )
+            validate_experiment_context(
+                training_config=None,
+                inference_config=inference_config,
+                metrics_config=None,
+                stages_to_run=["infer"],
+            )
+            # Raises:
+            #   ValueError: infer stage requires --training_config or a
+            #   standalone inference_config with exp_tag/exp_dir.
 
         Accept training-backed inference even when inference_config does not
         define `exp_tag`:
 
-        ```python
-        training_config = OmegaConf.create(
-            {"exp_tag": "train_asr_rnn", "exp_dir": "./exp/train_asr_rnn"}
-        )
-        inference_config = OmegaConf.create(
-            {"inference_dir": "${exp_dir}/inference"}
-        )
-        validate_experiment_context(
-            training_config=training_config,
-            inference_config=inference_config,
-            metrics_config=None,
-            stages_to_run=["infer"],
-        )
-        # Succeeds because training-backed mode is active.
-        ```
+        .. code-block:: python
+
+            training_config = OmegaConf.create(
+                {"exp_tag": "train_asr_rnn", "exp_dir": "./exp/train_asr_rnn"}
+            )
+            inference_config = OmegaConf.create(
+                {"inference_dir": "${exp_dir}/inference"}
+            )
+            validate_experiment_context(
+                training_config=training_config,
+                inference_config=inference_config,
+                metrics_config=None,
+                stages_to_run=["infer"],
+            )
+            # Succeeds because training-backed mode is active.
     """
     if training_config is not None:
         return

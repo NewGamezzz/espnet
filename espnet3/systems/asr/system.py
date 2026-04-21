@@ -20,13 +20,11 @@ logger = logging.getLogger(__name__)
 class ASRSystem(BaseSystem):
     """ASR-specific system.
 
-    This system adds:
+    **This system adds.**
       - Tokenizer training inside train()
 
-    Additional stage log paths:
-        | Stage           | Path reference                  |
-        |---              |---                              |
-        | train_tokenizer | training_config.tokenizer.save_path |
+    **Additional stage log paths.**
+        - ``train_tokenizer`` -> ``training_config.tokenizer.save_path``
     """
 
     def __init__(

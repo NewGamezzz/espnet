@@ -33,7 +33,7 @@ _AUDIO_SOURCE_MAP = {
 def build_ui_from_config(ui_cfg) -> UiSpec:
     """Build a :class:`UiSpec` from a demo UI configuration object.
 
-    The input config is expected to provide:
+    **Expected config fields.**
       - ``inputs``: list of component configs (each with at least ``name`` and ``type``)
       - ``outputs``: list of component configs
       - Optional UI metadata such as ``title``/``description``/``article``.
@@ -103,7 +103,7 @@ def _build_components(
 def _build_component(cfg, *, is_input: bool | None = None):
     """Instantiate a single Gradio component from a config entry.
 
-    Supported ``type`` values and corresponding components:
+    **Supported component types.**
       - ``audio``: gr.Audio (supports ``sources`` and ``audio_type``)
       - ``textbox``: gr.Textbox (supports ``lines`` and ``placeholder``)
       - ``dropdown``: gr.Dropdown (supports ``choices`` and ``value``)

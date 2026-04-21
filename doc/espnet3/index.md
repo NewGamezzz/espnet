@@ -46,11 +46,11 @@ highlights:
         icon: fa-solid:chart-line
       - title: "train"
         link: ./stages/train.md
-        details: "Run Lightning training with `train.yaml`."
+        details: "Run Lightning training with `training.yaml`."
         icon: fa-solid:graduation-cap
       - title: "infer"
         link: ./stages/inference.md
-        details: "Write `.scp` outputs under `infer_dir`."
+        details: "Write `.scp` outputs under `inference_dir`."
         icon: fa-solid:bolt
       - title: "measure"
         link: ./stages/measure.md
@@ -83,6 +83,18 @@ highlights:
         link: ./core/components.md
         details: "`espnet3/components`: reusable data/training/model/metric blocks."
         icon: fa-solid:cubes
+      - title: "ESPnet2 to ESPnet3"
+        link: ./core/espnet2_to_espnet3.md
+        details: "Migration notes for moving ESPnet2 recipes into ESPnet3."
+        icon: fa-solid:arrows-rotate
+      - title: "Recipe directory"
+        link: ./recipe_directory.md
+        details: "Recipe tree layout and what each file is for."
+        icon: fa-solid:folder-tree
+      - title: "Datasets"
+        link: ./core/components/datasets.md
+        details: "Dataset resolution, `data_src`, and `DatasetBuilder` lifecycle."
+        icon: fa-solid:database
       - title: "Parallel"
         link: ./core/parallel.md
         details: "`espnet3/parallel`: Provider/Runner execution stack."
