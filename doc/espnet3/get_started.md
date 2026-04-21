@@ -7,27 +7,23 @@ date: 2026-04-15
 
 # 🚀 Getting Started with ESPnet3
 
-This page is the practical entry point for ESPnet3 recipes. It keeps the old
-quick-start flow, but updates the examples to the current codebase:
+## Table of Contents
+1. [Quick Start](#-1-quick-start-asr-example)
+2. [Workflow](#2-workflow)
+   - [Recipes](#recipes)
+   - [Systems](#systems)
+   - [Stages](#stages)
+   - [Configs](#configs)
+   - [Experiments](#experiments)
+   - [Putting everything together](#putting-everything-together)
+3. [Next Steps / Further Documentation](#-3-additional-espnet3-documentation)
+4. [Reference Snippets](#-4-reference-snippets)
 
-- config names are `training.yaml`, `inference.yaml`, `metrics.yaml`, and
-  `publication.yaml`
-- dataset definitions use `data_src` / `data_src_args`
-- evaluation stages are `infer` and `measure`
-- publication stages are `pack_model` and `upload_model`
-- recipe-local dataset code lives under `dataset/`, while recipe-local helper
-  code such as `output_fn` usually lives under `src/`
+# ⚡ 1. Quick Start (ASR Example)
 
-The structure of this page is intentional:
+## 📦 1.1. Install ESPnet3
 
-- the first half is the onboarding flow
-- the second half is a reference section with concrete snippets and trees
-
-# ⚡ Quick Start (ASR Example)
-
-## 1. Install ESPnet3
-
-ESPnet3 is distributed under the same pip package name: `espnet`.
+ESPnet3 is distributed under the same pip package name as previous versions: `espnet`.
 For more installation options, see [ESPnet3 Installation](./install.md).
 
 ```bash
@@ -45,7 +41,7 @@ cd espnet/tools
 . setup_uv.sh
 ```
 
-## 📦 2. Install system-specific dependencies
+### Install system-specific dependencies
 
 ESPnet3 introduces the concept of a system such as ASR, TTS, ST, or ENH.
 Different systems may require different optional dependencies.
@@ -72,10 +68,11 @@ pip install -e ".[asr]"
 uv pip install -e ".[asr]"
 ```
 
-## 🧪 3. Run a recipe without cloning the repository
+## 🧪 1.2. Run a recipe
 
-ESPnet3 recipes are importable. That makes it possible to build a recipe-driven
-pipeline in your own Python code without cd'ing into `egs3/...`.
+### Option 1: In Python
+ESPnet3 recipes are importable, which makes it possible to build a recipe-driven pipeline in your own Python code.
+This mode is useful for programmatic pipelines, notebooks, and MLOps workflows.
 
 A minimal import-based execution example is:
 
@@ -101,11 +98,10 @@ args = Namespace(
 main(args=args, system_cls=ASRSystem, stages=stages)
 ```
 
-This mode is useful for programmatic pipelines, notebooks, and MLOps workflows.
+### Option 2: From the Command Line
 
-## 🖥 4. Run a recipe with a cloned repository
-
-All configs and helper scripts usually live inside `egs3/`.
+If you cloned the repository from source, you can run a recipe from within the `egs3/` directory.
+All configs and helper scripts are located there.
 
 Example: LibriSpeech 100h ASR
 
@@ -118,24 +114,52 @@ python run.py \
   --metrics_config conf/metrics.yaml
 ```
 
-# 🧠 Understanding Stages
+# 2. Workflow
 
-The default stage order is defined in:
+The general workflow in ESPnet revolves around recipes.
+A recipe is a structured and reproduceable set of steps for building, training, and evaluating a model for a specific task.
+This includes things like data preparation, choice model architecture, training setup, and evaluation metrics.
+
+This section will provide a high-level overview of how recipes work in ESPnet3 and how to create your own.
+
+## 2.1. Recipes
+
+ESPnet3 recipes are located in the `egs3/` directory, which is structured as follows:
+
+`egs3/<recipe>/<task>/`
+
+For example, the ASR recipe for LibriSpeech 100h is located in `egs3/librispeech_100/asr`.
+
+The task directory typically contains the following files and directories:
+- `run.py` is used to run the recipe.
+- `conf/` contains YAML configuration files for training, inference, evaluation, model publication, and creating demos.
+- `dataset/` contains code for downloading and building datasets.
+- `src/` contains any additional source code.
+
+
+## 2.2. Systems
+TODO: Define what a system is. Which ones are supported?
+
+## 2.3. Stages
+
+Each recipe is divided into several stages that are executed in order.
+For example, a typical ASR pipeline consists of the following stages:
+
+1. [`create_dataset`](./stages/create-dataset.md) - download, validate, or materialize recipe-local dataset assets
+2. [`collect_stats`](./stages/collect-stats.md) - compute shape files and dataset-level normalization stats
+3. [`train`](./stages/train.md) - run training using PyTorch Lightning and write checkpoints under `exp_dir`
+4. [`infer`](./stages/inference.md) - write SCP outputs under `inference_dir/<test_name>/`
+5. [`measure`](./stages/measure.md) - read those outputs and write `metrics.json`
+6. [`pack_model` / `upload_model`](./stages/publish.md) - package and optionally upload the trained model
+
+The default stage order for a given task is defined in:
 
 ```text
 egs3/TEMPLATE/<task>/run.py
 ```
 
-A typical current ASR pipeline is:
-
-1. `create_dataset` - download, validate, or materialize recipe-local dataset assets
-2. `collect_stats` - compute shape files and dataset-level normalization stats
-3. `train` - run Lightning training and write checkpoints under `exp_dir`
-4. `infer` - write SCP outputs under `inference_dir/<test_name>/`
-5. `measure` - read those outputs and write `metrics.json`
-6. `pack_model` / `upload_model` - package and optionally upload the trained model
-
-You can run only the stages you need:
+By default, all stages will be executed when running a recipe.
+You can also run only the stages you need using the `--stages` flag:
 
 ```bash
 python run.py \
@@ -145,79 +169,50 @@ python run.py \
   --metrics_config conf/metrics.yaml
 ```
 
-## Current config names
+## 2.4. Configs
 
-Use these file names and CLI flags:
+Recipes are configured using the YAML files in the `conf/` directory.
+Stages have separate config files and associated CLI flags:
 
 | Stage area | Config file | CLI flag |
 | --- | --- | --- |
-| training-related stages | `training.yaml` | `--training_config` |
-| inference | `inference.yaml` | `--inference_config` |
-| measurement | `metrics.yaml` | `--metrics_config` |
-| publication | `publication.yaml` | `--publication_config` |
+| training-related stages | [`training.yaml`](./config/train_config.md) | `--training_config` |
+| inference | [`inference.yaml`](./config/infer_config.md) | `--inference_config` |
+| measurement | [`metrics.yaml`](./config/measure_config.md) | `--metrics_config` |
+| publication | [`publication.yaml`](./config/publish_config.md) | `--publication_config` |
 
-These replace the old `train.yaml`, `infer.yaml`, `metric.yaml`, and
-`publish.yaml` naming.
+For a full list of configuration options, see the page for the relevant file. 
 
-# 🧵 Stage-specific arguments
+> [!IMPORTANT]
+> Stages do not take arbitrary stage-specific CLI arguments. Keep stage settings
+> inside YAML and pass the matching config file through `run.py`.
+> 
+> Typical pattern:
+> 
+> ```bash
+> python run.py \
+>   --stages infer measure \
+>   --inference_config conf/inference.yaml \
+>   --metrics_config conf/metrics.yaml
+> ```
+> 
+> That means:
+> 
+> - training behavior belongs in `training.yaml`
+> - inference behavior belongs in `inference.yaml`
+> - measurement behavior belongs in `metrics.yaml`
+> - publication behavior belongs in `publication.yaml`
+> 
+> You usually do not need to modify the system class just to pass a parameter into
+> an existing stage. Put it in the config first.
 
-Stages do not take arbitrary stage-specific CLI arguments. Keep stage settings
-inside YAML and pass the matching config file through `run.py`.
+## 2.5. Experiments
 
-Typical pattern:
+TODO:
+- define experiments
+- what do experiment directories look like
 
-```bash
-python run.py \
-  --stages infer measure \
-  --inference_config conf/inference.yaml \
-  --metrics_config conf/metrics.yaml
-```
-
-That means:
-
-- training behavior belongs in `training.yaml`
-- inference behavior belongs in `inference.yaml`
-- measurement behavior belongs in `metrics.yaml`
-- publication behavior belongs in `publication.yaml`
-
-You usually do not need to modify the system class just to pass a parameter into
-an existing stage. Put it in the config first.
-
-# ✅ Putting Everything Together (cloned repository workflow)
-
-Start from:
-
-```text
-egs3/TEMPLATE/asr/run.py
-```
-
-Then create your recipe layout, write the configs, and run the stages you need.
-
-Example:
-
-```bash
-cd egs3/<your_recipe>/<task>
-
-# Dataset preparation
-python run.py --stages create_dataset --training_config conf/training.yaml
-
-# Optional stats + training
-python run.py --stages collect_stats train --training_config conf/training.yaml
-
-# Evaluation
-python run.py \
-  --stages infer measure \
-  --inference_config conf/inference.yaml \
-  --metrics_config conf/metrics.yaml
-```
-
-Typical outputs go to:
-
-- `exp/` for checkpoints, logs, and training outputs
-- `inference_dir/` for inference outputs and `metrics.json`
-- a packed publication directory for `pack_model`
-
-# 🧪 Experiment Naming
+### Experiment Naming
 
 `exp_tag` participates directly in `exp_dir` naming.
 
@@ -269,7 +264,7 @@ That produces a directory such as:
 exp/whisper_eval/inference
 ```
 
-## Simple mapping example
+### Simple mapping example
 
 One easy convention is:
 
@@ -306,7 +301,48 @@ If inference is launched together with training, the training-side experiment
 name takes priority and the decoding outputs stay under the training experiment
 directory instead.
 
-## 📚 Additional ESPnet3 Documentation
+## 2.6. Putting Everything Together
+
+Start from:
+
+```text
+egs3/TEMPLATE/asr/run.py
+```
+
+Then create your recipe layout, write the configs, and run the stages you need.
+
+Example:
+
+```bash
+cd egs3/<your_recipe>/<task>
+
+# Dataset preparation
+python run.py --stages create_dataset --training_config conf/training.yaml
+
+# Optional stats + training
+python run.py --stages collect_stats train --training_config conf/training.yaml
+
+# Evaluation
+python run.py \
+  --stages infer measure \
+  --inference_config conf/inference.yaml \
+  --metrics_config conf/metrics.yaml
+```
+
+Typical outputs go to:
+
+- `exp/` for checkpoints, logs, and training outputs
+- `inference_dir/` for inference outputs and `metrics.json`
+- a packed publication directory for `pack_model`
+
+### 💡 Tips for Working With Recipes
+- Keep configs modular: dataset, model, trainer, and parallel blocks should stay separated.
+- Choose experiment names deliberately so `exp_dir` stays readable.
+- Use import-based execution when you want to integrate recipes into larger Python workflows.
+- Reuse ESPnet2 task-backed model configs when possible, and add custom code only where the recipe actually differs.
+- Prefer adding small helper code in `dataset/` or `src/` before inventing new stage interfaces.
+
+# 📚 3. Additional ESPnet3 Documentation
 
 ### ✅ Cheat sheet: what you touch vs. what ESPnet3 provides
 
@@ -348,15 +384,8 @@ directory instead.
 - [Systems](./core/systems.md)
 - [System-specific stages](./stages/system-specific.md)
 
-## 💡 Tips for Working With Recipes
 
-- Keep configs modular: dataset, model, trainer, and parallel blocks should stay separated.
-- Choose experiment names deliberately so `exp_dir` stays readable.
-- Use import-based execution when you want to integrate recipes into larger Python workflows.
-- Reuse ESPnet2 task-backed model configs when possible, and add custom code only where the recipe actually differs.
-- Prefer adding small helper code in `dataset/` or `src/` before inventing new stage interfaces.
-
-# 📎 Reference Snippets
+# 📎 4. Reference Snippets
 
 This section intentionally groups the concrete snippets and output trees in one
 place so the onboarding flow above stays readable.
