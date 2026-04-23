@@ -128,6 +128,8 @@ This section will provide a high-level overview of how recipes work in ESPnet3 a
 
 ## 2.1. Recipes
 
+Full Docs: [Recipes](./recipe_directory.md)
+
 ESPnet3 recipes are located in the `egs3/` directory, which is structured as follows:
 
 `egs3/<recipe>/<task>/`
@@ -137,11 +139,16 @@ For example, the ASR recipe for LibriSpeech 100h is located in `egs3/librispeech
 The task directory typically contains the following files and directories:
 - `run.py` is used to run the recipe.
 - `conf/` contains YAML configuration files for training, inference, evaluation, model publication, and creating demos.
-- `dataset/` contains code for downloading and building datasets.
-- `src/` contains any additional source code.
+- `dataset/` contains code for downloading and building datasets, as well as recipe-local dataset exports.
+- `src/` contains any additional code for the recipe.
+- `data/` contains prepared manifests or recipe-local artifacts.
+- `exp/` contains checkpoints and experiment outputs.
 
 
 ## 2.2. Systems
+
+Full Docs: [Systems](./core/systems.md)
+
 Training in ESPnet3 is driven by **System** classes.
 Systems define the training structure for a specific task.
 Currently, the following systems are supported:
@@ -179,6 +186,8 @@ python run.py \
 ```
 
 ## 2.4. Configs
+
+Full Docs: [Configs](./config/index.md)
 
 Recipes are configured using the YAML files in the `conf/` directory.
 Stages have separate config files and associated CLI flags:
@@ -346,7 +355,6 @@ Typical outputs go to:
 
 - [Recipe directory layout](./recipe_directory.md)
 - [Systems](./core/systems.md)
-- [System-specific stages](./stages/system-specific.md)
 
 
 ### Data & Datasets
@@ -371,11 +379,21 @@ Typical outputs go to:
 - [Measure stage](./stages/measure.md)
 - [Measure config](./config/measure_config.md)
 
-### Execution Framework
+### Publication & Demos
 
+- [Publication stage](./stages/publish.md)
+- [Publication config](./config/publish_config.md)
+- [Demo stage](./stages/demo.md)
+- [Demo config](./config/demo_config.md)
+
+### Execution Framework
 - [Provider / Runner](./core/parallel/provider_runner.md)
 - [Parallel configuration](./core/parallel.md)
 
+### Developer Reference
+- [Naming Conventions](./core/naming_convention.md)
+- [System-specific stages](./stages/system-specific.md)
+- [Components](./core/components.md)
 
 # 📎 4. Reference Snippets
 
