@@ -1,13 +1,13 @@
 ---
 title: Getting Started with ESPnet3
 author:
-  name: "Masao Someki"
-date: 2026-04-15
+- name: "Masao Someki"
+- name: "Elias Naske"
+date: 2026-04-23
 ---
 
 # 🚀 Getting Started with ESPnet3
 
-## Table of Contents
 1. [Quick Start](#-1-quick-start-asr-example)
 2. [Workflow](#2-workflow)
    - [Recipes](#recipes)
@@ -16,8 +16,10 @@ date: 2026-04-15
    - [Configs](#configs)
    - [Experiments](#experiments)
    - [Putting everything together](#putting-everything-together)
-3. [Next Steps / Further Documentation](#-3-additional-espnet3-documentation)
+3. [Additional ESPnet3 Documentation](#-3-additional-espnet3-documentation)
 4. [Reference Snippets](#-4-reference-snippets)
+
+- - -
 
 # ⚡ 1. Quick Start (ASR Example)
 
@@ -67,6 +69,8 @@ pip install -e ".[asr]"
 # or using uv:
 uv pip install -e ".[asr]"
 ```
+
+For a full list of options, check the [installation page](./install.md)
 
 ## 🧪 1.2. Run a recipe
 
@@ -138,11 +142,16 @@ The task directory typically contains the following files and directories:
 
 
 ## 2.2. Systems
-TODO: Define what a system is. Which ones are supported?
+Training in ESPnet3 is driven by **System** classes.
+Systems define the training structure for a specific task.
+Currently, the following systems are supported:
+- ASR: automatic speech recognition
+- TTS: text-to-speech
+
 
 ## 2.3. Stages
 
-Each recipe is divided into several stages that are executed in order.
+Each system divides training into several **stages** that are executed in order.
 For example, a typical ASR pipeline consists of the following stages:
 
 1. [`create_dataset`](./stages/create-dataset.md) - download, validate, or materialize recipe-local dataset assets
@@ -174,53 +183,32 @@ python run.py \
 Recipes are configured using the YAML files in the `conf/` directory.
 Stages have separate config files and associated CLI flags:
 
-| Stage area | Config file | CLI flag |
-| --- | --- | --- |
-| training-related stages | [`training.yaml`](./config/train_config.md) | `--training_config` |
-| inference | [`inference.yaml`](./config/infer_config.md) | `--inference_config` |
-| measurement | [`metrics.yaml`](./config/measure_config.md) | `--metrics_config` |
-| publication | [`publication.yaml`](./config/publish_config.md) | `--publication_config` |
+| Stage area              | Config file                                      | CLI flag               |
+| ----------------------- | ------------------------------------------------ | ---------------------- |
+| training-related stages | [`training.yaml`](./config/train_config.md)      | `--training_config`    |
+| inference               | [`inference.yaml`](./config/infer_config.md)     | `--inference_config`   |
+| measurement             | [`metrics.yaml`](./config/measure_config.md)     | `--metrics_config`     |
+| publication             | [`publication.yaml`](./config/publish_config.md) | `--publication_config` |
 
 For a full list of configuration options, see the page for the relevant file. 
 
 > [!IMPORTANT]
 > Stages do not take arbitrary stage-specific CLI arguments. Keep stage settings
 > inside YAML and pass the matching config file through `run.py`.
-> 
-> Typical pattern:
-> 
-> ```bash
-> python run.py \
->   --stages infer measure \
->   --inference_config conf/inference.yaml \
->   --metrics_config conf/metrics.yaml
-> ```
-> 
-> That means:
-> 
-> - training behavior belongs in `training.yaml`
-> - inference behavior belongs in `inference.yaml`
-> - measurement behavior belongs in `metrics.yaml`
-> - publication behavior belongs in `publication.yaml`
-> 
 > You usually do not need to modify the system class just to pass a parameter into
-> an existing stage. Put it in the config first.
+> an existing stage.
 
 ## 2.5. Experiments
 
-TODO:
-- define experiments
-- what do experiment directories look like
-
-### Experiment Naming
-
-`exp_tag` participates directly in `exp_dir` naming.
+Running a recipe will create a sub-directory in `exp/` where the run's checkpoints, logs, and training outputs will be saved.
+The name of the sub-directory (`exp_dir`) can be determined by setting the `exp_tag` key in `training.yaml` or `inference.yaml`, depending on which stages are run.
+If `exp_tag` is not specified, it will be inherited from the TEMPLATE config.
 
 In a combined training + inference run, inference inherits the training-side
 experiment identity. In a standalone inference run, `inference.yaml` must define
 its own identity through `exp_tag` or `exp_dir`.
 
-### Example: training-driven naming
+### Example 1: training-driven naming
 
 If `training.yaml` contains:
 
@@ -248,7 +236,7 @@ becomes something like:
 exp/training_branchformer/inference
 ```
 
-### Example: standalone inference naming
+### Example 2: standalone inference naming
 
 If inference runs by itself, `inference.yaml` must carry its own identity:
 
@@ -264,7 +252,7 @@ That produces a directory such as:
 exp/whisper_eval/inference
 ```
 
-### Simple mapping example
+### Example 3: naming resolution
 
 One easy convention is:
 
@@ -303,13 +291,13 @@ directory instead.
 
 ## 2.6. Putting Everything Together
 
-Start from:
+To create a new recipe, start from:
 
 ```text
 egs3/TEMPLATE/asr/run.py
 ```
 
-Then create your recipe layout, write the configs, and run the stages you need.
+Then define your recipe layout, write the configs, and run the stages you need.
 
 Example:
 
@@ -346,27 +334,30 @@ Typical outputs go to:
 
 ### ✅ Cheat sheet: what you touch vs. what ESPnet3 provides
 
-| Goal | You mainly edit or run | Read next |
-| --- | --- | --- |
-| Define datasets and builders | `dataset/`, `training.yaml`, `create_dataset` | [Datasets](./core/components/datasets.md), [Create dataset stage](./stages/create-dataset.md) |
-| Configure training | `training.yaml` for model, trainer, optimizer, dataloader | [Training config](./config/train_config.md), [Optimizer configuration](./core/components/optimizer_configuration.md), [Callbacks](./core/components/callbacks.md) |
-| Run multi-GPU or cluster workloads | `training.yaml` and `parallel` blocks | [Multi-GPU / multi-node](./core/parallel/multiple_gpu.md), [Parallel](./core/parallel.md) |
-| Set up inference and measurement | `inference.yaml` and `metrics.yaml` | [Inference](./stages/inference.md), [Measure](./stages/measure.md), [Provider / Runner](./core/parallel/provider_runner.md) |
-| Package a trained model | `publication.yaml` | [Publish stage](./stages/publish.md), [Publication config](./config/publish_config.md) |
+| Goal                               | You mainly edit or run                                    | Read next                                                                                                                                                         |
+| ---------------------------------- | --------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Define datasets and builders       | `dataset/`, `training.yaml`, `create_dataset`             | [Datasets](./core/components/datasets.md), [Create dataset stage](./stages/create-dataset.md)                                                                     |
+| Configure training                 | `training.yaml` for model, trainer, optimizer, dataloader | [Training config](./config/train_config.md), [Optimizer configuration](./core/components/optimizer_configuration.md), [Callbacks](./core/components/callbacks.md) |
+| Run multi-GPU or cluster workloads | `training.yaml` and `parallel` blocks                     | [Multi-GPU / multi-node](./core/parallel/multiple_gpu.md), [Parallel](./core/parallel.md)                                                                         |
+| Set up inference and measurement   | `inference.yaml` and `metrics.yaml`                       | [Inference](./stages/inference.md), [Measure](./stages/measure.md), [Provider / Runner](./core/parallel/provider_runner.md)                                       |
+| Package a trained model            | `publication.yaml`                                        | [Publish stage](./stages/publish.md), [Publication config](./config/publish_config.md)                                                                            |
 
-### Execution Framework
+### Recipe Structure
 
-- [Provider / Runner](./core/parallel/provider_runner.md)
-- [Parallel configuration](./core/parallel.md)
+- [Recipe directory layout](./recipe_directory.md)
+- [Systems](./core/systems.md)
+- [System-specific stages](./stages/system-specific.md)
+
 
 ### Data & Datasets
 
+- [Create dataset stage](./stages/create-dataset.md)
 - [Dataset references and builders](./core/components/datasets.md)
 - [DataOrganizer and dataset pipeline](./core/components/data-organizer.md)
-- [Create dataset stage](./stages/create-dataset.md)
 
 ### Training
 
+- [Training stage](./stages/train.md)
 - [Training config](./config/train_config.md)
 - [Callbacks](./core/components/callbacks.md)
 - [Optimizer configuration](./core/components/optimizer_configuration.md)
@@ -376,19 +367,17 @@ Typical outputs go to:
 ### Inference & Evaluation
 
 - [Inference stage](./stages/inference.md)
+- [Inference config](./config/infer_config.md)
 - [Measure stage](./stages/measure.md)
+- [Measure config](./config/measure_config.md)
 
-### Recipe Structure
+### Execution Framework
 
-- [Recipe directory layout](./recipe_directory.md)
-- [Systems](./core/systems.md)
-- [System-specific stages](./stages/system-specific.md)
+- [Provider / Runner](./core/parallel/provider_runner.md)
+- [Parallel configuration](./core/parallel.md)
 
 
 # 📎 4. Reference Snippets
-
-This section intentionally groups the concrete snippets and output trees in one
-place so the onboarding flow above stays readable.
 
 ## Minimal recipe layout
 
