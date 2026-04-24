@@ -43,7 +43,7 @@ cd espnet/tools
 . setup_uv.sh
 ```
 
-### Install system-specific dependencies
+## ⬇️ 1.2. Install system-specific dependencies
 
 ESPnet3 introduces the concept of a system such as ASR, TTS, ST, or ENH.
 Different systems may require different optional dependencies.
@@ -72,7 +72,7 @@ uv pip install -e ".[asr]"
 
 For a full list of options, check the [installation page](./install.md)
 
-## 🧪 1.2. Run a recipe
+## 🧪 1.3. Run a recipe
 
 ### Option 1: In Python
 ESPnet3 recipes are importable, which makes it possible to build a recipe-driven pipeline in your own Python code.
@@ -118,7 +118,7 @@ python run.py \
   --metrics_config conf/metrics.yaml
 ```
 
-# 2. Workflow
+# 🖥️ 2. Workflow
 
 The general workflow in ESPnet revolves around recipes.
 A recipe is a structured and reproduceable set of steps for building, training, and evaluating a model for a specific task.
@@ -147,7 +147,7 @@ egs3/<recipe>/<task>/
 └── exp/      # model checkpoints and experiment outputs
 ```
 
-## 2.2. Systems
+## 🧠 2.2. Systems
 
 Full Docs: [Systems](./core/systems.md)
 
