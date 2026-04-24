@@ -126,7 +126,7 @@ This includes things like data preparation, choice model architecture, training 
 
 This section will provide a high-level overview of how recipes work in ESPnet3 and how to create your own.
 
-## 2.1. Recipes
+## 🗒️ 2.1. Recipes
 
 Full Docs: [Recipes](./recipe_directory.md)
 
@@ -137,13 +137,15 @@ ESPnet3 recipes are located in the `egs3/` directory, which is structured as fol
 For example, the ASR recipe for LibriSpeech 100h is located in `egs3/librispeech_100/asr`.
 
 The task directory typically contains the following files and directories:
-- `run.py` is used to run the recipe.
-- `conf/` contains YAML configuration files for training, inference, evaluation, model publication, and creating demos.
-- `dataset/` contains code for downloading and building datasets, as well as recipe-local dataset exports.
-- `src/` contains any additional code for the recipe.
-- `data/` contains prepared manifests or recipe-local artifacts.
-- `exp/` contains checkpoints and experiment outputs.
-
+```
+egs3/<recipe>/<task>/
+├── run.py    # used to run the recipe
+├── conf/     # YAML config files
+├── dataset/  # code for downloading and building models
+├── src/      # additional code
+├── data/     # prepared manifests or recipe-local artifacts
+└── exp/      # model checkpoints and experiment outputs
+```
 
 ## 2.2. Systems
 
@@ -152,21 +154,26 @@ Full Docs: [Systems](./core/systems.md)
 Training in ESPnet3 is driven by **System** classes.
 Systems define the training structure for a specific task.
 Currently, the following systems are supported:
-- ASR: automatic speech recognition
-- TTS: text-to-speech
+
+| System | Task                         | Directory           |
+| ------ | ---------------------------- | ------------------- |
+| ASR    | automatic speech recognition | `egs3/TEMPLATE/asr` |
+| TTS    | text-to-speech               | `egs3/TEMPLATE/tts` |
 
 
-## 2.3. Stages
+## 🪜 2.3. Stages
 
 Each system divides training into several **stages** that are executed in order.
 For example, a typical ASR pipeline consists of the following stages:
 
-1. [`create_dataset`](./stages/create-dataset.md) - download, validate, or materialize recipe-local dataset assets
-2. [`collect_stats`](./stages/collect-stats.md) - compute shape files and dataset-level normalization stats
-3. [`train`](./stages/train.md) - run training using PyTorch Lightning and write checkpoints under `exp_dir`
-4. [`infer`](./stages/inference.md) - write SCP outputs under `inference_dir/<test_name>/`
-5. [`measure`](./stages/measure.md) - read those outputs and write `metrics.json`
-6. [`pack_model` / `upload_model`](./stages/publish.md) - package and optionally upload the trained model
+| Stage                                                | What it does                                                               |
+| ---------------------------------------------------- | -------------------------------------------------------------------------- |
+| [`create_dataset`](./stages/create-dataset.md)       | download, validate, or materialize recipe-local dataset assets             |
+| [`collect_stats`](./stages/collect-stats.md)         | compute shape files and dataset-level normalization stats                  |
+| [`train`](./stages/train.md)                         | run training using PyTorch Lightning and write checkpoints under `exp_dir` |
+| [`infer`](./stages/inference.md)                     | write SCP outputs under `inference_dir/<test_name>/`                       |
+| [`measure`](./stages/measure.md)                     | read those outputs and write `metrics.json`                                |
+| [`pack_model` / `upload_model`](./stages/publish.md) | package and optionally upload the trained model                            |
 
 The default stage order for a given task is defined in:
 
@@ -185,7 +192,7 @@ python run.py \
   --metrics_config conf/metrics.yaml
 ```
 
-## 2.4. Configs
+## ⚙️ 2.4. Configs
 
 Full Docs: [Configs](./config/index.md)
 
@@ -207,7 +214,7 @@ For a full list of configuration options, see the page for the relevant file.
 > You usually do not need to modify the system class just to pass a parameter into
 > an existing stage.
 
-## 2.5. Experiments
+## 🧪 2.5. Experiments
 
 Running a recipe will create a sub-directory in `exp/` where the run's checkpoints, logs, and training outputs will be saved.
 The name of the sub-directory (`exp_dir`) can be determined by setting the `exp_tag` key in `training.yaml` or `inference.yaml`, depending on which stages are run.
@@ -298,7 +305,7 @@ If inference is launched together with training, the training-side experiment
 name takes priority and the decoding outputs stay under the training experiment
 directory instead.
 
-## 2.6. Putting Everything Together
+## 🧩 2.6. Putting Everything Together
 
 To create a new recipe, start from:
 
