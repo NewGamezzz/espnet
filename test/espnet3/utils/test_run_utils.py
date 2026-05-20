@@ -2,6 +2,7 @@ import logging
 
 import pytest
 from omegaconf import OmegaConf
+from omegaconf.errors import InterpolationKeyError
 
 from espnet3.utils.run_utils import (
     apply_training_experiment_context,
@@ -24,6 +25,7 @@ def test_apply_training_experiment_context_inserts_missing_values(caplog) -> Non
             training_config=training,
             inference_config=inference,
             metrics_config=None,
+            publication_config=None,
             log=logging.getLogger("test.run_utils"),
         )
 
@@ -52,6 +54,7 @@ def test_apply_training_experiment_context_warns_on_overwrite(caplog) -> None:
             training_config=training,
             inference_config=inference,
             metrics_config=None,
+            publication_config=None,
             log=logging.getLogger("test.run_utils"),
         )
 
@@ -73,6 +76,7 @@ def test_apply_training_experiment_context_noop_without_training() -> None:
         training_config=None,
         inference_config=inference,
         metrics_config=None,
+        publication_config=None,
         log=logging.getLogger("test.run_utils"),
     )
 
@@ -97,6 +101,7 @@ def test_apply_training_experiment_context_syncs_metrics_from_inference(
             training_config=None,
             inference_config=inference,
             metrics_config=metrics,
+            publication_config=None,
             log=logging.getLogger("test.run_utils"),
         )
 
@@ -119,12 +124,12 @@ def test_apply_training_experiment_context_metrics_inference_dir_follows_inferen
     )
     inference = OmegaConf.create(
         {
-            "inference_dir": "./exp/train_debug/custom_decode",
+            "inference_dir": "./exp/train_debug/custom_inference",
         }
     )
     metrics = OmegaConf.create(
         {
-            "inference_dir": "./exp/train_debug/old_decode",
+            "inference_dir": "./exp/train_debug/old_inference",
         }
     )
 
@@ -133,12 +138,13 @@ def test_apply_training_experiment_context_metrics_inference_dir_follows_inferen
             training_config=training,
             inference_config=inference,
             metrics_config=metrics,
+            publication_config=None,
             log=logging.getLogger("test.run_utils"),
         )
 
     assert metrics.exp_tag == "train_debug"
     assert metrics.exp_dir == "./exp/train_debug"
-    assert metrics.inference_dir == "./exp/train_debug/custom_decode"
+    assert metrics.inference_dir == "./exp/train_debug/custom_inference"
     assert "Overriding metrics_config.inference_dir" in caplog.text
     assert "inference_config value" in caplog.text
 
@@ -181,6 +187,25 @@ def test_validate_experiment_context_accepts_training_backed_inference() -> None
     )
 
 
+def test_validate_experiment_context_accepts_standalone_metrics_by_exp_dir() -> None:
+    validate_experiment_context(
+        training_config=None,
+        inference_config=None,
+        metrics_config=OmegaConf.create({"exp_dir": "./exp/standalone_eval"}),
+        stages_to_run=["measure"],
+    )
+
+
+def test_validate_experiment_context_rejects_non_standalone_metrics() -> None:
+    with pytest.raises(ValueError, match="measure stage requires --training_config"):
+        validate_experiment_context(
+            training_config=None,
+            inference_config=None,
+            metrics_config=OmegaConf.create({"exp_dir": "./exp/None/metrics"}),
+            stages_to_run=["measure"],
+        )
+
+
 def test_resolve_loaded_configs_resolves_interpolations() -> None:
     training = OmegaConf.create(
         {
@@ -194,6 +219,7 @@ def test_resolve_loaded_configs_resolves_interpolations() -> None:
         training_config=training,
         inference_config=inference,
         metrics_config=None,
+        publication_config=None,
         log=logging.getLogger("test.run_utils"),
     )
     resolve_loaded_configs(training, inference)
@@ -216,6 +242,7 @@ def test_validate_experiment_context_accepts_metrics_synced_from_inference() -> 
         training_config=None,
         inference_config=inference,
         metrics_config=metrics,
+        publication_config=None,
         log=logging.getLogger("test.run_utils"),
     )
 
@@ -225,3 +252,90 @@ def test_validate_experiment_context_accepts_metrics_synced_from_inference() -> 
         metrics_config=metrics,
         stages_to_run=["infer", "measure"],
     )
+
+
+def test_resolve_loaded_configs_ignores_none_entries() -> None:
+    inference = OmegaConf.create({"inference_dir": "./exp/standalone_eval/inference"})
+
+    resolve_loaded_configs(None, inference)
+
+    assert inference.inference_dir == "./exp/standalone_eval/inference"
+
+
+def test_resolve_loaded_configs_raises_on_missing_interpolation() -> None:
+    inference = OmegaConf.create({"inference_dir": "${exp_dir}/inference"})
+
+    with pytest.raises(InterpolationKeyError):
+        resolve_loaded_configs(inference)
+
+
+def test_apply_training_context_syncs_publication_from_training_and_inference(
+    caplog,
+) -> None:
+    training = OmegaConf.create(
+        {
+            "exp_tag": "train_debug",
+            "exp_dir": "./exp/train_debug",
+        }
+    )
+    inference = OmegaConf.create(
+        {
+            "inference_dir": "./exp/train_debug/inference/custom_eval",
+        }
+    )
+    publication = OmegaConf.create(
+        {
+            "pack_model": {
+                "out_dir": "${exp_dir}/model_pack",
+                "inference_dir": "${inference_dir}",
+            }
+        }
+    )
+
+    with caplog.at_level(logging.INFO):
+        apply_training_experiment_context(
+            training_config=training,
+            inference_config=inference,
+            metrics_config=None,
+            publication_config=publication,
+            log=logging.getLogger("test.run_utils"),
+        )
+
+    assert publication.exp_tag == "train_debug"
+    assert publication.exp_dir == "./exp/train_debug"
+    assert publication.inference_dir == "./exp/train_debug/inference/custom_eval"
+    assert "Inserted publication_config.exp_tag from training_config" in caplog.text
+    assert "Inserted publication_config.exp_dir from training_config" in caplog.text
+    assert (
+        "Inserted publication_config.inference_dir from inference_config" in caplog.text
+    )
+
+
+def test_resolve_loaded_configs_resolves_publication_interpolations() -> None:
+    training = OmegaConf.create(
+        {
+            "exp_tag": "train_debug",
+            "exp_dir": "./exp/${exp_tag}",
+        }
+    )
+    inference = OmegaConf.create({"inference_dir": "${exp_dir}/inference"})
+    publication = OmegaConf.create(
+        {
+            "pack_model": {
+                "out_dir": "${exp_dir}/model_pack",
+                "inference_dir": "${inference_dir}",
+            }
+        }
+    )
+
+    apply_training_experiment_context(
+        training_config=training,
+        inference_config=inference,
+        metrics_config=None,
+        publication_config=publication,
+        log=logging.getLogger("test.run_utils"),
+    )
+    resolve_loaded_configs(training, inference, publication)
+
+    assert publication.pack_model.out_dir == "./exp/train_debug/model_pack"
+    assert publication.pack_model.inference_dir == "./exp/train_debug/inference"

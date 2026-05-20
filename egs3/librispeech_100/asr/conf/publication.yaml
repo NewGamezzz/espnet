@@ -1,26 +1,10 @@
-recipe_dir: .
-# Publication config assumes the default training entrypoint
-# `conf/training.yaml`, which
-# resolves to `exp/training` via `${self_name:}` from the TEMPLATE config.
-exp_dir: ${recipe_dir}/exp/training
 
 pack_model:
-  strategy: auto  # auto|espnet2|espnet3
-  out_dir: exp/model_pack
-  extra: []
-  exclude:
-    - "**/*.log"
-    - "**/tensorboard/**"
-    - "**/wandb/**"
-  files: {}
-  yaml_files: {}
-  espnet2:
-    task: asr
-    yaml_files:
-      asr_train_config: ${exp_dir}/config.yaml
-    files:
-      asr_train_model: ${exp_dir}/model.pth
-    option: []
+  include:
+    - ${recipe_dir}/src
+    - ${data_dir}/**/bpe.model
+    - ${data_dir}/**/bpe.vocab
+    - ${data_dir}/**/tokens.txt
 
 upload_model:
-  hf_repo: yourname/your-model-repo
+  hf_repo: espnet/librispeech_100_asr_training_e_branchformer

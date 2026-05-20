@@ -111,6 +111,19 @@ class ESPnetPreprocessor(AbsPreprocessor):
         }
 
 
+class RecordingESPnetPreprocessor(AbsPreprocessor):
+    def __init__(self):
+        super().__init__(train=False)
+        self.calls = []
+
+    def __call__(self, uid, sample):
+        self.calls.append(uid)
+        return {
+            "audio": sample["audio"],
+            "text": f"[espnet:{uid}] {sample['text']}",
+        }
+
+
 class DummyDataset:
     def __init__(self, path=None):
         self.data = [
@@ -149,12 +162,12 @@ class DummyShardedDataset(ShardedDataset):
         self,
         path=None,
         shard_id: int = 0,
-        num_shards: int = 2,
-        world_shard_size: int = 1,
+        total_shards: int = 2,
+        dist_world_size: int = 1,
     ):
         self.shard_id = shard_id
-        self.num_shards = num_shards
-        self.world_shard_size = world_shard_size
+        self.total_shards = total_shards
+        self.dist_world_size = dist_world_size
         self.data = [
             {"audio": np.random.random(16000), "text": f"shard{shard_id}_hello"},
             {"audio": np.random.random(16000), "text": f"shard{shard_id}_world"},
@@ -169,15 +182,15 @@ class DummyShardedDataset(ShardedDataset):
     def shard(self, idx):
         return DummyShardedDataset(
             shard_id=idx,
-            num_shards=self.num_shards,
-            world_shard_size=self.world_shard_size,
+            total_shards=self.total_shards,
+            dist_world_size=self.dist_world_size,
         )
 
 
 class DummyBrokenShardedDataset(ShardedDataset):
-    def __init__(self, num_shards=None, world_shard_size=None):
-        self.num_shards = num_shards
-        self.world_shard_size = world_shard_size
+    def __init__(self, total_shards=None, dist_world_size=None):
+        self.total_shards = total_shards
+        self.dist_world_size = dist_world_size
 
     def __len__(self):
         return 0
@@ -187,6 +200,14 @@ class DummyBrokenShardedDataset(ShardedDataset):
 
     def shard(self, idx):
         return self
+
+
+class DummyOverrideDataset(DummyDataset):
+    def __init__(self, path=None):
+        self.data = [
+            {"audio": np.random.random(16000), "text": "override"},
+            {"audio": np.random.random(16000), "text": "winner"},
+        ]
 
 
 def _entry(name: str, *, transform: bool = False, data_src: str = DUMMY_DATA_SRC):
@@ -432,6 +453,70 @@ def test_data_organizer_test_multiple_sets():
     assert "test_other" in organizer.test
 
 
+@pytest.mark.parametrize(
+    ("test_entries", "expected_name"),
+    [
+        (
+            [
+                {
+                    "name": "shared_eval",
+                    "dataset": {"_target_": DUMMY_DATASET_TARGET},
+                },
+                {
+                    "name": "shared_eval",
+                    "dataset": {
+                        "_target_": (
+                            "test.espnet3.components.data."
+                            "test_data_organizer.DummyOverrideDataset"
+                        )
+                    },
+                },
+            ],
+            "shared_eval",
+        ),
+        (
+            [
+                {
+                    "data_src": "shared/asr",
+                    "dataset": {"_target_": DUMMY_DATASET_TARGET},
+                },
+                {
+                    "data_src": "shared/asr",
+                    "dataset": {
+                        "_target_": (
+                            "test.espnet3.components.data."
+                            "test_data_organizer.DummyOverrideDataset"
+                        )
+                    },
+                },
+            ],
+            "shared/asr",
+        ),
+        (
+            [
+                {"dataset": {"_target_": DUMMY_DATASET_TARGET}},
+                {
+                    "dataset": {
+                        "_target_": (
+                            "test.espnet3.components.data."
+                            "test_data_organizer.DummyOverrideDataset"
+                        )
+                    }
+                },
+            ],
+            "local",
+        ),
+    ],
+)
+def test_data_organizer_test_duplicate_names_last_entry_wins(
+    test_entries, expected_name
+):
+    organizer = DataOrganizer(test=test_entries)
+
+    assert list(organizer.test.keys()) == [expected_name]
+    assert organizer.test[expected_name][0]["text"] == "override"
+
+
 def test_data_organizer_transform_only():
     config = {
         "train": [_entry("train_dummy", transform=True)],
@@ -439,6 +524,29 @@ def test_data_organizer_transform_only():
     }
     organizer = DataOrganizer(train=config["train"], valid=config["valid"])
     assert organizer.train[0]["text"] == "HELLO"
+    assert organizer.valid[0]["text"] == "hello"
+
+
+def test_data_organizer_no_preprocessor_instantiated_config():
+    config = {
+        "train": [
+            {
+                "name": "train_dummy",
+                "dataset": {"_target_": DUMMY_DATASET_TARGET},
+            }
+        ],
+        "valid": [
+            {
+                "name": "valid_dummy",
+                "dataset": {"_target_": DUMMY_DATASET_TARGET},
+            }
+        ],
+    }
+    organizer = DataOrganizer(
+        train=OmegaConf.create(config)["train"],
+        valid=OmegaConf.create(config)["valid"],
+    )
+    assert organizer.train[0]["text"] == "hello"
     assert organizer.valid[0]["text"] == "hello"
 
 
@@ -458,8 +566,8 @@ def test_data_organizer_no_preprocessor_config():
         ],
     }
     organizer = DataOrganizer(
-        train=OmegaConf.create(config)["train"],
-        valid=OmegaConf.create(config)["valid"],
+        train=instantiate(OmegaConf.create(config)["train"]),
+        valid=instantiate(OmegaConf.create(config)["valid"]),
     )
     assert organizer.train[0]["text"] == "hello"
     assert organizer.valid[0]["text"] == "hello"
@@ -647,6 +755,19 @@ def test_espnet_preprocessor_with_transform():
     assert sample["text"] == "[espnet] HELLO"
 
 
+def test_data_organizer_test_uses_espnet_preprocessor_uid():
+    preprocessor = RecordingESPnetPreprocessor()
+    organizer = DataOrganizer(
+        test=[_entry("test_dummy", transform=True)],
+        preprocessor=preprocessor,
+    )
+
+    sample = organizer.test["test_dummy"][0]
+
+    assert sample["text"] == "[espnet:0] HELLO"
+    assert preprocessor.calls == ["0"]
+
+
 def test_combined_dataset_sharded_consistency_error():
     # One dataset is a ShardedDataset, the other is not
     ds1 = DummyShardedDataset()
@@ -679,10 +800,11 @@ def test_combined_dataset_shard_returns_sharded_dataset():
 
 
 def test_combined_dataset_sharded_missing_metadata():
-    ds1 = DummyBrokenShardedDataset(num_shards=None, world_shard_size=1)
-    ds2 = DummyBrokenShardedDataset(num_shards=None, world_shard_size=1)
+    ds1 = DummyBrokenShardedDataset(total_shards=None, dist_world_size=1)
+    ds2 = DummyBrokenShardedDataset(total_shards=None, dist_world_size=1)
     with pytest.raises(
-        RuntimeError, match="ShardedDataset requires num_shards and world_shard_size"
+        RuntimeError,
+        match="ShardedDataset requires total_shards and dist_world_size",
     ):
         CombinedDataset(
             datasets=[ds1, ds2],
@@ -692,10 +814,10 @@ def test_combined_dataset_sharded_missing_metadata():
 
 
 def test_combined_dataset_sharded_metadata_mismatch():
-    ds1 = DummyBrokenShardedDataset(num_shards=2, world_shard_size=1)
-    ds2 = DummyBrokenShardedDataset(num_shards=3, world_shard_size=1)
+    ds1 = DummyBrokenShardedDataset(total_shards=2, dist_world_size=1)
+    ds2 = DummyBrokenShardedDataset(total_shards=3, dist_world_size=1)
     with pytest.raises(
-        RuntimeError, match="must share the same num_shards and world_shard_size"
+        RuntimeError, match="must share the same total_shards and dist_world_size"
     ):
         CombinedDataset(
             datasets=[ds1, ds2],

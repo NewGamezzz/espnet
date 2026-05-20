@@ -14,23 +14,7 @@ from espnet2.utils.yaml_no_alias_safe_dump import yaml_no_alias_safe_dump
 
 
 def get_task_class(task_path: str):
-    """Resolve and return an ESPnet2 Task class from a dotted class path.
-
-    Args:
-        task_path (str): Dotted path to an ESPnet2 Task class (Hydra-style),
-            e.g., ``"espnet2.tasks.asr.ASRTask"``.
-
-    Returns:
-        type: The resolved Task class.
-
-    Raises:
-        RuntimeError: If the class cannot be imported/resolved.
-
-    Example:
-        >>> cls = get_task_class("espnet2.tasks.asr.ASRTask")  # doctest: +SKIP
-        >>> cls.__name__  # doctest: +SKIP
-        'ASRTask'
-    """
+    """Get the ESPnet-2 Task class from the given task path."""
     try:
         ez_task = get_class(task_path)
     except Exception as e:
@@ -40,29 +24,7 @@ def get_task_class(task_path: str):
 
 @typechecked
 def get_espnet_model(task: str, config: Union[Dict, DictConfig]) -> AbsESPnetModel:
-    """Build and return an ESPnet2 model from a task class and config.
-
-    This is a thin wrapper around ``Task.get_default_config()`` and
-    ``Task.build_model(...)``. It temporarily overrides ``sys.argv`` to satisfy
-    some task implementations that rely on argument parsing.
-
-    Args:
-        task (str): Dotted path to an ESPnet2 Task class.
-        config (Union[Dict, DictConfig]): Model/config overrides merged into the
-            task default config.
-
-    Returns:
-        AbsESPnetModel: Instantiated ESPnet2 model.
-
-    Raises:
-        RuntimeError: If the task class cannot be resolved.
-
-    Example:
-        >>> model = get_espnet_model(
-        ...     "espnet2.tasks.asr.ASRTask",
-        ...     {"frontend": "default"},
-        ... )  # doctest: +SKIP
-    """
+    """Build and return an ESPnet model from the given task and config."""
     ez_task = get_task_class(task)
 
     # workaround for calling get_default_config

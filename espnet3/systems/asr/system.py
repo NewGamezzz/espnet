@@ -11,6 +11,8 @@ from importlib import import_module
 from pathlib import Path
 from typing import Iterable
 
+from omegaconf import DictConfig
+
 from espnet3.systems.asr.tokenizers.sentencepiece import train_sentencepiece
 from espnet3.systems.base.system import BaseSystem
 
@@ -29,20 +31,35 @@ class ASRSystem(BaseSystem):
 
     def __init__(
         self,
-        training_config=None,
-        inference_config=None,
-        metrics_config=None,
-        **kwargs,
+        training_config: DictConfig | None = None,
+        inference_config: DictConfig | None = None,
+        metrics_config: DictConfig | None = None,
+        publication_config: DictConfig | None = None,
+        stage_log_mapping: dict | None = None,
+        demo_config: DictConfig | None = None,
     ) -> None:
-        """Initialize the ASR system with ASR-specific stage mappings."""
+        """Initialize the ASR system with optional stage configs.
+
+        Args:
+            training_config: Training configuration.
+            inference_config: Inference configuration.
+            metrics_config: Measurement configuration.
+            publication_config: Publication configuration for model packing
+                and upload stages.
+            stage_log_mapping: Optional per-stage log directory overrides.
+            demo_config: Demo configuration for demo packing and upload
+                stages.
+        """
         super().__init__(
             training_config=training_config,
             inference_config=inference_config,
             metrics_config=metrics_config,
+            publication_config=publication_config,
             stage_log_mapping={
                 "train_tokenizer": "training_config.tokenizer.save_path",
+                **(stage_log_mapping or {}),
             },
-            **kwargs,
+            demo_config=demo_config,
         )
 
     def train(self, *args, **kwargs):
@@ -81,33 +98,6 @@ class ASRSystem(BaseSystem):
         model = output_path / f"{tokenizer_config.model_type}.model"
         vocab = output_path / f"{tokenizer_config.model_type}.vocab"
         return model.exists() and vocab.exists()
-
-    def _resolve_stats_pack_paths(self) -> list[Path]:
-        """Return stats artifacts to include in a publication bundle."""
-        stats_dir = getattr(self.training_config, "stats_dir", None)
-        if not stats_dir:
-            return []
-
-        stats_path = Path(stats_dir)
-        train_dir = stats_path / "train"
-        valid_dir = stats_path / "valid"
-        train_npz = sorted(path for path in train_dir.glob("*.npz") if path.is_file())
-        valid_npz = sorted(path for path in valid_dir.glob("*.npz") if path.is_file())
-        has_shape_files = any(train_dir.glob("*shape*")) and any(
-            valid_dir.glob("*shape*")
-        )
-        if (
-            train_dir.is_dir()
-            and valid_dir.is_dir()
-            and train_npz
-            and valid_npz
-            and has_shape_files
-        ):
-            logger.info(
-                "Packing stats artifacts from %s as train/*.npz only", stats_path
-            )
-            return train_npz
-        return [stats_path]
 
     def train_tokenizer(self, *args, **kwargs):
         """Train a SentencePiece tokenizer based on configured text.
@@ -192,27 +182,3 @@ class ASRSystem(BaseSystem):
         logger.info(
             "Tokenizer training completed in %.2fs", time.perf_counter() - start
         )
-
-    # ---------------------------------------------------------
-    # Publication helpers
-    # ---------------------------------------------------------
-    def pack_model(self, *args, **kwargs):
-        """Pack model artifacts into an espnet3 bundle."""
-        self._reject_stage_args("pack_model", args, kwargs)
-        from espnet3.utils.publish_utils import pack_model
-
-        extra_paths = []
-        if self.training_config is not None:
-            tokenizer_cfg = getattr(self.training_config, "tokenizer", None)
-            if tokenizer_cfg is not None:
-                save_path = getattr(tokenizer_cfg, "save_path", None)
-                if save_path:
-                    extra_paths.append(Path(save_path))
-            extra_paths.extend(self._resolve_stats_pack_paths())
-            data_dir = getattr(self.training_config, "data_dir", None)
-            if data_dir:
-                data_tokenizer = Path(data_dir) / "tokenizer"
-                if data_tokenizer.exists():
-                    extra_paths.append(data_tokenizer)
-
-        return pack_model(self, extra=extra_paths)
