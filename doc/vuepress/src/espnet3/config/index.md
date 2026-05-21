@@ -1,79 +1,48 @@
----
-title: ESPnet3 Config Overview
-author:
-  name: "Masao Someki"
-date: 2025-11-26
----
+# Config overview
 
-# ESPnet3 Config Overview
+Canonical ESPnet3 config files are:
 
-ESPnet3 uses separate YAML files per stage. Most recipes follow the layout:
-
-```
+```text
 egs3/<recipe>/<task>/conf/
-  train.yaml
-  infer.yaml
-  metric.yaml
-  publish.yaml
+  training.yaml
+  inference.yaml
+  metrics.yaml
+  publication.yaml
   demo.yaml
 ```
 
-Each file is passed to `run.py` via the matching CLI flag:
+## CLI flags
 
 ```bash
 python run.py \
-  --train_config conf/train.yaml \
-  --infer_config conf/infer.yaml \
-  --metric_config conf/metric.yaml \
-  --publish_config conf/publish.yaml \
+  --training_config conf/training.yaml \
+  --inference_config conf/inference.yaml \
+  --metrics_config conf/metrics.yaml \
+  --publication_config conf/publication.yaml \
   --demo_config conf/demo.yaml
 ```
 
-If you omit a config flag, no config is passed for that stage by default. When a
-stage runs without its required config entries, ESPnet3 raises an error so you
-can fix the missing settings explicitly.
-
-Example error:
-
-```
-ValueError: Config not provided for stage(s): train. Use --train_config/--infer_config/--measure_config.
-```
-
-## Resolvers
-
-ESPnet3 registers custom OmegaConf resolvers for loading external files from
-YAML. For example, in ASR or speech-to-text recipes you can keep a token list
-in a separate text file (to avoid huge YAML blocks) and load it at config time.
-See [Resolvers](./resolvers.md) for details.
-
-## Stage to config mapping
+## Stage mapping
 
 | Stage | Config flag | Typical file |
 | --- | --- | --- |
-| create_dataset | `--train_config` | `train.yaml` |
-| collect_stats | `--train_config` | `train.yaml` |
-| train | `--train_config` | `train.yaml` |
-| infer | `--infer_config` | `infer.yaml` |
-| metric | `--metric_config` | `metric.yaml` |
-| pack_model | `--train_config` | `train.yaml` |
-| upload_model | `--publish_config` | `publish.yaml` |
-| pack_demo | `--demo_config` | `demo.yaml` |
-| upload_demo | `--demo_config` | `demo.yaml` |
+| `create_dataset` | `--training_config` | `training.yaml` |
+| `train_tokenizer` | `--training_config` | `training.yaml` |
+| `collect_stats` | `--training_config` | `training.yaml` |
+| `train` | `--training_config` | `training.yaml` |
+| `infer` | `--inference_config` | `inference.yaml` |
+| `measure` | `--metrics_config` | `metrics.yaml` |
+| `pack_model` | `--training_config` and `--publication_config` | `training.yaml` and `publication.yaml` |
+| `upload_model` | `--publication_config` | `publication.yaml` |
+| `pack_demo` | `--demo_config` | `demo.yaml` |
+| `upload_demo` | `--demo_config` | `demo.yaml` |
 
-## What goes in each config
+## Pages
 
-| File | Purpose | Typical contents |
-| --- | --- | --- |
-| [`train.yaml`](./train_config.md) | Training pipeline | model, trainer, optimizers, dataloader, exp_dir |
-| [`infer.yaml`](./infer_config.md) | Inference/decoding | model entrypoint, dataset, inference_dir, output_fn, parallel |
-| [`metric.yaml`](./metric_config.md) | Scoring/metrics | metrics, inference_dir, test sets |
-| [`publish.yaml`](./publish_config.md) | Packaging/upload | pack settings, artifacts to include, HF upload options |
-| [`demo.yaml`](./demo_config.md) | Demo build | UI spec, output mapping, infer config path, assets |
+- [Training config](./training.md)
+- [Inference config](./inference.md)
+- [Metrics config](./metrics.md)
+- [Publication config](./publication.md)
+- [Demo config](./demo.md)
+- [Resolvers](./resolvers.md)
 
-### Notes
-
-- Train stage: [Train configuration](./train_config.md)
-- Inference config: [Inference configuration](./infer_config.md)
-- Metrics pipeline: [Metrics](../stages/metrics.md)
-- Demo customization: [Demo guide](../stages/demo.md)
-- Resolvers: [Resolvers](./resolvers.md)

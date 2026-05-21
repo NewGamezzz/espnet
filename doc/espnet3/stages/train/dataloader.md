@@ -9,10 +9,9 @@ date: 2025-11-26
 
 This page summarizes how `dataloader` and `collate_fn` work in ESPnet3. It
 supports both the ESPnet iterator setup and the standard PyTorch DataLoader; we
-explain the ESPnet flow first. For full configuration options, see
-[training config reference](../../config/train_config.md).
-
-The same dataloader block is reused by both `collect_stats` and `train`.
+explain the ESPnet flow first. For
+full configuration options, see
+[train config reference](../../config/train_config.md).
 
 In training, these dataloaders are built inside the LightningModule
 implementation: `espnet3/components/modeling/lightning_module.py`
@@ -29,6 +28,8 @@ dataloader:
     _target_: espnet2.train.collate_fn.CommonCollateFn
     int_pad_value: -1
   train:
+    multiple_iterator: false
+    num_shards: 1
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
       shuffle: true
@@ -38,6 +39,8 @@ dataloader:
         shape_files:
           - ${stats_dir}/train/feats_shape
   valid:
+    multiple_iterator: false
+    num_shards: 1
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
       shuffle: false
@@ -114,8 +117,8 @@ class MyCustomCollateFn:
         return self.base(noisy_items)
 ```
 
-If the collate function is recipe-specific, define it under
-`egs3/<recipe>/<task>/src/` and reference it in `training.yaml`:
+If the collate function is recipe-specific, define it under `egs3/<recipe>/<task>/src/`
+and reference it in `train.yaml`:
 
 ```yaml
 dataloader:
@@ -172,8 +175,6 @@ dataloader:
         batch_size: 16
         batch_bins: 12000000
 ```
-
-`multiple_iterator` is not supported in current ESPnet3.
 
 ### Iterator factories (ESPnet2)
 
@@ -259,6 +260,46 @@ dataloader:
       sampler_args:
         category2utt_file: ${stats_dir}/train/utt2category
         batch_size: 32
+```
+
+## Sharded iteration (multiple_iterator)
+
+Sharding means splitting a huge dataset into smaller pieces (shards) so you
+don't have to load or iterate the entire dataset at once. This becomes
+important at trainin with million‑hour scale data where loading/training with
+the entire data every epoch is too heavy.
+
+When `multiple_iterator: true`, ESPnet3 selects one shard per epoch and builds
+the iterator on that shard only. `num_shards` controls how many pieces you
+split the dataset into:
+
+- `num_shards: 1` keeps the full dataset as a single shard (no sharding).
+- `num_shards: 10` splits the dataset into 10 parts and uses one part per epoch.
+
+```yaml
+dataloader:
+  train:
+    multiple_iterator: true
+    num_shards: 10
+    iter_factory:
+      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+      shuffle: true
+      collate_fn: ${dataloader.collate_fn}
+      batches:
+        type: sorted
+        shape_files:
+          - ${stats_dir}/train/feats_shape.{shard_idx}
+  valid:
+    multiple_iterator: true
+    num_shards: 10
+    iter_factory:
+      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+      shuffle: false
+      collate_fn: ${dataloader.collate_fn}
+      batches:
+        type: sorted
+        shape_files:
+          - ${stats_dir}/valid/feats_shape.{shard_idx}
 ```
 
 ### Batch samplers (ESPnet2)

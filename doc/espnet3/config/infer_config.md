@@ -2,201 +2,146 @@
 title: ESPnet3 Inference Configuration
 author:
   name: "Masao Someki"
-date: 2026-04-15
+date: 2025-11-26
 ---
 
 # ESPnet3 Inference Configuration
 
-## Minimum required keys
+This page explains the `infer.yaml` schema used by the infer stage.
+The example below is from an ASR recipe, so it uses ASR-style dataset
+definitions.
 
-Typical inference runs need:
+## Minimum required keys (typical inference run)
 
-- `dataset.test`
-- `model`
-- `provider`
-- `runner`
-- `input_key`
-- `inference_dir`
+Required:
 
-Optional:
+- `model` (Hydra target; instantiated with a `device` argument)
+- `dataset.test` (at least one test set; names are used as output subfolders)
+- `inference_dir` (root output directory for `.scp` files)
+- `input_key` (which dataset field(s) to pass into the model)
+- `output_fn` (import path to a function that formats runner outputs)
 
-- `output_fn`
-- `output_keys`
-- `idx_key`
-- `batch_size`
-- `parallel`
+Common optional:
 
-## Config sections overview
+- `parallel` (defaults to local if omitted)
+- `exp_dir`, `recipe_dir`, `dataset_dir` (path scaffold)
+- `output_keys` (explicit list of SCP keys to write; otherwise inferred)
+- `idx_key` (default: `uttid`)
+- `batch_size` (enables batched runner execution)
+
+Minimal example:
+
+```yaml
+inference_dir: exp/my_exp/infer
+
+dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  test:
+    - name: test
+      dataset:
+        _target_: src.dataset.MyDataset
+        data_dir: /path/to/data
+
+model:
+  _target_: src.infer.MyInferenceModel
+
+input_key: speech
+output_fn: src.infer.output_fn
+```
+
+## ✅ Config sections overview
 
 | Section | Description |
 | --- | --- |
-| `recipe_dir`, `exp_dir`, `inference_dir`, ... | path scaffold for inference outputs |
-| `dataset` | test-set definitions resolved through `DataOrganizer` |
-| `model` | inference-time model entrypoint and arguments |
-| `input_key` | which dataset field or fields are passed into the model |
-| `output_fn` | import path to the formatting function used by `InferenceRunner` |
-| `output_keys`, `idx_key` | controls SCP output names and utterance ID key |
-| `batch_size` | enables batched runner execution |
-| `parallel` | local, multi-worker, or cluster execution settings |
+| `recipe_dir`, `exp_dir`, `inference_dir`, ... | Path scaffold for outputs and inference results. |
+| `dataset` | Test set definitions. |
+| `model` | Inference model entrypoint and parameters (instantiated with `device=`). |
+| `input_key` | Dataset field name (or list of names) passed into the model. |
+| `output_fn` | Import path to a result formatting function. |
+| `output_keys`, `idx_key` | Controls SCP output filenames and the ID field name. |
+| `parallel` | Dask / cluster settings for runners. |
 
-## Default values
-
-| Key | Default value |
-| --- | --- |
-| `recipe_dir` | `.` |
-| `data_dir` | `${recipe_dir}/data` |
-| `exp_tag` | empty |
-| `exp_dir` | `${recipe_dir}/exp/${exp_tag}` |
-| `inference_dir` | `${exp_dir}/${self_name:}` |
-| `parallel.env` | `local` |
-| `parallel.n_workers` | `1` |
-| `input_key` | `speech` |
-| `output_fn` | `src.inference.build_output` |
-| `provider._target_` | `espnet3.systems.base.inference_provider.InferenceProvider` |
-| `runner._target_` | `espnet3.systems.base.inference_runner.InferenceRunner` |
-
-## Naming behavior
-
-If `training_config` is also loaded in the same `run.py` invocation,
-inference inherits these two values from training:
-
-- `exp_tag`
-- `exp_dir`
-
-If inference runs standalone, `inference.yaml` must carry its own experiment
-identity, typically through:
+## Core config layout (ASR example)
 
 ```yaml
-exp_tag: my_eval
+recipe_dir: .
+exp_tag: asr_template_eval
 exp_dir: ${recipe_dir}/exp/${exp_tag}
-```
-
-## Minimal example
-
-```yaml
-exp_tag: inference_beam5
+stats_dir: ${recipe_dir}/exp/stats
+inference_dir: ${exp_dir}/infer
+dataset_dir: /path/to/your/dataset
 
 dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
   test:
-    - name: test
-      data_src: mini_an4/asr
-      data_src_args:
-        split: test
+    - name: test-clean
+      dataset:
+        _target_: src.dataset.LibriSpeechDataset
+        data_dir: ${dataset_dir}
+        split: test-clean
 
 model:
   _target_: espnet2.bin.asr_inference.Speech2Text
   asr_train_config: ${exp_dir}/config.yaml
   asr_model_file: ${exp_dir}/last.ckpt
+
+parallel:
+  env: local
+  n_workers: 1
+
+input_key: speech
+output_fn: src.infer.output_fn
+
 ```
 
 ## Model definition
 
 `model` should point to an inference-time callable. For ESPnet2-compatible
-recipes this is often an `espnet2.bin.*` helper such as
-`espnet2.bin.asr_inference.Speech2Text`.
+recipes this is typically an `espnet2.bin.*` inference helper such as
+`espnet2.bin.asr_inference.Speech2Text`. When using a custom inference stack,
+provide your own `_target_` and arguments.
 
-When you use a custom inference stack, provide your own `_target_` and
-arguments. The instantiated object should accept the inputs named by
-`input_key`, and `output_fn` should know how to interpret the return value.
-
-See [Model](../core/components/model.md) for model implementation details.
+See [Inference providers](../core/parallel/inference_provider.md) for the provider/runner
+contract and model construction details.
 
 ## Output directory layout
 
-Inference writes SCP outputs under `inference_dir`, one folder per test-set
-name:
+Inference writes `.scp` outputs under `inference_dir`, one folder per test set name:
 
-```text
+```
 ${inference_dir}/
   test-clean/
     hyp.scp
-    wav.scp
+    hyp0.scp
+    hyp1.scp
   test-other/
     hyp.scp
 ```
 
 The exact filenames are determined by:
 
-- `output_keys` if it is set
-- otherwise the keys returned by `output_fn` for the first sample, excluding
-  `idx_key`
+- `output_keys` (if set), or
+- the keys returned by `output_fn` (excluding `idx_key`) for the first sample.
 
-## Output control
+## Batched execution (`batch_size`)
 
-Useful keys:
+If `batch_size` is set, `InferenceRunner.forward` receives a list of indices
+and passes list-valued inputs to the model (one list per `input_key`). There is
+no `batch_forward`; batching is handled entirely through `forward`.
 
-- `idx_key`: sample ID key, default `utt_id`
-- `output_keys`: explicit SCP filenames to write
-- `output_artifacts`: artifact-writing config for non-scalar outputs
+In that case, `output_fn` is called with:
 
-Built-in artifact behavior:
+- `data`: a list of dataset items
+- `idx`: a list of indices
+- `model_output`: your model's batched output structure
 
-- `dict` -> JSON
-- `numpy.ndarray` -> NPY
-- CPU `torch.Tensor` -> NPY
-- unknown Python object -> pickle
-
-Supported artifact types:
-
-| Type | Saved as | Notes |
-| --- | --- | --- |
-| `wav` | `.wav` | requires `sample_rate` |
-| `npy` | `.npy` | good for NumPy arrays or CPU tensors |
-| `json` | `.json` | good for `dict` outputs |
-| `pickle` | `.pkl` | fallback for custom Python objects |
-| `writer` | custom path | uses a user-defined function via `_target_` |
-
-See [Inference stage](../stages/inference.md) for:
-
-- WAV output example
-- custom writer example
-- artifact directory structure
-
-## Batched execution
-
-If `batch_size` is set, `InferenceRunner.forward()` receives a list of indices
-and passes list-valued inputs to the model.
-
-In that case:
-
-- `data` becomes a list of dataset samples
-- `idx` becomes a list of indices
-- `output_fn` must return a list of output dicts
-
-If you do not want batched inference, leave `batch_size` unset.
+If you don't want to handle batched `output_fn`, leave `batch_size` unset. When
+`batch_size` is unset, `forward` is called with a scalar index and `data` is a
+single dataset item.
 
 ## Parallel execution
 
-Minimal local example:
-
-```yaml
-parallel:
-  env: local
-  n_workers: 1
-```
-
-Minimal SLURM example:
-
-```yaml
-parallel:
-  env: slurm
-  n_workers: 8
-  options:
-    queue: gpu
-    cores: 8
-    processes: 1
-    memory: 16GB
-    walltime: 30:00
-    job_extra_directives:
-      - "--gres=gpu:1"
-```
-
-Parallel execution details are documented here:
+Parallel execution is documented separately:
 
 - [Provider / Runner](../core/parallel/provider_runner.md)
 - [Multi-GPU / multi-node](../core/parallel/multiple_gpu.md)
-
-## Related pages
-
-- [Inference stage](../stages/inference.md)
-- [Dataset references and builders](../core/components/datasets.md)

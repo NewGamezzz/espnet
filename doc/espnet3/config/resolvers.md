@@ -2,23 +2,31 @@
 title: ESPnet3 Config Resolvers
 author:
   name: "Masao Someki"
-date: 2026-04-15
+date: 2025-11-26
 ---
 
 # ESPnet3 Config Resolvers
 
-## At a glance
+ESPnet3 registers a small set of OmegaConf resolvers to pull external data into
+YAML configs at load time. These are defined in `espnet3.utils.config_utils` and are
+available in all stage configs.
+
+## ✅ At a glance
 
 | Resolver | Description |
 | --- | --- |
-| `load_line` | load lines from a text file into a list |
-| `self_name` | use the current config file stem |
+| `load_line` | Load lines from a text file into a list. |
+| `load_yaml` | Load a YAML file or a specific key from it. |
 
-## `load_line`
+## load_line
+
+Use `load_line` to read a text file (one entry per line) and inject it into a
+config. This is commonly used for ASR or speech-to-text token lists, which are
+often easier to manage in a separate text file than inline YAML.
 
 Sample file:
 
-```text
+```
 <blank>
 <sos/eos>
 <unk>
@@ -28,43 +36,41 @@ Sample file:
 token_list: ${load_line:conf/token_list.txt}
 ```
 
-When Python reads this config, `token_list` becomes:
-
-```python
-["<blank>", "<sos/eos>", "<unk>"]
-```
-
-So `load_line` is just a way to write a string list in a text file instead of
-inline YAML.
-
-## `self_name`
-
-`self_name` resolves to the current config file stem.
-
-Example:
+When the config is loaded, `token_list` becomes:
 
 ```yaml
-exp_tag: ${self_name:}
+token_list:
+  - "<blank>"
+  - "<sos/eos>"
+  - "<unk>"
+```
+
+## load_yaml
+
+Use `load_yaml` to load an entire YAML file or a single value from it.
+
+Sample file (`conf/train.yaml`):
+
+```yaml
+exp_tag: asr_template_train
 exp_dir: ${recipe_dir}/exp/${exp_tag}
 ```
 
-If the file is `conf/tuning/training_e_branchformer.yaml`, then:
-
 ```yaml
-exp_tag: training_e_branchformer
-exp_dir: ./exp/training_e_branchformer
+exp_tag: ${load_yaml:conf/train.yaml,exp_tag}
+full_cfg: ${load_yaml:conf/train.yaml}
 ```
 
-This is how TEMPLATE configs derive default names from the config filename.
+When the config is loaded, the values are resolved from the referenced file.
 
-## Common use cases
+Example of the resolved result in a second config:
 
-- keep large token lists out of YAML
-- read one-item-per-line vocab or symbol files
-- derive `exp_tag` from the config filename
+```yaml
+exp_tag: asr_template_train
+full_cfg:
+  exp_tag: asr_template_train
+  exp_dir: ${recipe_dir}/exp/${exp_tag}
+```
 
-## Notes
-
-- use a path relative to the config file
-- each line becomes one list item
-- `self_name` uses the current config stem, not the full path
+When a key is provided, it uses dot notation and raises an error if the key is
+missing.

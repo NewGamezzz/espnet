@@ -1,109 +1,89 @@
 ---
-title: ESPnet3 Train Optimizer And Scheduler
-author:
-  name: "Masao Someki"
-date: 2026-04-15
+title: ESPnet3 Train Optimizer and Scheduler
 ---
 
-# ESPnet3 Train Optimizer And Scheduler
+# ESPnet3 Train Optimizer and Scheduler
 
-This page describes the user-facing config for optimizer and scheduler setup in
-`training.yaml`.
+This page explains how `optimizer`/`scheduler` config blocks map to actual
+optimizers and schedulers instantiated in the training code.
 
-The implementation lives in:
+ESPnet3 reads these configs in `espnet3/components/modeling/lightning_module.py`
+(`ESPnetLightningModule.configure_optimizers`)
+and instantiates them via Hydra.
 
-- `espnet3.components.modeling.lightning_module.ESPnetLightningModule.configure_optimizers`
+You can use any optimizer or scheduler supported by PyTorch. ESPnet2 also ships
+custom schedulers; you can reference them the same way with `_target_`.
 
-## Single optimizer path
+## ESPnet2 scheduler options
 
-Use this for standard training.
+| Class | Description |
+| --- | --- |
+| [`WarmupLR`](https://espnet.github.io/espnet/guide/espnet2/schedulers/WarmupLR.html) | Linear warmup with constant LR after warmup. |
+| [`NoamLR`](https://espnet.github.io/espnet/guide/espnet2/schedulers/NoamLR.html) | Transformer-style warmup + inverse square root decay. |
+| [`WarmupStepLR`](https://espnet.github.io/espnet/guide/espnet2/schedulers/WarmupStepLR.html) | Warmup then step-based decay. |
+| [`ExponentialDecayWarmup`](https://espnet.github.io/espnet/guide/espnet2/schedulers/ExponentialDecayWarmup.html) | Warmup then exponential decay. |
+| [`CosineAnnealingWarmupRestarts`](https://espnet.github.io/espnet/guide/espnet2/schedulers/CosineAnnealingWarmupRestarts.html) | Warmup with cosine annealing and restarts. |
+| [`PiecewiseLinearWarmupLR`](https://espnet.github.io/espnet/guide/espnet2/schedulers/PiecewiseLinearWarmupLR.html) | Warmup followed by piecewise linear schedule. |
+| [`TristageLR`](https://espnet.github.io/espnet/guide/espnet2/schedulers/TristageLR.html) | Three-stage schedule (warmup, hold, decay). |
+| [`WarmupReduceLROnPlateau`](https://espnet.github.io/espnet/guide/espnet2/schedulers/WarmupReduceLROnPlateau.html) | Warmup with ReduceLROnPlateau logic. |
+
+## Single optimizer + scheduler
+
+Use this when the entire model is trained with one optimizer.
 
 ```yaml
 optimizer:
-  _target_: torch.optim.Adam
+  _target_: torch.optimizer.Adam
   lr: 0.001
+  weight_decay: 0.000001
 
 scheduler:
   _target_: espnet2.schedulers.warmup_lr.WarmupLR
   warmup_steps: 15000
-
-scheduler_interval: step
-scheduler_monitor:
 ```
 
-Use `scheduler_monitor` only for epoch-based monitored schedulers such as
-`ReduceLROnPlateau`.
+What happens:
 
-## Multiple optimizers
+- `optimizer` is instantiated with all trainable parameters.
+- `scheduler` is instantiated with the optimizer.
 
-Use this for GAN-style or otherwise asymmetric training.
+## Multiple optimizers + schedulers
+
+Use this when different model parts use different optimizers/schedulers.
+Each entry in `optimizers` must define:
+
+- `optimizer`: the optimizer config
+- `params`: a substring that matches parameter names (e.g., `encoder`)
 
 ```yaml
 optimizers:
-  generator:
-    optimizer:
-      _target_: torch.optim.Adam
-      lr: 0.0002
-    params: generator
-    accum_grad_steps: 1
-    step_every_n_iters: 1
-    gradient_clip_val: 1.0
-    gradient_clip_algorithm: norm
-
-  discriminator:
-    optimizer:
-      _target_: torch.optim.Adam
-      lr: 0.0002
-    params: discriminator
-    accum_grad_steps: 1
-    step_every_n_iters: 1
+  - optimizer:
+      _target_: torch.optimizer.Adam
+      lr: 0.001
+    params: encoder
+  - optimizer:
+      _target_: torch.optimizer.SGD
+      lr: 0.01
+    params: decoder
 
 schedulers:
-  generator:
-    scheduler:
-      _target_: torch.optim.lr_scheduler.LinearLR
-      total_iters: 1000
-    interval: step
-
-  discriminator:
-    scheduler:
-      _target_: torch.optim.lr_scheduler.ReduceLROnPlateau
+  - scheduler:
+      _target_: torch.optimizer.lr_scheduler.StepLR
+      step_size: 10
+  - scheduler:
+      _target_: torch.optimizer.lr_scheduler.ReduceLROnPlateau
       patience: 2
-    interval: epoch
-    monitor: valid/discriminator/loss
 ```
 
-## What the model must return
+What happens:
 
-Single optimizer path:
+- Each `optimizer` block is instantiated with parameters whose names contain
+  the given `params` substring.
+- ESPnet3 checks that every trainable parameter is assigned exactly once.
+- Schedulers are matched by list index (`schedulers[0]` for `optimizers[0]`, etc.)
+  and wrapped for Lightning.
 
-```python
-return loss_tensor, stats, weight
-```
+### Notes
 
-Multiple-optimizer path:
-
-```python
-return [
-    OptimizationStep(loss=g_loss, name="generator"),
-    OptimizationStep(loss=d_loss, name="discriminator"),
-], stats, weight
-```
-
-The order of the returned list is the update order.
-
-If a named optimizer is not returned for a batch, it is not updated on that
-batch.
-
-## Rules
-
-- use `torch.optim.*`
-- do not mix `optimizer` with `optimizers`
-- do not mix `scheduler` with `schedulers`
-- named optimizer and scheduler keys must match exactly
-- trainer-level gradient clipping is not supported in multi-optimizer mode
-
-## Related pages
-
-- [Optimizer configuration](../../core/components/optimizer_configuration.md)
-- [Multiple optimizers and `OptimizationStep`](../../core/components/multiple_optimizers_schedulers.md)
+- Do not mix `optimizer` with `optimizers`, or `scheduler` with `schedulers`.
+- If `params` does not match any parameters, configuration fails.

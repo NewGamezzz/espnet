@@ -77,7 +77,7 @@ config and wires inputs/outputs directly to your inference runner.
 1. If `demo.yaml` includes `ui`, it is merged with system defaults from
    `build_ui_default()` (when available).
 2. If `ui` is missing, ESPnet3 calls `build_ui(demo_cfg)` from
-   `espnet3.systems.*system*.demo`.
+   `espnet3.systems.<system>.demo`.
 3. If neither is available, `ui` is required in `demo.yaml`.
 
 <div class='custom-h4'><p>UI fields</p></div>

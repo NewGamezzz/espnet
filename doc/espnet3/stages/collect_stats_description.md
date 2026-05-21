@@ -1,71 +1,67 @@
 ---
-title: ESPnet3 Collect Stats Overview
+title: ESPnet3 Collect Stats Phase Overview
 author:
   name: "Masao Someki"
-date: 2026-04-15
+date: 2025-11-26
 ---
 
-# ESPnet3 Collect Stats Overview
+# ESPnet3 Collect Stats Phase Overview
 
-`collect_stats` still serves the same two broad purposes as in ESPnet2:
+In ESPnet2, there is a stage called "collect-stats" that precedes training. This stage serves two primary purposes:
 
-1. produce shape information for batching
-2. produce statistics for normalization such as GlobalMVN
+1. **Collecting the lengths of acoustic features** to enable dynamic batch size adjustment.
+2. **Computing the global mean and variance** of the acoustic features for normalization.
+
+### 1. Feature Length Collection
+
+By precomputing the lengths of acoustic feature sequences, ESPnet2 could dynamically adjust batch sizes during training. For instance, if the maximum number of frames per batch was set to 100, a batch might contain 1 long utterance or 3 short ones. This helped mitigate out-of-memory (OOM) issues on GPUs.
 
 ![](./images/dynamic_batch.png)
 
-## 1. Feature length collection
+In ESPnet3, the collect-stats stage is still present. It runs before training and
+writes the collected statistics under `stats_dir` so later stages (like training
+and normalization) can reuse them.
 
-Shape files produced under `stats_dir/train` and `stats_dir/valid` are commonly
-used by ESPnet iterator-based batching.
+### 2. Global Mean and Variance (Global MVN)
 
-Precomputing feature lengths lets the iterator adjust batches based on sequence
-size, which is one of the main ways ESPnet avoids out-of-memory errors.
+ESPnet2 often used `GlobalMVN` for acoustic features. The statistics were computed over the entire dataset in the collect-stats stage and applied during training.
+ESPnet3 computes these statistics in the collect-stats stage and saves them
+to `stats_dir` (e.g., `${stats_dir}/train/feats_stats.npz`). If a user already has
+`GlobalMVN` statistics from a prior ESPnet2 project, ESPnet3 allows specifying
+these via configuration so that models can continue to use them.
 
-## 2. Global mean and variance
-
-When the model uses normalization that needs dataset-level stats, `collect_stats`
-writes files such as:
-
-```text
-${stats_dir}/train/feats_stats.npz
-```
-
-Task-backed models usually point to these through:
+When you are using ESPnet2 models with `task` set in `train.yaml`, put the
+normalization settings under `model:`:
 
 ```yaml
+task: espnet3.systems.asr.task.ASRTask
 model:
   normalize: global_mvn
   normalize_conf:
     stats_file: ${stats_dir}/train/feats_stats.npz
 ```
 
-If a custom model wants to instantiate normalization directly through Hydra, a
-common pattern is:
-
+Or if you want to use `GlobalMVN` on your custom model, define it like this and
+Hydra will instantiate it automatically:
 ```yaml
 normalize:
   _target_: espnet2.layers.global_mvn.GlobalMVN
-  stats_file: ${stats_dir}/train/feats_stats.npz
+  stats_file: /path/to/your/custom/stats_file.npz
 ```
 
-That is the same conceptual role as in ESPnet2: compute a dataset-level summary
-once, then reuse it during the actual training stage.
 
-The difference in ESPnet3 is mainly the surrounding config and stage wiring, not
-the purpose of the files themselves.
+### 3. Advanced Use Cases: GPU-based Stats Collection
 
-If a user already has compatible statistics from elsewhere, the model can also
-point to that file directly. The important point is that ESPnet3 still treats
-`collect_stats` as the standard place to create these files.
+Some research projects may involve complex features, such as using HuBERT or
+other pretrained models for representation extraction. In such cases, feature
+extraction and stats computation may need to run on GPU.
 
-## 3. Advanced use cases: GPU-based stats collection
+ESPnet3 provides a parallel execution API. See
+[Provider/Runner](../core/parallel/provider_runner.md) for the parallel runner setup. Set
+`parallel` in `train.yaml`, then run the `collect_stats` stage as usual; the
+parallel backend will be used automatically.
 
-If `parallel` is configured in `training.yaml`, the stage can reuse ESPnet3's
-parallel execution helpers for heavier feature extraction workloads.
-
-Example:
-
+parallel configuration:
 ```yaml
 parallel:
   env: slurm
@@ -80,15 +76,17 @@ parallel:
       - "--gres=gpu:1"
 ```
 
-## Run
+Run:
 
 ```bash
-python run.py --stages collect_stats --training_config conf/training.yaml
+python run.py --stages collect_stats --train_config conf/train.yaml
 ```
 
-In summary, the stage still creates the same core outputs:
+In summary, the collect-stats stage in ESPnet3 remains a dedicated step. Run it
+to compute feature shapes and global statistics, and it will save the outputs
+under `stats_dir`, for example:
 
-```text
+```
 ${stats_dir}/train/feats_stats.npz
 ${stats_dir}/train/feats_shape
 ${stats_dir}/train/stats_keys
