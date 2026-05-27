@@ -13,7 +13,14 @@ Trainer arguments.
 
 Upstream reference:
 
-- [PyTorch Lightning Trainer](https://lightning.ai/docs/pytorch/stable/common/trainer.html)
+<DocCards :cols="1">
+  <DocCard
+    title="PyTorch Lightning Trainer"
+    desc="Official Lightning trainer reference for the upstream argument surface."
+    icon="tabler:external-link"
+    href="https://lightning.ai/docs/pytorch/stable/common/trainer.html"
+  />
+</DocCards>
 
 ESPnet3 wraps Lightning in:
 
@@ -110,20 +117,7 @@ Use per-optimizer settings under:
 
 See [Multiple optimizers and schedulers](./multiple_optimizers_schedulers.md).
 
-## Where this is used in code
 
-The `trainer` config is passed into ESPnet3's training wrapper, which
-constructs a `lightning.Trainer` internally.
-
-Current implementation:
-
-- `espnet3/components/trainers/trainer.py`
-
-The usual call path is:
-
-1. build `ESPnetLightningModule`
-2. build `ESPnet3LightningTrainer`
-3. call `trainer.fit(...)`
 
 ## Main methods
 
@@ -136,7 +130,7 @@ The usual call path is:
 `fit(...)` and `validate(...)` forward to the underlying Lightning trainer.
 `collect_stats(...)` forwards to the model-side stats path.
 
-## Custom trainer example: `GANTTSLightningTrainer`
+## Custom trainer example: GANTTSLightningTrainer
 
 The clearest current customization example is:
 
@@ -177,6 +171,23 @@ If you need a custom trainer, use this pattern first.
 
 ## Related pages
 
-- [Training configuration](../../config/train_config.md)
-- [Callbacks](./callbacks.md)
-- [Multiple optimizers and schedulers](./multiple_optimizers_schedulers.md)
+<DocCards :cols="3">
+  <DocCard
+    title="Training configuration"
+    desc="See where trainer options are set in YAML."
+    icon="tabler:settings-2"
+    href="../../config/training.md"
+  />
+  <DocCard
+    title="Callbacks"
+    desc="See the callback layer attached to the trainer."
+    icon="tabler:plug"
+    href="./callbacks.md"
+  />
+  <DocCard
+    title="Multiple optimizers"
+    desc="See the trainer-side runtime behavior for multi-optimizer training."
+    icon="tabler:git-merge"
+    href="./multiple_optimizers_schedulers.md"
+  />
+</DocCards>

@@ -53,10 +53,10 @@ demo/
 └── requirements.txt
 ```
 
-### Configure (in `demo.yaml`)
+### Configure (in demo.yaml)
 
 Keep the core settings in `demo.yaml`. For the full list, see
-[Demo configuration](../config/demo_config.md).
+[Demo configuration](../config/demo.md).
 
 | Config section | Description |
 | -------------- | ----------- |
@@ -70,9 +70,7 @@ Keep the core settings in `demo.yaml`. For the full list, see
 UI is configured under `ui` in `demo.yaml`. The demo app is generated from this
 config and wires inputs/outputs directly to your inference runner.
 
-<div class='custom-h4'><p>Resolution order</p></div>
-
-
+#### Resolution order
 
 1. If `demo.yaml` includes `ui`, it is merged with system defaults from
    `build_ui_default()` (when available).
@@ -80,9 +78,7 @@ config and wires inputs/outputs directly to your inference runner.
    `espnet3.systems.<system>.demo`.
 3. If neither is available, `ui` is required in `demo.yaml`.
 
-<div class='custom-h4'><p>UI fields</p></div>
-
-
+#### UI fields
 
 | Field | Description |
 | --- | --- |
@@ -192,7 +188,7 @@ class DemoRunner(BaseRunner):
         return {"hyp": hyp}
 ```
 
-### Output mapping (`output_keys`)
+### Output mapping (output_keys)
 
 When outputs are defined, `output_keys` maps UI output names to keys returned by
 your runner/model result. This lets you return a structured dict (e.g.,

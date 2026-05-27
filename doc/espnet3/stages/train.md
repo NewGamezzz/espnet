@@ -18,7 +18,7 @@ The `train` stage runs model training based on `train.yaml` using
 python run.py --stages train --train_config conf/train.yaml
 ```
 
-### Configure (in `train.yaml`)
+### Configure (in train.yaml)
 
 Keep the core settings in `train.yaml`:
 
@@ -27,7 +27,7 @@ Keep the core settings in `train.yaml`:
 - `exp_dir`, `stats_dir`
 
 For the full configuration list, see the
-[train config reference](../config/train_config.md).
+[train config reference](../core/config/training.md).
 
 | Section | Description |
 | --- | --- |
@@ -52,7 +52,7 @@ Typical outputs are written under:
 
 ### Details by topic
 
-### [Dataset](./train/dataset.md)
+### [Dataset](../core/config/dataset.md)
 
 Dataset uses `DataOrganizer` to define train/valid splits.
 <!-- TODO(masao): link to GitHub DataOrganizer once PR is merged. -->
@@ -72,7 +72,7 @@ dataset:
         manifest_path: ${dataset_dir}/manifest/train_dev.tsv
 ```
 
-### [Dataloader + Collate](./train/dataloader.md)
+### [Dataloader + Collate](../core/components/dataloader.md)
 
 Dataloader defines `collate_fn` and iterator behavior.
 You can use the ESPnet iterator setup (expected by collect_stats), or switch to
@@ -112,7 +112,7 @@ trainer:
       name: tb_logger
 ```
 
-### [Optimizer + Scheduler](./train/optim_scheduler.md)
+### [Optimizer + Scheduler](../core/components/optimizer_configuration.md)
 
 Optimizer and scheduler control updates and LR schedule.
 Multiple optimizers are supported when needed.

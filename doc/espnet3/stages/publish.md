@@ -24,10 +24,10 @@ python run.py \
   --publish_config conf/publish.yaml
 ```
 
-### Configure (in `publish.yaml`)
+### Configure (in publish.yaml)
 
 Keep the core settings in `publish.yaml`. For the full list, see
-[Publish configuration](../config/publish_config.md).
+[Publish configuration](../core/config/publication.md).
 
 | Config section | Description |
 | -------------- | ----------- |
@@ -40,7 +40,7 @@ Typical output is a package directory (default: `<exp_dir>/model_pack`) containi
 
 ## Developer Notes
 
-### `pack_model` details
+### pack_model details
 
 `pack_model` gathers files from the experiment directory and builds a package
 directory (default: `<exp_dir>/model_pack`). It also generates metadata and an

@@ -24,15 +24,14 @@ In GAN training, generator and discriminator often:
 - update at different frequencies
 - use different clipping rules
 
-ESPnet3 keeps the model return contract close to the normal path:
+ESPnet3 therefore needs a way to:
 
-```python
-loss, stats, weight = model(**batch)
-```
+- name each optimizer update explicitly
+- control update order
+- skip some optimizers on some batches
+- apply per-optimizer runtime policies
 
-but changes the meaning of `loss` in the multi-optimizer case.
-
-## `OptimizationStep`
+## OptimizationStep
 
 `OptimizationStep` is:
 
@@ -47,13 +46,8 @@ The `name` must match a key under:
 
 ## Model return contract
 
-Single optimizer path:
-
-```python
-return loss_tensor, stats, weight
-```
-
-Multi-optimizer path:
+In the multi-optimizer path, the model returns named optimization steps instead
+of one shared loss tensor:
 
 ```python
 return OptimizationStep(loss=g_loss, name="generator"), stats, weight
@@ -202,6 +196,23 @@ or discriminator runs first.
 
 ## Related pages
 
-- [Optimizer configuration](./optimizer_configuration.md)
-- [Trainer](./trainer.md)
-- [Training optimizer user guide](../../stages/train/optim_scheduler.md)
+<DocCards :cols="3">
+  <DocCard
+    title="Optimizer configuration"
+    desc="See the broader config surface for optimizer and scheduler setup."
+    icon="tabler:adjustments"
+    href="./optimizer_configuration.md"
+  />
+  <DocCard
+    title="Trainer"
+    desc="See where multiple-optimizer runtime rules are applied."
+    icon="tabler:player-play"
+    href="./trainer.md"
+  />
+  <DocCard
+    title="Training configuration"
+    desc="See where the optimizer mappings are defined in YAML."
+    icon="tabler:settings-2"
+    href="../../config/training.md"
+  />
+</DocCards>

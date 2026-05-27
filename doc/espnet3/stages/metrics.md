@@ -28,10 +28,10 @@ and how to implement custom metrics), see:
 python run.py --stages metric --metric_config conf/metric.yaml
 ```
 
-### Configure (in `metric.yaml`)
+### Configure (in metric.yaml)
 
 Keep the core settings in `metric.yaml`. For the full list, see
-[Metric configuration](../config/metric_config.md).
+[Metric configuration](../core/config/metrics.md).
 
 | Config section | Description |
 | -------------- | ----------- |

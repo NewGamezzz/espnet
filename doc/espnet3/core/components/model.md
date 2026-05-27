@@ -10,9 +10,10 @@ date: 2025-11-26
 This page explains how `model` and `task` in `train.yaml` map to model
 construction for the `train` / `collect_stats` stages.
 
-## Two modes: `task` (ESPnet2) vs `model._target_` (custom)
+## Two modes: task (ESPnet2) vs model._target_ (custom)
 
-### Use ESPnet2-style models (`task`)
+<div class='custom-h3'><p>Use ESPnet2-style models <span class='small-bracket'>(task)</span></p></div>
+
 
 If you want to reuse an ESPnet2-derived model stack, set `task` and use an
 ESPnet2-style `model:` block.
@@ -74,7 +75,8 @@ Below is a quick reference to ESPnet2 task names and their recipe docs.
 | [`tts2`](../../../recipe/tts2.md) | Text-to-Speech with Discrete Units |
 | [`uasr1`](../../../recipe/uasr1.md) | Unsupervised Automatic Speech Recognition |
 
-### Use custom/ESPnet3-only models (`model._target_`)
+<div class='custom-h3'><p>Use custom/ESPnet3-only models <span class='small-bracket'>(model._target_)</span></p></div>
+
 
 If you want an ESPnet3-specific or fully custom model, implement it under your
 recipe's `src/` directory and point `model._target_` to it:
@@ -109,10 +111,33 @@ class MyCustomModel:
         return loss, stats, weight
 ```
 
-## Collect-stats support (`collect_feats`)
+## Collect-stats support (collect_feats)
 
 If you want to use `collect_stats`, your model should implement `collect_feats()`.
 See:
 
 - Stage doc: `doc/vuepress/src/espnet3/stages/collect-stats.md`
-- Config doc: `doc/vuepress/src/espnet3/config/train_config.md`
+- Config doc: `doc/vuepress/src/espnet3/core/config/training.md`
+
+## Related pages
+
+<DocCards :cols="3">
+  <DocCard
+    title="Trainer"
+    desc="See how model outputs are consumed by the training wrapper."
+    icon="tabler:player-play"
+    href="./trainer.md"
+  />
+  <DocCard
+    title="Metrics"
+    desc="See how model outputs later flow into metrics and evaluation."
+    icon="tabler:gauge"
+    href="./metrics.md"
+  />
+  <DocCard
+    title="Training configuration"
+    desc="See where model selection and normalization live in YAML."
+    icon="tabler:settings-2"
+    href="../../config/training.md"
+  />
+</DocCards>

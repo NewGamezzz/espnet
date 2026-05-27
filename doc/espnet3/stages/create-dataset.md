@@ -23,7 +23,7 @@ same directory, so logs and generated data live together in the dataset output
 path.
 
 In ESPnet3, `create_dataset` is driven by a callable defined in your
-`train.yaml` config (see the [train config reference](../config/train_config.md)).
+`train.yaml` config (see the [train config reference](../core/config/training.md)).
 The system resolves the function and passes the remaining config keys as keyword
 arguments.
 
@@ -101,7 +101,7 @@ ${dataset_dir}/
 `egs3/librispeech_100/asr/src/create_dataset.py` downloads and extracts splits
 from OpenSLR into `dataset_dir/LibriSpeech/` without extra preprocessing.
 
-### Minimal conceptual code (from `egs3/librispeech_100/asr/src/create_dataset.py`)
+### Minimal conceptual code (from egs3/librispeech_100/asr/src/create_dataset.py)
 
 Below is the smallest conceptual snippet that shows the intent. The real
 implementation adds split checks and re-run safety.
@@ -121,7 +121,7 @@ for split in requested_splits:
         extract_targz(archive_path, dataset_dir, logger)
 ```
 
-### Planned usage (from `egs3/librispeech_100/asr/src/dataset.py`)
+### Planned usage (from egs3/librispeech_100/asr/src/dataset.py)
 
 The dataset loader is expected to read the on-disk tree under
 `dataset_dir/LibriSpeech/...` directly. A minimal usage looks like:

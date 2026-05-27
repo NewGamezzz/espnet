@@ -20,7 +20,7 @@ Two modes are supported:
 1. single optimizer path: `optimizer` + `scheduler`
 2. named multi-optimizer path: `optimizers` + `schedulers`
 
-## What lives in `configure_optimizers` vs YAML
+## What lives in configure_optimizers vs YAML
 
 | Layer | You control via YAML | ESPnet3 ensures |
 | --- | --- | --- |
@@ -76,7 +76,10 @@ scheduler_monitor: valid/loss
 Use `optimizers` and `schedulers` when different parameter groups need
 independent updates.
 
-This is the normal path for GAN training.
+This is the normal path for GAN training and other cases where one shared loss
+and one shared optimizer are not enough.
+
+Minimal shape:
 
 ```yaml
 optimizers:
@@ -116,67 +119,13 @@ schedulers:
     monitor: valid/discriminator/loss
 ```
 
-Important rules:
+General rules:
 
 - names under `optimizers` and `schedulers` must match exactly
 - every optimizer entry must include `params` and `optimizer`
-- every trainable parameter must match exactly one optimizer
 - top-level `scheduler_interval` and `scheduler_monitor` are not used here
-- per-optimizer grad settings live under `optimizers.<name>`
-
-## Parameter routing
-
-`params` is a dot-boundary-aware selector over parameter names.
-
-That means the YAML decides which part of the model each optimizer updates.
-
-If parameters are:
-
-- missing from all optimizers
-- or matched by more than one optimizer
-
-ESPnet3 raises an error.
-
-## Per-optimizer grad controls
-
-Each named optimizer may define:
-
-- `accum_grad_steps`
-- `step_every_n_iters`
-- `gradient_clip_val`
-- `gradient_clip_algorithm`
-
-These are enforced by ESPnet3's manual optimization path, not by Lightning's
-global trainer settings.
-
-## Scheduler stepping rules
-
-Single optimizer path:
-
-- `scheduler_interval: step|epoch`
-- optional `scheduler_monitor`
-
-Named multi-optimizer path:
-
-- `schedulers.<name>.interval: step|epoch`
-- `schedulers.<name>.monitor`
-
-Step-based schedulers are stepped immediately after that optimizer updates.
-Epoch-based schedulers are stepped at epoch end.
-
-## Model-side contract
-
-Single optimizer path expects the model to return a plain tensor loss.
-
-Named multi-optimizer path expects:
-
-- `OptimizationStep`
-- or `list[OptimizationStep]`
-
-This is how ESPnet3 knows which optimizer should update.
-
-See [Multiple optimizers and schedulers](./multiple_optimizers_schedulers.md)
-for the full model-side contract.
+- all detailed per-optimizer routing and runtime rules are documented in
+  [Multiple optimizers and `OptimizationStep`](./multiple_optimizers_schedulers.md)
 
 ## What not to mix
 
@@ -189,6 +138,23 @@ ESPnet3 rejects mixed configuration.
 
 ## Related pages
 
-- [Multiple optimizers and `OptimizationStep`](./multiple_optimizers_schedulers.md)
-- [Training optimizer user guide](../../stages/train/optim_scheduler.md)
-- [Training configuration](../../config/train_config.md)
+<DocCards :cols="3">
+  <DocCard
+    title="Multiple optimizers"
+    desc="See the multi-optimizer runtime contract and `OptimizationStep`."
+    icon="tabler:git-merge"
+    href="./multiple_optimizers_schedulers.md"
+  />
+  <DocCard
+    title="Trainer"
+    desc="See where optimizer configuration is consumed by the training wrapper."
+    icon="tabler:player-play"
+    href="./trainer.md"
+  />
+  <DocCard
+    title="Training configuration"
+    desc="See where optimizer and scheduler settings live in YAML."
+    icon="tabler:settings-2"
+    href="../../config/training.md"
+  />
+</DocCards>

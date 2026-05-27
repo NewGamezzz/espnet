@@ -18,7 +18,15 @@ The stage entrypoint is:
 
 - `espnet3.systems.base.metric.measure`
 
-## Current metric contract
+::: note
+If you want the full file flow from `metrics.yaml` to `metrics.json`, use the
+interactive explorer below.
+This page focuses on the metric component contract itself.
+:::
+
+<MetricsExplorer />
+
+## Metric contract
 
 Metrics are instantiated from `metrics_config.metrics[*].metric`. Each metric is
 called as:
@@ -27,36 +35,20 @@ called as:
 metric(data: Dict[str, Path], test_name: str, output_dir: Path)
 ```
 
-This is intentionally path-based. ESPnet3 resolves required inputs to SCP paths,
-but it does not preload them into aligned lists.
+This is intentionally path-based.
+ESPnet3 resolves the requested inputs to SCP paths, but reading and alignment
+happen inside the metric.
 
-### What `data` contains
-
-Typical ASR example:
-
-```python
-{
-    "ref": Path("exp/asr_run/inference/test-clean/ref.scp"),
-    "hyp": Path("exp/asr_run/inference/test-clean/hyp.scp"),
-}
-```
-
-Another metric can request different files:
+Typical input:
 
 ```python
 {
     "ref": Path(".../ref.scp"),
     "hyp": Path(".../hyp.scp"),
-    "prompt": Path(".../prompt.scp"),
 }
 ```
 
-So the important distinction is:
-
-- `data` contains file paths
-- reading and alignment happen inside the metric, usually through helpers
-
-## `BaseMetric`
+## BaseMetric
 
 ```python
 from pathlib import Path
@@ -78,7 +70,7 @@ class MyMetric(BaseMetric):
 Return values must be JSON-serializable because `measure()` stores them in
 `<inference_dir>/metrics.json`.
 
-## `iter_inputs()` is the standard helper
+## iter_inputs() helper
 
 For aligned SCP text inputs, use:
 
@@ -97,35 +89,10 @@ for utt_id, row in self.iter_inputs(data, "ref", "hyp"):
 
 This is the normal pattern for text metrics such as WER and CER.
 
-## Path-based metrics vs content-consuming metrics
+Metrics that work directly from file paths can ignore `iter_inputs()` and read
+`data[...]` themselves.
 
-There are two common patterns.
-
-### 1. Metrics that stream SCP contents
-
-WER/CER style metrics use `iter_inputs()`:
-
-```python
-refs = []
-hyps = []
-for _, row in self.iter_inputs(data, self.ref_key, self.hyp_key):
-    refs.append(row[self.ref_key])
-    hyps.append(row[self.hyp_key])
-```
-
-### 2. Metrics that consume paths directly
-
-Some metrics may call external tools or inspect directories directly:
-
-```python
-ref_scp = data["ref"]
-hyp_scp = data["hyp"]
-subprocess.run(["some_tool", str(ref_scp), str(hyp_scp)], check=True)
-```
-
-In those cases, no SCP parsing helper is required.
-
-## Configuring aliases
+## Config aliases
 
 `measure()` accepts either:
 
@@ -144,11 +111,11 @@ metrics:
       prompt: prompt
 ```
 
-This means:
+This means `measure()` passes:
 
-- `data["ref"]` points to `text.scp`
-- `data["hyp"]` points to `hyp.scp`
-- `data["prompt"]` points to `prompt.scp`
+- `data["ref"]` -> `text.scp`
+- `data["hyp"]` -> `hyp.scp`
+- `data["prompt"]` -> `prompt.scp`
 
 ## Example: text metric
 
@@ -203,5 +170,23 @@ class FileCountMetric(BaseMetric):
 
 ## Related pages
 
-- [Measure stage](../../stages/measure.md)
-- [Measure configuration](../../config/measure_config.md)
+<DocCards :cols="3">
+  <DocCard
+    title="Metrics configuration"
+    desc="See how metric classes and inputs are selected from YAML."
+    icon="tabler:settings-2"
+    href="../config/metrics.html"
+  />
+  <DocCard
+    title="Metrics stage"
+    desc="Return to the stage-level metrics flow."
+    icon="tabler:route"
+    href="../../stages/metrics.html"
+  />
+  <DocCard
+    title="Components overview"
+    desc="Return to the full component map."
+    icon="tabler:puzzle"
+    href="./"
+  />
+</DocCards>

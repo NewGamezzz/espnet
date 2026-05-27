@@ -16,7 +16,14 @@ Implementation:
 
 Dataset resolution itself is documented in:
 
-- [Dataset references and builders](./datasets.md)
+<DocCards :cols="1">
+  <DocCard
+    title="Dataset references and builders"
+    desc="See dataset references, recipe-local modules, and builder lifecycle."
+    icon="tabler:database"
+    href="./datasets.html"
+  />
+</DocCards>
 
 ## Role in the pipeline
 
@@ -72,7 +79,8 @@ dataset:
 
 ## Important behavior
 
-### `data_src_args` only goes to `Dataset(...)`
+<div class='custom-h3'><p>data_src_args only goes to Dataset<span class="small-bracket">(...)</span></p></div>
+
 
 `DataOrganizer` resolves the dataset module, gets its exported `Dataset` class,
 and instantiates:
@@ -88,7 +96,8 @@ Top-level organizer keys such as:
 
 stay in organizer space and are not forwarded to the dataset constructor.
 
-### `recipe_dir` matters for local datasets
+<div class='custom-h3'><p>recipe_dir matters for local datasets</p></div>
+
 
 If a dataset entry omits `data_src`, `DataOrganizer` resolves the local recipe
 module:
@@ -105,7 +114,8 @@ dataset:
   recipe_dir: ${recipe_dir}
 ```
 
-### `train` and `valid` must move together
+<div class='custom-h3'><p>train and valid must move together</p></div>
+
 
 Current `DataOrganizer` requires:
 
@@ -114,7 +124,8 @@ Current `DataOrganizer` requires:
 
 Providing only one side raises an error.
 
-### `test[*].name` becomes the test-set key
+<div class='custom-h3'><p>test[*].name becomes the test-set key</p></div>
+
 
 Inference and measurement use the `name` field to choose test sets and to build
 per-test output directories.
@@ -175,6 +186,23 @@ egs3.librispeech_100.asr.dataset
 
 ## Related pages
 
-- [Dataset references and builders](./datasets.md)
-- [Create dataset stage](../../stages/create-dataset.md)
-- [Training dataset config](../../stages/train/dataset.md)
+<DocCards :cols="3">
+  <DocCard
+    title="Datasets"
+    desc="See dataset references, builders, and recipe-local dataset modules."
+    icon="tabler:database"
+    href="./datasets.md"
+  />
+  <DocCard
+    title="Dataloader"
+    desc="See how organized datasets feed the collate and iterator layer."
+    icon="tabler:stack-2"
+    href="./dataloader.md"
+  />
+  <DocCard
+    title="Create dataset stage"
+    desc="Return to the stage-level dataset creation flow."
+    icon="tabler:route"
+    href="../../stages/create-dataset.md"
+  />
+</DocCards>

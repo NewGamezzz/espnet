@@ -28,7 +28,7 @@ The current default list is:
 
 These are added automatically by `ESPnet3LightningTrainer`.
 
-## `MetricsLogger`
+## MetricsLogger
 
 `MetricsLogger` is the main human-readable training log callback in current
 ESPnet3.
@@ -37,12 +37,14 @@ Implementation:
 
 - `espnet3.components.callbacks.default_callbacks.MetricsLogger`
 
-### Why it exists
+<div class='custom-h3'><p>Why it exists</p></div>
+
 
 Instead of scattering summary logging across multiple callbacks or stage code,
 ESPnet3 centralizes compact train/validation summaries in one callback.
 
-### What it logs
+<div class='custom-h3'><p>What it logs</p></div>
+
 
 `MetricsLogger` handles three reporting points:
 
@@ -61,7 +63,8 @@ It also tracks timing-style keys such as:
 
 and includes optimizer learning rates such as `optim0_lr0`.
 
-### Metric key normalization
+<div class='custom-h3'><p>Metric key normalization</p></div>
+
 
 The callback normalizes keys before printing:
 
@@ -72,7 +75,8 @@ The callback normalizes keys before printing:
 This is why logs stay compact even though the underlying metric names are stored
 as `train/...` and `valid/...`.
 
-### Example log lines
+<div class='custom-h3'><p>Example log lines</p></div>
+
 
 Typical output looks like:
 
@@ -82,7 +86,7 @@ epoch_summary:1epoch:train: loss=8.91 iter_time=0.02 forward_time=0.01 backward_
 epoch_summary:1epoch:valid: loss=7.85 cer=18.4 valid_time=12.6
 ```
 
-## `AverageCheckpointsCallback`
+## AverageCheckpointsCallback
 
 This callback averages the top-k checkpoint weights chosen by the monitored
 `ModelCheckpoint` callbacks and writes:
@@ -107,5 +111,23 @@ The default stack remains, and custom callbacks are appended after it.
 
 ## Related pages
 
-- [Trainer](./trainer.md)
-- [Training stage](../../stages/train.md)
+<DocCards :cols="3">
+  <DocCard
+    title="Trainer"
+    desc="See how callbacks are attached and used by the trainer wrapper."
+    icon="tabler:player-play"
+    href="./trainer.md"
+  />
+  <DocCard
+    title="Training configuration"
+    desc="See where callback settings live in YAML."
+    icon="tabler:settings-2"
+    href="../../config/training.md"
+  />
+  <DocCard
+    title="Train stage"
+    desc="Return to the stage-level training overview."
+    icon="tabler:route"
+    href="../../stages/train.md"
+  />
+</DocCards>

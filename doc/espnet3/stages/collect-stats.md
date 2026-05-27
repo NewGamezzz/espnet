@@ -10,7 +10,7 @@ date: 2025-11-26
 The `collect_stats` stage computes dataset statistics (feature shapes and global
 stats) used by training and normalization. For background, motivation, and
 advanced use cases, see
-[Collect Stats Phase Overview](./collect_stats_description.md).
+[Collect Stats Phase Overview](../core/stats-collection.md).
 
 ## Quick usage
 
@@ -23,7 +23,7 @@ python run.py --stages collect_stats --train_config conf/train.yaml
 This runs `collect_stats` over the **train** and **valid** splits. Outputs are
 written under `stats_dir/train` and `stats_dir/valid`.
 
-### Configure (in `train.yaml`)
+### Configure (in train.yaml)
 
 `collect_stats` reads the `train.yaml` used for training. At minimum:
 
@@ -120,7 +120,7 @@ contract:
 
 This is an ASR-style example; for ASR datasets, `speech` and `text` are expected
 to be provided by the dataset class (see
-[Dataloader + Collate](./train/dataloader.md)).
+[Dataloader + Collate](../core/components/dataloader.md)).
 
 Sample custom model:
 

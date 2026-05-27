@@ -24,10 +24,10 @@ metrics stage later consumes. See `metrics.md` for metric computation.
 python run.py --stages infer --infer_config conf/infer.yaml
 ```
 
-### Configure (in `infer.yaml`)
+### Configure (in infer.yaml)
 
 Keep the core settings in `infer.yaml`. For the full list, see
-[Inference configuration](../config/infer_config.md).
+[Inference configuration](../core/config/inference.md).
 
 | Config section | Description |
 | -------------- | ----------- |
@@ -42,7 +42,7 @@ See also:
 
 - [Provider / Runner](../core/parallel/provider_runner.md)
 - [Inference provider](../core/parallel/inference_provider.md)
-- [Parallel execution](../core/parallel.md)
+- [Parallel execution](../core/parallel/)
 
 ### Outputs
 
@@ -68,7 +68,7 @@ entry is written to its own file: `<key>0.scp`, `<key>1.scp`, ...
 
 ## Developer Notes
 
-### 🏃‍♂️ Inference with `InferenceRunner`
+### 🏃‍♂️ Inference with InferenceRunner
 
 ESPnet3 inference is a Provider/Runner loop. `infer.yaml` provides two key
 pieces:
@@ -130,7 +130,7 @@ output_fn: src.infer.output_fn
 For each test set name in `dataset.test`, `inference()` writes one `.scp` file
 per output key under `inference_dir/<test_name>/` (e.g., `hyp.scp`, `wav.scp`, ...).
 
-### `output_fn`: formatting model outputs into SCP fields
+### output_fn: formatting model outputs into SCP fields
 
 `output_fn` is required and is called from `InferenceRunner` as:
 
@@ -178,7 +178,7 @@ Notes:
   is a scalar. If `batch_size` is set (>= 1), `forward` receives a list of
   dataset items and `idx` is a list.
 
-### Batched inference (`batch_size`)
+### Batched inference (batch_size)
 
 If you set `batch_size` in `infer.yaml`, `InferenceRunner` chunks indices and
 passes a list of indices into `forward`. The model is called once per batch
@@ -229,7 +229,7 @@ def output_fn(*, data, model_output, idx):
     ]
 ```
 
-If your task produces audio hypotheses (e.g., TTS), write the audio files under
+If your system produces audio hypotheses (e.g., TTS), write the audio files under
 `<inference_dir>/<test_name>/` (or a subdirectory), and put the file paths in the
 corresponding `hyp.scp` entries. Ensure the output directory exists before
 writing SCPs so `metric()` can load them reliably.
@@ -261,10 +261,7 @@ The snippet above assumes the espnet2 `Speech2Text` interface. When you write
 your **own** model or inference wrapper, you can either adapt your model to the
 default runner or provide a custom runner.
 
-<div class='custom-h4'><p>Write your own InferenceRunner</p></div>
-
-
-
+#### Write your own InferenceRunner
 
 If your model has a different interface (e.g., already returns `(hyp, ref)`), you
 can subclass `BaseRunner` and change only the `forward` method:

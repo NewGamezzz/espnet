@@ -5,7 +5,6 @@ import navbar from "./navbar.js"
 import sidebar from "./sidebar.js"
 
 export default hopeTheme({
-
   iconAssets: "iconify",
 
   logo: "/assets/image/espnet_logo1.png",
@@ -114,4 +113,6 @@ export default hopeTheme({
     }),
 
   },
+}, {
+  custom: true,
 });
