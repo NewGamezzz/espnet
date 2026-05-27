@@ -263,7 +263,7 @@ class RNNDecoder(AbsDecoder):
         for _ in range(1, self.dlayers):
             c_list.append(self.zero_state(x[0].unsqueeze(0)))
             z_list.append(self.zero_state(x[0].unsqueeze(0)))
-        # TODO(karita): support strm_index for `asr_mix`
+        # TODO(karita): support strm_index for ``asr_mix``
         strm_index = 0
         att_idx = min(strm_index, len(self.att_list) - 1)
         if self.num_encs == 1:

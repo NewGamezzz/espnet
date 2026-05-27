@@ -152,8 +152,8 @@ class Speech2TextStreaming:
         ):
             if not is_transformers_available:
                 raise ImportError(
-                    "`transformers` is not available."
-                    " Please install it via `pip install transformers`"
+                    "``transformers`` is not available."
+                    " Please install it via ``pip install transformers``"
                     " or `cd /path/to/espnet/tools && . ./activate_python.sh"
                     " && ./installers/install_transformers.sh`."
                 )

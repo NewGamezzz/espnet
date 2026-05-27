@@ -120,7 +120,7 @@ class WarmupReduceLROnPlateau(AbsBatchStepScheduler, AbsValEpochStepScheduler):
         self.num_bad_epochs = 0
 
     def _step_reducelronplateau(self, metrics=None, epoch=None):
-        # convert `metrics` to float, in case it's a zero-dim Tensor
+        # convert ``metrics`` to float, in case it's a zero-dim Tensor
         current = float(metrics)
         if epoch is None:
             epoch = self.last_epoch + 1

@@ -49,7 +49,7 @@ def extract_embed_lid(args):
         args: The arguments containing model paths, data paths, inference
               options, and distributed settings. For example argument
               settings, refer to stage 6 and stage 8 in
-              `egs2/TEMPLATE/lid1/lid.sh`.
+              ``egs2/TEMPLATE/lid1/lid.sh``.
 
     Note:
         - Supports both single-process and distributed inference.

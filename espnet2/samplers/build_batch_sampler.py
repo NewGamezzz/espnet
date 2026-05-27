@@ -276,7 +276,7 @@ def build_category_batch_sampler(
                 f"dataset2utt mandatory for catpow_balance_dataset batch sampler, "
                 f"but not found {dataset2utt_file}. To create a dataset2utt "
                 "file, please refer to the script in "
-                "`egs2/geolid/lid1/local/create_utt2dataset_dataset2utt.sh`"
+                "``egs2/geolid/lid1/local/create_utt2dataset_dataset2utt.sh``"
             )
 
         if Path(dataset2utt_parent_dir, "utt2dataset").exists():
@@ -287,7 +287,7 @@ def build_category_batch_sampler(
                 f"utt2dataset mandatory for catpow_balance_dataset batch sampler, "
                 f"but not found {utt2dataset_file}. To create a dataset2utt "
                 "file, please refer to the script in "
-                "`egs2/geolid/lid1/local/create_utt2dataset_dataset2utt.sh`"
+                "``egs2/geolid/lid1/local/create_utt2dataset_dataset2utt.sh``"
             )
         sampler_args = dict(
             batch_bins=batch_bins,

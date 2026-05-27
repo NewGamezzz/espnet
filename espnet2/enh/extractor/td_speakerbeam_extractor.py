@@ -49,11 +49,11 @@ class TDSpeakerBeamExtractor(AbsExtractor):
                        select from 'relu', 'tanh', 'sigmoid', 'linear'
             i_adapt_layer: int, index of adaptation layer
             adapt_layer_type: str, type of adaptation layer
-                see espnet2.enh.layers.adapt_layers for options
+                see ``espnet2.enh.layers.adapt_layers`` for options
             adapt_enroll_dim: int, dimensionality of the speaker embedding
             use_spk_emb: bool, whether to use speaker embeddings as enrollment
             spk_emb_dim: int, dimension of input speaker embeddings
-                         only used when `use_spk_emb` is True
+                         only used when ``use_spk_emb`` is True
         """
         super().__init__()
 
@@ -125,7 +125,7 @@ class TDSpeakerBeamExtractor(AbsExtractor):
                 for the target speaker [B, T, N] or [B, N]
             ilens_aux (torch.Tensor): input lengths of auxiliary input for the
                 target speaker [Batch]
-            suffix_tag (str): suffix to append to the keys in `others`
+            suffix_tag (str): suffix to append to the keys in ``others``
             additional (None or dict): additional parameters
                 not used in this model
 
@@ -143,7 +143,7 @@ class TDSpeakerBeamExtractor(AbsExtractor):
         B, L, N = feature.shape
 
         feature = feature.transpose(1, 2)  # B, N, L
-        # NOTE(wangyou): When `self.use_spk_emb` is True, `aux_feature` is assumed to be
+        # NOTE(wangyou): When ``self.use_spk_emb`` is True, ``aux_feature`` is assumed to be
         # a speaker embedding; otherwise, it is assumed to be an enrollment audio.
         if self.use_spk_emb:
             # B, N, L'=1

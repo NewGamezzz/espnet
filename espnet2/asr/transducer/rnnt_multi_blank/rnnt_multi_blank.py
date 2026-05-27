@@ -67,7 +67,7 @@ class _RNNTNumba(Function):
 
         certify_inputs(acts, labels, act_lens, label_lens)
         if clamp < 0:
-            raise ValueError("`clamp` must be 0.0 or positive float value.")
+            raise ValueError("``clamp`` must be 0.0 or positive float value.")
 
         loss_func = rnnt.rnnt_loss_gpu if is_cuda else rnnt.rnnt_loss_cpu
         grads = torch.zeros_like(acts) if acts.requires_grad else None
@@ -141,7 +141,7 @@ class _MultiblankRNNTNumba(Function):
 
         certify_inputs(acts, labels, act_lens, label_lens)
         if clamp < 0:
-            raise ValueError("`clamp` must be 0.0 or positive float value.")
+            raise ValueError("``clamp`` must be 0.0 or positive float value.")
 
         if is_cuda:
             loss_func = rnnt.multiblank_rnnt_loss_gpu

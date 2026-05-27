@@ -28,7 +28,7 @@ class USES2_Swin(nn.Module):
         input_size (int): dimension of the input feature.
         output_size (int): dimension of the output.
         bottleneck_size (int): dimension of the bottleneck feature.
-            Must be a multiple of `att_heads`.
+            Must be a multiple of ``att_heads``.
         num_blocks (int): number of ResSwinBlock blocks.
         num_spatial_blocks (int): number of ResSwinBlock blocks with channel modeling.
         swin_block_depth (Tuple[int]): depth of each ResSwinBlock.

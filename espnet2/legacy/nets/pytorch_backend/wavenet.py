@@ -278,7 +278,7 @@ class WaveNet(nn.Module):
     def generate(self, x, h, n_samples, interval=None, mode="sampling"):
         """Generate a waveform with fast genration algorithm.
 
-        This generation based on `Fast WaveNet Generation Algorithm`_.
+        This generation based on ``Fast WaveNet Generation Algorithm``_.
 
         Args:
             x (LongTensor): Initial waveform tensor with the shape  (T,).

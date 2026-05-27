@@ -48,9 +48,9 @@ def prepare_beamformer_stats(
         beamformer_stats (dict): a dictionary containing all necessary statistics
             e.g. "psd_n", "psd_speech", "psd_distortion"
             Note:
-            * When `masks_speech` is a tensor or a single-element list, all returned
+            * When ``masks_speech`` is a tensor or a single-element list, all returned
               statistics are tensors;
-            * When `masks_speech` is a multi-element list, some returned statistics
+            * When ``masks_speech`` is a multi-element list, some returned statistics
               can be a list, e.g., "psd_n" for MVDR, "psd_speech" and "psd_distortion".
 
     """
@@ -437,11 +437,11 @@ def get_sdw_mwf_vector(
             speech distortion.
             A larger value leads to more noise reduction at the expense of more speech
             distortion.
-            The plain MWF is obtained with `denoising_weight = 1` (by default).
+            The plain MWF is obtained with ``denoising_weight = 1`` (by default).
         approx_low_rank_psd_speech (bool): whether to replace original input psd_speech
             with its low-rank approximation as in [2]
         iterations (int): number of iterations in power method, only used when
-            `approx_low_rank_psd_speech = True`
+            ``approx_low_rank_psd_speech = True``
         diagonal_loading (bool): Whether to add a tiny term to the diagonal of psd_n
         diag_eps (float):
         eps (float):
@@ -513,11 +513,11 @@ def get_rank1_mwf_vector(
             speech distortion.
             A larger value leads to more noise reduction at the expense of more speech
             distortion.
-            When `denoising_weight = 0`, it corresponds to MVDR beamformer.
+            When ``denoising_weight = 0``, it corresponds to MVDR beamformer.
         approx_low_rank_psd_speech (bool): whether to replace original input psd_speech
             with its low-rank approximation as in [1]
         iterations (int): number of iterations in power method, only used when
-            `approx_low_rank_psd_speech = True`
+            ``approx_low_rank_psd_speech = True``
         diagonal_loading (bool): Whether to add a tiny term to the diagonal of psd_n
         diag_eps (float):
         eps (float):
@@ -641,7 +641,7 @@ def generalized_eigenvalue_decomposition(a: torch.Tensor, b: torch.Tensor, eps=1
     a @ e_vec = e_val * b @ e_vec
     |
     |   Cholesky decomposition on `b`:
-    |       b = L @ L^H, where `L` is a lower triangular matrix
+    |       b = L @ L^H, where ``L`` is a lower triangular matrix
     |
     |   Let C = L^-1 @ a @ L^-H, it is Hermitian.
     |
@@ -805,7 +805,7 @@ def signal_framing(
     pad_value: int = 0,
     indices: List = None,
 ) -> Union[torch.Tensor, ComplexTensor]:
-    """Expand `signal` into several frames, with each frame of length `frame_length`.
+    """Expand ``signal`` into several frames, with each frame of length ``frame_length``.
 
     Args:
         signal : (..., T)
@@ -831,7 +831,7 @@ def signal_framing(
         pad_func = torch.nn.functional.pad
 
     frame_length2 = frame_length - 1
-    # pad to the right at the last dimension of `signal` (time dimension)
+    # pad to the right at the last dimension of ``signal`` (time dimension)
     if do_padding:
         # (..., T) --> (..., T + bdelay + frame_length - 2)
         signal = pad_func(
@@ -991,7 +991,7 @@ def get_WPD_filter_v2(
 ) -> Union[torch.Tensor, ComplexTensor]:
     """Return the WPD vector (v2).
 
-       This implementation is more efficient than `get_WPD_filter` as
+       This implementation is more efficient than ``get_WPD_filter`` as
         it skips unnecessary computation with zeros.
 
     Args:

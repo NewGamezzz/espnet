@@ -19,7 +19,7 @@ class Tokenizer:
         self.bos_id = None
         self.eos_id = None
 
-        # some checkpoints have both files, `.json` takes precedence
+        # some checkpoints have both files, ``.json`` takes precedence
         if (vocabulary_path := checkpoint_dir / "tokenizer.json").is_file():
             from tokenizers import Tokenizer as HFTokenizer
 
@@ -91,7 +91,7 @@ class Tokenizer:
             config = json.load(fp)
         if "add_bos_token" in config:
             return config["add_bos_token"]
-        # if `add_bos_token` isn't in the config file, but LLaMA
+        # if ``add_bos_token`` isn't in the config file, but LLaMA
         # tokenizer is used - return True.
         # ex: https://huggingface.co/stabilityai/StableBeluga2/blob/
         # main/tokenizer_config.json#L2
@@ -120,7 +120,7 @@ class Tokenizer:
             if tokens[0] != bos_id:
                 tokens = [bos_id] + tokens
         if tokens is None:
-            raise ValueError("`tokens` is None")
+            raise ValueError("``tokens`` is None")
 
         if eos and (not tokens or tokens[-1] != self.eos_id):
             tokens = tokens + [self.eos_id]

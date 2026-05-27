@@ -11,8 +11,8 @@ from espnet2.fileio.read_text import read_2columns_text
 class VADScpReader(collections.abc.Mapping):
     """Reader class for 'vad.scp'.
 
-    Different from `segments`, the `vad.scp` would focus on utterance-level,
-    while the `segments` are expected to focus on a whole session. The major
+    Different from ``segments``, the ``vad.scp`` would focus on utterance-level,
+    while the ``segments`` are expected to focus on a whole session. The major
     usage in ESPnet is to guide the silence trim for UASR.
 
     Examples:

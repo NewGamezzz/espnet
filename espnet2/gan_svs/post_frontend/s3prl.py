@@ -88,7 +88,7 @@ class S3prlPostFrontend(AbsFrontend):
         self.input_fs = input_fs
 
     def _tile_representations(self, feature):
-        """Tile up the representations by `tile_factor`.
+        """Tile up the representations by ``tile_factor``.
 
         Input - sequence of representations
                 shape: (batch_size, seq_len, feature_dim)
@@ -98,7 +98,7 @@ class S3prlPostFrontend(AbsFrontend):
         """
         assert (
             len(feature.shape) == 3
-        ), "Input argument `feature` has invalid shape: {}".format(feature.shape)
+        ), "Input argument ``feature`` has invalid shape: {}".format(feature.shape)
         tiled_feature = feature.repeat(1, 1, self.tile_factor)
         tiled_feature = tiled_feature.reshape(
             feature.size(0), feature.size(1) * self.tile_factor, feature.size(2)
@@ -117,7 +117,7 @@ class S3prlPostFrontend(AbsFrontend):
             input_lengths = input_lengths.ceil().long()
 
         # You can choose to freeze parameters in the configuration
-        # by setting `freeze_param`
+        # by setting ``freeze_param``
         feats, feats_lens = self.upstream(input, input_lengths)
 
         if self.layer != -1:

@@ -178,8 +178,8 @@ class GroupedExperts(nn.Module):
 class GroupedMoeBlock(Qwen3MoeSparseMoeBlock):
     """MoE block using fused grouped_mm for all experts (no EP).
 
-    Inherits from `Qwen3MoeSparseMoeBlock` so that HF's `OutputRecorder`
-    (which uses `isinstance` check) can find this module and capture
+    Inherits from ``Qwen3MoeSparseMoeBlock`` so that HF's ``OutputRecorder``
+    (which uses ``isinstance`` check) can find this module and capture
     router_logits for the load balancing auxiliary loss.
 
     All experts reside on every rank. Uses GroupedExperts with

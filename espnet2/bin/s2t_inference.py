@@ -84,7 +84,7 @@ class ScoreFilter(BatchScorerInterface, torch.nn.Module):
 
         Returns:
             tuple[torch.Tensor, Any]: Tuple of
-                scores for next token that has a shape of `(n_vocab)`
+                scores for next token that has a shape of ``(n_vocab)``
                 and next state for ys
 
         """
@@ -132,7 +132,7 @@ class ScoreFilter(BatchScorerInterface, torch.nn.Module):
 
         Returns:
             tuple[torch.Tensor, List[Any]]: Tuple of
-                batchfied scores for next token with shape of `(n_batch, n_vocab)`
+                batchfied scores for next token with shape of ``(n_batch, n_vocab)``
                 and next state list for ys.
 
         """
@@ -703,8 +703,8 @@ class Speech2Text:
 
             except ImportError:
                 logging.error(
-                    "`espnet_model_zoo` is not installed. "
-                    "Please install via `pip install -U espnet_model_zoo`."
+                    "``espnet_model_zoo`` is not installed. "
+                    "Please install via ``pip install -U espnet_model_zoo``."
                 )
                 raise
             d = ModelDownloader()

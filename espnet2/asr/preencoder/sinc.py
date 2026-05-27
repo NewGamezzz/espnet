@@ -25,9 +25,9 @@ class LightweightSincConvs(AbsPreEncoder):
     https://arxiv.org/abs/2010.07597
 
     To use Sinc convolutions in your model instead of the default f-bank
-    frontend, set this module as your pre-encoder with `preencoder: sinc`
+    frontend, set this module as your pre-encoder with ``preencoder: sinc``
     and use the input of the sliding window frontend with
-    `frontend: sliding_window` in your yaml configuration file.
+    ``frontend: sliding_window`` in your yaml configuration file.
     So that the process flow is:
 
     Frontend (SlidingWindow) -> SpecAug -> Normalization ->
@@ -35,7 +35,7 @@ class LightweightSincConvs(AbsPreEncoder):
 
     Note that this method also performs data augmentation in time domain
     (vs. in spectral domain in the default frontend).
-    Use `plot_sinc_filters.py` to visualize the learned Sinc filters.
+    Use ``plot_sinc_filters.py`` to visualize the learned Sinc filters.
     """
 
     @typechecked

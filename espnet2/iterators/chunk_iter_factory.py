@@ -110,8 +110,8 @@ class ChunkIterFactory(AbsIterFactory):
 
         # keys that satisfy either condition below will be excluded from the length
         # consistency check:
-        #  - exactly match one of the prefixes in `excluded_key_prefixes`
-        #  - have one of the prefixes in `excluded_key_prefixes` and end with numbers
+        #  - exactly match one of the prefixes in ``excluded_key_prefixes``
+        #  - have one of the prefixes in ``excluded_key_prefixes`` and end with numbers
         if excluded_key_prefixes is None:
             _excluded_key_prefixes = DEFAULT_EXCLUDED_KEY_PREFIXES
         else:
@@ -162,7 +162,7 @@ class ChunkIterFactory(AbsIterFactory):
                 if self.excluded_key_pattern is not None and re.fullmatch(
                     self.excluded_key_pattern, key
                 ):
-                    # ignore length inconsistency for `excluded_key_prefixes`
+                    # ignore length inconsistency for ``excluded_key_prefixes``
                     continue
                 if len(batch[key]) != len(batch[sequence_keys[0]]):
                     raise RuntimeError(

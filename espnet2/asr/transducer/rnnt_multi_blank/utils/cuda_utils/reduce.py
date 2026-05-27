@@ -62,7 +62,7 @@ def CTAReduce(tid: int, x, storage, count: int, R_opid: int):
 
     The data will be read from the right segement recursively, and reduced (ROP) onto
     the left half. Operation continues while warp size is larger than a given offset.
-    Beyond this offset, warp reduction is performed via `shfl_down_sync`,
+    Beyond this offset, warp reduction is performed via ``shfl_down_sync``,
     which halves the reduction space and sums the two halves at each call.
 
     Note:
@@ -263,7 +263,7 @@ def ReduceHelper(
 ):
     """CUDA Warp reduction kernel helper which reduces via the R_Op.Add and writes
 
-    the result to `output` according to I_op id.
+    the result to ``output`` according to I_op id.
 
     The result is stored in the blockIdx.
 
@@ -307,7 +307,7 @@ def ReduceHelper(
 
 
 def reduce_exp(acts: torch.Tensor, denom, rows: int, cols: int, minus: bool, stream):
-    """Helper method to call the Warp Reduction Kernel to perform `exp` reduction.
+    """Helper method to call the Warp Reduction Kernel to perform ``exp`` reduction.
 
     Note:
         Efficient warp occurs at input shapes of 2 ^ K.
@@ -342,7 +342,7 @@ def reduce_exp(acts: torch.Tensor, denom, rows: int, cols: int, minus: bool, str
 
 
 def reduce_max(acts: torch.Tensor, denom, rows: int, cols: int, minus: bool, stream):
-    """Helper method to call the Warp Reduction Kernel to perform `max` reduction.
+    """Helper method to call the Warp Reduction Kernel to perform ``max`` reduction.
 
     Note:
         Efficient warp occurs at input shapes of 2 ^ K.

@@ -19,16 +19,16 @@ class EncoderLayer(nn.Module):
     Args:
         size (int): Input dimension.
         self_attn (torch.nn.Module): Self-attention module instance.
-            `MultiHeadedAttention` or `RelPositionMultiHeadedAttention` instance
+            ``MultiHeadedAttention`` or ``RelPositionMultiHeadedAttention`` instance
             can be used as the argument.
         feed_forward (torch.nn.Module): Feed-forward module instance.
-            `PositionwiseFeedForward`, `MultiLayeredConv1d`, or `Conv1dLinear` instance
+            ``PositionwiseFeedForward``, ``MultiLayeredConv1d``, or ``Conv1dLinear`` instance
             can be used as the argument.
         feed_forward_macaron (torch.nn.Module): Additional feed-forward module instance.
-            `PositionwiseFeedForward`, `MultiLayeredConv1d`, or `Conv1dLinear` instance
+            ``PositionwiseFeedForward``, ``MultiLayeredConv1d``, or ``Conv1dLinear`` instance
             can be used as the argument.
         conv_module (torch.nn.Module): Convolution module instance.
-            `ConvlutionModule` instance can be used as the argument.
+            ``ConvlutionModule`` instance can be used as the argument.
         dropout_rate (float): Dropout rate.
         normalize_before (bool): Whether to use layer_norm before the first block.
         concat_after (bool): Whether to concat attention layer's input and output.
@@ -97,8 +97,8 @@ class EncoderLayer(nn.Module):
             x, pos_emb = x_input, None
 
         skip_layer = False
-        # with stochastic depth, residual connection `x + f(x)` becomes
-        # `x <- x + 1 / (1 - p) * f(x)` at training time.
+        # with stochastic depth, residual connection ``x + f(x)`` becomes
+        # ``x <- x + 1 / (1 - p) * f(x)`` at training time.
         stoch_layer_coeff = 1.0
         if self.training and self.stochastic_depth_rate > 0:
             skip_layer = torch.rand(1).item() < self.stochastic_depth_rate

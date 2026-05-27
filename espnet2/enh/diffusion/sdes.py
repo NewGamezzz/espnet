@@ -47,7 +47,7 @@ class SDE(abc.ABC):
     def prior_sampling(self, shape, *args):
         """Generate one sample from the prior distribution,
 
-        $p_T(x|args)$ with shape `shape`.
+        $p_T(x|args)$ with shape ``shape``.
         """
         pass
 
@@ -72,7 +72,7 @@ class SDE(abc.ABC):
 
         Args:
             x: a torch tensor
-            t: a torch float representing the time step (from 0 to `self.T`)
+            t: a torch float representing the time step (from 0 to ``self.T``)
 
         Returns:
             f, G
@@ -88,7 +88,7 @@ class SDE(abc.ABC):
 
         Args:
             score_model: A function that takes x, t and y and returns the score.
-            probability_flow: If `True`, create the reverse-time ODE
+            probability_flow: If ``True``, create the reverse-time ODE
                 used for probability flow sampling.
         """
         N = oself.N
@@ -163,9 +163,9 @@ class OUVESDE(SDE):
     ):
         """Construct an Ornstein-Uhlenbeck Variance Exploding SDE.
 
-        Note that the "steady-state mean" `y` is not provided at construction,
+        Note that the "steady-state mean" ``y`` is not provided at construction,
         but must rather be given as an argument to the methods
-        which require it (e.g., `sde` or `marginal_prob`).
+        which require it (e.g., ``sde`` or ``marginal_prob``).
 
         dx = -theta (y-x) dt + sigma(t) dw
 
@@ -198,7 +198,7 @@ class OUVESDE(SDE):
         # the sqrt(2*logsig) factor is required here so that logsig does not in the end
         # affect the perturbation kernel standard deviation. this can be understood
         # from solving the integral of [exp(2s) * g(s)^2] from s=0 to t with
-        # g(t) = sigma(t) as defined here, and seeing that `logsig` remains in the
+        # g(t) = sigma(t) as defined here, and seeing that ``logsig`` remains in the
         # integral solution unless this sqrt(2*logsig) factor is included.
         sigma = self.sigma_min * (self.sigma_max / self.sigma_min) ** t
         diffusion = sigma * np.sqrt(2 * self.logsig)
@@ -255,9 +255,9 @@ class OUVPSDE(SDE):
 
         beta(t) = beta_min + t(beta_max - beta_min)
 
-        Note that the "steady-state mean" `y` is not provided at construction,
+        Note that the "steady-state mean" ``y`` is not provided at construction,
         but must rather be given as an argument to the methods which
-        require it (e.g., `sde` or `marginal_prob`).
+        require it (e.g., ``sde`` or ``marginal_prob``).
 
         Args:
             beta_min: smallest sigma.
@@ -324,7 +324,7 @@ def batch_broadcast(a, x):
         a = a.squeeze()
         if len(a.shape) != 1:
             raise ValueError(
-                f"Don't know how to batch-broadcast tensor `a` "
+                f"Don't know how to batch-broadcast tensor ``a`` "
                 f"with more than one effective dimension (shape {a.shape})"
             )
 

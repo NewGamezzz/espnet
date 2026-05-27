@@ -35,11 +35,11 @@ def pad_list(xs, pad_value):
     """Perform padding for the list of tensors.
 
     Args:
-        xs (List): List of Tensors [(T_1, `*`), (T_2, `*`), ..., (T_B, `*`)].
+        xs (List): List of Tensors [(T_1, ``*``), (T_2, ``*``), ..., (T_B, ``*``)].
         pad_value (float): Value for padding.
 
     Returns:
-        Tensor: Padded tensor (B, Tmax, `*`).
+        Tensor: Padded tensor (B, Tmax, ``*``).
 
     Examples:
         >>> x = [torch.ones(4), torch.ones(2), torch.ones(1)]
@@ -355,12 +355,12 @@ def mask_by_length(xs, lengths, fill=0):
     """Mask tensor according to length.
 
     Args:
-        xs (Tensor): Batch of input tensor (B, `*`).
+        xs (Tensor): Batch of input tensor (B, ``*``).
         lengths (LongTensor or List): Batch of lengths (B,).
         fill (int or float): Value to fill masked part.
 
     Returns:
-        Tensor: Batch of masked input tensor (B, `*`).
+        Tensor: Batch of masked input tensor (B, ``*``).
 
     Examples:
         >>> x = torch.arange(5).repeat(3, 1) + 1
@@ -474,7 +474,7 @@ def to_torch_tensor(x):
 
 
 def get_subsample(train_args, mode, arch):
-    """Parse the subsampling factors from the args for the specified `mode` and `arch`.
+    """Parse the subsampling factors from the args for the specified ``mode`` and ``arch``.
 
     Args:
         train_args: argument Namespace containing options.

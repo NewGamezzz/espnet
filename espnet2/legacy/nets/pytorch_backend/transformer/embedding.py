@@ -27,7 +27,7 @@ def _pre_hook(
 
     Note:
         We saved self.pe until v.0.5.2 but we have omitted it later.
-        Therefore, we remove the item "pe" from `state_dict` for backward compatibility.
+        Therefore, we remove the item "pe" from ``state_dict`` for backward compatibility.
 
     """
     k = prefix + "pe"
@@ -85,10 +85,10 @@ class PositionalEncoding(torch.nn.Module):
         """Add positional encoding.
 
         Args:
-            x (torch.Tensor): Input tensor (batch, time, `*`).
+            x (torch.Tensor): Input tensor (batch, time, ``*``).
 
         Returns:
-            torch.Tensor: Encoded tensor (batch, time, `*`).
+            torch.Tensor: Encoded tensor (batch, time, ``*``).
         """
         self.extend_pe(x)
         x = x * self.xscale + self.pe[:, : x.size(1)]
@@ -120,10 +120,10 @@ class ScaledPositionalEncoding(PositionalEncoding):
         """Add positional encoding.
 
         Args:
-            x (torch.Tensor): Input tensor (batch, time, `*`).
+            x (torch.Tensor): Input tensor (batch, time, ``*``).
 
         Returns:
-            torch.Tensor: Encoded tensor (batch, time, `*`).
+            torch.Tensor: Encoded tensor (batch, time, ``*``).
 
         """
         self.extend_pe(x)
@@ -210,10 +210,10 @@ class LearnableFourierPosEnc(torch.nn.Module):
         """Add positional encoding.
 
         Args:
-            x (torch.Tensor): Input tensor (batch, time, `*`).
+            x (torch.Tensor): Input tensor (batch, time, ``*``).
 
         Returns:
-            torch.Tensor: Encoded tensor (batch, time, `*`).
+            torch.Tensor: Encoded tensor (batch, time, ``*``).
         """
         pe = self.extend_pe(x)
         x = x * self.xscale + pe
@@ -247,11 +247,11 @@ class LegacyRelPositionalEncoding(PositionalEncoding):
         """Compute positional encoding.
 
         Args:
-            x (torch.Tensor): Input tensor (batch, time, `*`).
+            x (torch.Tensor): Input tensor (batch, time, ``*``).
 
         Returns:
-            torch.Tensor: Encoded tensor (batch, time, `*`).
-            torch.Tensor: Positional embedding tensor (1, time, `*`).
+            torch.Tensor: Encoded tensor (batch, time, ``*``).
+            torch.Tensor: Positional embedding tensor (1, time, ``*``).
 
         """
         self.extend_pe(x)
@@ -292,7 +292,7 @@ class RelPositionalEncoding(torch.nn.Module):
                 if self.pe.dtype != x.dtype or self.pe.device != x.device:
                     self.pe = self.pe.to(dtype=x.dtype, device=x.device)
                 return
-        # Suppose `i` means to the position of query vecotr and `j` means the
+        # Suppose ``i`` means to the position of query vecotr and ``j`` means the
         # position of key vector. We use position relative positions when keys
         # are to the left (i>j) and negative relative positions otherwise (i<j).
         pe_positive = torch.zeros(x.size(1), self.d_model)
@@ -319,10 +319,10 @@ class RelPositionalEncoding(torch.nn.Module):
         """Add positional encoding.
 
         Args:
-            x (torch.Tensor): Input tensor (batch, time, `*`).
+            x (torch.Tensor): Input tensor (batch, time, ``*``).
 
         Returns:
-            torch.Tensor: Encoded tensor (batch, time, `*`).
+            torch.Tensor: Encoded tensor (batch, time, ``*``).
 
         """
         self.extend_pe(x)
@@ -377,10 +377,10 @@ class StreamPositionalEncoding(torch.nn.Module):
         """Add positional encoding.
 
         Args:
-            x (torch.Tensor): Input tensor (batch, time, `*`).
+            x (torch.Tensor): Input tensor (batch, time, ``*``).
 
         Returns:
-            torch.Tensor: Encoded tensor (batch, time, `*`).
+            torch.Tensor: Encoded tensor (batch, time, ``*``).
 
         """
         self.extend_pe(x.size(1) + start_idx, x.device, x.dtype)
@@ -454,7 +454,7 @@ class ConvolutionalPositionalEmbedding(torch.nn.Module):
         """Prepare Scriptable method."""
         for hook in self.conv._forward_pre_hooks.values():
             # The hook we want to remove is an instance of WeightNorm class, so
-            # normally we would do `if isinstance(...)` but this class is not accessible
+            # normally we would do ``if isinstance(...)`` but this class is not accessible
             # because of shadowing, so we check the module name directly.
             # https://github.com/pytorch/pytorch/blob/be0ca00c5ce260eb5bcec3237357f7a30cc08983/torch/nn/utils/__init__.py#L3
             if (

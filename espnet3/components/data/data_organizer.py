@@ -130,27 +130,27 @@ class DataOrganizer:
 
     Attributes:
         train (CombinedDataset): Combined dataset built from training configurations,
-            or `None` if not provided.
+            or ``None`` if not provided.
         valid (CombinedDataset): Combined dataset built from validation configurations,
-            or `None` if not provided.
+            or ``None`` if not provided.
         test_sets (Dict[str, DatasetWithTransform]): Dictionary mapping test set names
             to DatasetWithTransform instances.
 
     Raises:
-        RuntimeError: If only one of `train` or `valid` is provided.
-        RuntimeError: If `train` and `valid` are of mismatched types
+        RuntimeError: If only one of ``train`` or ``valid`` is provided.
+        RuntimeError: If ``train`` and ``valid`` are of mismatched types
             (e.g., one is CombinedDataset, the other is None).
-        AssertionError: If `preprocessor` is not callable.
+        AssertionError: If ``preprocessor`` is not callable.
 
     Note:
         **Supported workflows.**
 
-        - For training: provide both `train` and `valid`.
-        - For testing only: provide `test` and omit `train` / `valid`.
-        - All three (`train`, `valid`, `test`) can also be provided simultaneously.
+        - For training: provide both ``train`` and ``valid``.
+        - For testing only: provide ``test`` and omit ``train`` / ``valid``.
+        - All three (``train``, ``valid``, ``test``) can also be provided simultaneously.
 
-        If any of the `train`, `valid`, or `test` are omitted, the corresponding
-            attributes will be set to `None` or empty.
+        If any of the ``train``, ``valid``, or ``test`` are omitted, the corresponding
+            attributes will be set to ``None`` or empty.
 
     **Example (training + validation).**
         >>> organizer = DataOrganizer(

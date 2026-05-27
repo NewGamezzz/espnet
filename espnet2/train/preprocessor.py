@@ -262,7 +262,7 @@ class CommonPreprocessor(AbsPreprocessor):
         else:
             self.noises = None
 
-        # Check DataAugmentation docstring for more information of `data_aug_effects`
+        # Check DataAugmentation docstring for more information of ``data_aug_effects``
         self.fs = fs
         if data_aug_effects is not None:
             assert self.fs > 0, self.fs
@@ -923,7 +923,7 @@ class DynamicMixingPreprocessor(AbsPreprocessor):
         self.sources = {}
         assert (
             source_scp is not None
-        ), f"Please pass `source_scp` to {type(self).__name__}"
+        ), f"Please pass ``source_scp`` to {type(self).__name__}"
         with open(source_scp, "r", encoding="utf-8") as f:
             for line in f:
                 sps = line.strip().split(None, 1)
@@ -1036,7 +1036,7 @@ class DynamicMixingPreprocessor(AbsPreprocessor):
             len(data[self.mixture_source_name].shape) == 1
         ), "Multi-channel input has not been tested"
 
-        # Add the category information (an integer) to `data`
+        # Add the category information (an integer) to ``data``
         if not self.categories and "category" in data:
             raise ValueError(
                 "categories must be set in the config file when utt2category files "
@@ -1125,7 +1125,7 @@ class EnhPreprocessor(CommonPreprocessor):
 
         # If specified, the audios will be chomped to the specified length
         self.speech_segment = speech_segment
-        # Only used when `speech_segment` is specified.
+        # Only used when ``speech_segment`` is specified.
         # If True, make sure all chomped segments are not all-zero.
         self.avoid_allzero_segment = avoid_allzero_segment
 
@@ -1243,7 +1243,7 @@ class EnhPreprocessor(CommonPreprocessor):
     def _random_crop_range(
         self, data_dict, num_spk, tgt_length, uid=None, max_trials=10
     ):
-        # Randomly crop the signals to the length `tgt_length`
+        # Randomly crop the signals to the length ``tgt_length``
         assert tgt_length > 0, tgt_length
         speech_refs = [
             data_dict[self.speech_ref_name_prefix + str(spk + 1)]
@@ -1285,14 +1285,14 @@ class EnhPreprocessor(CommonPreprocessor):
 
         num_spk = self.num_spk
 
-        # Add the category information (an integer) to `data`
+        # Add the category information (an integer) to ``data``
         if not self.categories and "category" in data:
             raise ValueError(
                 "categories must be set in the config file when utt2category files "
                 "exist in the data directory (e.g., dump/raw/*/utt2category)"
             )
 
-        # Add the sampling rate information (an integer) to `data`
+        # Add the sampling rate information (an integer) to ``data``
         if "fs" in data:
             fs = int(data.pop("fs"))
             data["utt2fs"] = np.array([fs])
@@ -1812,7 +1812,7 @@ class TSEPreprocessor(EnhPreprocessor):
         if train and rir_scp is not None and rir_apply_prob > 0:
             logging.warning(
                 "Be cautious when applying RIRs on the fly in the TSE task! "
-                "Please ensure `speech_ref` sums up to `speech_mix` for each sample."
+                "Please ensure ``speech_ref`` sums up to ``speech_mix`` for each sample."
             )
 
         if train:
@@ -1971,7 +1971,7 @@ class SpkPreprocessor(CommonPreprocessor):
 
     Args:
         train (bool): Whether to use in training mode.
-        spk2utt (str): Path to the `spk2utt` file.
+        spk2utt (str): Path to the ``spk2utt`` file.
         target_duration (float): Target duration in seconds.
         sample_rate (int): Sampling rate.
         num_eval (int): Number of utterances to be used for evaluation.
@@ -1979,12 +1979,12 @@ class SpkPreprocessor(CommonPreprocessor):
         rir_apply_prob (float): Probability of applying RIR.
         noise_info (List[Tuple[float, str, Tuple[int, int], Tuple[float, float]]]):
             List of tuples of noise information. Each tuple represents a noise type.
-            Each tuple consists of `(prob, noise_scp, num_to_mix, db_range)`.
-                - `prob` (float) is the probability of applying the noise type.
-                - `noise_scp` (str) is the path to the noise scp file.
-                - `num_to_mix` (Tuple[int, int]) is the range of the number of noises
+            Each tuple consists of ``(prob, noise_scp, num_to_mix, db_range)``.
+                - ``prob`` (float) is the probability of applying the noise type.
+                - ``noise_scp`` (str) is the path to the noise scp file.
+                - ``num_to_mix`` (Tuple[int, int]) is the range of the number of noises
                     to be mixed.
-                - `db_range` (Tuple[float, float]) is the range of noise levels in dB.
+                - ``db_range`` (Tuple[float, float]) is the range of noise levels in dB.
         noise_apply_prob (float): Probability of applying noise.
         short_noise_thres (float): Threshold of short noise.
     """
@@ -2247,7 +2247,7 @@ class LIDPreprocessor(CommonPreprocessor):
 
     Args:
         train (bool): Whether to use in training mode.
-        lang2utt (str): Path to the `lang2utt` file.
+        lang2utt (str): Path to the ``lang2utt`` file.
         target_duration (float): Target duration in seconds, if
         fix_duration, clip to this duration.
         fix_duration (bool): Whether to fix the duration of the audio.
@@ -2256,12 +2256,12 @@ class LIDPreprocessor(CommonPreprocessor):
         rir_apply_prob (float): Probability of applying RIR.
         noise_info (List[Tuple[float, str, Tuple[int, int], Tuple[float, float]]]):
             List of tuples of noise information. Each tuple represents a noise type.
-            Each tuple consists of `(prob, noise_scp, num_to_mix, db_range)`.
-                - `prob` (float) is the probability of applying the noise type.
-                - `noise_scp` (str) is the path to the noise scp file.
-                - `num_to_mix` (Tuple[int, int]) is the range of the number of noises
+            Each tuple consists of ``(prob, noise_scp, num_to_mix, db_range)``.
+                - ``prob`` (float) is the probability of applying the noise type.
+                - ``noise_scp`` (str) is the path to the noise scp file.
+                - ``num_to_mix`` (Tuple[int, int]) is the range of the number of noises
                     to be mixed.
-                - `db_range` (Tuple[float, float]) is the range of noise levels in dB.
+                - ``db_range`` (Tuple[float, float]) is the range of noise levels in dB.
         noise_apply_prob (float): Probability of applying noise.
         short_noise_thres (float): Threshold of short noise.
     """

@@ -120,7 +120,7 @@ class HuggingfaceOPTModel(AbsLM):
 
         Returns:
             tuple[torch.Tensor, List[Any]]: Tuple of
-                batchfied scores for next token with shape of `(n_batch, vocab_size)`
+                batchfied scores for next token with shape of ``(n_batch, vocab_size)``
                 and next state list for ys.
 
         """

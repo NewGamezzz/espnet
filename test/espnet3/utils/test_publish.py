@@ -8,8 +8,8 @@ from omegaconf import OmegaConf
 
 from espnet3.publication.demo import packing as demo_packer
 from espnet3.systems.asr.system import ASRSystem
-from espnet3.utils import publish
-from espnet3.utils.publish import (
+from espnet3.utils import publish_utils as publish
+from espnet3.utils.publish_utils import (
     _build_results_table,
     _render_readme,
     _resolve_results,

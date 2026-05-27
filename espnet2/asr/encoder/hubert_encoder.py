@@ -227,7 +227,7 @@ class TorchAudioHuBERTPretrainEncoder(AbsEncoder):
 
     def _finetuning_forward(self, xs_pad, ilens):
         def get_padding_mask(input, lengths):
-            """get_padding_mask() from torchaudio.models.wav2vec2.components"""
+            """get_padding_mask() from ``torchaudio.models.wav2vec2.components``"""
             batch_size, max_len, _ = input.shape
             mask = (
                 torch.arange(max_len, device=lengths.device).expand(batch_size, max_len)
@@ -624,9 +624,11 @@ class FairseqHubertPretrainEncoder(AbsEncoder):
         self.encoder.mask_emb = torch.nn.Parameter(
             torch.HalfTensor(self.cfg.encoder_embed_dim).uniform_()
         )
-        logging.info(f"Hubert mask embedding re-initiallized!, \
+        logging.info(
+            f"Hubert mask embedding re-initiallized!, \
             {self.encoder.mask_emb.dtype}, \
-            {self.use_amp}")
+            {self.use_amp}"
+        )
 
 
 def download_hubert(model_url, dir_path):

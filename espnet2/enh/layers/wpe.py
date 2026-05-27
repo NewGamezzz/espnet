@@ -47,7 +47,7 @@ def signal_framing(
 
 
 def get_power(signal, dim=-2) -> torch.Tensor:
-    """Calculates power for `signal`
+    """Calculates power for ``signal``
 
     Args:
         signal : Single frequency signal

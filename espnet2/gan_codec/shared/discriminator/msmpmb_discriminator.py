@@ -189,7 +189,7 @@ class MultiScaleMultiPeriodMultiBandDiscriminator(nn.Module):
         sample_rate : int, optional
             Sampling rate of audio in Hz, by default 44100
         bands : list, optional
-            Bands to run MRD at, by default `BANDS`
+            Bands to run MRD at, by default ``BANDS``
         """
         super().__init__()
         discs = []

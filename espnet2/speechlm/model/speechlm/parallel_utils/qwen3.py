@@ -9,20 +9,20 @@ models used in the SpeechLM framework. It follows TorchTitan's
 parallelization patterns adapted for the HuggingFace model structure.
 
 HuggingFace Qwen3 model structure:
-    model.model.embed_tokens  - Token embeddings
-    model.model.layers        - List of transformer layers
-    model.model.norm          - Final RMSNorm
-    model.lm_head             - Output projection
+    ``model.model.embed_tokens``  - Token embeddings
+    ``model.model.layers``        - List of transformer layers
+    ``model.model.norm``          - Final RMSNorm
+    ``model.lm_head``             - Output projection
 
 For MoE models (e.g., Qwen3-30B-A3B), some layers have:
-    layer.mlp = Qwen3MoeSparseMoeBlock
-        .gate: nn.Linear(hidden_size, num_experts)   # Router
-        .experts: nn.ModuleList of Qwen3MoeMLP        # Individual experts
+    ``layer.mlp`` = Qwen3MoeSparseMoeBlock
+        ``.gate``: nn.Linear(hidden_size, num_experts)   # Router
+        ``.experts``: nn.ModuleList of Qwen3MoeMLP        # Individual experts
 
 Additional multimodal components (added by ParallelHFModel):
-    model.multimodal_io_dict  - Dict of multimodal IO handlers
-    model.adaptor             - Dict of linear adaptors for continuous modalities
-    model.stream_emb          - Stream embeddings
+    ``model.multimodal_io_dict``  - Dict of multimodal IO handlers
+    ``model.adaptor``             - Dict of linear adaptors for continuous modalities
+    ``model.stream_emb``          - Stream embeddings
 """
 
 import logging

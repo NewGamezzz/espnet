@@ -78,7 +78,7 @@ class Encoder(torch.nn.Module):
         attention_dropout_rate (float): Dropout rate in attention.
         input_layer (Union[str, torch.nn.Module]): Input layer type.
         pos_enc_class (torch.nn.Module): Positional encoding module class.
-            `PositionalEncoding `or `ScaledPositionalEncoding`
+            ``PositionalEncoding ``or ``ScaledPositionalEncoding``
         normalize_before (bool): Whether to use layer_norm before the first block.
         concat_after (bool): Whether to concat attention layer's input and output.
             if True, additional linear will be applied.

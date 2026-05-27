@@ -26,7 +26,7 @@ class Translatotron(AbsSynthesizer):
     """TTranslatotron Synthesizer related modules for speech-to-speech translation.
 
     This is a module of Spectrogram prediction network in Translatotron described
-    in `Direct speech-to-speech translation with a sequence-to-sequence model`_,
+    in ``Direct speech-to-speech translation with a sequence-to-sequence model``_,
     which converts the sequence of hidden states into the sequence of Mel-filterbanks.
 
     .. _`Direct speech-to-speech translation with a sequence-to-sequence model`:

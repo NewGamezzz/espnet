@@ -14,16 +14,16 @@ class TristageLR(_LRScheduler, AbsBatchStepScheduler):
     This scheduler adjusts the learning rate in three phases:
         1. Warmup:
            The learning rate increases linearly from
-           `init_lr_scale * base_lr` to `base_lr` over the first
-           `warmup_ratio * max_steps` steps.
+           ``init_lr_scale * base_lr`` to ``base_lr`` over the first
+           ``warmup_ratio * max_steps`` steps.
 
         2. Hold:
-           The learning rate is held constant at `base_lr` for
-           `hold_ratio * max_steps` steps.
+           The learning rate is held constant at ``base_lr`` for
+           ``hold_ratio * max_steps`` steps.
 
         3. Decay:
-           The learning rate decays exponentially from `base_lr`
-           to `final_lr_scale * base_lr` over `decay_ratio * max_steps`
+           The learning rate decays exponentially from ``base_lr``
+           to ``final_lr_scale * base_lr`` over ``decay_ratio * max_steps``
            steps.
 
     Reference:
@@ -37,8 +37,8 @@ class TristageLR(_LRScheduler, AbsBatchStepScheduler):
         warmup_ratio: Fraction of steps for linear warmup.
         hold_ratio: Fraction of steps to hold constant.
         decay_ratio: Fraction of steps for exponential decay.
-        init_lr_scale: Initial learning rate is `init_lr_scale * base_lr`.
-        final_lr_scale: Final learning rate is `final_lr_scale * base_lr`.
+        init_lr_scale: Initial learning rate is ``init_lr_scale * base_lr``.
+        final_lr_scale: Final learning rate is ``final_lr_scale * base_lr``.
         last_epoch: The index of the last step. Default is -1 (fresh start).
     """
 

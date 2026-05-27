@@ -231,8 +231,8 @@ class Text2Speech:
 
             except ImportError:
                 logging.error(
-                    "`espnet_model_zoo` is not installed. "
-                    "Please install via `pip install -U espnet_model_zoo`."
+                    "``espnet_model_zoo`` is not installed. "
+                    "Please install via ``pip install -U espnet_model_zoo``."
                 )
                 raise
             d = ModelDownloader()
@@ -245,8 +245,8 @@ class Text2Speech:
 
                 except ImportError:
                     logging.error(
-                        "`parallel_wavegan` is not installed. "
-                        "Please install via `pip install -U parallel_wavegan`."
+                        "``parallel_wavegan`` is not installed. "
+                        "Please install via ``pip install -U parallel_wavegan``."
                     )
                     raise
 
@@ -255,7 +255,7 @@ class Text2Speech:
                 # NOTE(kan-bayashi): Filelock download is supported from 0.5.2
                 assert V(__version__) > V("0.5.1"), (
                     "Please install the latest parallel_wavegan "
-                    "via `pip install -U parallel_wavegan`."
+                    "via ``pip install -U parallel_wavegan``."
                 )
                 vocoder_tag = vocoder_tag.replace("parallel_wavegan/", "")
                 vocoder_file = download_pretrained_model(vocoder_tag)

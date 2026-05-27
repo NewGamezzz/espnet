@@ -29,10 +29,10 @@ class Config:
     parallel_residual: bool = True
     bias: bool = True
     lm_head_bias: bool = False
-    # to use multi-head attention (MHA), set this to `n_head` (default)
+    # to use multi-head attention (MHA), set this to ``n_head`` (default)
     # to use multi-query attention (MQA), set this to 1
     # to use grouped-query attention (GQA), set this to a value in between
-    # Example with `n_head=4`
+    # Example with ``n_head=4``
     # ┌───┐┌───┐┌───┐┌───┐     ┌───┐    ┌───┐             ┌───┐
     # │ v ││ v ││ v ││ v │     │ v │    │ v │             │ v │
     # └───┘└───┘└───┘└───┘     └───┘    └───┘             └───┘
@@ -109,7 +109,7 @@ class Config:
         if self.intermediate_size is None:
             if self.mlp_class_name == "LLaMAMLP":
                 raise ValueError(
-                    f"The config {self.name!r}, needs to set the `intermediate_size`"
+                    f"The config {self.name!r}, needs to set the ``intermediate_size``"
                 )
             self.intermediate_size = 4 * self.n_embd
 
@@ -121,7 +121,7 @@ class Config:
     @classmethod
     def from_name(cls, name: str, **kwargs: Any) -> Optional[Self]:
         if name not in name_to_config:
-            # search through all `config['hf_config']['name']`
+            # search through all ``config['hf_config']['name']``
             try:
                 conf_dict = next(
                     config
@@ -150,9 +150,9 @@ class Config:
 
     @classmethod
     def from_checkpoint(cls, path: Path, **kwargs: Any) -> Self:
-        """Automatically load `model_config.yaml` and if it doesn't
+        """Automatically load ``model_config.yaml`` and if it doesn't
 
-        exist - a matching config from `litgpt/config.py`.
+        exist - a matching config from ``litgpt/config.py``.
         """
         if (config_path := path / "model_config.yaml").is_file():
             return cls.from_file(config_path, **kwargs)
@@ -164,14 +164,14 @@ class Config:
 
     @property
     def mlp_class(self) -> Type:
-        # `self.mlp_class_name` cannot be the type to keep the config serializable
+        # ``self.mlp_class_name`` cannot be the type to keep the config serializable
         return getattr(
             espnet2.sds.end_to_end.mini_omni.litgpt.model, self.mlp_class_name
         )
 
     @property
     def norm_class(self) -> Type:
-        # `self.norm_class_name` cannot be the type to keep the config serializable
+        # ``self.norm_class_name`` cannot be the type to keep the config serializable
         if self.norm_class_name == "RMSNorm":
             from functools import partial
 

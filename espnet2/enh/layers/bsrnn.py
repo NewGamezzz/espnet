@@ -36,13 +36,13 @@ class BSRNN(nn.Module):
 
         Args:
             input_dim (int): maximum number of frequency bins corresponding to
-                `target_fs`
+                ``target_fs``
             num_channel (int): embedding dimension of each time-frequency bin
             num_layer (int): number of time and frequency RNN layers
             target_fs (int): maximum sampling frequency supported by the model
             subbands (list or tuple, optional): list of subband sizes to split the
                 frequency band into. If specified, this will override the subband
-                definition in the `BandSplit` class.
+                definition in the ``BandSplit`` class.
             causal (bool): Whether or not to adopt causal processing
                 if True, LSTM will be used instead of BLSTM for time modeling
             num_spk (int): number of outputs to be generated
@@ -442,7 +442,7 @@ def get_mel_subbands(input_dim, n_mels=40, target_fs=48000):
         https://github.com/lucidrains/BS-RoFormer/blob/main/bs_roformer/mel_band_roformer.py#L432-L464
 
     Args:
-        input_dim (int): number of frequency bins corresponding to `target_fs`
+        input_dim (int): number of frequency bins corresponding to ``target_fs``
             Assumed to be n_fft // 2 + 1, where n_fft is the FFT size.
         n_mels (int): number of mel frequency bands to be used.
         target_fs (int): target sampling frequency in Hz.
@@ -485,11 +485,11 @@ def get_erb_subbands(input_dim, min_freq_idx=0, n_erbs=64, target_fs=48000):
         https://github.com/Xiaobin-Rong/gtcrn/blob/main/stream/gtcrn.py#L11-L49
 
     Args:
-        input_dim (int): number of frequency bins corresponding to `target_fs`
+        input_dim (int): number of frequency bins corresponding to ``target_fs``
             Assumed to be n_fft // 2 + 1, where n_fft is the FFT size.
         min_freq_idx (int): bin index of the minimum frequency to start the ERB bands.
             Frequency bins below this value will be kept as is.
-            `min_freq_idx / input_dim * target_fs / 2` is the minimum frequency in Hz.
+            ``min_freq_idx / input_dim * target_fs / 2`` is the minimum frequency in Hz.
         n_erbs (int): number of ERB frequency bands to be used.
         target_fs (int): target sampling frequency in Hz.
 
@@ -520,7 +520,7 @@ def get_erb_subbands(input_dim, min_freq_idx=0, n_erbs=64, target_fs=48000):
     if np.diff(bins).min() < 1:
         raise ValueError(
             "The ERB filter bank has duplicated frequency bands. "
-            "Please increase `min_freq_idx` to ensure unique subbands."
+            "Please increase ``min_freq_idx`` to ensure unique subbands."
         )
     subbands = [(i, i) for i in range(min_freq_idx)] + [
         (bins[i], bins[i + 1] - 1) for i in range(len(bins) - 1)

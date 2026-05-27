@@ -318,9 +318,9 @@ def _crop_audio_label(
     """Collate the audio and label at the same time.
 
     Args:
-        waveform (Tensor): The waveform Tensor with dimensions `(time)`.
-        label (Tensor): The label Tensor with dimensions `(seq)`.
-        length (Tensor): The length Tensor with dimension `(1,)`.
+        waveform (Tensor): The waveform Tensor with dimensions ``(time)``.
+        label (Tensor): The label Tensor with dimensions ``(seq)``.
+        length (Tensor): The length Tensor with dimension ``(1,)``.
         num_frames (int): The final length of the waveform.
         rand_crop (bool): if ``rand_crop`` is True, the starting index of the
             waveform and label is random if the length is longer than the minimum

@@ -77,7 +77,7 @@ def parse_cli_and_stage_args(
 
     This helper is a thin wrapper around ``ArgumentParser.parse_args()`` plus
     :func:`resolve_stages`. It keeps the runner entrypoints concise and ensures
-    the `"all"` shorthand is expanded consistently across recipes.
+    the ``"all"`` shorthand is expanded consistently across recipes.
 
     Args:
         parser (argparse.ArgumentParser): Parser configured by the recipe

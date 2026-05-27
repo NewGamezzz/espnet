@@ -125,7 +125,7 @@ def sync_grad(params):
 def average_metrics(metrics: Dict[str, float], count=1.0):
     """Average a dictionary of metrics across all workers, using the optional
 
-    `count` as unormalized weight.
+    ``count`` as unormalized weight.
     """
     if not is_distributed():
         return metrics

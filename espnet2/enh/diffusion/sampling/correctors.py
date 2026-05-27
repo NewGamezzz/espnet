@@ -24,7 +24,7 @@ class Corrector(abc.ABC):
         Args:
             x: A PyTorch tensor representing the current state
             t: A PyTorch tensor representing the current time step.
-            *args: Possibly additional arguments, in particular `y` for OU processes
+            *args: Possibly additional arguments, in particular ``y`` for OU processes
 
         Returns:
             x: A PyTorch tensor of the next state.

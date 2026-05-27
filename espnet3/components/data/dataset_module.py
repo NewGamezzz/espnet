@@ -95,7 +95,7 @@ def _load_local_dataset_module(recipe_dir: str | Path | None):
     if not module_init.is_file():
         raise ModuleNotFoundError(
             "No dataset source provided and local dataset module not found at "
-            f"{module_init}. Set `data_src` or add recipe_dir/dataset/__init__.py."
+            f"{module_init}. Set ``data_src`` or add recipe_dir/dataset/__init__.py."
         )
 
     # Use a unique synthetic module name to avoid collisions across recipes.
@@ -201,7 +201,7 @@ def parse_dataset_reference_config(
     data_src = plain.get(_DATA_SRC_KEY)
     if data_src is not None:
         if not isinstance(data_src, str):
-            raise TypeError("`data_src` must be a string or None.")
+            raise TypeError("``data_src`` must be a string or None.")
         data_src = data_src.strip() or None
     data_src_args = dict(plain.get(_DATA_SRC_ARGS_KEY, {}))
     return data_src, data_src_args

@@ -45,7 +45,7 @@ class JETS(AbsGANTTS):
     This is a module of JETS described in `JETS: Jointly Training FastSpeech2
     and HiFi-GAN for End to End Text to Speech'_.
 
-    .. _`JETS: Jointly Training FastSpeech2 and HiFi-GAN for End to End Text to Speech`
+    .. _``JETS: Jointly Training FastSpeech2 and HiFi-GAN for End to End Text to Speech``
         : https://arxiv.org/abs/2203.16852
 
     """

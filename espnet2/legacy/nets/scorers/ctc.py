@@ -73,7 +73,7 @@ class CTCPrefixScorer(BatchPartialScorerInterface):
 
         Returns:
             tuple[torch.Tensor, Any]:
-                Tuple of a score tensor for y that has a shape `(len(next_tokens),)`
+                Tuple of a score tensor for y that has a shape ``(len(next_tokens),)``
                 and next state for ys
 
         """
@@ -109,7 +109,7 @@ class CTCPrefixScorer(BatchPartialScorerInterface):
 
         Returns:
             tuple[torch.Tensor, Any]:
-                Tuple of a score tensor for y that has a shape `(len(next_tokens),)`
+                Tuple of a score tensor for y that has a shape ``(len(next_tokens),)``
                 and next state for ys
 
         """

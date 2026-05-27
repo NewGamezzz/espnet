@@ -54,7 +54,7 @@ class WebrtcVADModel(AbsVAD):
 
         Raises:
             ImportError:
-                If the required `webrtcvad` library is not installed.
+                If the required ``webrtcvad`` library is not installed.
         """
         if not is_webrtcvad_available:
             raise ImportError("Error: webrtcvad is not properly installed.")

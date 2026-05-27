@@ -91,7 +91,7 @@ class GPT(nn.Module):
         elif value != self.cos.size(0):
             self.cos, self.sin = self.rope_cache(device=self.cos.device)
         # the mask and kv cache size will get updated on
-        # `set_kv_cache`. we cannot update it here because we don't
+        # ``set_kv_cache``. we cannot update it here because we don't
         # know
         # if the kv cache is expected
 
@@ -100,7 +100,7 @@ class GPT(nn.Module):
         self.cos, self.sin = self.rope_cache(device=self.cos.device)
 
     def _init_weights(self, module: nn.Module) -> None:
-        """Meant to be used with `gpt.apply(gpt._init_weights)`."""
+        """Meant to be used with ``gpt.apply(gpt._init_weights)``."""
         if isinstance(module, nn.Linear):
             torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
             if module.bias is not None:
@@ -138,7 +138,7 @@ class GPT(nn.Module):
             cos = self.cos.index_select(0, input_pos)
             sin = self.sin.index_select(0, input_pos)
             if self.mask_cache is None:
-                raise TypeError("You need to call `gpt.set_kv_cache()`")
+                raise TypeError("You need to call ``gpt.set_kv_cache()``")
             mask = self.mask_cache.index_select(2, input_pos)
         else:
             cos = self.cos[:T]
@@ -254,7 +254,7 @@ class GPT(nn.Module):
                 )
 
         if self.mask_cache is None or self.mask_cache.size(3) != max_seq_length:
-            # passing `attn_mask` to SDPA disables the flash
+            # passing ``attn_mask`` to SDPA disables the flash
             # implementation. since we only need the mask
             # for the kv-cache support (only during inference), we
             # only create it in that situation
@@ -315,8 +315,8 @@ class CausalSelfAttention(nn.Module):
         # key, query, value projections for all heads, but in a batch
         self.attn = nn.Linear(config.n_embd, shape, bias=config.add_qkv_bias)
         # output projection
-        # if `head_size` is explicitly specified in the config,
-        # `n_emd` might not be equal to `head_size * n_head`
+        # if ``head_size`` is explicitly specified in the config,
+        # ``n_emd`` might not be equal to ``head_size * n_head``
         self.proj = nn.Linear(
             config.head_size * config.n_head, config.n_embd, bias=config.bias
         )
@@ -340,7 +340,7 @@ class CausalSelfAttention(nn.Module):
         qkv = self.attn(x)
 
         # assemble into a number of query groups to support MHA, MQA
-        # and GQA together (see `config.n_query_groups`)
+        # and GQA together (see ``config.n_query_groups``)
         q_per_kv = self.config.n_head // self.config.n_query_groups
         total_qkv = q_per_kv + 2  # each group has 1+ queries, 1 key, and 1 value
         qkv = qkv.view(
@@ -376,7 +376,7 @@ class CausalSelfAttention(nn.Module):
 
         if input_pos is not None:
             if not isinstance(self.kv_cache, KVCache):
-                raise TypeError("You need to call `gpt.set_kv_cache()`")
+                raise TypeError("You need to call ``gpt.set_kv_cache()``")
             k, v = self.kv_cache(input_pos, k, v)
 
         y = self.scaled_dot_product_attention(q, k, v, mask)
@@ -414,7 +414,7 @@ class CausalSelfAttention(nn.Module):
         if rope_cache_length is None:
             if self.config.rotary_percentage != 1.0:
                 raise TypeError(
-                    "Please pass the `rope_cache_length=gpt.cos.size(-1)` value"
+                    "Please pass the ``rope_cache_length=gpt.cos.size(-1)`` value"
                 )
             k_shape = v_shape
         else:
@@ -543,7 +543,7 @@ def build_rope_cache(
     # $\Theta = {\theta_i = 10000^{\frac{2(i-1)}{d}}, i \in [1, 2, ..., \frac{d}{2}]}$
     theta = 1.0 / (base ** (torch.arange(0, n_elem, 2, device=device).float() / n_elem))
 
-    # Create position indexes `[0, 1, ..., seq_len - 1]`
+    # Create position indexes ``[0, 1, ..., seq_len - 1]``
     seq_idx = torch.arange(seq_len, device=device) / condense_ratio
 
     # Calculate the product of position index and $\theta_i$

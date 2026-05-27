@@ -94,7 +94,7 @@ def griffin_lim(
         logging.warning(
             "librosa version is old. use slow version of Grriffin-Lim algorithm."
             "if you want to use fast Griffin-Lim, please update librosa via "
-            "`source ./path.sh && pip install librosa==0.7.0`."
+            "``source ./path.sh && pip install librosa==0.7.0``."
         )
         cspc = np.abs(spc).astype(np.complex).T
         angles = np.exp(2j * np.pi * np.random.rand(*cspc.shape))

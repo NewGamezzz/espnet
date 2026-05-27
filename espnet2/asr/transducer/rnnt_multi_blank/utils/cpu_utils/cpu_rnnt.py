@@ -155,7 +155,7 @@ class LogSoftmaxGradModification(Function):
     @staticmethod
     def forward(ctx, acts, clamp):
         if clamp < 0:
-            raise ValueError("`clamp` must be 0.0 or positive float.")
+            raise ValueError("``clamp`` must be 0.0 or positive float.")
 
         # This is needed for correctness (inplace is problematic),
         # but it wastes a log of memory.

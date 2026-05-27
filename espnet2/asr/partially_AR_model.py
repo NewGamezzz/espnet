@@ -142,7 +142,7 @@ class PartiallyARInference(torch.nn.Module):
         y_hat_tokens = y_hat[y_idx]
         mask_num = torch.sum(yseq_with_mask == self.mask_token)
 
-        # then use `add_mask` to register masks to the beam search class,
+        # then use ``add_mask`` to register masks to the beam search class,
         # run beam search, and get the best hypotheses.
         # Since we might get OOM with the too many batch size,
         # we restrict the maximum number of masks to be processed at the same time.
@@ -171,7 +171,7 @@ class PartiallyARInference(torch.nn.Module):
                 )
                 self.beam_search.add_mask(self.primer + prev_tokens, next_token)
 
-            # run beam search and save to `result`
+            # run beam search and save to ``result``
             hypos = self.beam_search(enc_out.squeeze(0), self.max_seq_len)
             for i_hypo, hypo in enumerate(hypos):
                 res_mask = self._get_mask_idx(result, 0)

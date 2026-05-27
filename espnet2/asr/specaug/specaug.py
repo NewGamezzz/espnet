@@ -17,7 +17,7 @@ class SpecAug(AbsSpecAug):
 
     .. warning::
         When using cuda mode, time_warp doesn't have reproducibility
-        due to `torch.nn.functional.interpolate`.
+        due to ``torch.nn.functional.interpolate``.
 
     """
 

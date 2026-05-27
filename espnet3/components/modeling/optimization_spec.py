@@ -10,17 +10,17 @@ import torch
 class OptimizationStep:
     """Describe one optimizer update emitted by the model.
 
-    ESPnet3 keeps the model return contract as `(loss, stats, weight)`. In the
-    single-optimizer path, `loss` is a plain tensor. In the multiple-optimizer
-    path, `loss` becomes either one `OptimizationStep` or a list of them so the
+    ESPnet3 keeps the model return contract as ``(loss, stats, weight)``. In the
+    single-optimizer path, ``loss`` is a plain tensor. In the multiple-optimizer
+    path, ``loss`` becomes either one ``OptimizationStep`` or a list of them so the
     training loop knows which named optimizer should consume each loss.
 
     Examples:
-        `OptimizationStep(loss=g_loss, name="generator")`
+        ``OptimizationStep(loss=g_loss, name="generator")``
 
-    means "apply `g_loss` to the optimizer and scheduler pair named
-    `generator`." The `name` must match the keys configured under
-    `optimizers.<name>` and `schedulers.<name>`.
+    means "apply ``g_loss`` to the optimizer and scheduler pair named
+    ``generator``." The ``name`` must match the keys configured under
+    ``optimizers.<name>`` and ``schedulers.<name>``.
     """
 
     loss: torch.Tensor
@@ -29,7 +29,7 @@ class OptimizationStep:
 
 @dataclass
 class OptimizerSpec:
-    """Describe one named optimizer block from `config.optimizers`.
+    """Describe one named optimizer block from ``config.optimizers``.
 
     This dataclass is the normalized, validated form of one user-facing config.
     **Example config.**
@@ -67,7 +67,7 @@ class OptimizerSpec:
     def from_config(cls, name: str, cfg) -> "OptimizerSpec":
         """Build and validate an optimizer spec from one named config block.
 
-        This converts raw Hydra/OmegaConf config into a typed `OptimizerSpec`
+        This converts raw Hydra/OmegaConf config into a typed ``OptimizerSpec``
         instance, applies dataclass defaults for omitted optional fields, and
         runs basic validation before the Lightning module instantiates the real
         optimizer objects.
@@ -122,7 +122,7 @@ class OptimizerSpec:
 
 @dataclass
 class SchedulerSpec:
-    """Describe one named scheduler block from `config.schedulers`.
+    """Describe one named scheduler block from ``config.schedulers``.
 
     This is the normalized, validated form of user-facing scheduler metadata.
     **Scheduler config example.**
@@ -148,7 +148,7 @@ class SchedulerSpec:
             interval: epoch
             monitor: valid/discriminator/loss
 
-    Like `OptimizerSpec`, this stores configuration, not the
+    Like ``OptimizerSpec``, this stores configuration, not the
     instantiated scheduler object. The Lightning module uses it to decide
     whether a scheduler should step on each optimizer update or at epoch end,
     and which logged metric to pass when a monitored epoch-based scheduler is
@@ -164,7 +164,7 @@ class SchedulerSpec:
     def from_config(cls, name: str, cfg) -> "SchedulerSpec":
         """Build and validate a scheduler spec from one named config block.
 
-        This converts raw Hydra/OmegaConf config into a typed `SchedulerSpec`
+        This converts raw Hydra/OmegaConf config into a typed ``SchedulerSpec``
         instance, applies dataclass defaults for omitted optional fields, and
         validates interval-level rules before the Lightning module instantiates
         the real scheduler objects.
@@ -204,7 +204,7 @@ class SchedulerSpec:
 class OptimizerRuntimeState:
     """Track custom runtime counters for one named optimizer.
 
-    Lightning already checkpoints optimizer and scheduler `state_dict()` values.
+    Lightning already checkpoints optimizer and scheduler ``state_dict()`` values.
     This dataclass exists only for extra ESPnet3 runtime state that Lightning
     does not manage for named multi-optimizer training.
 
@@ -212,8 +212,8 @@ class OptimizerRuntimeState:
       last optimizer step,
     - `update_step`: how many times this optimizer has actually been updated.
 
-    These counters are saved and restored through `on_save_checkpoint()` and
-    `on_load_checkpoint()` in the Lightning module.
+    These counters are saved and restored through ``on_save_checkpoint()`` and
+    ``on_load_checkpoint()`` in the Lightning module.
     """
 
     accum_counter: int = 0

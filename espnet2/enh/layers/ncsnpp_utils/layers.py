@@ -103,7 +103,7 @@ def default_init(scale=1.0):
 
 
 class Dense(nn.Module):
-    """Linear layer with `default_init`."""
+    """Linear layer with ``default_init``."""
 
     def __init__(self):
         super().__init__()

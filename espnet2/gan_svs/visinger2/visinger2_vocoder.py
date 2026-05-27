@@ -381,7 +381,7 @@ class Generator_Noise(torch.nn.Module):
         """Initialize the Generator_Noise module.
 
         Args:
-            win_length (int, optional): Window length. If None, set to `n_fft`.
+            win_length (int, optional): Window length. If None, set to ``n_fft``.
             hop_length (int): Hop length.
             n_fft (int): FFT size.
             hidden_channels (int): Number of hidden representation channels.

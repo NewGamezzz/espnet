@@ -34,14 +34,14 @@ class HuggingFaceLLM(AbsLLM):
 
         Raises:
             ImportError:
-                If the `transformers` library is not installed.
+                If the ``transformers`` library is not installed.
         """
         try:
             from transformers import AutoModelForCausalLM, AutoTokenizer, pipeline
         except Exception as e:
             print(
-                "`transformers` is not available. Please install it via `pip install"
-                " transformers` or `cd /path/to/espnet/tools && . ./activate_python.sh"
+                "``transformers`` is not available. Please install it via `pip install"
+                " transformers`` or ``cd /path/to/espnet/tools && . ./activate_python.sh"
                 " && ./installers/install_transformers.sh`."
             )
             raise e
@@ -92,7 +92,7 @@ class HuggingFaceLLM(AbsLLM):
         Notes:
             - The model generates a response with a maximum of 64
             new tokens and a deterministic sampling strategy
-            (temperature set to 0 and `do_sample` set to False).
+            (temperature set to 0 and ``do_sample`` set to False).
         """
         with torch.no_grad():
             output = self.LM_pipe(

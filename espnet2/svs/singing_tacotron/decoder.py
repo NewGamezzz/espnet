@@ -28,7 +28,7 @@ class Decoder(torch.nn.Module):
     """Decoder module of Spectrogram prediction network.
 
     This is a module of decoder of Spectrogram prediction network in Singing Tacotron,
-    which described in `https://arxiv.org/pdf/2202.07907v1.pdf`_.
+    which described in ``https://arxiv.org/pdf/2202.07907v1.pdf``_.
     The decoder generates the sequence of
     features from the sequence of the hidden states.
 
@@ -266,9 +266,9 @@ class Decoder(torch.nn.Module):
                 If set to 10 and the length of input is 10,
                 the maximum length of outputs will be 10 * 10 = 100.
             use_att_constraint (bool):
-                Whether to apply attention constraint introduced in `Deep Voice 3`_.
+                Whether to apply attention constraint introduced in ``Deep Voice 3``_.
             use_dynamic_filter (bool):
-                Whether to apply dynamic filter introduced in `Singing Tacotron`_.
+                Whether to apply dynamic filter introduced in ``Singing Tacotron``_.
             backward_window (int): Backward window size in attention constraint.
             forward_window (int): Forward window size in attention constraint.
         Returns:

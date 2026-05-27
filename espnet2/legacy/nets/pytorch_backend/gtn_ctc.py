@@ -9,7 +9,7 @@ try:
     import gtn
 except ModuleNotFoundError:
     raise RuntimeError(
-        "Please install gtn. Run `YOUR_ESPNET_ROOT/tools/installers/install_gtn.sh`"
+        "Please install gtn. Run ``YOUR_ESPNET_ROOT/tools/installers/install_gtn.sh``"
     )
 
 

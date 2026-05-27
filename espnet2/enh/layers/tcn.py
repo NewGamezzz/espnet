@@ -46,7 +46,7 @@ class TemporalConvNet(nn.Module):
             C: Number of speakers
             Sc: Number of channels in skip-connection paths' 1x1-conv blocks
             out_channel: Number of output channels
-                if it is None, `N` will be used instead.
+                if it is None, ``N`` will be used instead.
             norm_type: BN, gLN, cLN
             causal: causal or non-causal
             pre_mask_nonlinear: the non-linear function before masknet
@@ -189,14 +189,14 @@ class TemporalConvNetInformed(TemporalConvNet):
             R: Number of repeats
             Sc: Number of channels in skip-connection paths' 1x1-conv blocks
             out_channel: Number of output channels
-                if it is None, `N` will be used instead.
+                if it is None, ``N`` will be used instead.
             norm_type: BN, gLN, cLN
             causal: causal or non-causal
             pre_mask_nonlinear: the non-linear function before masknet
             mask_nonlinear: use which non-linear function to generate mask
             i_adapt_layer: int, index of the adaptation layer
             adapt_layer_type: str, type of adaptation layer
-                see espnet2.enh.layers.adapt_layers for options
+                see ``espnet2.enh.layers.adapt_layers`` for options
             adapt_enroll_dim: int, dimensionality of the speaker embedding
         """
         super().__init__(
@@ -348,7 +348,7 @@ class DepthwiseSeparableConv(nn.Module):
         causal=False,
     ):
         super().__init__()
-        # Use `groups` option to implement depthwise convolution
+        # Use ``groups`` option to implement depthwise convolution
         # [M, H, K] -> [M, H, K]
         depthwise_conv = nn.Conv1d(
             in_channels,

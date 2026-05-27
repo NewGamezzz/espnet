@@ -95,7 +95,7 @@ class DPTNet(nn.Module):
     args:
         rnn_type (str): select from 'RNN', 'LSTM' and 'GRU'.
         input_size (int): dimension of the input feature.
-            Input size must be a multiple of `att_heads`.
+            Input size must be a multiple of ``att_heads``.
         hidden_size (int): dimension of the hidden state.
         output_size (int): dimension of the output size.
         att_heads (int): number of attention heads.

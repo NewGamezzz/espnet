@@ -30,7 +30,7 @@ class HuggingFaceFrontend(AbsFrontend):
                 WhisperFeatureExtractor,
             )
         except ImportError:
-            raise ImportError("Please install `transformers`")
+            raise ImportError("Please install ``transformers``")
 
         super().__init__()
         if load_pretrained:

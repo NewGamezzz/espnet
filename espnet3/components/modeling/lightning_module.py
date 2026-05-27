@@ -38,10 +38,10 @@ class ESPnetLightningModule(lightning.LightningModule):
     loop then behaves exactly like conventional Lightning single-optimizer training.
 
     When multiple optimizers are configured, the same return value is expected,
-    but the `loss` field must carry optimizer routing information through
-    `OptimizationStep`.
-    The model still returns one `stats` dict and one optional `weight` value; only
-    the type of `loss` changes.
+    but the ``loss`` field must carry optimizer routing information through
+    ``OptimizationStep``.
+    The model still returns one ``stats`` dict and one optional ``weight`` value; only
+    the type of ``loss`` changes.
 
     Example:
         **Single optimizer path.**
@@ -77,11 +77,11 @@ class ESPnetLightningModule(lightning.LightningModule):
                 return OptimizationStep(loss=g_loss, name="generator"), stats, None
 
     Notes:
-        - Returning `OptimizationStep` with the single optimizer is forbidden.
+        - Returning ``OptimizationStep`` with the single optimizer is forbidden.
         - In the multi-optimizer path, only optimizers named by returned
-          `OptimizationStep` objects are touched for that batch. Optimizers omitted
+          ``OptimizationStep`` objects are touched for that batch. Optimizers omitted
           from the list are left untouched entirely.
-        - The order of `OptimizationStep` entries is the exact backward/step order.
+        - The order of ``OptimizationStep`` entries is the exact backward/step order.
         - NaN or Inf in any returned loss causes the whole batch to be skipped on
           all workers.
     """
@@ -131,7 +131,7 @@ class ESPnetLightningModule(lightning.LightningModule):
         if hasattr(self.config.dataloader, "collate_fn"):
             self.collate_fn = instantiate(self.config.dataloader.collate_fn)
 
-        # Named `optimizers` switches the module to the manual multi-optimizer path.
+        # Named ``optimizers`` switches the module to the manual multi-optimizer path.
         self.automatic_optimization = getattr(self.config, "optimizers", None) is None
 
     def _sync2skip(self, flag_skip):
@@ -169,7 +169,7 @@ class ESPnetLightningModule(lightning.LightningModule):
 
         - Single-optimizer-path mode, where the model returns one scalar loss tensor.
         - Multiple-path mode, where the model returns one or more
-          `OptimizationStep` objects and therefore several loss tensors can be
+          ``OptimizationStep`` objects and therefore several loss tensors can be
           produced in the same batch.
 
         If every loss is finite, the batch proceeds normally. If any one loss is
@@ -222,13 +222,13 @@ class ESPnetLightningModule(lightning.LightningModule):
         """Validate and normalize multi-optimizer loss output into step objects.
 
         **Checks.**
-            - `loss` is either one `OptimizationStep` or a list of them.
+            - ``loss`` is either one ``OptimizationStep`` or a list of them.
             - The list is not empty.
-            - Every list element is an `OptimizationStep`.
+            - Every list element is an ``OptimizationStep``.
 
         Returns:
             List[OptimizationStep]: Ordered optimization steps. A single
-            `OptimizationStep` is normalized to a one-element list.
+            ``OptimizationStep`` is normalized to a one-element list.
         """
         if isinstance(loss, OptimizationStep):
             steps = [loss]
@@ -239,8 +239,8 @@ class ESPnetLightningModule(lightning.LightningModule):
 
         if steps is None:
             raise AssertionError(
-                "Multiple optimizers are configured, so `loss` must be "
-                "`OptimizationStep` or `list[OptimizationStep]` to specify which "
+                "Multiple optimizers are configured, so ``loss`` must be "
+                "``OptimizationStep`` or ``list[OptimizationStep]`` to specify which "
                 "optimizer each loss updates."
             )
         if len(steps) == 0:
@@ -251,8 +251,8 @@ class ESPnetLightningModule(lightning.LightningModule):
         for step in steps:
             if not isinstance(step, OptimizationStep):
                 raise AssertionError(
-                    "Multiple optimizers are configured, so every item in `loss` "
-                    "must be an `OptimizationStep`."
+                    "Multiple optimizers are configured, so every item in ``loss`` "
+                    "must be an ``OptimizationStep``."
                 )
         return steps
 
@@ -266,7 +266,7 @@ class ESPnetLightningModule(lightning.LightningModule):
         """Log stats dict plus optional extra metrics while tolerating weight=None."""
         if not isinstance(stats, dict):
             raise AssertionError(
-                "Model output `stats` must be a dict so metrics can be logged "
+                "Model output ``stats`` must be a dict so metrics can be logged "
                 "consistently."
             )
 
@@ -296,8 +296,8 @@ class ESPnetLightningModule(lightning.LightningModule):
     def _build_optimizer_specs(self) -> List[OptimizerSpec]:
         """Build typed specs for validating the named multi-optimizer config.
 
-        This helper is only used when `config.optimizers` enables the multiple
-        optimizer path. It converts raw user config entries into `OptimizerSpec`
+        This helper is only used when ``config.optimizers`` enables the multiple
+        optimizer path. It converts raw user config entries into ``OptimizerSpec``
         objects so that the remaining setup code can perform structured validation
         and instantiation.
         """
@@ -309,9 +309,9 @@ class ESPnetLightningModule(lightning.LightningModule):
     def _build_scheduler_specs(self) -> List[SchedulerSpec]:
         """Build typed specs for validating the named multi-scheduler config.
 
-        This helper is only used when `config.schedulers` is provided for the
+        This helper is only used when ``config.schedulers`` is provided for the
         multiple optimizer path. It converts raw scheduler config entries into
-        `SchedulerSpec` objects so that the remaining setup code can perform
+        ``SchedulerSpec`` objects so that the remaining setup code can perform
         structured validation and instantiation.
         """
         if getattr(self.config, "schedulers", None) is None:
@@ -334,7 +334,7 @@ class ESPnetLightningModule(lightning.LightningModule):
             - no trainable parameter is matched by more than one optimizer spec
             - every trainable parameter is covered by some optimizer spec
 
-        The matching itself is based on the configured `params` dotted-path
+        The matching itself is based on the configured ``params`` dotted-path
         selector.
         """
         trainable_params = {
@@ -373,9 +373,9 @@ class ESPnetLightningModule(lightning.LightningModule):
         """Match a selector on dot-delimited parameter-name boundaries.
 
         Examples:
-            selector=`encoder` matches `model.encoder.layer.weight`
-            selector=`encoder.layer1` matches `model.encoder.layer1.weight`
-            selector=`encoder` does not match `model.decoder_encoder.weight`
+            selector=``encoder`` matches ``model.encoder.layer.weight``
+            selector=``encoder.layer1`` matches ``model.encoder.layer1.weight``
+            selector=``encoder`` does not match ``model.decoder_encoder.weight``
         """
         pattern = rf"(^|\.){re.escape(selector)}(\.|$)"
         return re.search(pattern, name) is not None
@@ -435,7 +435,7 @@ class ESPnetLightningModule(lightning.LightningModule):
                 return loss, stats, weight
 
         Single-optimizer-path schedulers follow standard Lightning behavior.
-        **Validation-monitored `ReduceLROnPlateau` example.**
+        **Validation-monitored ``ReduceLROnPlateau`` example.**
 
         .. code-block:: yaml
 
@@ -452,15 +452,15 @@ class ESPnetLightningModule(lightning.LightningModule):
             scheduler_monitor: valid/loss
 
         **Lightning receives.**
-        - `interval="epoch"`
-        - `monitor="valid/loss"`
+        - ``interval="epoch"``
+        - ``monitor="valid/loss"``
 
-        so it steps the scheduler after validation using the logged `valid/loss`
+        so it steps the scheduler after validation using the logged ``valid/loss``
         metric.
 
-        Multiple-path training is enabled by configuring named `optimizers` and
-        `schedulers`. The names become the routing keys used by
-        `OptimizationStep(name=...)`.
+        Multiple-path training is enabled by configuring named ``optimizers`` and
+        ``schedulers``. The names become the routing keys used by
+        ``OptimizationStep(name=...)``.
 
         .. code-block:: yaml
 
@@ -522,8 +522,8 @@ class ESPnetLightningModule(lightning.LightningModule):
 
         **Important rules.**
         - Single-optimizer-path training must return a tensor loss directly.
-        - Multiple-path training must return `OptimizationStep` or
-          `list[OptimizationStep]` as `loss` so that ESPnet3 knows which optimizer
+        - Multiple-path training must return ``OptimizationStep`` or
+          ``list[OptimizationStep]`` as ``loss`` so that ESPnet3 knows which optimizer
           should be used to update parameters.
         - Optimizer and scheduler names must match exactly.
           **Valid.**
@@ -540,14 +540,14 @@ class ESPnetLightningModule(lightning.LightningModule):
               optimizers: {generator: {...}, discriminator: {...}}
               schedulers: {generator: {...}, decoder: {...}}
         - In the multiple-path configuration, gradient clipping is configured per
-          optimizer via `gradient_clip_val` and `gradient_clip_algorithm`.
+          optimizer via ``gradient_clip_val`` and ``gradient_clip_algorithm``.
           Trainer-level global clipping settings must not be used.
-        - `monitor` names must refer to logged metric keys of the form
-          `train/<stats-key>` or `valid/<stats-key>`, including automatically
-          logged multi-path losses such as `valid/generator/loss` and
-          `valid/discriminator/loss`.
-        - `monitor` is only used with epoch-based schedulers. Step-based schedulers
-          are always called as `scheduler.step()` after a successful optimizer
+        - ``monitor`` names must refer to logged metric keys of the form
+          ``train/<stats-key>`` or ``valid/<stats-key>``, including automatically
+          logged multi-path losses such as ``valid/generator/loss`` and
+          ``valid/discriminator/loss``.
+        - ``monitor`` is only used with epoch-based schedulers. Step-based schedulers
+          are always called as ``scheduler.step()`` after a successful optimizer
           update and do not receive metric inputs.
         - DeepSpeed is rejected in the multi-path configuration because Lightning's
           DeepSpeed strategy does not support multiple optimizers/schedulers.
@@ -557,10 +557,10 @@ class ESPnetLightningModule(lightning.LightningModule):
         ):
             assert (
                 getattr(self.config, "optimizers", None) is None
-            ), "Mixture of `optimizer` and `optimizers` is not allowed."
+            ), "Mixture of ``optimizer`` and ``optimizers`` is not allowed."
             assert (
                 getattr(self.config, "schedulers", None) is None
-            ), "Mixture of `scheduler` and `schedulers` is not allowed."
+            ), "Mixture of ``scheduler`` and ``schedulers`` is not allowed."
 
             params = filter(lambda p: p.requires_grad, self.parameters())
             optimizer = instantiate(
@@ -573,7 +573,7 @@ class ESPnetLightningModule(lightning.LightningModule):
             interval = str(getattr(self.config, "scheduler_interval", "step"))
             if interval not in {"step", "epoch"}:
                 raise AssertionError(
-                    "Single-optimizer-path `scheduler_interval` must be "
+                    "Single-optimizer-path ``scheduler_interval`` must be "
                     "'step' or 'epoch'."
                 )
             monitor = getattr(self.config, "scheduler_monitor", None)
@@ -590,20 +590,20 @@ class ESPnetLightningModule(lightning.LightningModule):
         ):
             assert (
                 getattr(self.config, "optimizer", None) is None
-            ), "Mixture of `optimizer` and `optimizers` is not allowed."
+            ), "Mixture of ``optimizer`` and ``optimizers`` is not allowed."
             assert (
                 getattr(self.config, "scheduler", None) is None
-            ), "Mixture of `scheduler` and `schedulers` is not allowed."
+            ), "Mixture of ``scheduler`` and ``schedulers`` is not allowed."
             if getattr(self.config, "scheduler_interval", None) is not None:
                 raise AssertionError(
-                    "Top-level `scheduler_interval` is only supported in the "
-                    "single-optimizer path. Use `schedulers.<name>.interval` "
+                    "Top-level ``scheduler_interval`` is only supported in the "
+                    "single-optimizer path. Use ``schedulers.<name>.interval`` "
                     "for multiple optimizers."
                 )
             if getattr(self.config, "scheduler_monitor", None) is not None:
                 raise AssertionError(
-                    "Top-level `scheduler_monitor` is only supported in the "
-                    "single-optimizer path. Use `schedulers.<name>.monitor` "
+                    "Top-level ``scheduler_monitor`` is only supported in the "
+                    "single-optimizer path. Use ``schedulers.<name>.monitor`` "
                     "for multiple optimizers."
                 )
 
@@ -644,8 +644,8 @@ class ESPnetLightningModule(lightning.LightningModule):
             return optimizers, schedulers
 
         raise ValueError(
-            "Must specify either `optimizer` or `optimizers` and `scheduler` or"
-            "`schedulers`"
+            "Must specify either ``optimizer`` or ``optimizers`` and ``scheduler`` or"
+            "``schedulers``"
         )
 
     @staticmethod
@@ -675,7 +675,7 @@ class ESPnetLightningModule(lightning.LightningModule):
             None
 
         Notes:
-            - Uses `format_number` and `format_size` to improve readability.
+            - Uses ``format_number`` and ``format_size`` to improve readability.
             - The summary is logged at INFO level.
 
         Examples:
@@ -697,7 +697,7 @@ class ESPnetLightningModule(lightning.LightningModule):
                 Scheduler[0]:
 
             When multiple optimizers or schedulers are configured, additional
-            `Optimizer[i]` and `Scheduler[i]` sections are emitted for each item in
+            ``Optimizer[i]`` and ``Scheduler[i]`` sections are emitted for each item in
             the instantiated list.
 
         Raises:
@@ -766,10 +766,10 @@ class ESPnetLightningModule(lightning.LightningModule):
         """Map configured optimizer names to instantiated optimizer objects.
 
         Lightning returns optimizers as a positional collection via
-        `self.optimizers(use_pl_optimizer=True)`, while ESPnet3's multiple-optimizer
-        path routes updates by name (for example `"generator"` or
-        `"discriminator"`). This helper bridges the two representations by
-        rebuilding a `name -> optimizer` mapping using the configured optimizer order.
+        ``self.optimizers(use_pl_optimizer=True)``, while ESPnet3's multiple-optimizer
+        path routes updates by name (for example ``"generator"`` or
+        ``"discriminator"``). This helper bridges the two representations by
+        rebuilding a ``name -> optimizer`` mapping using the configured optimizer order.
 
         Example:
             .. code-block:: python
@@ -797,7 +797,7 @@ class ESPnetLightningModule(lightning.LightningModule):
         Like optimizers, Lightning exposes schedulers positionally, while ESPnet3's
         multiple-optimizer training loop needs named access so that each optimizer
         step can trigger the scheduler with the same name. This helper rebuilds a
-        `name -> scheduler` mapping from Lightning's scheduler collection.
+        ``name -> scheduler`` mapping from Lightning's scheduler collection.
 
         Example:
             .. code-block:: python
@@ -828,7 +828,7 @@ class ESPnetLightningModule(lightning.LightningModule):
             return
         if spec.monitor is not None:
             raise AssertionError(
-                f"Step-based scheduler '{name}' must not define `monitor`; "
+                f"Step-based scheduler '{name}' must not define ``monitor``; "
                 "metric-based schedulers are stepped at epoch end."
             )
         scheduler.step()
@@ -845,15 +845,15 @@ class ESPnetLightningModule(lightning.LightningModule):
         This method also updates per-optimizer runtime state.
 
         This path exists to support GAN and other multi-loss training without
-        introducing a new model hook. The model still returns `(loss, stats, weight)`.
-        **Only the `loss` field changes shape.**
+        introducing a new model hook. The model still returns ``(loss, stats, weight)``.
+        **Only the ``loss`` field changes shape.**
 
         - single optimizer path: a tensor
-        - multiple path: `OptimizationStep` or `list[OptimizationStep]`
+        - multiple path: ``OptimizationStep`` or ``list[OptimizationStep]``
 
-        The `stats` dict remains a single shared logging payload. In the multi-path
-        case this method additionally logs `train/<name>/loss` and
-        `train/<name>/update_step` for each returned optimization step.
+        The ``stats`` dict remains a single shared logging payload. In the multi-path
+        case this method additionally logs ``train/<name>/loss`` and
+        ``train/<name>/update_step`` for each returned optimization step.
         """
         named_optimizers = self._get_named_optimizers()
         spec_by_name = {spec.name: spec for spec in self._optimizer_specs}
@@ -902,7 +902,7 @@ class ESPnetLightningModule(lightning.LightningModule):
 
         **Expected model return.**
         - Single-optimizer-path training or validation.
-          `loss: torch.Tensor, stats: dict, weight: Optional[Tensor]`
+          ``loss: torch.Tensor, stats: dict, weight: Optional[Tensor]``
         - Multiple-optimizer training or validation.
           `loss: OptimizationStep | list[OptimizationStep], stats: dict,
           weight: Optional[Tensor]`
@@ -911,14 +911,14 @@ class ESPnetLightningModule(lightning.LightningModule):
         - Single optimizer path keeps Lightning automatic optimization enabled.
           This method
           only prepares and returns the loss tensor, and Lightning performs the
-          backward pass, optimizer step, and scheduler step after `training_step`.
+          backward pass, optimizer step, and scheduler step after ``training_step``.
         - Multiple-optimizer path uses manual optimization. This method validates
-          the returned `OptimizationStep` objects and performs backward,
+          the returned ``OptimizationStep`` objects and performs backward,
           optimizer stepping, clipping, and step-based scheduler updates directly.
         """
         loss, stats, weight = self.model(**batch[1])
         # Single-optimizer-path training delegates optimization to Lightning automatic
-        # optimization after `training_step` returns the loss tensor. Only the
+        # optimization after ``training_step`` returns the loss tensor. Only the
         # named multi-optimizer path performs manual optimizer handling here.
         if getattr(self.config, "optimizers", None) is not None:
             optimizer_steps = self._validate_multi_loss_steps(loss)
@@ -941,9 +941,9 @@ class ESPnetLightningModule(lightning.LightningModule):
 
         if not isinstance(loss, torch.Tensor):
             raise AssertionError(
-                "Single-optimizer training expects `loss` to be a tensor. If only "
+                "Single-optimizer training expects ``loss`` to be a tensor. If only "
                 "one loss is needed, return it directly instead of wrapping it in "
-                "`OptimizationStep`."
+                "``OptimizationStep``."
             )
 
         any_invalid = self._check_nan_inf_loss([loss], batch_idx)
@@ -987,7 +987,7 @@ class ESPnetLightningModule(lightning.LightningModule):
                     raise RuntimeError(
                         f"Scheduler '{spec.name}' failed to step without a metric. "
                         "If this scheduler expects a monitored value, configure "
-                        f"`schedulers.{spec.name}.monitor`."
+                        f"``schedulers.{spec.name}.monitor``."
                     ) from exc
                 continue
             metric = self.trainer.callback_metrics.get(spec.monitor)
@@ -1009,11 +1009,11 @@ class ESPnetLightningModule(lightning.LightningModule):
         """Persist custom per-optimizer runtime state in checkpoints.
 
         Lightning already saves and restores the instantiated optimizer and
-        scheduler `state_dict()` objects, so this hook only stores the extra
+        scheduler ``state_dict()`` objects, so this hook only stores the extra
         runtime state introduced by ESPnet3's named multi-optimizer path.
 
-        - `accum_counter`
-        - `update_step`
+        - ``accum_counter``
+        - ``update_step``
 
         Scheduler state is not saved here because Lightning's
         checkpoint already contains each scheduler's internal state. Additional
@@ -1095,10 +1095,10 @@ class ESPnetLightningModule(lightning.LightningModule):
     def collect_stats(self):
         """Collect training and validation statistics using ESPnet's collect_stats.
 
-        Requires `config.stats_dir` to be defined. Saves stats under this directory.
+        Requires ``config.stats_dir`` to be defined. Saves stats under this directory.
 
         Raises:
-            AssertionError: If `config.stats_dir` is not provided.
+            AssertionError: If ``config.stats_dir`` is not provided.
         """
         assert hasattr(self.config, "stats_dir"), "config.statsdir must be defined"
 

@@ -47,8 +47,8 @@ def create_houlsby_adapter(
 ):
     if not is_transformers_available:
         raise ImportError(
-            "`transformers` is not available. Please install it via `pip install"
-            " transformers` or `cd /path/to/espnet/tools && . ./activate_python.sh"
+            "``transformers`` is not available. Please install it via `pip install"
+            " transformers`` or ``cd /path/to/espnet/tools && . ./activate_python.sh"
             " && ./installers/install_transformers.sh`."
         )
     if not is_s3prl_available:
@@ -246,8 +246,8 @@ def create_new_lora_module(
     else:
         raise ValueError(
             f"Target module {target_module} is not supported. "
-            f"Currently, only `torch.nn.Embedding`, `torch.nn.Conv2d` "
-            f"`torch.nn.Linear` and are supported."
+            f"Currently, only ``torch.nn.Embedding``, ``torch.nn.Conv2d`` "
+            f"``torch.nn.Linear`` and are supported."
         )
 
     return new_module

@@ -107,15 +107,15 @@ class BeatsEncoder(AbsEncoder):
     (https://arxiv.org/abs/2212.09058)
     Args:
         beats_ckpt_path: Path to a pretrained Beats checkpoint. If
-            `beats_config` is provided and it does not match the
+            ``beats_config`` is provided and it does not match the
             config in the checkpoint, code might throw an error.
         max_layer: Propagate input through all layers for encoding
-            if None. Otherwise use upto `max_layer`.
+            if None. Otherwise use upto ``max_layer``.
         downsampling_rate: Downsampling rate for the encoder. Applied if > 1.
         adapter_config: Path to a config file for the wav2vec2 adapter.
         use_weighted_representation: Use weighted representations
             from max_layer if True. Weights are randomly initialized.
-        beats_config: `BeatsConfig` object. If provided, we will try
+        beats_config: ``BeatsConfig`` object. If provided, we will try
             to override the config in the checkpoint. This can be used
             to change dropouts etc for fine-tuning the model while
             starting from a pretrained checkpoint.
@@ -123,7 +123,7 @@ class BeatsEncoder(AbsEncoder):
             If provided, SpecAugment will be applied.
         add_positional_information: Add learned positional embeddings.
         max_positions: Maximum number of positions for positional embeddings.
-            Required if `add_positional_information` is True.
+            Required if ``add_positional_information`` is True.
         roll_augment: Apply roll augmentation to the input.
         roll_interval: Interval for roll augmentation. All rolling is
             quantized to this interval.
@@ -166,8 +166,8 @@ class BeatsEncoder(AbsEncoder):
             # We need transformers library for adapter and positional embeddings
             if not is_transformers_available:
                 raise ImportError(
-                    "`transformers` is not available. Please install it "
-                    " via `pip install transformers` or"
+                    "``transformers`` is not available. Please install it "
+                    " via ``pip install transformers`` or"
                     " `cd /path/to/espnet/tools && "
                     ". ./activate_python.sh"
                     " && ./installers/install_transformers.sh`."
@@ -918,7 +918,7 @@ class MultiheadAttention(nn.Module):
 
         Args:
             key_padding_mask (ByteTensor, optional): mask to exclude
-                keys that are pads, of shape `(batch, src_len)`, where
+                keys that are pads, of shape ``(batch, src_len)``, where
                 padding elements are indicated by 1s.
             need_weights (bool, optional): return the attention weights,
                 averaged over heads (default: False).
@@ -1371,7 +1371,7 @@ def gelu(x: torch.Tensor) -> torch.Tensor:
 
 
 def get_activation_fn(activation: str):
-    """Returns the activation function corresponding to `activation`"""
+    """Returns the activation function corresponding to ``activation``"""
 
     if activation == "relu":
         return F.relu

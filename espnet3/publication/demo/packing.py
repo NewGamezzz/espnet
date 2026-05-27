@@ -9,7 +9,7 @@ from pathlib import Path
 
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
-from espnet3.utils.publish import (
+from espnet3.utils.publish_utils import (
     _copy_pack_include_paths,
 )
 
@@ -139,7 +139,7 @@ def upload_demo(system) -> None:
         raise RuntimeError(f"Demo pack not found: {demo_dir}")
 
     # --- upload ---
-    from espnet3.utils.publish import _upload_common
+    from espnet3.utils.publish_utils import _upload_common
 
     _upload_common(
         repo,
@@ -216,7 +216,7 @@ def _prepare_demo_config(demo_cfg, demo_dir: Path, system) -> DictConfig:
                 )
                 default_ref = os.path.relpath(target_path, start=demo_dir)
         # Priority 2: conventional location pack_model() uses when out_dir is
-        # not set (see utils/publish.py line ~489).
+        # not set (see utils/publish_utils.py pack_model()).
         if default_ref is None:
             exp_dir = getattr(system, "exp_dir", None)
             if exp_dir is not None:

@@ -14,7 +14,7 @@ from typeguard import typechecked
 class LogCompression(torch.nn.Module):
     """Log Compression Activation.
 
-    Activation function `log(abs(x) + 1)`.
+    Activation function ``log(abs(x) + 1)``.
     """
 
     def __init__(self):
@@ -68,9 +68,9 @@ class SincConv(torch.nn.Module):
             in_channels: Number of input channels.
             out_channels: Number of output channels.
             kernel_size: Sinc filter kernel size (needs to be an odd number).
-            stride: See torch.nn.functional.conv1d.
-            padding: See torch.nn.functional.conv1d.
-            dilation: See torch.nn.functional.conv1d.
+            stride: See ``torch.nn.functional.conv1d``.
+            padding: See ``torch.nn.functional.conv1d``.
+            dilation: See ``torch.nn.functional.conv1d``.
             window_func: Window function on the filter, one of ["hamming", "none"].
             fs (str, int, float): Sample rate of the input data
         """

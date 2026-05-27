@@ -10,17 +10,17 @@ def add_gradient_noise(
 ):
     """Adds noise from a standard normal distribution to the gradients.
 
-    The standard deviation (`sigma`) is controlled
+    The standard deviation (``sigma``) is controlled
     by the three hyper-parameters below.
-    `sigma` goes to zero (no noise) with more iterations.
+    ``sigma`` goes to zero (no noise) with more iterations.
 
     Args:
         model: Model.
         iteration: Number of iterations.
         duration: {100, 1000}: Number of durations to control
-            the interval of the `sigma` change.
-        eta: {0.01, 0.3, 1.0}: The magnitude of `sigma`.
-        scale_factor: {0.55}: The scale of `sigma`.
+            the interval of the ``sigma`` change.
+        eta: {0.01, 0.3, 1.0}: The magnitude of ``sigma``.
+        scale_factor: {0.55}: The scale of ``sigma``.
     """
     interval = (iteration // duration) + 1
     sigma = eta / interval**scale_factor

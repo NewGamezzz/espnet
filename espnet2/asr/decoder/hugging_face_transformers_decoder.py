@@ -74,7 +74,7 @@ class HuggingFaceTransformersDecoder(AbsDecoder, BatchScorerInterface):
                 to False.
 
         Raises:
-            ImportError: If the `transformers` library is not available.
+            ImportError: If the ``transformers`` library is not available.
             Exception: If the word embeddings attribute cannot be found in
                 the model.
         """
@@ -82,9 +82,9 @@ class HuggingFaceTransformersDecoder(AbsDecoder, BatchScorerInterface):
 
         if not is_transformers_available:
             raise ImportError(
-                "`transformers` is not available. Please install it "
+                "``transformers`` is not available. Please install it "
                 "via `pip install"
-                " transformers` or `cd /path/to/espnet/tools "
+                " transformers`` or ``cd /path/to/espnet/tools "
                 "&& . ./activate_python.sh"
                 " && ./installers/install_transformers.sh`."
             )

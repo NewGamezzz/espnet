@@ -20,7 +20,7 @@ class USES(nn.Module):
         input_size (int): dimension of the input feature.
         output_size (int): dimension of the output.
         bottleneck_size (int): dimension of the bottleneck feature.
-            Must be a multiple of `att_heads`.
+            Must be a multiple of ``att_heads``.
         num_blocks (int): number of processing blocks.
         num_spatial_blocks (int): number of processing blocks with channel modeling.
         segment_size (int): number of frames in each non-overlapping segment.

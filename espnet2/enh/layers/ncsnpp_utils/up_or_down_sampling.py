@@ -75,7 +75,7 @@ def naive_downsample_2d(x, factor=2):
 
 
 def upsample_conv_2d(x, w, k=None, factor=2, gain=1):
-    """Fused `upsample_2d()` followed by `tf.nn.conv2d()`.
+    """Fused ``upsample_2d()`` followed by ``tf.nn.conv2d()``.
 
     Padding is performed only once at the beginning, not between the
     operations.
@@ -83,20 +83,20 @@ def upsample_conv_2d(x, w, k=None, factor=2, gain=1):
     calculation
     using standard TensorFlow ops. It supports gradients of arbitrary order.
     Args:
-      x:            Input tensor of the shape `[N, C, H, W]` or `[N, H, W,
+      x:            Input tensor of the shape ``[N, C, H, W]`` or `[N, H, W,
         C]`.
       w:            Weight tensor of the shape `[filterH, filterW, inChannels,
-        outChannels]`. Grouped convolution can be performed by `inChannels =
+        outChannels]``. Grouped convolution can be performed by ``inChannels =
         x.shape[0] // numGroups`.
-      k:            FIR filter of the shape `[firH, firW]` or `[firN]`
-        (separable). The default is `[1] * factor`, which corresponds to
+      k:            FIR filter of the shape ``[firH, firW]`` or ``[firN]``
+        (separable). The default is ``[1] * factor``, which corresponds to
         nearest-neighbor upsampling.
       factor:       Integer upsampling factor (default: 2).
       gain:         Scaling factor for signal magnitude (default: 1.0).
 
     Returns:
-      Tensor of the shape `[N, C, H * factor, W * factor]` or
-      `[N, H * factor, W * factor, C]`, and same datatype as `x`.
+      Tensor of the shape ``[N, C, H * factor, W * factor]`` or
+      ``[N, H * factor, W * factor, C]``, and same datatype as ``x``.
     """
 
     assert isinstance(factor, int) and factor >= 1
@@ -143,27 +143,27 @@ def upsample_conv_2d(x, w, k=None, factor=2, gain=1):
 
 
 def conv_downsample_2d(x, w, k=None, factor=2, gain=1):
-    """Fused `tf.nn.conv2d()` followed by `downsample_2d()`.
+    """Fused ``tf.nn.conv2d()`` followed by ``downsample_2d()``.
 
     Padding is performed only once at the beginning, not between the operations.
     The fused op is considerably more efficient than performing the same
     calculation
     using standard TensorFlow ops. It supports gradients of arbitrary order.
     Args:
-        x:            Input tensor of the shape `[N, C, H, W]` or `[N, H, W,
+        x:            Input tensor of the shape ``[N, C, H, W]`` or `[N, H, W,
           C]`.
         w:            Weight tensor of the shape `[filterH, filterW, inChannels,
-          outChannels]`. Grouped convolution can be performed by `inChannels =
+          outChannels]``. Grouped convolution can be performed by ``inChannels =
           x.shape[0] // numGroups`.
-        k:            FIR filter of the shape `[firH, firW]` or `[firN]`
-          (separable). The default is `[1] * factor`, which corresponds to
+        k:            FIR filter of the shape ``[firH, firW]`` or ``[firN]``
+          (separable). The default is ``[1] * factor``, which corresponds to
           average pooling.
         factor:       Integer downsampling factor (default: 2).
         gain:         Scaling factor for signal magnitude (default: 1.0).
 
     Returns:
-        Tensor of the shape `[N, C, H // factor, W // factor]` or
-        `[N, H // factor, W // factor, C]`, and same datatype as `x`.
+        Tensor of the shape ``[N, C, H // factor, W // factor]`` or
+        ``[N, H // factor, W // factor, C]``, and same datatype as ``x``.
     """
 
     assert isinstance(factor, int) and factor >= 1
@@ -195,25 +195,25 @@ def _shape(x, dim):
 def upsample_2d(x, k=None, factor=2, gain=1):
     r"""Upsample a batch of 2D images with the given filter.
 
-    Accepts a batch of 2D images of the shape `[N, C, H, W]` or `[N, H, W, C]`
+    Accepts a batch of 2D images of the shape ``[N, C, H, W]`` or ``[N, H, W, C]``
     and upsamples each image with the given filter. The filter is normalized so
     that
     if the input pixels are constant, they will be scaled by the specified
-    `gain`.
+    ``gain``.
     Pixels outside the image are assumed to be zero, and the filter is padded
     with
     zeros so that its shape is a multiple of the upsampling factor.
     Args:
-        x:            Input tensor of the shape `[N, C, H, W]` or `[N, H, W,
+        x:            Input tensor of the shape ``[N, C, H, W]`` or `[N, H, W,
           C]`.
-        k:            FIR filter of the shape `[firH, firW]` or `[firN]`
-          (separable). The default is `[1] * factor`, which corresponds to
+        k:            FIR filter of the shape ``[firH, firW]`` or ``[firN]``
+          (separable). The default is ``[1] * factor``, which corresponds to
           nearest-neighbor upsampling.
         factor:       Integer upsampling factor (default: 2).
         gain:         Scaling factor for signal magnitude (default: 1.0).
 
     Returns:
-        Tensor of the shape `[N, C, H * factor, W * factor]`
+        Tensor of the shape ``[N, C, H * factor, W * factor]``
     """
     assert isinstance(factor, int) and factor >= 1
     if k is None:
@@ -231,25 +231,25 @@ def upsample_2d(x, k=None, factor=2, gain=1):
 def downsample_2d(x, k=None, factor=2, gain=1):
     r"""Downsample a batch of 2D images with the given filter.
 
-    Accepts a batch of 2D images of the shape `[N, C, H, W]` or `[N, H, W, C]`
+    Accepts a batch of 2D images of the shape ``[N, C, H, W]`` or ``[N, H, W, C]``
     and downsamples each image with the given filter. The filter is normalized
     so that
     if the input pixels are constant, they will be scaled by the specified
-    `gain`.
+    ``gain``.
     Pixels outside the image are assumed to be zero, and the filter is padded
     with
     zeros so that its shape is a multiple of the downsampling factor.
     Args:
-        x:            Input tensor of the shape `[N, C, H, W]` or `[N, H, W,
+        x:            Input tensor of the shape ``[N, C, H, W]`` or `[N, H, W,
           C]`.
-        k:            FIR filter of the shape `[firH, firW]` or `[firN]`
-          (separable). The default is `[1] * factor`, which corresponds to
+        k:            FIR filter of the shape ``[firH, firW]`` or ``[firN]``
+          (separable). The default is ``[1] * factor``, which corresponds to
           average pooling.
         factor:       Integer downsampling factor (default: 2).
         gain:         Scaling factor for signal magnitude (default: 1.0).
 
     Returns:
-        Tensor of the shape `[N, C, H // factor, W // factor]`
+        Tensor of the shape ``[N, C, H // factor, W // factor]``
     """
 
     assert isinstance(factor, int) and factor >= 1

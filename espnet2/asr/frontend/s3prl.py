@@ -73,7 +73,7 @@ class S3prlFrontend(AbsFrontend):
         self.tile_factor = frontend_conf.get("tile_factor", 1)
 
     def _tile_representations(self, feature):
-        """Tile up the representations by `tile_factor`.
+        """Tile up the representations by ``tile_factor``.
 
         Input - sequence of representations
                 shape: (batch_size, seq_len, feature_dim)
@@ -83,7 +83,7 @@ class S3prlFrontend(AbsFrontend):
         """
         assert (
             len(feature.shape) == 3
-        ), "Input argument `feature` has invalid shape: {}".format(feature.shape)
+        ), "Input argument ``feature`` has invalid shape: {}".format(feature.shape)
         tiled_feature = feature.repeat(1, 1, self.tile_factor)
         tiled_feature = tiled_feature.reshape(
             feature.size(0), feature.size(1) * self.tile_factor, feature.size(2)

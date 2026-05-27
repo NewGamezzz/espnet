@@ -160,10 +160,10 @@ class MultiHeadedAttention(nn.Module):
             mask (torch.Tensor): Mask tensor (#batch, 1, time2) or
                 (#batch, time1, time2).
             expand_kv (bool): Used only for partially autoregressive (PAR) decoding.
-                When set to `True`, `Linear` layers are computed only for the first
+                When set to ``True``, ``Linear`` layers are computed only for the first
                 batch. This is useful to reduce the memory usage during decoding
                 when the batch size is #beam_size x #mask_count, which can be large.
-                Typically, in single waveform inference of PAR, `Linear` layers
+                Typically, in single waveform inference of PAR, ``Linear`` layers
                 should not be computed for all batches for source-attention.
 
         Returns:

@@ -77,22 +77,22 @@ class AverageCheckpointsCallback(Callback):
     **Behavior.**
         - Loads the state_dict from each of the top-K checkpoints saved by given
           ModelCheckpoint callbacks.
-        - Averages the model parameters (keys starting with `model.`).
+        - Averages the model parameters (keys starting with ``model.``).
         - Ignores or simply accumulates integer-type parameters
-          (e.g., BatchNorm's `num_batches_tracked`).
-        - Saves the averaged model as a `.pth` file in `output_dir`.
+          (e.g., BatchNorm's ``num_batches_tracked``).
+        - Saves the averaged model as a ``.pth`` file in ``output_dir``.
 
     Args:
         output_dir (str or Path):
             The directory where the averaged model will be saved.
         best_ckpt_callbacks (List[ModelCheckpoint]):
             A list of ModelCheckpoint callbacks whose top-K checkpoints will be used
-            for averaging. Each callback must have `best_k_models` populated.
+            for averaging. Each callback must have ``best_k_models`` populated.
 
     Notes:
-        - Only keys that start with `model.` are included in the averaging.
+        - Only keys that start with ``model.`` are included in the averaging.
         - The final filename will be:
-            `{monitor_name}.ave_{K}best.pth`
+            ``{monitor_name}.ave_{K}best.pth``
         - This callback only runs on the global rank 0 process
             (for distributed training).
 
@@ -199,8 +199,8 @@ class MetricsLogger(Callback):
         None.
 
     Notes:
-        - Training summaries remove the `train/` prefix from logged metrics.
-        - Validation summaries remove the `valid/` prefix from logged metrics.
+        - Training summaries remove the ``train/`` prefix from logged metrics.
+        - Validation summaries remove the ``valid/`` prefix from logged metrics.
         - Validation sanity-check runs are ignored to avoid noisy startup logs.
 
     Examples:
@@ -208,10 +208,10 @@ class MetricsLogger(Callback):
         >>> trainer = Trainer(callbacks=[cb, ...])
 
         **Example train log output.**
-        `20epoch:train:4201-4400batch: iter_time=6.212e-05, loss=46.669`
+        ``20epoch:train:4201-4400batch: iter_time=6.212e-05, loss=46.669``
 
         **Example validation log output.**
-        `epoch_summary:20epoch:valid: valid_time=1.42, acc=0.91, loss=0.83`
+        ``epoch_summary:20epoch:valid: valid_time=1.42, acc=0.91, loss=0.83``
     """
 
     def __init__(self, log_every_n_steps: int = 500):
@@ -407,14 +407,14 @@ def get_default_callbacks(
     """Return a list of callbacks tailored for most training workflows.
 
     **Includes.**
-        - `ModelCheckpoint` for saving the last model checkpoint (`save_last`)
-        - One or more `ModelCheckpoint`s for saving the top-K checkpoints according to
+        - ``ModelCheckpoint`` for saving the last model checkpoint (``save_last``)
+        - One or more ``ModelCheckpoint``s for saving the top-K checkpoints according to
             specific metrics
-        - `AverageCheckpointsCallback` to compute and save the average model from top-K
+        - ``AverageCheckpointsCallback`` to compute and save the average model from top-K
             checkpoints
-        - `LearningRateMonitor` to track and log learning rates during training
-        - `MetricsLogger` to emit train and validation summaries
-        - `TQDMProgressBar` to show a rich progress bar during training
+        - ``LearningRateMonitor`` to track and log learning rates during training
+        - ``MetricsLogger`` to emit train and validation summaries
+        - ``TQDMProgressBar`` to show a rich progress bar during training
 
     Args:
         exp_dir (str): Directory to store checkpoints and logs.
@@ -422,10 +422,10 @@ def get_default_callbacks(
         best_model_criterion (List[Tuple[str, int, str]]): A list of criteria for
             saving top-K checkpoints.
         Each item is a tuple ``(name, top_k, mode)`` where:
-            - `name` (str): The name of the validation value to monitor
+            - ``name`` (str): The name of the validation value to monitor
                 (e.g., "val/loss").
-            - `top_k` (int): Number of best models to keep.
-            - `mode` (str): "min" to keep models with lowest value, "max" for highest.
+            - ``top_k`` (int): Number of best models to keep.
+            - ``mode`` (str): "min" to keep models with lowest value, "max" for highest.
 
     Returns:
         List[Callback]: A list of callbacks to be passed to the PyTorch Lightning

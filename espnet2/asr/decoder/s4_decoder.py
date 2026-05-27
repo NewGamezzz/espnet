@@ -148,7 +148,7 @@ class S4Decoder(AbsDecoder, BatchScorerInterface):
 
         Returns:
             tuple[torch.Tensor, List[Any]]: Tuple of
-                batchfied scores for next token with shape of `(n_batch, n_vocab)`
+                batchfied scores for next token with shape of ``(n_batch, n_vocab)``
                 and next state list for ys.
 
         """

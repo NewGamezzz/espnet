@@ -56,7 +56,7 @@ class MERTFrontend(AbsFrontend):
         self.stride = 320
 
     def _tile_representations(self, feature):
-        """Tile up the representations by `tile_factor`.
+        """Tile up the representations by ``tile_factor``.
 
         Input - sequence of representations
                 shape: (batch_size, seq_len, feature_dim)
@@ -66,7 +66,7 @@ class MERTFrontend(AbsFrontend):
         """
         assert (
             len(feature.shape) == 3
-        ), "Input argument `feature` has invalid shape: {}".format(feature.shape)
+        ), "Input argument ``feature`` has invalid shape: {}".format(feature.shape)
         tiled_feature = feature.repeat(1, 1, self.tile_factor)
         tiled_feature = tiled_feature.reshape(
             feature.size(0), feature.size(1) * self.tile_factor, feature.size(2)
@@ -164,7 +164,7 @@ class EnCodecFrontend(AbsFrontend):
         )
 
     def _tile_representations(self, feature):
-        """Tile up the representations by `tile_factor`.
+        """Tile up the representations by ``tile_factor``.
 
         Input - sequence of representations
                 shape: (batch_size, seq_len, feature_dim)
@@ -174,7 +174,7 @@ class EnCodecFrontend(AbsFrontend):
         """
         assert (
             len(feature.shape) == 3
-        ), "Input argument `feature` has invalid shape: {}".format(feature.shape)
+        ), "Input argument ``feature`` has invalid shape: {}".format(feature.shape)
         tiled_feature = feature.repeat(1, 1, self.tile_factor)
         tiled_feature = tiled_feature.reshape(
             feature.size(0), feature.size(1) * self.tile_factor, feature.size(2)

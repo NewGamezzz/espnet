@@ -15,8 +15,8 @@ from espnet3.publication.demo.packing import upload_demo as _upload_demo
 from espnet3.systems.base.inference import infer
 from espnet3.systems.base.metric import measure
 from espnet3.systems.base.training import collect_stats, train
-from espnet3.utils.publish import pack_model as _pack_model
-from espnet3.utils.publish import upload_model as _upload_model
+from espnet3.utils.publish_utils import pack_model as _pack_model
+from espnet3.utils.publish_utils import upload_model as _upload_model
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +36,6 @@ class BaseSystem:
       - train()
       - infer()
       - measure()
-      - publish()
       - pack_model()
       - upload_model()
       - pack_demo()
@@ -54,17 +53,17 @@ class BaseSystem:
             paths (first non-empty value wins).
 
     Stage log mapping (base defaults):
-        | Stage          | Path reference                     |
-        |---             |---                                 |
-        | create_dataset | training_config.data_dir           |
-        | collect_stats  | training_config.stats_dir          |
-        | train          | training_config.exp_dir            |
-        | infer          | inference_config.inference_dir     |
-        | measure        | metrics_config.inference_dir       |
-        | pack_model     | training_config.exp_dir            |
-        | upload_model   | training_config.exp_dir            |
-        | pack_demo      | demo_config.pack.out_dir           |
-        | upload_demo    | demo_config.pack.out_dir           |
+        | Stage          | Path reference                              |
+        |---             |---                                          |
+        | create_dataset | ``training_config.data_dir``            |
+        | collect_stats  | ``training_config.stats_dir``           |
+        | train          | ``training_config.exp_dir``             |
+        | infer          | ``inference_config.inference_dir``      |
+        | measure        | ``metrics_config.inference_dir``        |
+        | pack_model     | ``training_config.exp_dir``             |
+        | upload_model   | ``training_config.exp_dir``             |
+        | pack_demo      | ``demo_config.pack.out_dir``            |
+        | upload_demo    | ``demo_config.pack.out_dir``            |
 
     Any stage missing from the mapping (or resolving to ``None``) falls back
     to the default log directory: ``training_config.exp_dir`` when available,

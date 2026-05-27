@@ -102,7 +102,7 @@ class InferenceModel:
     """User-facing inference wrapper for packaged ESPnet models.
 
     This class is the public runtime API for a bundle produced by
-    ``espnet3.utils.publish.pack_model()``. It sits on the publication side of
+    ``espnet3.utils.publish_utils.pack_model()``. It sits on the publication side of
     the pipeline: stage runners produce the packed directory, then external
     callers use :class:`InferenceModel` to reopen that directory and execute
     the bundled inference configuration without going back through
@@ -146,7 +146,7 @@ class InferenceModel:
     def __init__(self, inference_config: DictConfig) -> None:
         """Initialize the inference model from a resolved inference config.
 
-        Called by :meth:`from_packed` and :meth:`from_pretrained` after bundle
+        Called by :meth:`from_packed`` and :meth:``from_pretrained` after bundle
         discovery and trust checks are complete. This constructor instantiates
         the backend model, normalizes ``input_key`` into either a string or a
         list of strings, and loads the optional recipe ``output_fn``.
@@ -198,7 +198,7 @@ class InferenceModel:
 
         Args:
             pack_dir: Path to the output directory created by
-                ``espnet3.utils.publish.pack_model()``. This directory must
+                ``espnet3.utils.publish_utils.pack_model()``. This directory must
                 contain ``conf/inference.yaml`` and any files referenced by
                 that config.
             trust_user_code: Set to ``True`` to allow importing bundled recipe

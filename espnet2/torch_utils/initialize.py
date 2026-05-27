@@ -15,7 +15,7 @@ def initialize(model: torch.nn.Module, init: str):
     Parameters are initialized using the given method or distribution.
 
     Custom initialization routines can be implemented into submodules
-    as function `espnet_initialization_fn` within the custom module.
+    as function ``espnet_initialization_fn`` within the custom module.
 
     Args:
         model: Target.

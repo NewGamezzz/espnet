@@ -17,7 +17,7 @@ class LengthRegulator(torch.nn.Module):
     """Length regulator module for feed-forward Transformer.
 
     This is a module of length regulator described in
-    `FastSpeech: Fast, Robust and Controllable Text to Speech`_.
+    ``FastSpeech: Fast, Robust and Controllable Text to Speech``_.
     The length regulator expands char or
     phoneme-level embedding features to frame-level by repeating each
     feature based on the corresponding predicted durations.

@@ -50,7 +50,7 @@ class TimeDomainLoss(AbsEnhLoss, ABC):
         self._is_dereverb_loss = is_dereverb_loss
         if is_noise_loss and is_dereverb_loss:
             raise ValueError(
-                "`is_noise_loss` and `is_dereverb_loss` cannot be True at the same time"
+                "``is_noise_loss`` and ``is_dereverb_loss`` cannot be True at the same time"
             )
         if is_noise_loss and "noise" not in name:
             name = name + "_noise"
@@ -95,7 +95,7 @@ class CISDRLoss(TimeDomainLoss):
             is_dereverb_loss=is_dereverb_loss,
         )
         if ci_sdr is None:
-            raise RuntimeError("Please install espnet with `pip install espnet[enh]`")
+            raise RuntimeError("Please install espnet with ``pip install espnet[enh]``")
 
         self.filter_length = filter_length
 
@@ -185,7 +185,7 @@ class SDRLoss(TimeDomainLoss):
             is_dereverb_loss=is_dereverb_loss,
         )
         if fast_bss_eval is None:
-            raise RuntimeError("Please install espnet with `pip install espnet[enh]`")
+            raise RuntimeError("Please install espnet with ``pip install espnet[enh]``")
 
         self.filter_length = filter_length
         self.use_cg_iter = use_cg_iter
@@ -224,7 +224,7 @@ class SDRLoss(TimeDomainLoss):
 class SISNRLoss(TimeDomainLoss):
     """SI-SNR (or named SI-SDR) loss
 
-    A more stable SI-SNR loss with clamp from `fast_bss_eval`.
+    A more stable SI-SNR loss with clamp from ``fast_bss_eval``.
 
     Attributes:
         clamp_db: float
@@ -253,7 +253,7 @@ class SISNRLoss(TimeDomainLoss):
             is_dereverb_loss=is_dereverb_loss,
         )
         if fast_bss_eval is None:
-            raise RuntimeError("Please install espnet with `pip install espnet[enh]`")
+            raise RuntimeError("Please install espnet with ``pip install espnet[enh]``")
 
         self.clamp_db = clamp_db
         self.zero_mean = zero_mean

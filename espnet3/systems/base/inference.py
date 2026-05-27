@@ -93,7 +93,7 @@ def infer(config: DictConfig):
         name = getattr(test_set, "name", None)
         if not isinstance(name, str) or not name:
             raise RuntimeError(
-                "inference_config.dataset.test entries must define non-empty `name` "
+                "inference_config.dataset.test entries must define non-empty ``name`` "
                 f"(failed at index {index})."
             )
         test_sets.append(name)

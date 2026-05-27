@@ -83,7 +83,7 @@ try:
     contract_expression = oe.contract_expression
 except ImportError:
     log.warning(
-        "If you are running state-space model, run `pip install espnet['asr']`."
+        "If you are running state-space model, run ``pip install espnet['asr']``."
     )
     contract = None
     contract_expression = None
@@ -1497,7 +1497,7 @@ class SSKernel(nn.Module):
             if not measure.startswith("diag"):
                 log.warning(
                     "Diagonal kernel (S4D) activated but initialization is not "
-                    "intended for S4D. Set `measure` to 'diag-lin', 'diag-inv', or "
+                    "intended for S4D. Set ``measure`` to 'diag-lin', 'diag-inv', or "
                     "'diag-legs' for the main variants, or 'diag' "
                     "for a combination of S4D-Lin and S4D-Inv."
                 )

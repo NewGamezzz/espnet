@@ -9,7 +9,7 @@ from espnet2.legacy.nets.pytorch_backend.nets_utils import make_pad_mask
 class LogMel(torch.nn.Module):
     """Convert STFT to fbank feats
 
-    The arguments is same as librosa.filters.mel
+    The arguments is same as ``librosa.filters.mel``
 
     Args:
         fs: number > 0 [scalar] sampling rate of the incoming signal
@@ -17,7 +17,7 @@ class LogMel(torch.nn.Module):
         n_mels: int > 0 [scalar] number of Mel bands to generate
         fmin: float >= 0 [scalar] lowest frequency (in Hz)
         fmax: float >= 0 [scalar] highest frequency (in Hz).
-            If `None`, use `fmax = fs / 2.0`
+            If ``None``, use ``fmax = fs / 2.0``
         htk: use HTK formula instead of Slaney
     """
 

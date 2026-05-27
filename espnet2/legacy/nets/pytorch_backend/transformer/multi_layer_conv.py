@@ -15,7 +15,7 @@ class MultiLayeredConv1d(torch.nn.Module):
     This is a module of multi-leyered conv1d designed
     to replace positionwise feed-forward network
     in Transforner block, which is introduced in
-    `FastSpeech: Fast, Robust and Controllable Text to Speech`_.
+    ``FastSpeech: Fast, Robust and Controllable Text to Speech``_.
 
     .. _`FastSpeech: Fast, Robust and Controllable Text to Speech`:
         https://arxiv.org/pdf/1905.09263.pdf

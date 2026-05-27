@@ -41,7 +41,7 @@ def get_train_config(train_config, model_file=None):
 
 
 def recursive_dict_update(dict_org, dict_patch, verbose=False, log_prefix=""):
-    """Update `dict_org` with `dict_patch` in-place recursively."""
+    """Update ``dict_org`` with ``dict_patch`` in-place recursively."""
     for key, value in dict_patch.items():
         if key not in dict_org:
             if verbose:
@@ -399,8 +399,8 @@ class SeparateSpeech:
 
             except ImportError:
                 logging.error(
-                    "`espnet_model_zoo` is not installed. "
-                    "Please install via `pip install -U espnet_model_zoo`."
+                    "``espnet_model_zoo`` is not installed. "
+                    "Please install via ``pip install -U espnet_model_zoo``."
                 )
                 raise
             d = ModelDownloader()

@@ -14,7 +14,7 @@ from espnet2.train.abs_espnet_model import AbsESPnetModel
 class AbsGANESPnetModel(AbsESPnetModel, torch.nn.Module, ABC):
     """The common abstract class among each GAN-based task.
 
-    "ESPnetModel" is referred to a class which inherits torch.nn.Module,
+    "ESPnetModel" is referred to a class which inherits ``torch.nn.Module``,
     and makes the dnn-models "forward" as its member field, a.k.a delegate
     pattern. And "forward" must accept the argument "forward_generator" and
     Return the dict of "loss", "stats", "weight", and "optim_idx".

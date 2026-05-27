@@ -7,8 +7,8 @@ def int2float(sound: Union[np.ndarray, list]) -> np.ndarray:
     """Converts an integer PCM audio signal to a floating-point representation.
 
     This function scales an integer PCM audio
-    waveform (typically `int16`)
-    to a `float32` format, normalizing the values
+    waveform (typically ``int16``)
+    to a ``float32`` format, normalizing the values
     to the range [-1.0, 1.0].
 
     Args:
@@ -18,7 +18,7 @@ def int2float(sound: Union[np.ndarray, list]) -> np.ndarray:
 
     Returns:
         np.ndarray:
-            The audio signal converted to `float32` format and normalized.
+            The audio signal converted to ``float32`` format and normalized.
     Taken from https://github.com/snakers4/silero-vad
     """
 

@@ -15,7 +15,7 @@ class DurationPredictor(torch.nn.Module):
     """Duration predictor module.
 
     This is a module of duration predictor described
-    in `FastSpeech: Fast, Robust and Controllable Text to Speech`_.
+    in ``FastSpeech: Fast, Robust and Controllable Text to Speech``_.
     The duration predictor predicts a duration of each frame in log domain
     from the hidden embeddings of encoder.
 
@@ -24,8 +24,8 @@ class DurationPredictor(torch.nn.Module):
 
     Note:
         The calculation domain of outputs is different
-        between in `forward` and in `inference`. In `forward`,
-        the outputs are calculated in log domain but in `inference`,
+        between in ``forward`` and in ``inference``. In ``forward``,
+        the outputs are calculated in log domain but in ``inference``,
         those are calculated in linear domain.
 
     """
@@ -147,7 +147,7 @@ class DurationPredictorLoss(torch.nn.Module):
             Tensor: Mean squared error loss value.
 
         Note:
-            `outputs` is in log domain but `targets` is in linear domain.
+            ``outputs`` is in log domain but ``targets`` is in linear domain.
 
         """
         # NOTE: outputs is in log domain while targets in linear

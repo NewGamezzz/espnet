@@ -22,8 +22,8 @@ class ZoneOutCell(torch.nn.Module):
     """ZoneOut Cell module.
 
     This is a module of zoneout described in
-    `Zoneout: Regularizing RNNs by Randomly Preserving Hidden Activations`_.
-    This code is modified from `eladhoffer/seq2seq.pytorch`_.
+    ``Zoneout: Regularizing RNNs by Randomly Preserving Hidden Activations``_.
+    This code is modified from ``eladhoffer/seq2seq.pytorch``_.
 
     Examples:
         >>> lstm = torch.nn.LSTMCell(16, 32)
@@ -42,7 +42,7 @@ class ZoneOutCell(torch.nn.Module):
 
         Args:
             cell (torch.nn.Module): Pytorch recurrent cell module
-                e.g. `torch.nn.Module.LSTMCell`.
+                e.g. ``torch.nn.Module.LSTMCell``.
             zoneout_rate (float, optional): Probability of zoneout from 0.0 to 1.0.
 
         """
@@ -509,7 +509,7 @@ class Decoder(torch.nn.Module):
                 If set to 10 and the length of input is 10,
                 the maximum length of outputs will be 10 * 10 = 100.
             use_att_constraint (bool):
-                Whether to apply attention constraint introduced in `Deep Voice 3`_.
+                Whether to apply attention constraint introduced in ``Deep Voice 3``_.
             backward_window (int): Backward window size in attention constraint.
             forward_window (int): Forward window size in attention constraint.
 

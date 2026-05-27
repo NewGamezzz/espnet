@@ -35,14 +35,14 @@ class BSRNNSeparator(AbsSeparator):
 
         Args:
             input_dim: (int) maximum number of frequency bins corresponding to
-                `target_fs`
+                ``target_fs``
             num_spk: (int) number of speakers.
             num_channels: (int) feature dimension in the BandSplit block.
             num_layers: (int) number of processing layers.
             target_fs: (int) max sampling frequency that the model can handle.
             subbands (list or tuple, optional): list of subband sizes to split the
                 frequency band into. If specified, this will override the subband
-                definition in the `BandSplit` class.
+                definition in the ``BandSplit`` class.
             causal (bool): whether or not to apply causal modeling.
                 if True, LSTM will be used instead of BLSTM for time modeling
             norm_type (str): type of the normalization layer (cfLN / cLN / BN / GN).

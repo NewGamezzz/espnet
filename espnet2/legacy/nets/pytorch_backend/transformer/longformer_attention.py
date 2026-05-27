@@ -28,8 +28,8 @@ class LongformerAttention(nn.Module):
     def forward(self, query, key, value, mask):
         """Compute Longformer Self-Attention with masking.
 
-        Expects `len(hidden_states)` to be multiple of `attention_window`.
-        Padding to `attention_window` happens in :meth:`encoder.forward`
+        Expects ``len(hidden_states)`` to be multiple of ``attention_window``.
+        Padding to ``attention_window`` happens in :meth:`encoder.forward`
         to avoid redoing the padding on each layer.
         Args:
             query (torch.Tensor): Query tensor (#batch, time1, size).

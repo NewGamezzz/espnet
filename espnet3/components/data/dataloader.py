@@ -93,17 +93,17 @@ class DataLoaderBuilder:
     def _maybe_shard_dataset(self, dataset):
         """Return one epoch/rank-specific shard when shard metadata is present.
 
-        `dataset` is expected to be a `CombinedDataset`, so shard metadata is
-        read from the first wrapped dataset while the actual `shard()` call is
-        dispatched through `CombinedDataset`.
+        ``dataset`` is expected to be a ``CombinedDataset``, so shard metadata is
+        read from the first wrapped dataset while the actual ``shard()`` call is
+        dispatched through ``CombinedDataset``.
 
         Sharded datasets must define:
         - `total_shards`: Total shard count across the full dataset.
         - `dist_world_size`: Distributed world size used by the shard rotation.
 
-        This helper validates that `dist_world_size` matches the runtime
+        This helper validates that ``dist_world_size`` matches the runtime
         distributed world size before selecting one shard for the current
-        `(epoch, rank)` pair.
+        ``(epoch, rank)`` pair.
         """
         # DataOrganizer provides CombinedDataset, so shard metadata lives on the
         # wrapped datasets, while shard() is exposed by CombinedDataset itself.
@@ -148,7 +148,7 @@ class DataLoaderBuilder:
         (1) **ESPnet-style iterator**: Custom sampling and iteration logic.
         (2) **Standard PyTorch DataLoader**: Simpler use-case with fixed batch size.
 
-        The selection depends on whether `config.dataloader.<mode>.iter_factory` is
+        The selection depends on whether ``config.dataloader.<mode>.iter_factory`` is
         defined.
 
         Args:

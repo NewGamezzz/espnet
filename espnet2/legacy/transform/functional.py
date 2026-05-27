@@ -11,7 +11,7 @@ class FuncTrans(TransformInterface):
 
     WARNING:
         Builtin or C/C++ functions may not work properly
-        because this class heavily depends on the `inspect` module.
+        because this class heavily depends on the ``inspect`` module.
 
     Usage:
 

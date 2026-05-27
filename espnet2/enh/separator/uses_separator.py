@@ -48,7 +48,7 @@ class USESSeparator(AbsSeparator):
             num_spk (int): number of speakers.
             enc_channels (int): feature dimension after the Conv1D encoder.
             bottleneck_size (int): dimension of the bottleneck feature.
-                Must be a multiple of `att_heads`.
+                Must be a multiple of ``att_heads``.
             num_blocks (int): number of processing blocks.
             num_spatial_blocks (int): number of processing blocks with channel modeling.
             ref_channel (int): reference channel (used in channel modeling modules).
@@ -90,7 +90,7 @@ class USESSeparator(AbsSeparator):
         opt = {
             "memory_types": memory_types,
         }
-        # arguments in `opt` can be updated at inference time to process different data
+        # arguments in ``opt`` can be updated at inference time to process different data
         opt.update(additional)
         self.uses = USES(
             enc_channels,

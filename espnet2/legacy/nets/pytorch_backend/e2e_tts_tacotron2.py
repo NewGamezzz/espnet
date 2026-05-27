@@ -244,11 +244,11 @@ class Tacotron2Loss(torch.nn.Module):
     ):
         """Apply pre hook function before loading state dict.
 
-        From v.0.6.1 `bce_criterion.pos_weight` param is registered as a parameter but
+        From v.0.6.1 ``bce_criterion.pos_weight`` param is registered as a parameter but
         old models do not include it and as a result, it causes missing key error when
         loading old model parameter. This function solve the issue by adding param in
         state dict before loading as a pre hook function
-        of the `load_state_dict` method.
+        of the ``load_state_dict`` method.
 
         """
         key = prefix + "bce_criterion.pos_weight"

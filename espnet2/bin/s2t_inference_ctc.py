@@ -398,8 +398,8 @@ class Speech2Text:
 
             except ImportError:
                 logging.error(
-                    "`espnet_model_zoo` is not installed. "
-                    "Please install via `pip install -U espnet_model_zoo`."
+                    "``espnet_model_zoo`` is not installed. "
+                    "Please install via ``pip install -U espnet_model_zoo``."
                 )
                 raise
             d = ModelDownloader()
@@ -1015,8 +1015,8 @@ class Speech2TextGreedySearch:
 
             except ImportError:
                 logging.error(
-                    "`espnet_model_zoo` is not installed. "
-                    "Please install via `pip install -U espnet_model_zoo`."
+                    "``espnet_model_zoo`` is not installed. "
+                    "Please install via ``pip install -U espnet_model_zoo``."
                 )
                 raise
             d = ModelDownloader()

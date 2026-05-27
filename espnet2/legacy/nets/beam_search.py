@@ -54,7 +54,7 @@ class BeamSearch(torch.nn.Module):
         Args:
             scorers (dict[str, ScorerInterface]): Dict of decoder modules
                 e.g., Decoder, CTCPrefixScorer, LM
-                The scorer will be ignored if it is `None`
+                The scorer will be ignored if it is ``None``
             weights (dict[str, float]): Dict of weights for each scorers
                 The scorer will be ignored if its weight is 0
             beam_size (int): The number of hypotheses kept during search
@@ -64,7 +64,7 @@ class BeamSearch(torch.nn.Module):
             token_list (list[str]): List of tokens for debug log
             pre_beam_score_key (str): key of scores to perform pre-beam search
             pre_beam_ratio (float): beam size in the pre-beam search
-                will be `int(pre_beam_ratio * beam_size)`
+                will be ``int(pre_beam_ratio * beam_size)``
             return_hs (bool): Whether to return hidden intermediates
             normalize_length (bool): If true, select the best ended hypotheses
                 based on length-normalized scores rather than the accumulated scores
@@ -77,7 +77,7 @@ class BeamSearch(torch.nn.Module):
         self.full_scorers = dict()
         self.part_scorers = dict()
         # this module dict is required for recursive cast
-        # `self.to(device, dtype)` in `recog.py`
+        # ``self.to(device, dtype)`` in ``recog.py``
         self.nn_dict = torch.nn.ModuleDict()
         for k, v in scorers.items():
             w = weights.get(k, 0)
@@ -174,7 +174,7 @@ class BeamSearch(torch.nn.Module):
     def score_full(
         self, hyp: Hypothesis, x: torch.Tensor, pre_x: torch.Tensor = None
     ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
-        """Score new hypothesis by `self.full_scorers`.
+        """Score new hypothesis by ``self.full_scorers``.
 
         Args:
             hyp (Hypothesis): Hypothesis with prefix tokens to score
@@ -185,10 +185,10 @@ class BeamSearch(torch.nn.Module):
 
         Returns:
             Tuple[Dict[str, torch.Tensor], Dict[str, Any]]: Tuple of
-                score dict of `hyp` that has string keys of `self.full_scorers`
-                and tensor score values of shape: `(self.n_vocab,)`,
+                score dict of ``hyp`` that has string keys of ``self.full_scorers``
+                and tensor score values of shape: ``(self.n_vocab,)``,
                 and state dict that has string keys
-                and state values of `self.full_scorers`
+                and state values of ``self.full_scorers``
 
         """
         scores = dict()
@@ -210,7 +210,7 @@ class BeamSearch(torch.nn.Module):
     def score_partial(
         self, hyp: Hypothesis, ids: torch.Tensor, x: torch.Tensor
     ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
-        """Score new hypothesis by `self.part_scorers`.
+        """Score new hypothesis by ``self.part_scorers``.
 
         Args:
             hyp (Hypothesis): Hypothesis with prefix tokens to score
@@ -219,10 +219,10 @@ class BeamSearch(torch.nn.Module):
 
         Returns:
             Tuple[Dict[str, torch.Tensor], Dict[str, Any]]: Tuple of
-                score dict of `hyp` that has string keys of `self.part_scorers`
-                and tensor score values of shape: `(len(ids),)`,
+                score dict of ``hyp`` that has string keys of ``self.part_scorers``
+                and tensor score values of shape: ``(len(ids),)``,
                 and state dict that has string keys
-                and state values of `self.part_scorers`
+                and state values of ``self.part_scorers``
 
         """
         scores = dict()
@@ -238,13 +238,13 @@ class BeamSearch(torch.nn.Module):
 
         Args:
             weighted_scores (torch.Tensor): The weighted sum scores for each tokens.
-            Its shape is `(self.n_vocab,)`.
+            Its shape is ``(self.n_vocab,)``.
             ids (torch.Tensor): The partial token ids to compute topk
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor]:
                 The topk full token ids and partial token ids.
-                Their shapes are `(self.beam_size,)`
+                Their shapes are ``(self.beam_size,)``
 
         """
         # no pre beam performed
@@ -272,16 +272,16 @@ class BeamSearch(torch.nn.Module):
 
         Args:
             prev_scores (Dict[str, float]):
-                The previous hypothesis scores by `self.scorers`
-            next_full_scores (Dict[str, torch.Tensor]): scores by `self.full_scorers`
-            full_idx (int): The next token id for `next_full_scores`
+                The previous hypothesis scores by ``self.scorers``
+            next_full_scores (Dict[str, torch.Tensor]): scores by ``self.full_scorers``
+            full_idx (int): The next token id for ``next_full_scores``
             next_part_scores (Dict[str, torch.Tensor]):
-                scores of partial tokens by `self.part_scorers`
-            part_idx (int): The new token id for `next_part_scores`
+                scores of partial tokens by ``self.part_scorers``
+            part_idx (int): The new token id for ``next_part_scores``
 
         Returns:
             Dict[str, torch.Tensor]: The new score dict.
-                Its keys are names of `self.full_scorers` and `self.part_scorers`.
+                Its keys are names of ``self.full_scorers`` and ``self.part_scorers``.
                 Its values are scalar tensors by the scorers.
 
         """
@@ -296,13 +296,13 @@ class BeamSearch(torch.nn.Module):
         """Merge states for new hypothesis.
 
         Args:
-            states: states of `self.full_scorers`
-            part_states: states of `self.part_scorers`
-            part_idx (int): The new token id for `part_scores`
+            states: states of ``self.full_scorers``
+            part_states: states of ``self.part_scorers``
+            part_idx (int): The new token id for ``part_scores``
 
         Returns:
             Dict[str, torch.Tensor]: The new score dict.
-                Its keys are names of `self.full_scorers` and `self.part_scorers`.
+                Its keys are names of ``self.full_scorers`` and ``self.part_scorers``.
                 Its values are states of the scorers.
 
         """
@@ -574,7 +574,7 @@ def beam_search(
         vocab_size (int): The number of vocabulary
         scorers (dict[str, ScorerInterface]): Dict of decoder modules
             e.g., Decoder, CTCPrefixScorer, LM
-            The scorer will be ignored if it is `None`
+            The scorer will be ignored if it is ``None``
         weights (dict[str, float]): Dict of weights for each scorers
             The scorer will be ignored if its weight is 0
         token_list (list[str]): List of tokens for debug log
@@ -584,7 +584,7 @@ def beam_search(
         minlenratio (float): Input length ratio to obtain min output length.
         pre_beam_score_key (str): key of scores to perform pre-beam search
         pre_beam_ratio (float): beam size in the pre-beam search
-            will be `int(pre_beam_ratio * beam_size)`
+            will be ``int(pre_beam_ratio * beam_size)``
 
     Returns:
         list: N-best decoding results

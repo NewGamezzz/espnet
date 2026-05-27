@@ -59,7 +59,7 @@ class CER(BaseMetric):
         if jiwer is None:
             raise RuntimeError(
                 "jiwer is required to compute CER. "
-                "Please install it with `pip install espnet[asr]`."
+                "Please install it with ``pip install espnet[asr]``."
             )
 
     def __call__(

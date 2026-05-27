@@ -57,7 +57,7 @@ class PartiallyARBeamSearch(BatchBeamSearch):
 
     Partially autoregressive hypothesis is a set of BatchHypothesis.
 
-    We need to use `add_mask` function to add a hypothesis for a mask.
+    We need to use ``add_mask`` function to add a hypothesis for a mask.
     Before search and beam search method, each partially autoregressive
     hypothesis is extracted to BatchHypothesis, and applied the same process
     as the batched_beam_search.
@@ -138,7 +138,7 @@ class PartiallyARBeamSearch(BatchBeamSearch):
     def score_full(
         self, hyp: PartiallyARHypothesis, x: torch.Tensor, is_first: bool = False
     ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
-        """Score new hypothesis by `self.full_scorers`.
+        """Score new hypothesis by ``self.full_scorers``.
 
         Args:
             hyp (PartiallyARHypothesis): Hypothesis with prefix tokens to score
@@ -146,10 +146,10 @@ class PartiallyARBeamSearch(BatchBeamSearch):
 
         Returns:
             Tuple[Dict[str, torch.Tensor], Dict[str, Any]]: Tuple of
-                score dict of `hyp` that has string keys of `self.full_scorers`
-                and tensor score values of shape: `(self.n_vocab,)`,
+                score dict of ``hyp`` that has string keys of ``self.full_scorers``
+                and tensor score values of shape: ``(self.n_vocab,)``,
                 and state dict that has string keys
-                and state values of `self.full_scorers`
+                and state values of ``self.full_scorers``
 
         """
         new_scores = dict()
@@ -262,20 +262,20 @@ class PartiallyARBeamSearch(BatchBeamSearch):
 
         Args:
             weighted_scores (torch.Tensor): The weighted sum scores for each tokens.
-                Its shape is `(n_beam, self.vocab_size)`.
+                Its shape is ``(n_beam, self.vocab_size)``.
 
         Returns:
             Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
                 The topk full (prev_hyp, new_token) ids
                 and partial (prev_hyp, new_token) ids.
-                Their shapes are all `(self.beam_size,)`
+                Their shapes are all ``(self.beam_size,)``
 
         """
         weighted_scores = weighted_scores.view(len(self.masks), -1)
         top_ids = weighted_scores.topk(self.beam_size, dim=1)[1]  # (n_mask, beam_size)
-        # Because of the flatten above, `top_ids` is organized as:
+        # Because of the flatten above, ``top_ids`` is organized as:
         # [hyp1 * V + token1, hyp2 * V + token2, ..., hypK * V + tokenK],
-        # where V is `self.n_vocab` and K is `self.beam_size`
+        # where V is ``self.n_vocab`` and K is ``self.beam_size``
         prev_hyp_ids = torch.div(top_ids, self.n_vocab, rounding_mode="trunc")
         new_token_ids = top_ids % self.n_vocab
 

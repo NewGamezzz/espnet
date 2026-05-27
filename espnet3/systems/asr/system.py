@@ -73,7 +73,7 @@ class ASRSystem(BaseSystem):
         """
         self._reject_stage_args("train", args, kwargs)
         logger.info("ASRSystem.train(): starting training process")
-        tokenizer_cfg = getattr(self.train_config, "tokenizer", None)
+        tokenizer_cfg = getattr(self.training_config, "tokenizer", None)
         vocab_size = getattr(tokenizer_cfg, "vocab_size", None) if tokenizer_cfg else None
         logger.info("Configured vocab size: %s", vocab_size)
 

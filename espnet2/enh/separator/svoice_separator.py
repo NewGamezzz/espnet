@@ -15,8 +15,8 @@ def overlap_and_add(signal, frame_step):
     """Reconstructs a signal from a framed representation.
 
         Adds potentially overlapping frames of a signal with shape
-        `[..., frames, frame_length]`, offsetting subsequent frames by `frame_step`.
-        The resulting tensor has shape `[..., output_size]` where
+        ``[..., frames, frame_length]``, offsetting subsequent frames by ``frame_step``.
+        The resulting tensor has shape ``[..., output_size]`` where
             output_size = (frames - 1) * frame_step + frame_length
 
         Args:

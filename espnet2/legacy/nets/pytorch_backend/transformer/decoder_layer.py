@@ -18,11 +18,11 @@ class DecoderLayer(nn.Module):
     Args:
         size (int): Input dimension.
         self_attn (torch.nn.Module): Self-attention module instance.
-            `MultiHeadedAttention` instance can be used as the argument.
+            ``MultiHeadedAttention`` instance can be used as the argument.
         src_attn (torch.nn.Module): Self-attention module instance.
-            `MultiHeadedAttention` instance can be used as the argument.
+            ``MultiHeadedAttention`` instance can be used as the argument.
         feed_forward (torch.nn.Module): Feed-forward module instance.
-            `PositionwiseFeedForward`, `MultiLayeredConv1d`, or `Conv1dLinear` instance
+            ``PositionwiseFeedForward``, ``MultiLayeredConv1d``, or ``Conv1dLinear`` instance
             can be used as the argument.
         dropout_rate (float): Dropout rate.
         normalize_before (bool): Whether to use layer_norm before the first block.

@@ -224,7 +224,7 @@ def _write_builtin_artifact(
     if type_name == "wav":
         sample_rate = options.get("sample_rate")
         if sample_rate is None:
-            raise ValueError("WAV artifacts require `sample_rate`.")
+            raise ValueError("WAV artifacts require ``sample_rate``.")
         sf.write(output_path, np.asarray(value), int(sample_rate))
     elif type_name == "npy":
         np.save(output_path, np.asarray(value))

@@ -44,7 +44,7 @@ class FastSpeech(AbsTTS):
     """FastSpeech module for end-to-end text-to-speech.
 
     This is a module of FastSpeech, feed-forward Transformer with duration predictor
-    described in `FastSpeech: Fast, Robust and Controllable Text to Speech`_, which
+    described in ``FastSpeech: Fast, Robust and Controllable Text to Speech``_, which
     does not require any auto-regressive processing during inference, resulting in
     fast decoding compared with auto-regressive Transformer.
 

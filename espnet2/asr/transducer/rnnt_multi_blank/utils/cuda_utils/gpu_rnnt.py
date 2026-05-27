@@ -107,7 +107,7 @@ class GPURNNT:
             denom: A zero tensor of same shape as acts.
 
         Updates:
-            This kernel inplace updates the `denom` tensor
+            This kernel inplace updates the ``denom`` tensor
         """
 
         # // trans_acts + pred_acts -> log_softmax denominator

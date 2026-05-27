@@ -159,8 +159,8 @@ class BranchformerEncoderLayer(torch.nn.Module):
             x, pos_emb = x_input, None
 
         skip_layer = False
-        # with stochastic depth, residual connection `x + f(x)` becomes
-        # `x <- x + 1 / (1 - p) * f(x)` at training time.
+        # with stochastic depth, residual connection ``x + f(x)`` becomes
+        # ``x <- x + 1 / (1 - p) * f(x)`` at training time.
         stoch_layer_coeff = 1.0
         if self.training and self.stochastic_depth_rate > 0:
             skip_layer = torch.rand(1).item() < self.stochastic_depth_rate

@@ -226,17 +226,17 @@ class InferenceProvider(EnvironmentProvider, ABC):
         """Resolve the logical device visible to the current process.
 
         **Resolution order.**
-            1. Explicit `config.device`
-            2. Logical index from `config.device_index`
-            3. Logical index from `config.local_rank`
-            4. Logical index from `LOCAL_RANK`
-            5. Default to the current worker-visible CUDA device (`cuda:0`)
+            1. Explicit ``config.device``
+            2. Logical index from ``config.device_index``
+            3. Logical index from ``config.local_rank``
+            4. Logical index from ``LOCAL_RANK``
+            5. Default to the current worker-visible CUDA device (``cuda:0``)
             6. Fall back to CPU when CUDA is unavailable
 
         Notes:
-            - Do not reinterpret `CUDA_VISIBLE_DEVICES` as a physical device id.
+            - Do not reinterpret ``CUDA_VISIBLE_DEVICES`` as a physical device id.
               Dask/schedulers may remap visible devices per worker process.
-            - `device_index` and `local_rank` are treated as logical indices in the
+            - ``device_index`` and ``local_rank`` are treated as logical indices in the
               current process namespace.
         """
         explicit_device = getattr(config, "device", None)

@@ -12,12 +12,12 @@ __all__ = ["Predictor", "Corrector", "get_sampler"]
 
 
 def to_flattened_numpy(x):
-    """Flatten a torch tensor `x` and convert it to numpy."""
+    """Flatten a torch tensor ``x`` and convert it to numpy."""
     return x.detach().cpu().numpy().reshape((-1,))
 
 
 def from_flattened_numpy(x, shape):
-    """Form a torch tensor with the given `shape` from a flattened numpy array `x`."""
+    """Form a torch tensor with the given ``shape`` from a flattened numpy array ``x``."""
     return torch.from_numpy(x.reshape(shape))
 
 
@@ -38,18 +38,18 @@ def get_pc_sampler(
     """Create a Predictor-Corrector (PC) sampler.
 
     Args:
-        predictor_name: The name of a registered `sampling.Predictor`.
-        corrector_name: The name of a registered `sampling.Corrector`.
-        sde: An `sdes.SDE` object representing the forward SDE.
+        predictor_name: The name of a registered ``sampling.Predictor``.
+        corrector_name: The name of a registered ``sampling.Corrector``.
+        sde: An ``sdes.SDE`` object representing the forward SDE.
         score_fn: A function (typically learned model) that predicts the score.
-        y: A `torch.Tensor`, representing the (non-white-)noisy starting point(s)
+        y: A ``torch.Tensor``, representing the (non-white-)noisy starting point(s)
              to condition the prior on.
-        denoise: If `True`, add one-step denoising to the final samples.
-        eps: A `float` number. The reverse-time SDE and ODE are integrated to
-            `epsilon` to avoid numerical issues.
+        denoise: If ``True``, add one-step denoising to the final samples.
+        eps: A ``float`` number. The reverse-time SDE and ODE are integrated to
+            ``epsilon`` to avoid numerical issues.
         snr: The SNR to use for the corrector. 0.1 by default, and ignored for
-            `NoneCorrector`.
-        N: The number of reverse sampling steps. If `None`, uses the SDE's `N`
+            ``NoneCorrector``.
+        N: The number of reverse sampling steps. If ``None``, uses the SDE's ``N``
             property by default.
 
     Returns:
@@ -94,18 +94,18 @@ def get_ode_sampler(
     """Probability flow ODE sampler with the black-box ODE solver.
 
     Args:
-        sde: An `sdes.SDE` object representing the forward SDE.
+        sde: An ``sdes.SDE`` object representing the forward SDE.
         score_fn: A function (typically learned model) that predicts the score.
-        y: A `torch.Tensor`, representing the (non-white-)noisy starting point(s)
+        y: A ``torch.Tensor``, representing the (non-white-)noisy starting point(s)
             to condition the prior on.
         inverse_scaler: The inverse data normalizer.
-        denoise: If `True`, add one-step denoising to final samples.
-        rtol: A `float` number. The relative tolerance level of the ODE solver.
-        atol: A `float` number. The absolute tolerance level of the ODE solver.
-        method: A `str`. The algorithm used for the black-box ODE solver.
-            See the documentation of `scipy.integrate.solve_ivp`.
-        eps: A `float` number. The reverse-time SDE/ODE will be integrated to
-            `eps` for numerical stability.
+        denoise: If ``True``, add one-step denoising to final samples.
+        rtol: A ``float`` number. The relative tolerance level of the ODE solver.
+        atol: A ``float`` number. The absolute tolerance level of the ODE solver.
+        method: A ``str``. The algorithm used for the black-box ODE solver.
+            See the documentation of ``scipy.integrate.solve_ivp``.
+        eps: A ``float`` number. The reverse-time SDE/ODE will be integrated to
+            ``eps`` for numerical stability.
         device: PyTorch device.
 
     Returns:
@@ -129,7 +129,7 @@ def get_ode_sampler(
 
         Args:
             model: A score model.
-            z: If present, generate samples from latent code `z`.
+            z: If present, generate samples from latent code ``z``.
         Returns:
             samples, number of function evaluations.
         """

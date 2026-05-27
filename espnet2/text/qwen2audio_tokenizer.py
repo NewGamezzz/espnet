@@ -25,8 +25,8 @@ class Qwen2AudioTokenizer(AbsTokenizer):
     ):
         if not is_transformers_available:
             raise ImportError(
-                "`transformers` is not available. Please install it via `pip install"
-                " transformers` or `cd /path/to/espnet/tools && . ./activate_python.sh"
+                "``transformers`` is not available. Please install it via `pip install"
+                " transformers`` or ``cd /path/to/espnet/tools && . ./activate_python.sh"
                 " && ./installers/install_transformers.sh`."
             )
 
@@ -68,7 +68,7 @@ class Qwen2AudioTokenizer(AbsTokenizer):
         if audio_input is not None:
             audios, sr = audio_input
             # The audio URLs are just placeholders for the chat template.
-            # The actual audio data is passed in the `audios` argument below.
+            # The actual audio data is passed in the ``audios`` argument below.
             wavs_query = [
                 {"type": "audio", "audio_url": f"placeholder_{i}.wav"}
                 for i in range(len(audios))

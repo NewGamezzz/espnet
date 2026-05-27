@@ -62,8 +62,8 @@ def find_resume_path(
         return resume_path
     if resume is True and resume_path is None:
         raise FileNotFoundError(
-            "You passed `--resume=True`, but no checkpont file was "
-            "found in `--out_dir={out_dir}`."
+            "You passed ``--resume=True``, but no checkpont file was "
+            "found in ``--out_dir={out_dir}``."
         )
     return resume_path
 
@@ -88,7 +88,7 @@ def num_parameters(module: nn.Module, requires_grad: Optional[bool] = None) -> i
 
 
 def reset_parameters(module: nn.Module) -> None:
-    """Calls `reset_parameters` on the module and all its submodules."""
+    """Calls ``reset_parameters`` on the module and all its submodules."""
     for mod in module.modules():
         if callable(getattr(mod, "reset_parameters", None)):
             mod.reset_parameters()
@@ -288,7 +288,7 @@ class incremental_save:
     def save(self, obj):
         if self.has_saved:
             raise RuntimeError("have already saved")
-        # Write the pickle data for `obj`
+        # Write the pickle data for ``obj``
         data_buf = BytesIO()
         pickler = IncrementalPyTorchPickler(self, data_buf, protocol=5)
         pickler.dump(obj)
@@ -321,7 +321,7 @@ def chunked_cross_entropy(
     chunk_size: int = 128,
     ignore_index: int = -100,
 ) -> torch.Tensor:
-    # with large max_sequence_lengths, the beginning of `backward`
+    # with large max_sequence_lengths, the beginning of ``backward``
     # allocates a large memory chunk which can dominate
     # the memory usage in fine-tuning settings with low number of
     # parameters.
@@ -383,7 +383,7 @@ def chunked_cross_entropy(
     # division by zero. However that
     #   results in a python int which is then passed back to torch
     # division. By using the
-    #   `x.maximum(torch.ones_like(x))` pattern we avoid a cudaStreamSynchronize.
+    #   ``x.maximum(torch.ones_like(x))`` pattern we avoid a cudaStreamSynchronize.
     return torch.cat(loss_chunks).sum() / non_masked_elems.maximum(
         torch.ones_like(non_masked_elems)
     )
@@ -401,10 +401,10 @@ def map_old_state_dict_weights(state_dict: Dict, mapping: Mapping, prefix: str) 
 def get_default_supported_precision(training: bool) -> str:
     """Return default precision that is supported by the hardware:
 
-    either `bf16` or `16`.
+    either ``bf16`` or ``16``.
 
     Args:
-        training: `-mixed` or `-true` version of the precision to use
+        training: ``-mixed`` or ``-true`` version of the precision to use
 
     Returns:
         default precision that is suitable for the task and is supported by the hardware
@@ -550,9 +550,9 @@ def capture_hparams() -> Dict[str, Any]:
 
 
 def save_hyperparameters(function: callable, checkpoint_dir: Path) -> None:
-    """Captures the CLI parameters passed to `function` without
+    """Captures the CLI parameters passed to ``function`` without
 
-    running `function` and saves them to the checkpoint.
+    running ``function`` and saves them to the checkpoint.
     """
     from jsonargparse import capture_parser
 
@@ -560,7 +560,7 @@ def save_hyperparameters(function: callable, checkpoint_dir: Path) -> None:
     # This hack strips away the subcommands from the top-level CLI
     # to parse the file as if it was called as a script
     known_commands = [
-        ("finetune_full",),  # For subcommands, use `("finetune", "full")` etc
+        ("finetune_full",),  # For subcommands, use ``("finetune", "full")`` etc
         ("finetune_lora",),
         ("finetune_adapter",),
         ("finetune_adapter_v2",),
@@ -613,7 +613,7 @@ def choose_logger(
     if logger_name == "wandb":
         return WandbLogger(project=name, resume=resume, **kwargs)
     raise ValueError(
-        f"`--logger_name={logger_name}` is not a valid option."
+        f"``--logger_name={logger_name}`` is not a valid option."
         " Choose from 'csv', 'tensorboard', 'wandb'."
     )
 

@@ -19,12 +19,12 @@ def setup_logger(
 
     **Configured handlers.**
       - A stream handler for console output (added once per logger).
-      - A file handler that writes to `download.log` in `log_dir`, if provided.
+      - A file handler that writes to ``download.log`` in ``log_dir``, if provided.
 
     Args:
         name (str): Logger name (e.g., "espnet3.download").
         log_dir (Path | None): Directory for the optional log file.
-            When provided, `download.log` is created under this directory.
+            When provided, ``download.log`` is created under this directory.
         level (int): Logging level (e.g., logging.INFO).
 
     Returns:
@@ -109,7 +109,7 @@ def download_url(
 ) -> None:
     """Download a URL to a local path with progress logging.
 
-    This uses `urllib.request.urlretrieve` and logs progress at fixed
+    This uses ``urllib.request.urlretrieve`` and logs progress at fixed
     percentage intervals (default: every 5%). The destination directory
     is created if needed.
 
@@ -143,10 +143,10 @@ def extract_targz(
     dst_dir: Path,
     logger: logging.Logger | None = None,
 ) -> None:
-    """Extract a `.tar.gz` archive into a destination directory.
+    """Extract a ``.tar.gz`` archive into a destination directory.
 
     Args:
-        archive_path (Path): Path to the `.tar.gz` archive.
+        archive_path (Path): Path to the ``.tar.gz`` archive.
         dst_dir (Path): Directory to extract files into.
         logger (logging.Logger | None): Logger to emit progress messages.
 

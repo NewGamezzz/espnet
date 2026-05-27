@@ -1,8 +1,8 @@
 """Helpers for preparing runner configs before stage execution.
 
 This module contains runner-oriented config logic that sits above raw config
-loading. The functions here are intended to be called by `run.py`-style entry
-points after `training_config`, `inference_config`, and `metrics_config` have
+loading. The functions here are intended to be called by ``run.py``-style entry
+points after ``training_config``, ``inference_config``, and ``metrics_config`` have
 been loaded, but before those configs are resolved and passed into a system.
 """
 
@@ -29,22 +29,22 @@ def _is_missing_or_empty(value) -> bool:
     """Return whether a config value should be treated as absent.
 
     This helper normalizes the common "missing" checks used by the runner
-    config propagation logic. The check is intentionally conservative: `None`
+    config propagation logic. The check is intentionally conservative: ``None``
     and empty strings are considered absent, while other values are kept.
 
     Args:
         value: Config value to inspect.
 
     Returns:
-        bool: `True` when the value should be treated as missing.
+        bool: ``True`` when the value should be treated as missing.
 
     Notes:
         This helper is intentionally private because it codifies runner-local
         behavior rather than a general-purpose OmegaConf rule.
 
     Examples:
-        `_is_missing_or_empty(None)` returns `True`.
-        `_is_missing_or_empty("train_debug")` returns `False`.
+        ``_is_missing_or_empty(None)`` returns ``True``.
+        ``_is_missing_or_empty("train_debug")`` returns ``False``.
     """
     return value is None or (isinstance(value, str) and not value.strip())
 
@@ -54,23 +54,23 @@ def _has_exp_identity(config: DictConfig) -> bool:
 
     Standalone inference or metrics configs are allowed only when they already
     carry enough experiment identity to derive output paths without relying on
-    `training_config`. This helper currently treats either `exp_tag` or a
-    concrete `exp_dir` as sufficient.
+    ``training_config``. This helper currently treats either ``exp_tag`` or a
+    concrete ``exp_dir`` as sufficient.
 
     Args:
         config (DictConfig): Inference or metrics config to inspect.
 
     Returns:
-        bool: `True` if the config has a usable `exp_tag` or standalone
-        `exp_dir`.
+        bool: ``True`` if the config has a usable ``exp_tag`` or standalone
+        ``exp_dir``.
 
     Notes:
-        `exp_dir` values that still contain `${exp_tag}` are not considered
+        ``exp_dir`` values that still contain ``${exp_tag}`` are not considered
         standalone because they still depend on another missing key.
 
     Examples:
-        `OmegaConf.create({"exp_tag": "train_debug"})` returns `True`.
-        `OmegaConf.create({"exp_dir": "${exp_tag}/foo"})` returns `False`.
+        ``OmegaConf.create({"exp_tag": "train_debug"})`` returns ``True``.
+        ``OmegaConf.create({"exp_dir": "${exp_tag}/foo"})`` returns ``False``.
     """
     exp_tag = config.get("exp_tag")
     if not _is_missing_or_empty(exp_tag):
@@ -119,8 +119,8 @@ def _copy_config_context(
         experiment identity and inference-derived output locations.
 
     Examples:
-        When `target.exp_tag` is missing, the helper logs an `INFO` insert.
-        When `target.exp_tag` differs, the helper logs a `WARNING` overwrite.
+        When ``target.exp_tag`` is missing, the helper logs an ``INFO`` insert.
+        When ``target.exp_tag`` differs, the helper logs a ``WARNING`` overwrite.
     """
     for key in keys:
         if key not in source:
@@ -160,18 +160,18 @@ def apply_training_experiment_context(
     """Apply runner context propagation across stage configs.
 
     Runner entry points call this after loading configs and before resolving
-    interpolations. When `training_config` is available, its `exp_tag` and
-    `exp_dir` are treated as the source of truth for inference, metrics, and
-    publication. When both `inference_config` and `metrics_config` are present,
-    `metrics_config` also inherits `inference_dir` from `inference_config` so
+    interpolations. When ``training_config`` is available, its ``exp_tag`` and
+    ``exp_dir`` are treated as the source of truth for inference, metrics, and
+    publication. When both ``inference_config`` and ``metrics_config`` are present,
+    ``metrics_config`` also inherits ``inference_dir`` from ``inference_config`` so
     measurement follows the same output location as inference. When both
-    `inference_config` and `publication_config` are present,
-    `publication_config` inherits `inference_dir` so `pack_model` can reuse
+    ``inference_config`` and ``publication_config`` are present,
+    ``publication_config`` inherits ``inference_dir`` so ``pack_model`` can reuse
     the same inference output directory as the preceding inference stage.
 
     Args:
         training_config (DictConfig | None): Training config selected for the
-            current run. When `None`, this function is a no-op.
+            current run. When ``None``, this function is a no-op.
         inference_config (DictConfig | None): Inference config to patch in
             place when present.
         metrics_config (DictConfig | None): Metrics config to patch in place
@@ -349,17 +349,17 @@ def validate_experiment_context(
 
     **Supported runner modes.**
 
-    1. Training-backed mode, where `training_config` is present and provides
+    1. Training-backed mode, where ``training_config`` is present and provides
        experiment identity for inference and metrics.
     2. Standalone inference/metrics mode, where the runtime config must define
-       its own `exp_tag` or concrete `exp_dir`.
+       its own ``exp_tag`` or concrete ``exp_dir``.
 
     Args:
         training_config (DictConfig | None): Training config selected for the
             current run.
-        inference_config (DictConfig | None): Inference config for the `infer`
+        inference_config (DictConfig | None): Inference config for the ``infer``
             stage.
-        metrics_config (DictConfig | None): Metrics config for the `measure`
+        metrics_config (DictConfig | None): Metrics config for the ``measure``
             stage.
         stages_to_run (Sequence[str]): Resolved stage names requested by the
             runner.
@@ -368,13 +368,13 @@ def validate_experiment_context(
         None: Validation succeeds silently.
 
     Raises:
-        ValueError: If `infer` or `measure` is requested without
-            `training_config` and the corresponding runtime config does not
-            define `exp_tag` or a concrete `exp_dir`.
+        ValueError: If ``infer`` or ``measure`` is requested without
+            ``training_config`` and the corresponding runtime config does not
+            define ``exp_tag`` or a concrete ``exp_dir``.
 
     Notes:
         Validation is stage-aware. For example, a missing metrics identity is
-        ignored when `measure` is not in `stages_to_run`.
+        ignored when ``measure`` is not in ``stages_to_run``.
 
     Examples:
         Allow standalone inference when the config already defines its
@@ -450,20 +450,20 @@ def validate_experiment_context(
 def resolve_loaded_configs(*configs: DictConfig | None) -> None:
     """Resolve a set of already-loaded configs in place.
 
-    Runner entry points use `load_and_merge_config(..., resolve=False)` so they
+    Runner entry points use ``load_and_merge_config(..., resolve=False)`` so they
     can patch experiment identity before OmegaConf interpolations are
     evaluated. This helper performs the final resolution step once all runtime
     adjustments are complete.
 
     Args:
-        *configs (DictConfig | None): Configs to resolve. `None` entries are
+        *configs (DictConfig | None): Configs to resolve. ``None`` entries are
             ignored.
 
     Returns:
         None: Provided configs are resolved in place.
 
     Raises:
-        omegaconf.errors.OmegaConfBaseException: Propagated if interpolation
+        ``omegaconf.errors.OmegaConfBaseException``: Propagated if interpolation
             resolution fails for any config.
 
     Notes:
@@ -471,9 +471,9 @@ def resolve_loaded_configs(*configs: DictConfig | None) -> None:
         the caller.
 
     Examples:
-        `resolve_loaded_configs(training, inference, metrics)` resolves all
+        ``resolve_loaded_configs(training, inference, metrics)`` resolves all
         three configs in place.
-        `resolve_loaded_configs(None, inference)` resolves only inference.
+        ``resolve_loaded_configs(None, inference)`` resolves only inference.
     """
     for config in configs:
         if config is not None:

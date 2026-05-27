@@ -361,7 +361,7 @@ def compute_grad_kernel(
     idx = tid  # index of v < V+1; in steps of constant buffer size
     col = cuda.blockIdx.x  # represents a fused index of b * t * u
 
-    # Decompose original indices from fused `col`
+    # Decompose original indices from fused ``col``
     u = col % maxU  # (b * t * u) % u = u
     bt = (col - u) // maxU  # (b * t * u - u) // U = b * t
     t = bt % maxT  # (b * t) % t = t
@@ -386,7 +386,7 @@ def compute_grad_kernel(
         # As such, each thread will perform the while loop at least
         # (V + 1 // thread_buffer) number of times
         while idx < alphabet_size:
-            # remember, `col` represents the tri-index [b, t, u]
+            # remember, ``col`` represents the tri-index [b, t, u]
             # therefore; logpk = denom[b, t, u] + acts[b, t, u, v]
             logpk = denom[col] + acts[col * alphabet_size + idx]
             # initialize the grad of the sample acts[b, t, u, v]
@@ -397,7 +397,7 @@ def compute_grad_kernel(
             # The formula for this is Equation 9 in https://arxiv.org/abs/2010.11148,
             # multiplied by the log probability of the current step (t, u),
             # normalized by the total log likelihood. Once the gradient has been
-            # calculated, scale it by `fastemit_lambda`, as in Equation 10.
+            # calculated, scale it by ``fastemit_lambda``, as in Equation 10.
             if fastemit_lambda > 0.0 and u < U - 1:
                 fastemit_grad = fastemit_lambda * math.exp(
                     alphas[col]  # alphas(t, u)
@@ -535,7 +535,7 @@ def compute_multiblank_alphas_kernel(
     # Ordinary alpha calculations, broadcast across B=b and U=u
     # Look up forward variable calculation from rnnt_numpy.forward_pass()
     # Note: because of the logit under-normalization, everytime logp() is called,
-    # it is always followed by a `-sigma` term.
+    # it is always followed by a ``-sigma`` term.
     for n in range(1, T + U - 1):
         t = n - u
 
@@ -742,7 +742,7 @@ def compute_multiblank_betas_kernel(
     offset = b * maxT * maxU  # pointer indexing offset
 
     # Note: just like the alphas, because of the logit under-normalization, everytime
-    # logp() is called, it is always followed by a `-sigma` term.
+    # logp() is called, it is always followed by a ``-sigma`` term.
 
     # Initilize beta[b, t=T-1, u=U-1] for all b in B with
     # log_probs[b, t=T-1, u=U-1, blank]
@@ -946,7 +946,7 @@ def compute_multiblank_grad_kernel(
     idx = tid  # index of v < V+1; in steps of constant buffer size
     col = cuda.blockIdx.x  # represents a fused index of b * t * u
 
-    # Decompose original indices from fused `col`
+    # Decompose original indices from fused ``col``
     u = col % maxU  # (b * t * u) % u = u
     bt = (col - u) // maxU  # (b * t * u - u) // U = b * t
     t = bt % maxT  # (b * t) % t = t
@@ -971,7 +971,7 @@ def compute_multiblank_grad_kernel(
         # As such, each thread will perform the while loop at least
         # (V + 1 // thread_buffer) number of times
         while idx < alphabet_size:
-            # remember, `col` represents the tri-index [b, t, u]
+            # remember, ``col`` represents the tri-index [b, t, u]
             # therefore; logpk = denom[b, t, u] + acts[b, t, u, v]
             logpk = denom[col] + acts[col * alphabet_size + idx]
             # initialize the grad of the sample acts[b, t, u, v]
@@ -986,7 +986,7 @@ def compute_multiblank_grad_kernel(
             # The formula for this is Equation 9 in https://arxiv.org/abs/2010.11148,
             # multiplied by the log probability of the current step (t, u), normalized
             # by the total log likelihood. Once the gradient has been calculated,
-            # scale it by `fastemit_lambda`, as in Equation 10.
+            # scale it by ``fastemit_lambda``, as in Equation 10.
             if fastemit_lambda > 0.0 and u < U - 1:
                 fastemit_grad = fastemit_lambda * math.exp(
                     alphas[col]  # alphas(t, u)

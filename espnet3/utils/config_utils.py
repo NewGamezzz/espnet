@@ -8,7 +8,7 @@ from pathlib import Path
 from omegaconf import DictConfig, ListConfig, OmegaConf
 
 # Used to rewrite relative paths in resolver expressions such as
-# `${load_line:conf/tokens.txt}` during config loading.
+# ``${load_line:conf/tokens.txt}`` during config loading.
 _RELATIVE_RESOLVER_PATTERN = re.compile(r"\$\{(?P<resolver>load_line):(?P<path>[^,}]+)")
 
 
@@ -17,7 +17,7 @@ def load_line(path):
 
     This function is used as a custom resolver in OmegaConf,
     allowing YAML files to reference external text line files
-    dynamically via `${load_line:some/file.txt}`.
+    dynamically via ``${load_line:some/file.txt}``.
 
     This resolver is intended to load vocab file in configuration.
 
@@ -49,20 +49,20 @@ def load_line(path):
 
 
 def self_name(path):
-    """Return the current config stem for `${self_name:}` interpolation.
+    """Return the current config stem for ``${self_name:}`` interpolation.
 
-    This resolver supports config values such as `exp_tag: ${self_name:}`.
-    During config loading, `load_config_with_defaults()` rewrites that
+    This resolver supports config values such as ``exp_tag: ${self_name:}``.
+    During config loading, ``load_config_with_defaults()`` rewrites that
     interpolation to the stem of the YAML file currently being processed.
 
     The resolver itself is intentionally a passthrough because OmegaConf only
     passes explicit resolver arguments to callbacks. The actual config-name
-    injection happens earlier in `_normalize_relative_resolver_paths()`, which
-    replaces `${self_name:}` with the plain config stem before resolution.
+    injection happens earlier in ``_normalize_relative_resolver_paths()``, which
+    replaces ``${self_name:}`` with the plain config stem before resolution.
 
     Args:
         path (str): Config stem passed explicitly to the resolver, such as
-            `training` or `inference`.
+            ``training`` or ``inference``.
 
     Returns:
         str: The injected config stem unchanged.
@@ -72,7 +72,7 @@ def self_name(path):
         primarily consumed from YAML rather than called directly from Python.
 
     Examples:
-        **In a config file named `training.yaml`.**
+        **In a config file named ``training.yaml``.**
 
             exp_tag: ${self_name:}
 
@@ -123,7 +123,7 @@ def _process_dict_config_entry(
 def _load_config_with_defaults(
     path: str, resolve: bool = True, bind_self_name: bool = True
 ) -> OmegaConf:
-    """Load a config while optionally deferring `${self_name:}` binding."""
+    """Load a config while optionally deferring ``${self_name:}`` binding."""
     config_path = Path(path)
     base_path = config_path.parent
     main_config = OmegaConf.load(path)
@@ -189,17 +189,17 @@ def _load_config_with_defaults(
 
 
 def load_config_with_defaults(path: str, resolve: bool = True) -> OmegaConf:
-    """Load an YAML config with recursive `_self_` merging via Hydra-style `defaults`.
+    """Load an YAML config with recursive ``_self_`` merging via Hydra-style ``defaults``.
 
     This function recursively loads and merges dependent YAML files specified
-    in the `defaults` key of the given config. It mimics Hydra's composition mechanism
+    in the ``defaults`` key of the given config. It mimics Hydra's composition mechanism
     without using Hydra's runtime, which makes it suitable for standalone YAML handling
     (e.g., for distributed training or script-based training setups).
 
-    **Supported formats inside `defaults`.**
-    - `"subconfig"` → loads `subconfig.yaml`
-    - `{"key": "value"}` → loads `key/value.yaml`
-    - `"_self_"` → appends the current config in-place
+    **Supported formats inside ``defaults``.**
+    - ``"subconfig"`` → loads ``subconfig.yaml``
+    - ``{"key": "value"}`` → loads ``key/value.yaml``
+    - ``"_self_"`` → appends the current config in-place
 
     Example:
         # config.yaml
@@ -243,11 +243,11 @@ def load_default_config(
     """Load a packaged default config without resolving interpolations.
 
     This helper reads a default config bundled in an ESPnet recipe package.
-    The default package is typically an `egs3` recipe package such as
-    `egs3.TEMPLATE.asr`, but any installed recipe package with a `conf/`
+    The default package is typically an ``egs3`` recipe package such as
+    ``egs3.TEMPLATE.asr``, but any installed recipe package with a ``conf/``
     directory can be used as the source of default values. The loaded config
     is intended to be merged later with a user-provided config via
-    `load_and_merge_config()`.
+    ``load_and_merge_config()``.
 
     Example:
         **Template example.**
@@ -259,12 +259,12 @@ def load_default_config(
             egs3/librispeech/asr/conf/training.yaml
 
     Args:
-        config_name (str): Config filename under `conf/`, such as
-            `training.yaml`, `inference.yaml`, or `metrics.yaml`.
+        config_name (str): Config filename under ``conf/``, such as
+            ``training.yaml``, ``inference.yaml``, or ``metrics.yaml``.
         default_package (str): Python package that contains the default
-            recipe resources. For example, `egs3.TEMPLATE.asr` points to files
-            under `egs3/TEMPLATE/asr/`. Other installed recipe packages can
-            also be used as long as they provide `conf/<config_name>`.
+            recipe resources. For example, ``egs3.TEMPLATE.asr`` points to files
+            under ``egs3/TEMPLATE/asr/``. Other installed recipe packages can
+            also be used as long as they provide ``conf/<config_name>``.
 
     Returns:
         OmegaConf.DictConfig: The default config loaded from package
@@ -287,22 +287,22 @@ def load_and_merge_config(
     """Load a user config and merge it with packaged default values.
 
     This is the higher-level helper used by recipe code. It first loads the
-    default config through `load_default_config()`, then loads the user config
+    default config through ``load_default_config()``, then loads the user config
     without resolving interpolations, merges the two, and finally resolves the
     merged result. This allows user configs to reference values defined in the
     defaults, while also letting user-provided values override those defaults.
 
-    The default source is usually an `egs3.TEMPLATE.*` package, but any
+    The default source is usually an ``egs3.TEMPLATE.*`` package, but any
     installed recipe package can be used if it provides the same config file
-    under its own `conf/` directory.
+    under its own ``conf/`` directory.
 
     Examples:
         **If a recipe config lives at.**
 
             egs3/mini_an4/asr/conf/training.yaml
 
-        With `config_name="training.yaml"`, this function can infer
-        `default_package="egs3.TEMPLATE.asr"` and merge:
+        With ``config_name="training.yaml"``, this function can infer
+        ``default_package="egs3.TEMPLATE.asr"`` and merge:
 
             egs3/TEMPLATE/asr/conf/training.yaml
 
@@ -311,14 +311,14 @@ def load_and_merge_config(
             egs3/mini_an4/asr/conf/training.yaml
 
     Args:
-        config_path (Path | None): Path to the user config. If `None`, this
-            function returns `None`.
-        config_name (str): Config filename under `conf/`, such as
-            `training.yaml`, `inference.yaml`, or `metrics.yaml`.
+        config_path (Path | None): Path to the user config. If ``None``, this
+            function returns ``None``.
+        config_name (str): Config filename under ``conf/``, such as
+            ``training.yaml``, ``inference.yaml``, or ``metrics.yaml``.
         default_package (str | None): Python package that contains the default
-            recipe resources. If omitted, it is inferred from `config_path`.
-            For example, a config under `egs3/<recipe>/asr/conf/` maps to
-            `egs3.TEMPLATE.asr`.
+            recipe resources. If omitted, it is inferred from ``config_path``.
+            For example, a config under ``egs3/<recipe>/asr/conf/`` maps to
+            ``egs3.TEMPLATE.asr``.
 
     Returns:
         OmegaConf.DictConfig | None: The merged config. Interpolations are
@@ -394,9 +394,9 @@ def _normalize_relative_resolver_paths(
 def _rewrite_relative_resolver_paths(value: str, base_path: Path) -> str:
     """Rewrite relative resolver paths to absolute paths for the current config.
 
-    For example, if `value` contains `${load_line:tokens.txt}` and the current
-    config lives under `conf/`, this rewrites the resolver path to point at
-    `conf/tokens.txt` before OmegaConf resolves the expression.
+    For example, if ``value`` contains ``${load_line:tokens.txt}`` and the current
+    config lives under ``conf/``, this rewrites the resolver path to point at
+    ``conf/tokens.txt`` before OmegaConf resolves the expression.
     Absolute paths and dynamic paths are left unchanged.
     """
 

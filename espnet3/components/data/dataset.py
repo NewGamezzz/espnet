@@ -42,28 +42,28 @@ class CombinedDataset:
 
     Args:
         datasets (List[Any]): A list of dataset instances. Each must implement
-            `__getitem__` and `__len__`.
+            ``__getitem__`` and ``__len__``.
         transforms (List[Tuple[Callable, Callable]]): A list of
             (transform, preprocessor) tuples. Each pair corresponds to the matching
-            dataset in `datasets`.
-            - `transform(sample)` is applied first.
-            - Then `preprocessor(uid, sample)` or `preprocessor(sample)` is applied,
-              depending on `use_espnet_preprocessor`.
+            dataset in ``datasets``.
+            - ``transform(sample)`` is applied first.
+            - Then ``preprocessor(uid, sample)`` or ``preprocessor(sample)`` is applied,
+              depending on ``use_espnet_preprocessor``.
         use_espnet_preprocessor (bool): If True, applies the preprocessor as
-            `preprocessor(uid, sample)`. This is used for ESPnet `AbsPreprocessor`
+            ``preprocessor(uid, sample)``. This is used for ESPnet ``AbsPreprocessor``
             compatible pipelines.
 
     Note:
         At initialization, the first sample from each dataset is passed through
         its associated transform to check that all datasets produce dictionaries
         with the same set of keys. This ensures consistency across the combined dataset.
-        An `AssertionError` is raised if the keys differ.
+        An ``AssertionError`` is raised if the keys differ.
 
     Raises:
         IndexError: If a requested index is outside the range of the combined dataset.
         ValueError: If index is a non-integer string that none of the underlying
             datasets accept as an utterance ID.
-        RuntimeError: If `shard()` is called but not supported.
+        RuntimeError: If ``shard()`` is called but not supported.
         AssertionError: If output keys from different datasets are inconsistent.
 
     Example:
@@ -373,8 +373,8 @@ class CombinedDataset:
 
         This is used when handling large datasets that are split into shards
         for efficiency and distributed processing (ESPnet multiple-iterator mode).
-        All datasets must be subclasses of `espnet3.data.dataset.ShardedDataset`,
-        and implement a `shard()` method.
+        All datasets must be subclasses of ``espnet3.data.dataset.ShardedDataset``,
+        and implement a ``shard()`` method.
 
         Args:
             shard_idx (int): Index of the shard to retrieve.
@@ -427,13 +427,13 @@ class DatasetWithTransform:
     preprocessor receives both a UID and the sample.
 
     Args:
-        dataset (Any): A dataset implementing `__getitem__` and `__len__`.
+        dataset (Any): A dataset implementing ``__getitem__`` and ``__len__``.
         transform (Callable): A function applied to each sample before preprocessor.
         preprocessor (Callable): A function applied after the transform.
-            If `use_espnet_preprocessor` is True, it must accept `(uid, sample)`
-            as arguments. Otherwise, it must accept a single `sample`.
+            If ``use_espnet_preprocessor`` is True, it must accept ``(uid, sample)``
+            as arguments. Otherwise, it must accept a single ``sample``.
         use_espnet_preprocessor (bool): Whether to include the UID when calling
-            the preprocessor. Required for ESPnet's `AbsPreprocessor` compatibility.
+            the preprocessor. Required for ESPnet's ``AbsPreprocessor`` compatibility.
 
     Example:
         >>> def transform(sample):
@@ -457,8 +457,8 @@ class DatasetWithTransform:
         [uid=0] HELLO
 
     Raises:
-        TypeError: If `preprocessor` is not callable.
-        TypeError: If `transform` is not callable.
+        TypeError: If ``preprocessor`` is not callable.
+        TypeError: If ``transform`` is not callable.
     """
 
     def __init__(self, dataset, transform, preprocessor, use_espnet_preprocessor=False):
@@ -509,8 +509,8 @@ class ShardedDataset(ABC, Dataset):
     """Abstract base class for datasets that support sharding.
 
     This interface is used when datasets are split into shards for parallel or
-    distributed data loading. Any dataset subclassing `ShardedDataset` must
-    implement the `shard()` method.
+    distributed data loading. Any dataset subclassing ``ShardedDataset`` must
+    implement the ``shard()`` method.
 
     Attributes:
         total_shards (int): Total number of shards in the dataset.
@@ -518,8 +518,8 @@ class ShardedDataset(ABC, Dataset):
             scheme.
 
     Note:
-        - This class is intended to be used with `CombinedDataset` in ESPnet.
-        - All datasets combined must subclass `ShardedDataset` if sharding is used.
+        - This class is intended to be used with ``CombinedDataset`` in ESPnet.
+        - All datasets combined must subclass ``ShardedDataset`` if sharding is used.
 
     Example:
         >>> class MyDataset(ShardedDataset):
@@ -547,7 +547,7 @@ class ShardedDataset(ABC, Dataset):
             NotImplementedError: Always in the base class. Must be overridden.
         """
         raise NotImplementedError(
-            "Please implement `shard` function, "
-            "which should return a `torch.utils.data.Dataset` object "
+            "Please implement ``shard`` function, "
+            "which should return a ``torch.utils.data.Dataset`` object "
             "representing the shard corresponding to the given index."
         )

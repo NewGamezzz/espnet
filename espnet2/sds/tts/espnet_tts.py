@@ -39,7 +39,7 @@ class ESPnetTTSModel(AbsTTS):
 
         Raises:
             ImportError:
-                If the required `espnet_model_zoo` library is not installed.
+                If the required ``espnet_model_zoo`` library is not installed.
         """
         try:
             from espnet_model_zoo.downloader import ModelDownloader
@@ -118,7 +118,7 @@ class ESPnetTTSModel(AbsTTS):
                 A tuple containing:
                 - The sample rate of the audio (int).
                 - The generated audio waveform as a
-                NumPy array of type `int16`.
+                NumPy array of type ``int16``.
         """
         with torch.no_grad():
             audio_chunk = (

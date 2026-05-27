@@ -215,9 +215,9 @@ def configure_logging(
 
     **Configured logging outputs.**
       - A root logger with a stream handler (console).
-      - An optional file handler at `log_dir/filename`.
-      - If `log_dir/filename` already exists, it is rotated to the next
-        available suffix (e.g., `run1.log`) and a fresh `run.log` is created.
+      - An optional file handler at ``log_dir/filename``.
+      - If ``log_dir/filename`` already exists, it is rotated to the next
+        available suffix (e.g., ``run1.log``) and a fresh ``run.log`` is created.
       - Warning capture into the logging system.
 
     **Example usage.**
@@ -245,7 +245,7 @@ def configure_logging(
         log_dir (Path | None): Directory to store the log file.
             If None, only console logging is configured.
         level (int): Logging level (e.g., logging.INFO).
-        filename (str): Log file name when `log_dir` is provided.
+        filename (str): Log file name when ``log_dir`` is provided.
 
     Returns:
         logging.Logger: Logger instance named "espnet3".
@@ -351,7 +351,7 @@ def get_git_metadata(cwd: Path | None = None) -> dict[str, str]:
     """Return git metadata for the current repository.
 
     This attempts to read commit hash, short hash, branch name, and worktree
-    status from the git repository rooted at `cwd`.
+    status from the git repository rooted at ``cwd``.
 
     Args:
         cwd (Path | None): Directory within the target git repo.
@@ -941,9 +941,9 @@ def log_component(
               value: 7
 
     Notes:
-        - The logger uses `stacklevel=2` so log lines point at the caller.
-        - Attribute dumping uses `build_qualified_name` for readable class names.
-        - Set `max_depth` to 0 to log only the class and repr lines.
+        - The logger uses ``stacklevel=2`` so log lines point at the caller.
+        - Attribute dumping uses ``build_qualified_name`` for readable class names.
+        - Set ``max_depth`` to 0 to log only the class and repr lines.
     """
     if obj is None:
         return
@@ -976,7 +976,7 @@ def log_instance_dict(
 
     **Description.**
         Iterates over the provided mapping and logs each value using the shared
-        `kind` label. This is useful for dumping collections of structured
+        ``kind`` label. This is useful for dumping collections of structured
         objects (e.g., environment info blocks or component registries) in a
         consistent, readable format.
 
@@ -991,7 +991,7 @@ def log_instance_dict(
 
     Notes:
         - Empty mappings are ignored.
-        - Each entry is logged via `log_component`, which emits a class line,
+        - Each entry is logged via ``log_component``, which emits a class line,
           a repr line, and selected public attributes.
 
     Examples:

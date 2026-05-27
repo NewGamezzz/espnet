@@ -26,8 +26,8 @@ class ParallelWaveGANPretrainedVocoder(torch.nn.Module):
             from parallel_wavegan.utils import load_model
         except ImportError:
             logging.error(
-                "`parallel_wavegan` is not installed. "
-                "Please install via `pip install -U parallel_wavegan`."
+                "``parallel_wavegan`` is not installed. "
+                "Please install via ``pip install -U parallel_wavegan``."
             )
             raise
         if config_file is None:

@@ -106,8 +106,8 @@ class UHiFiGANGenerator(torch.nn.Module):
             or ResidualBlock is None
         ):
             raise ImportError(
-                "`parallel_wavegan` is not installed. "
-                "Please install via `pip install -U parallel_wavegan`."
+                "``parallel_wavegan`` is not installed. "
+                "Please install via ``pip install -U parallel_wavegan``."
             )
 
         if not use_causal_conv:

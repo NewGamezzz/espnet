@@ -21,7 +21,7 @@ def prepare_sentences(
 ):
     """Create a SentencePiece training text file from dump text files.
 
-    This function consolidates multiple text files into a single `train.txt`
+    This function consolidates multiple text files into a single ``train.txt``
     file, which is formatted for use in SentencePiece training. It also
     provides an option to remove specified characters from the text before
     writing to the output file.
@@ -31,7 +31,7 @@ def prepare_sentences(
             A single dump text file path or a list of paths to the dump
             text files that will be processed.
         output_path (Union[str, Path]):
-            The directory where the `train.txt` file will be saved.
+            The directory where the ``train.txt`` file will be saved.
             If the directory does not exist, it will be created.
         remove_characters (str, optional):
             A string containing characters to be removed from the text.
@@ -45,12 +45,12 @@ def prepare_sentences(
 
     Examples:
         >>> prepare_sentences("data/dump.txt", "output", remove_characters=",.!")
-        This will create an `output/train.txt` file from `data/dump.txt`,
+        This will create an ``output/train.txt`` file from ``data/dump.txt``,
         removing commas, periods, and exclamation marks from the text.
 
         >>> prepare_sentences(["data/dump1.txt", "data/dump2.txt"], "output")
-        This will create an `output/train.txt` file by concatenating
-        `data/dump1.txt` and `data/dump2.txt` without removing any characters.
+        This will create an ``output/train.txt`` file by concatenating
+        ``data/dump1.txt`` and ``data/dump2.txt`` without removing any characters.
 
     Note:
         Ensure that the input dump text files are properly formatted, as
@@ -97,7 +97,7 @@ def train_sentencepiece(
     such as vocabulary size, character coverage, and model type.
 
     Args:
-        dump_text_path (Union[str, Path]): Path to the `train.txt` file
+        dump_text_path (Union[str, Path]): Path to the ``train.txt`` file
             containing the training data for the SentencePiece model.
         save_path (Union[str, Path]): Output directory where the trained
             SentencePiece model and vocabulary list will be stored.
@@ -113,7 +113,7 @@ def train_sentencepiece(
             that should be included in the model. Defaults to an empty list.
 
     Raises:
-        FileNotFoundError: If the specified `dump_text_path` does not exist.
+        FileNotFoundError: If the specified ``dump_text_path`` does not exist.
         Exception: If the training of the SentencePiece model fails for any
             reason.
 
@@ -128,8 +128,8 @@ def train_sentencepiece(
         ... )
 
     Note:
-        Ensure that the `train.txt` file has been prepared using the
-        `prepare_sentences` function before calling this function.
+        Ensure that the ``train.txt`` file has been prepared using the
+        ``prepare_sentences`` function before calling this function.
         The output directory will be created if it does not already exist.
     """
     # Please prepare sentences before running this function.

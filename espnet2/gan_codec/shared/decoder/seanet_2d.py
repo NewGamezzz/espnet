@@ -102,7 +102,7 @@ class SConvTranspose2d(nn.Module):
         self.trim_right_ratio = trim_right_ratio
         assert (
             self.causal or self.trim_right_ratio == 1.0
-        ), "`trim_right_ratio` != 1.0 only makes sense for causal convolutions"
+        ), "``trim_right_ratio`` != 1.0 only makes sense for causal convolutions"
         assert self.trim_right_ratio >= 0.0 and self.trim_right_ratio <= 1.0
 
     def forward(self, x):
@@ -115,7 +115,7 @@ class SConvTranspose2d(nn.Module):
 
         y = self.convtr(x)
 
-        # We will only trim fixed padding. Extra padding from `pad_for_conv1d`
+        # We will only trim fixed padding. Extra padding from ``pad_for_conv1d``
         # would be removed at the very end, when keeping only the right length
         # for the output, as removing it here would require also passing the
         # length at the matching layer in the encoder.

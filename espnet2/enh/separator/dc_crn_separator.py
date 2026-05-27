@@ -48,7 +48,7 @@ class DC_CRNSeparator(AbsSeparator):
             predict_noise: whether to output the estimated noise signal
             input_channels (list): number of input channels for the stacked
                 DenselyConnectedBlock layers
-                Its length should be (`number of DenselyConnectedBlock layers`).
+                Its length should be (``number of DenselyConnectedBlock layers``).
             enc_hid_channels (int): common number of intermediate channels for all
                 DenselyConnectedBlock of the encoder
             enc_kernel_size (tuple): common kernel size for all DenselyConnectedBlock

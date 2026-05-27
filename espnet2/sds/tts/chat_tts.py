@@ -16,7 +16,7 @@ class ChatTTSModel(AbsTTS):
     ):
         """Initializes the ChatTTSModel class.
 
-        Ensures that the `ChatTTS` library is properly installed
+        Ensures that the ``ChatTTS`` library is properly installed
         and initializes the TTS engine.
         """
         super().__init__()
@@ -50,7 +50,7 @@ class ChatTTSModel(AbsTTS):
                 A tuple containing:
                 - The sample rate of the audio (int).
                 - The generated audio waveform as a
-                NumPy array of type `int16`.
+                NumPy array of type ``int16``.
         """
         with torch.no_grad():
             audio_chunk = self.text2speech.infer([transcript])[0]

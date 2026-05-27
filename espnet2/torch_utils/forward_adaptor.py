@@ -5,7 +5,7 @@ from typeguard import typechecked
 class ForwardAdaptor(torch.nn.Module):
     """Wrapped module to parallelize specified method
 
-    torch.nn.DataParallel parallelizes only "forward()"
+    ``torch.nn.DataParallel`` parallelizes only "forward()"
     and, maybe, the method having the other name can't be applied
     except for wrapping the module just like this class.
 

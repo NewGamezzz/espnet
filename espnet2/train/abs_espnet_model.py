@@ -7,7 +7,7 @@ import torch
 class AbsESPnetModel(torch.nn.Module, ABC):
     """The common abstract class among each tasks
 
-    "ESPnetModel" is referred to a class which inherits torch.nn.Module,
+    "ESPnetModel" is referred to a class which inherits ``torch.nn.Module``,
     and makes the dnn-models forward as its member field,
     a.k.a delegate pattern,
     and defines "loss", "stats", and "weight" for the task.

@@ -154,7 +154,7 @@ def _compute_mask_indices(
             (if no_overlap is True).
 
     Returns:
-        (Tensor): The mask indices of dimension `[batch, frame]`.
+        (Tensor): The mask indices of dimension ``[batch, frame]``.
     """
 
     batch_size, frame = shape

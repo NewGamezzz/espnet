@@ -942,8 +942,8 @@ class AbsTask(ABC):
             default=[],
             help="List of key prefixes. Keys that satisfy either condition below "
             "will be excluded from the length consistency check in ChunkIterFactory:\n"
-            "  - exactly match one of the prefixes in `chunk_excluded_key_prefixes`\n"
-            "  - have one of the prefixes in `chunk_excluded_key_prefixes` and "
+            "  - exactly match one of the prefixes in ``chunk_excluded_key_prefixes``\n"
+            "  - have one of the prefixes in ``chunk_excluded_key_prefixes`` and "
             "end with numbers",
         )
         group.add_argument(
@@ -1583,7 +1583,7 @@ class AbsTask(ABC):
                 try:
                     wandb.login()
                 except wandb.errors.UsageError:
-                    logging.info("wandb not configured! run `wandb login` to enable")
+                    logging.info("wandb not configured! run ``wandb login`` to enable")
                     args.use_wandb = False
 
             if args.use_wandb:
@@ -2515,7 +2515,7 @@ class AbsTask(ABC):
                 )
             except RuntimeError:
                 # Note(simpleoier): the following part is to be compatible with
-                #   pretrained model using earlier versions before `0a625088`
+                #   pretrained model using earlier versions before ``0a625088``
                 state_dict = torch.load(
                     model_file, map_location="cpu" if device == "mps" else device
                 )

@@ -125,8 +125,8 @@ class MiniOmniE2EModel(AbsE2E):
         Returns:
             Tuple[str, bytes]:
                 A tuple containing:
-                - `text_str` (str): The generated text response.
-                - `audio_output` (bytes): The synthesized speech
+                - ``text_str`` (str): The generated text response.
+                - ``audio_output`` (bytes): The synthesized speech
                 as an MP3 byte stream.
         """
         audio_buffer = io.BytesIO()

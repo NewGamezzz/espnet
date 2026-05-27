@@ -239,8 +239,8 @@ class Speech2Text:
         ):
             if not is_transformers_available:
                 raise ImportError(
-                    "`transformers` is not available."
-                    " Please install it via `pip install transformers`"
+                    "``transformers`` is not available."
+                    " Please install it via ``pip install transformers``"
                     " or `cd /path/to/espnet/tools && . ./activate_python.sh"
                     " && ./installers/install_transformers.sh`."
                 )
@@ -697,8 +697,8 @@ class Speech2Text:
 
             except ImportError:
                 logging.error(
-                    "`espnet_model_zoo` is not installed. "
-                    "Please install via `pip install -U espnet_model_zoo`."
+                    "``espnet_model_zoo`` is not installed. "
+                    "Please install via ``pip install -U espnet_model_zoo``."
                 )
                 raise
             d = ModelDownloader()

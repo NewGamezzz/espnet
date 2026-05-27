@@ -13,16 +13,16 @@ class ScorerInterface:
 
     Examples:
         Search heuristics:
-        * espnet2.legacy.nets.scorers.length_bonus.LengthBonus
+        * ``espnet2.legacy.nets.scorers.length_bonus.LengthBonus``
 
         Decoder networks of the sequence-to-sequence models:
-            * espnet2.legacy.nets.pytorch_backend.nets.transformer.decoder.Decoder
-            * espnet2.legacy.nets.pytorch_backend.nets.rnn.decoders.Decoder
+            * ``espnet2.legacy.nets.pytorch_backend.nets.transformer.decoder.Decoder``
+            * ``espnet2.legacy.nets.pytorch_backend.nets.rnn.decoders.Decoder``
 
         Neural language models:
-            * espnet2.legacy.nets.pytorch_backend.lm.transformer.TransformerLM
-            * espnet2.legacy.nets.pytorch_backend.lm.default.DefaultRNNLM
-            * espnet2.legacy.nets.pytorch_backend.lm.seq_rnn.SequentialRNNLM
+            * ``espnet2.legacy.nets.pytorch_backend.lm.transformer.TransformerLM``
+            * ``espnet2.legacy.nets.pytorch_backend.lm.default.DefaultRNNLM``
+            * ``espnet2.legacy.nets.pytorch_backend.lm.seq_rnn.SequentialRNNLM``
 
     """
 
@@ -63,7 +63,7 @@ class ScorerInterface:
 
         Returns:
             tuple[torch.Tensor, Any]: Tuple of
-                scores for next token that has a shape of `(n_vocab)`
+                scores for next token that has a shape of ``(n_vocab)``
                 and next state for ys
 
         """
@@ -109,7 +109,7 @@ class BatchScorerInterface(ScorerInterface):
 
         Returns:
             tuple[torch.Tensor, List[Any]]: Tuple of
-                batchfied scores for next token with shape of `(n_batch, n_vocab)`
+                batchfied scores for next token with shape of ``(n_batch, n_vocab)``
                 and next state list for ys.
 
         """
@@ -154,7 +154,7 @@ class PartialScorerInterface(ScorerInterface):
 
         Returns:
             tuple[torch.Tensor, Any]:
-                Tuple of a score tensor for y that has a shape `(len(next_tokens),)`
+                Tuple of a score tensor for y that has a shape ``(len(next_tokens),)``
                 and next state for ys
 
         """
@@ -182,7 +182,7 @@ class BatchPartialScorerInterface(BatchScorerInterface, PartialScorerInterface):
 
         Returns:
             tuple[torch.Tensor, Any]:
-                Tuple of a score tensor for ys that has a shape `(n_batch, n_vocab)`
+                Tuple of a score tensor for ys that has a shape ``(n_batch, n_vocab)``
                 and next states for ys
         """
         raise NotImplementedError

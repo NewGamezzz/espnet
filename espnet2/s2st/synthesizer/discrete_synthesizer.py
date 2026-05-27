@@ -21,7 +21,7 @@ class TransformerDiscreteSynthesizer(AbsSynthesizer, BatchScorerInterface):
     """Discrete unit Synthesizer related modules for speech-to-speech translation.
 
     This is a module of discrete unit prediction network in discrete-unit described
-    in `Direct speech-to-speech translation with discrete units`_,
+    in ``Direct speech-to-speech translation with discrete units``_,
     which converts the sequence of hidden states into the sequence of
     discrete unit (from SSLs).
 
@@ -248,7 +248,7 @@ class TransformerDiscreteSynthesizer(AbsSynthesizer, BatchScorerInterface):
             memory: encoded memory, float32  (batch, maxlen_in, feat)
             cache: cached output list of (batch, max_time_out-1, size)
         Returns:
-            y, cache: NN output value and cache per `self.decoders`.
+            y, cache: NN output value and cache per ``self.decoders``.
             y.shape` is (batch, maxlen_out, token)
         """
         # FIXME(jiatong): the spk/lang embedding may be execute too many times
@@ -285,7 +285,7 @@ class TransformerDiscreteSynthesizer(AbsSynthesizer, BatchScorerInterface):
 
         Returns:
             tuple[torch.Tensor, List[Any]]: Tuple of
-                batchfied scores for next token with shape of `(n_batch, n_vocab)`
+                batchfied scores for next token with shape of ``(n_batch, n_vocab)``
                 and next state list for ys.
 
         """

@@ -6,7 +6,7 @@ import torch
 def get_layer(l_name, library=torch.nn):
     """Return layer object handler from library e.g. from torch.nn
 
-    E.g. if l_name=="elu", returns torch.nn.ELU.
+    E.g. if l_name=="elu", returns ``torch.nn.ELU``.
 
     Args:
         l_name (string): Case insensitive name for layer in library (e.g. .'elu').
@@ -14,7 +14,7 @@ def get_layer(l_name, library=torch.nn):
         with l_name e.g. "torch.nn".
 
     Returns:
-        layer_handler (object): handler for the requested layer e.g. (torch.nn.ELU)
+        layer_handler (object): handler for the requested layer e.g. ``torch.nn.ELU``
 
     """
 

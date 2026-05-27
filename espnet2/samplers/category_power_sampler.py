@@ -44,9 +44,9 @@ class CategoryPowerSampler(AbsSampler):
     - β → 1 approximates uniform sampling over all utterances
 
     Note:
-    - Batches are constructed based on `batch_bins`, similar to
+    - Batches are constructed based on ``batch_bins``, similar to
     LengthBatchSampler.
-    - Set `batch_type=catpow` in your configuration to use this sampler.
+    - Set ``batch_type=catpow`` in your configuration to use this sampler.
 
     Args:
         batch_bins: The approximate maximum number of bins (e.g., audio samples)
@@ -138,7 +138,7 @@ class CategoryPowerSampler(AbsSampler):
         # 4. Estimate the total number of utterances after upsampling the whole dataset
         # Motivation: Upsampling low-resource categories may increase the
         # total number of bins beyond the original dataset size. To reflect this,
-        # we scale the total bins by `dataset_scaling_factor`, then divide by
+        # we scale the total bins by ``dataset_scaling_factor``, then divide by
         # average utterance size to get the total number of utterances to sample.
         assert dataset_scaling_factor >= 1, "dataset_scaling_factor must >= 1"
         scaling_bins = int(total_bins * dataset_scaling_factor)
@@ -235,7 +235,7 @@ class CategoryDatasetPowerSampler(AbsSampler):
     Step 1 — Category-level sampling within each dataset:
         P(l | d) ∝ (n_ld / N_d)^β_L
 
-    where β_L (`category_upsampling_factor`) controls how strongly to upsample
+    where β_L (``category_upsampling_factor``) controls how strongly to upsample
     low-resource languages within each dataset. The normalized probability becomes:
         P(l | d) = [(n_ld / N_d)^β_L] / ∑_l'[(n_l'd / N_d)^β_L]
 
@@ -250,15 +250,15 @@ class CategoryDatasetPowerSampler(AbsSampler):
     The probability of sampling dataset d is then:
       P(d) = [(N_d / M)^β_D] / ∑_d[(N_d / M)^β_D]
     where:
-    - β_D is `dataset_upsampling_factor`
+    - β_D is ``dataset_upsampling_factor``
 
     Final utterance sampling probability:
         P(x) = P(d) × P(l | d) × P(x | l, d), where P(x | l, d) = 1 / k_ld
 
     Note:
-    - Batches are constructed based on `batch_bins`, similar to
+    - Batches are constructed based on ``batch_bins``, similar to
     LengthBatchSampler.
-    - Set `batch_type=catpow_balance_dataset` to enable this sampler.
+    - Set ``batch_type=catpow_balance_dataset`` to enable this sampler.
     - This sampler is particularly useful when combining heterogeneous
     datasets  (e.g., FLEURS + VoxLingua107 + BABEL) with highly imbalanced
     language and size distributions.
@@ -433,7 +433,7 @@ class CategoryDatasetPowerSampler(AbsSampler):
         # Estimate total number of samples after applying dataset scaling.
         # Motivation: Upsampling low-resource datasets and categories may
         # increase the total number of bins beyond the original dataset size.
-        # To reflect this, we scale the total bins by `dataset_scaling_factor`,
+        # To reflect this, we scale the total bins by ``dataset_scaling_factor``,
         # then divide by average utterance size to get the total number of
         # utterances to sample.
         scaling_bins = int(total_resampled_bins * dataset_scaling_factor)

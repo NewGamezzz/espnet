@@ -134,7 +134,7 @@ class FrequencyDomainLoss(AbsEnhLoss, ABC):
         self._is_dereverb_loss = is_dereverb_loss
         if is_noise_loss and is_dereverb_loss:
             raise ValueError(
-                "`is_noise_loss` and `is_dereverb_loss` cannot be True at the same time"
+                "``is_noise_loss`` and ``is_dereverb_loss`` cannot be True at the same time"
             )
 
     def create_mask_label(self, mix_spec, ref_spec, noise_spec=None):
@@ -436,7 +436,7 @@ class FrequencyDomainAbsCoherence(FrequencyDomainLoss):
                     "Invalid input shape: ref={}, inf={}".format(ref.shape, inf.shape)
                 )
         else:
-            raise ValueError("`ref` and `inf` must be complex tensors.")
+            raise ValueError("``ref`` and ``inf`` must be complex tensors.")
         return coh_loss
 
 

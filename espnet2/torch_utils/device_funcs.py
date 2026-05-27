@@ -46,7 +46,7 @@ def to_device(data, device=None, dtype=None, non_blocking=False, copy=False):
 
 
 def force_gatherable(data, device):
-    """Change object to gatherable in torch.nn.DataParallel recursively
+    """Change object to gatherable in ``torch.nn.DataParallel`` recursively
 
     The difference from to_device() is changing to torch.Tensor if float or int
     value is found.

@@ -13,8 +13,8 @@ except ImportError as err:
 class MultilabelAUPRCCallback(Callback):
     """Computes and logs Multilabel AUPRC (mAP) at the end of each validation epoch.
 
-    To use this callback, you must implement a `update_mAP` method in the espnet
-    model that accepts a `MultilabelAUPRC` object and calls its `update` method
+    To use this callback, you must implement a ``update_mAP`` method in the espnet
+    model that accepts a ``MultilabelAUPRC`` object and calls its ``update`` method
     with predictions and targets.
     For example:
     ```python
@@ -24,7 +24,7 @@ class MultilabelAUPRCCallback(Callback):
             mAP_function.update(predictions, targets)
             ...
     ```
-    The model should also have a `get_vocab_size()` function that
+    The model should also have a ``get_vocab_size()`` function that
     specifies the number of labels/classes.
     """
 
@@ -32,9 +32,9 @@ class MultilabelAUPRCCallback(Callback):
         super().__init__()
         if torcheval_import_error is not None:
             raise ImportError(
-                "`torcheval` is not available. Please install it "
-                "via `pip install torcheval` in your environment."
-                "More info at: `https://pytorch.org/torcheval/stable/`"
+                "``torcheval`` is not available. Please install it "
+                "via ``pip install torcheval`` in your environment."
+                "More info at: ``https://pytorch.org/torcheval/stable/``"
                 f"Original error is: {torcheval_import_error}"
             )
         self.mAP_function = None  # init on train start

@@ -17,16 +17,16 @@ class ContextualBlockEncoderLayer(nn.Module):
     Args:
         size (int): Input dimension.
         self_attn (torch.nn.Module): Self-attention module instance.
-            `MultiHeadedAttention` or `RelPositionMultiHeadedAttention` instance
+            ``MultiHeadedAttention`` or ``RelPositionMultiHeadedAttention`` instance
             can be used as the argument.
         feed_forward (torch.nn.Module): Feed-forward module instance.
-            `PositionwiseFeedForward`, `MultiLayeredConv1d`, or `Conv1dLinear` instance
+            ``PositionwiseFeedForward``, ``MultiLayeredConv1d``, or ``Conv1dLinear`` instance
             can be used as the argument.
         feed_forward_macaron (torch.nn.Module): Additional feed-forward module instance.
-            `PositionwiseFeedForward`, `MultiLayeredConv1d`, or `Conv1dLinear` instance
+            ``PositionwiseFeedForward``, ``MultiLayeredConv1d``, or ``Conv1dLinear`` instance
             can be used as the argument.
         conv_module (torch.nn.Module): Convolution module instance.
-            `ConvlutionModule` instance can be used as the argument.
+            ``ConvlutionModule`` instance can be used as the argument.
         dropout_rate (float): Dropout rate.
         total_layer_num (int): Total number of layers
         normalize_before (bool): Whether to use layer_norm before the first block.

@@ -71,7 +71,7 @@ class DiffusionStepEmbedding(nn.Module):
 class ComplexLinear(nn.Module):
     """A potentially complex-valued linear layer. Reduces to a regular linear
 
-    layer if `complex_valued=False`.
+    layer if ``complex_valued=False``.
     """
 
     def __init__(self, input_dim, output_dim, complex_valued):
@@ -109,21 +109,21 @@ def torch_complex_from_reim(re, im):
 
 
 class ArgsComplexMultiplicationWrapper(nn.Module):
-    """Adapted from `asteroid`'s `complex_nn.py`, allowing
+    """Adapted from ``asteroid``'s ``complex_nn.py``, allowing
 
     args/kwargs to be passed through forward().
 
-    Make a complex-valued module `F` from a real-valued module `f` by applying
+    Make a complex-valued module ``F`` from a real-valued module ``f`` by applying
     complex multiplication rules:
 
     F(a + i b) = f1(a) - f1(b) + i (f2(b) + f2(a))
 
-    where `f1`, `f2` are instances of `f` that do *not* share weights.
+    where ``f1``, ``f2`` are instances of ``f`` that do *not* share weights.
 
     Args:
         module_cls (callable): A class or function that returns a Torch
-            module/functional. Constructor of `f` in the formula above.
-            Called 2x with `*args`, `**kwargs`, to construct the real and imaginary
+            module/functional. Constructor of ``f`` in the formula above.
+            Called 2x with ``*args``, ``**kwargs``, to construct the real and imaginary
             component modules.
     """
 
@@ -176,7 +176,7 @@ class OnReIm(nn.Module):
         return torch_complex_from_reim(self.re_module(x.real), self.im_module(x.imag))
 
 
-# Code for DCUNet largely copied from Danilo's `informedenh` repo, cheers!
+# Code for DCUNet largely copied from Danilo's ``informedenh`` repo, cheers!
 
 
 def unet_decoder_args(encoders, *, skip_connections):
@@ -184,13 +184,13 @@ def unet_decoder_args(encoders, *, skip_connections):
 
     given the arguments used to construct the encoder.
     Args:
-        encoders (tuple of length `N` of tuples of
+        encoders (tuple of length ``N`` of tuples of
             (in_chan, out_chan, kernel_size, stride, padding)):
             List of arguments used to construct the encoders
         skip_connections (bool): Whether to include skip connections in the
             calculation of decoder input channels.
     Return:
-        tuple of length `N` of tuples of
+        tuple of length ``N`` of tuples of
             (in_chan, out_chan, kernel_size, stride, padding):
             Arguments to be used to construct decoders
     """
@@ -361,7 +361,7 @@ class DCUNet(nn.Module):
         self.temb_activation = dcunet_temb_activation
         conf_encoders, conf_decoders = DCUNET_ARCHITECTURES[dcunet_architecture]
 
-        # Replace `input_channels` in encoders config
+        # Replace ``input_channels`` in encoders config
         _replaced_input_channels, *rest = conf_encoders[0]
         encoders = ((self.input_channels, *rest), *conf_encoders[1:])
         decoders = conf_decoders
@@ -427,7 +427,7 @@ class DCUNet(nn.Module):
                 "sorry, mask bounding not implemented at the moment"
             )
         # TODO(gituser) we can't use nn.Sequential since the ComplexConvTranspose2d
-        # needs a second `output_size` argument
+        # needs a second ``output_size`` argument
         # operations = (output_layer, complex_nn.BoundComplexMask(self.mask_bound))
         # output_layer = nn.Sequential(*[x for x in operations if x is not None])
 
@@ -477,7 +477,7 @@ class DCUNet(nn.Module):
 
 
 def _fix_dcu_input_dims(fix_length_mode, x, encoders_stride_product):
-    """Pad or trim `x` to a length compatible with DCUNet."""
+    """Pad or trim ``x`` to a length compatible with DCUNet."""
     freq_prod = int(encoders_stride_product[0])
     time_prod = int(encoders_stride_product[1])
     if (x.shape[2] - 1) % freq_prod:
@@ -507,7 +507,7 @@ def _fix_dcu_input_dims(fix_length_mode, x, encoders_stride_product):
 
 
 def _fix_dcu_output_dims(fix_length_mode, out, x):
-    """Fix shape of `out` to the original shape of `x` by padding/cropping."""
+    """Fix shape of ``out`` to the original shape of ``x`` by padding/cropping."""
     inp_len = x.shape[-1]
     output_len = out.shape[-1]
     return nn.functional.pad(out, [0, inp_len - output_len])

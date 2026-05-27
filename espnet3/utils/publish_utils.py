@@ -361,12 +361,12 @@ def _build_results_note(results_path: Path | None, results_section: str) -> str:
     if results_path is None:
         return (
             "## Results\n\n"
-            "Metrics were not bundled. Run the `measure` stage before "
-            "`pack_model` to include evaluation results.\n"
+            "Metrics were not bundled. Run the ``measure`` stage before "
+            "``pack_model`` to include evaluation results.\n"
         )
     return (
         "## Results\n\n"
-        "A `metrics.json` file was found, but it could not be rendered into "
+        "A ``metrics.json`` file was found, but it could not be rendered into "
         "a results table.\n"
     )
 
@@ -396,7 +396,7 @@ def _build_readme_context(
         "creator": _infer_creator(),
         "created_at": datetime.now().isoformat(timespec="seconds"),
         "description": (
-            f"Packed model bundle generated from `{_infer_recipe_name(recipe_root)}`."
+            f"Packed model bundle generated from ``{_infer_recipe_name(recipe_root)}``."
         ),
         "exp_dir": str(getattr(training_config, "exp_dir", "")),
         "git_dirty": git_meta.get("worktree") or "",

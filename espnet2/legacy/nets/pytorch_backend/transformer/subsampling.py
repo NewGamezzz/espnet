@@ -175,7 +175,7 @@ class Conv1dSubsampling1(torch.nn.Module):
 
         """
         if key != -1:
-            raise NotImplementedError("Support only `-1` (for `reset_parameters`).")
+            raise NotImplementedError("Support only ``-1`` (for ``reset_parameters``).")
         return self.pos_enc
 
 
@@ -277,7 +277,7 @@ class Conv1dSubsampling2(torch.nn.Module):
 
         """
         if key != -1:
-            raise NotImplementedError("Support only `-1` (for `reset_parameters`).")
+            raise NotImplementedError("Support only ``-1`` (for ``reset_parameters``).")
         return self.pos_enc
 
 
@@ -379,7 +379,7 @@ class Conv1dSubsampling3(torch.nn.Module):
 
         """
         if key != -1:
-            raise NotImplementedError("Support only `-1` (for `reset_parameters`).")
+            raise NotImplementedError("Support only ``-1`` (for ``reset_parameters``).")
         return self.pos_enc
 
 
@@ -481,7 +481,7 @@ class Conv2dSubsampling(torch.nn.Module):
 
     #     """
     #     if key != -1:
-    #         raise NotImplementedError("Support only `-1` (for `reset_parameters`).")
+    #         raise NotImplementedError("Support only ``-1`` (for ``reset_parameters``).")
     #     return self.out[key]
 
 
@@ -583,7 +583,7 @@ class Conv2dSubsampling1(torch.nn.Module):
 
         """
         if key != -1:
-            raise NotImplementedError("Support only `-1` (for `reset_parameters`).")
+            raise NotImplementedError("Support only ``-1`` (for ``reset_parameters``).")
         return self.pos_enc
 
 
@@ -685,7 +685,7 @@ class Conv2dSubsampling2(torch.nn.Module):
 
         """
         if key != -1:
-            raise NotImplementedError("Support only `-1` (for `reset_parameters`).")
+            raise NotImplementedError("Support only ``-1`` (for ``reset_parameters``).")
         return self.pos_enc
 
 

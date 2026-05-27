@@ -105,7 +105,7 @@ class BatchBeamSearchOnline(BatchBeamSearch):
         x: torch.Tensor,
         pre_x: torch.Tensor = None,
     ) -> Tuple[Dict[str, torch.Tensor], Dict[str, Any]]:
-        """Score new hypothesis by `self.full_scorers`.
+        """Score new hypothesis by ``self.full_scorers``.
 
         Args:
             hyp (Hypothesis): Hypothesis with prefix tokens to score
@@ -115,10 +115,10 @@ class BatchBeamSearchOnline(BatchBeamSearch):
 
         Returns:
             Tuple[Dict[str, torch.Tensor], Dict[str, Any]]: Tuple of
-                score dict of `hyp` that has string keys of `self.full_scorers`
-                and tensor score values of shape: `(self.n_vocab,)`,
+                score dict of ``hyp`` that has string keys of ``self.full_scorers``
+                and tensor score values of shape: ``(self.n_vocab,)``,
                 and state dict that has string keys
-                and state values of `self.full_scorers`
+                and state values of ``self.full_scorers``
 
         """
         scores = dict()

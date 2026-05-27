@@ -23,7 +23,7 @@ class GLSTM(nn.Module):
 
         Args:
             hidden_size (int): total hidden size of all LSTMs in each grouped LSTM layer
-                i.e., hidden size of each LSTM is `hidden_size // groups`
+                i.e., hidden size of each LSTM is ``hidden_size // groups``
             groups (int): number of LSTMs in each grouped LSTM layer
             layers (int): number of grouped LSTM layers
             bidirectional (bool): whether to use BLSTM or unidirectional LSTM
@@ -231,7 +231,7 @@ class DenselyConnectedBlock(nn.Module):
             last_stride (tuple): stride for the last GluConv layer
             last_padding (tuple): padding for the last GluConv layer
             last_output_padding (tuple): output padding for the last GluConvTranspose2d
-                 (only used when `transposed=True`)
+                 (only used when ``transposed=True``)
             layers (int): total number of Conv layers
             transposed (bool): True to use GluConvTranspose2d in the last layer
                                False to use GluConv2d in the last layer
@@ -338,9 +338,9 @@ class DC_CRN(nn.Module):
             input_dim (int): input feature dimension
             input_channels (list): number of input channels for the stacked
                 DenselyConnectedBlock layers
-                Its length should be (`number of DenselyConnectedBlock layers`).
+                Its length should be (``number of DenselyConnectedBlock layers``).
                 It is recommended to use even number of channels to avoid AssertError
-                when `glstm_bidirectional=True`.
+                when ``glstm_bidirectional=True``.
             enc_hid_channels (int): common number of intermediate channels for all
                 DenselyConnectedBlock of the encoder
             enc_kernel_size (tuple): common kernel size for all DenselyConnectedBlock

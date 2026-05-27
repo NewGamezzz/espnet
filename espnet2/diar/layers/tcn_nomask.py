@@ -129,7 +129,7 @@ class DepthwiseSeparableConv(nn.Module):
         causal=False,
     ):
         super().__init__()
-        # Use `groups` option to implement depthwise convolution
+        # Use ``groups`` option to implement depthwise convolution
         # [M, H, K] -> [M, H, K]
         depthwise_conv = nn.Conv1d(
             in_channels,

@@ -164,7 +164,7 @@ def viterbi_decode(log_p_attn, text_lengths, feats_lengths):
         feats_legnths (Tensor): Feature length tensor (B,).
 
     Returns:
-        Tensor: Batched token duration extracted from `log_p_attn` (B, T_text).
+        Tensor: Batched token duration extracted from ``log_p_attn`` (B, T_text).
         Tensor: Binarization loss tensor ().
 
     """

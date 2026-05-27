@@ -83,7 +83,7 @@ def _ensure_dask():
 def build_local_gpu_cluster(n_workers: int, options: dict) -> Client:
     """Create a Dask LocalCUDACluster using available GPUs.
 
-    This requires `dask_cuda` package.
+    This requires ``dask_cuda`` package.
 
     Args:
         n_workers (int): Number of Dask workers (must not exceed number of GPUs).
@@ -211,7 +211,7 @@ def build_client(config: DictConfig = None) -> Client:
 
     if parallel_config is None:
         raise ValueError(
-            "Parallel configuration not set. Use `set_parallel` to set it."
+            "Parallel configuration not set. Use ``set_parallel`` to set it."
         )
 
     return _build_client(parallel_config)

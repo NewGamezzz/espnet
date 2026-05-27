@@ -158,7 +158,7 @@ class CTCSegmentation:
         (1) ``get_lpz``: obtain the lpz,
         (2) ``prepare_segmentation_task``: prepare the task, and
         (3) ``get_segments``: perform CTC segmentation.
-        Note that the function `get_segments` is a staticmethod and therefore
+        Note that the function ``get_segments`` is a staticmethod and therefore
         independent of an already initialized CTCSegmentation object.
 
     References:
@@ -569,7 +569,7 @@ class CTCSegmentation:
             timing_cfg = self.get_timing_config(speech_len, lpz_len)
             config.set(**timing_cfg)
 
-        # `text` is needed in the form of a list.
+        # ``text`` is needed in the form of a list.
         utt_ids, text = self._split_text(text)
 
         # Obtain utterance & label sequence from text
@@ -817,7 +817,7 @@ def get_parser():
         type=str2bool,
         default=False,
         help="Fill blanks in between words to better model pauses between words."
-        " This option is only active for `--text_converter classic`."
+        " This option is only active for ``--text_converter classic``."
         " Segments can be misaligned if this option is combined with"
         " --gratis-blank.",
     )
@@ -885,7 +885,7 @@ def get_parser():
         "--output",
         type=argparse.FileType("w"),
         default="-",
-        help="Output in the form of a `segments` file."
+        help="Output in the form of a ``segments`` file."
         " If not given, output is written to stdout.",
     )
     return parser

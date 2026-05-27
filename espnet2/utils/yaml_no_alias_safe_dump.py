@@ -2,7 +2,7 @@
 
 This module provides a custom YAML SafeDumper that disables the use of anchors
 and aliases when dumping Python objects to YAML. By overriding the
-`ignore_aliases` method in the `NoAliasSafeDumper` class, all anchors (&) and
+``ignore_aliases`` method in the ``NoAliasSafeDumper`` class, all anchors (&) and
 aliases (*) are suppressed in the output, resulting in cleaner and more readable YAML.
 
 Functions:
@@ -23,7 +23,7 @@ import yaml
 class NoAliasSafeDumper(yaml.SafeDumper):
     """A custom YAML SafeDumper that disables the use of anchors and aliases.
 
-    This dumper overrides the `ignore_aliases` method to always return True,
+    This dumper overrides the ``ignore_aliases`` method to always return True,
     ensuring that YAML output does not contain anchors (&) or aliases (*),
     which can make the output less readable or "ugly" in certain contexts.
 

@@ -51,7 +51,7 @@ def sample(
     # optionally crop the logits to only the top k options
     if top_k is not None:
         v, i = torch.topk(logits, min(top_k, logits.size(-1)))
-        # do not use `torch.where` as in nanogpt because it will repeat top-k collisions
+        # do not use ``torch.where`` as in nanogpt because it will repeat top-k collisions
         logits = torch.full_like(logits, float("-inf")).scatter_(-1, i, v)
     # optionally scale the logits and sample from a probability distribution
     if temperature > 0.0 or top_p > 0.0:
@@ -212,18 +212,18 @@ def generate(
             In top-p sampling, the next token is sampled from the
             highest probability tokens
             whose cumulative probability exceeds the threshold
-            `top_p`. When specified,
-            it must be `0 <= top_p <= 1`. Here, `top_p=0` is
+            ``top_p``. When specified,
+            it must be ``0 <= top_p <= 1``. Here, ``top_p=0`` is
             equivalent
-            to sampling the most probable token, while `top_p=1`
+            to sampling the most probable token, while ``top_p=1``
             samples from the whole distribution.
-            It can be used in conjunction with `top_k` and
-            `temperature` with the following order
+            It can be used in conjunction with ``top_k`` and
+            ``temperature`` with the following order
             of application:
 
-            1. `top_k` sampling
-            2. `temperature` scaling
-            3. `top_p` sampling
+            1. ``top_k`` sampling
+            2. ``temperature`` scaling
+            3. ``top_p`` sampling
 
             For more details, see https://arxiv.org/abs/1904.09751
             or https://huyenchip.com/2024/01/16/sampling.html#top_p
@@ -236,9 +236,9 @@ def generate(
     device = input_ids[0].device
     assert max_returned_tokens > T
     if model.max_seq_length < max_returned_tokens - 1:
-        # rolling the kv cache based on the `input_pos` value would
+        # rolling the kv cache based on the ``input_pos`` value would
         # be necessary. However, doing so would introduce a
-        # data dependency on the `input_pos` tensor and impact model
+        # data dependency on the ``input_pos`` tensor and impact model
         # compilation. Since this setting is uncommon, we do
         # not support it to avoid negatively impacting the overall
         # speed

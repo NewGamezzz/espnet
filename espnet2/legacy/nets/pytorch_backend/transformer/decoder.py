@@ -75,7 +75,7 @@ class Decoder(BatchScorerInterface, torch.nn.Module):
         input_layer (Union[str, torch.nn.Module]): Input layer type.
         use_output_layer (bool): Whether to use output layer.
         pos_enc_class (torch.nn.Module): Positional encoding module class.
-            `PositionalEncoding `or `ScaledPositionalEncoding`
+            ``PositionalEncoding ``or ``ScaledPositionalEncoding``
         normalize_before (bool): Whether to use layer_norm before the first block.
         concat_after (bool): Whether to concat attention layer's input and output.
             if True, additional linear will be applied.
@@ -126,7 +126,7 @@ class Decoder(BatchScorerInterface, torch.nn.Module):
                 input_layer, pos_enc_class(attention_dim, positional_dropout_rate)
             )
         else:
-            raise NotImplementedError("only `embed` or torch.nn.Module is supported.")
+            raise NotImplementedError("only ``embed`` or torch.nn.Module is supported.")
         self.normalize_before = normalize_before
 
         # self-attention module definition
@@ -321,7 +321,7 @@ class Decoder(BatchScorerInterface, torch.nn.Module):
 
         Returns:
             tuple[torch.Tensor, List[Any]]: Tuple of
-                batchfied scores for next token with shape of `(n_batch, n_vocab)`
+                batchfied scores for next token with shape of ``(n_batch, n_vocab)``
                 and next state list for ys.
 
         """

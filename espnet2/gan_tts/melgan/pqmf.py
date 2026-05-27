@@ -59,7 +59,7 @@ def design_prototype_filter(
 class PQMF(torch.nn.Module):
     """PQMF module.
 
-    This module is based on `Near-perfect-reconstruction pseudo-QMF banks`_.
+    This module is based on ``Near-perfect-reconstruction pseudo-QMF banks``_.
 
     .. _`Near-perfect-reconstruction pseudo-QMF banks`:
         https://ieeexplore.ieee.org/document/258122

@@ -219,9 +219,9 @@ class TorchAudioHubertPretrainModel(AbsESPnetModel):
 
         Args:
             logit_m (Tensor or None): The masked logit Tensor of dimension
-                `(masked_frames, final_dim)`.
+                ``(masked_frames, final_dim)``.
             logit_u (Tensor or None): The non-masked logit Tensor of dimension
-                `(unmasked_frames, final_dim)`.
+                ``(unmasked_frames, final_dim)``.
             feature_penalty (Tensor): The feature mean value for additional penalty
                 loss.
             masked_weight (float, optional): The weight for masked cross-entropy loss

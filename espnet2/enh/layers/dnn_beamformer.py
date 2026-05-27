@@ -149,7 +149,7 @@ class DNN_Beamformer(torch.nn.Module):
         self.use_torch_solver = use_torch_solver
         if not use_torch_solver:
             logging.warning(
-                "The `use_torch_solver` argument has been deprecated. "
+                "The ``use_torch_solver`` argument has been deprecated. "
                 "Now it will always be true in DNN_Beamformer"
             )
 

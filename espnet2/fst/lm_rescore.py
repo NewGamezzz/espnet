@@ -89,11 +89,11 @@ def compute_am_scores_and_lm_scores(
 
     Args:
       lats:
-        An FsaVec, which is the output of `k2.intersect_dense_pruned`.
-        It must have the attribute `lm_scores`.
+        An FsaVec, which is the output of ``k2.intersect_dense_pruned``.
+        It must have the attribute ``lm_scores``.
       word_fsas_with_epsilon_loops:
         An FsaVec representing a n-best list. Note that it has been processed
-        by `k2.add_epsilon_self_loops`.
+        by ``k2.add_epsilon_self_loops``.
       path_to_seq_map:
         A 1-D torch.Tensor with dtype torch.int32. path_to_seq_map[i] indicates
         which sequence the i-th Fsa in word_fsas_with_epsilon_loops belongs to.
@@ -104,8 +104,8 @@ def compute_am_scores_and_lm_scores(
     Returns:
       Return a tuple of (1-D torch.Tensor, 1-D torch.Tensor) containing
       the AM and LM scores of each path.
-      `am_scores.numel() == word_fsas_with_epsilon_loops.shape[0]`
-      `lm_scores.numel() == word_fsas_with_epsilon_loops.shape[0]`
+      ``am_scores.numel() == word_fsas_with_epsilon_loops.shape[0]``
+      ``lm_scores.numel() == word_fsas_with_epsilon_loops.shape[0]``
     """
     assert (
         k2 is not None
@@ -113,16 +113,16 @@ def compute_am_scores_and_lm_scores(
     assert len(lats.shape) == 3
 
     # k2.compose() currently does not support b_to_a_map. To void
-    # replicating `lats`, we use k2.intersect_device here.
+    # replicating ``lats``, we use k2.intersect_device here.
     #
-    # lats has phone IDs as `labels` and word IDs as aux_labels, so we
+    # lats has phone IDs as ``labels`` and word IDs as aux_labels, so we
     # need to invert it here.
     inverted_lats = k2.invert(lats)
 
-    # Now the `labels` of inverted_lats are word IDs (a 1-D torch.Tensor)
-    # and its `aux_labels` are phone IDs ( a k2.RaggedInt with 2 axes)
+    # Now the ``labels`` of inverted_lats are word IDs (a 1-D torch.Tensor)
+    # and its ``aux_labels`` are phone IDs ( a k2.RaggedInt with 2 axes)
 
-    # Remove its `aux_labels` since it is not needed in the
+    # Remove its ``aux_labels`` since it is not needed in the
     # following computation
     del inverted_lats.aux_labels
     inverted_lats = k2.arc_sort(inverted_lats)
@@ -137,7 +137,7 @@ def compute_am_scores_and_lm_scores(
 
     am_path_lats = k2.top_sort(k2.connect(am_path_lats))
 
-    # The `scores` of every arc consists of `am_scores` and `lm_scores`
+    # The ``scores`` of every arc consists of ``am_scores`` and ``lm_scores``
     tot_score_device = "cpu"
     if hasattr(lats, "lm_scores"):
         am_path_lats.scores = am_path_lats.scores - am_path_lats.lm_scores

@@ -128,7 +128,7 @@ class HuBERTDecoder(nn.Module):
         Args:
             encoder_embed_dim (int): The dimension of the transformer embedding output.
             num_classes (int): The number of classes in the labels.
-            final_dim (int): Project final representations and targets to `final_dim`.
+            final_dim (int): Project final representations and targets to ``final_dim``.
         """
 
         super().__init__()
@@ -142,12 +142,12 @@ class HuBERTDecoder(nn.Module):
 
         Args:
             x (Tensor): The feature representation of the last transformer layer.
-            mask_m (Tensor): The masked indices of dimension `[batch, frame]`.
-            mask_u (Tensor): The unmasked indices of dimension `[batch, frame]`.
+            mask_m (Tensor): The masked indices of dimension ``[batch, frame]``.
+            mask_u (Tensor): The unmasked indices of dimension ``[batch, frame]``.
 
         Returns:
-            Tensor: The logits of masked frames. `[masked_frame, final_dim]`.
-            Tensor: The logits of unmasked frames. `[unmasked_frame, final_dim]`.
+            Tensor: The logits of masked frames. ``[masked_frame, final_dim]``.
+            Tensor: The logits of unmasked frames. ``[unmasked_frame, final_dim]``.
         """
         logit_temp = 0.1
         proj_x = self.final_proj(x)

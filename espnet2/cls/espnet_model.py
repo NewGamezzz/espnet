@@ -56,9 +56,9 @@ class ESPnetClassificationModel(AbsESPnetModel):
         super().__init__()
         if torcheval_import_error is not None:
             raise ImportError(
-                "`torcheval` is not available. Please install it "
-                "via `pip install torcheval` in your environment."
-                "More info at: `https://pytorch.org/torcheval/stable/`"
+                "``torcheval`` is not available. Please install it "
+                "via ``pip install torcheval`` in your environment."
+                "More info at: ``https://pytorch.org/torcheval/stable/``"
                 f"Original error is: {torcheval_import_error}"
             )
         self.vocab_size = vocab_size

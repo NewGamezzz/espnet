@@ -247,7 +247,7 @@ def pitch_shift(
     hop_length: float = 0.008,
     window: Optional[str] = "hann",
 ):
-    """Shift the pitch of a waveform by `n_steps` steps.
+    """Shift the pitch of a waveform by ``n_steps`` steps.
 
     Note: this function is slow.
 
@@ -255,8 +255,8 @@ def pitch_shift(
         waveform (torch.Tensor): audio signal (..., time)
         sample_rate (int): sampling rate in Hz
         n_steps (int): the (fractional) steps to shift the pitch
-            -4 for shifting pitch down by 4/`bins_per_octave` octaves
-            4 for shifting pitch up by 4/`bins_per_octave` octaves
+            -4 for shifting pitch down by 4/``bins_per_octave`` octaves
+            4 for shifting pitch up by 4/``bins_per_octave`` octaves
         bins_per_octave (int): number of steps per octave
         n_fft (float): length of FFT (in second)
         win_length (float or None): The window length (in second) used for STFT
@@ -393,15 +393,15 @@ def codecs(
             "flac", "sph", "gsm", and "htk".
         compression (float or None, optional): used for formats other than WAV
 
-            For more details see torchaudio.backend.sox_io_backend.save().
+            For more details see ``torchaudio.backend.sox_io_backend.save()``.
         encoding (str or None, optional): change the encoding for the supported formats
             Valid values are "PCM_S" (signed integer Linear PCM),
             "PCM_U" (unsigned integer Linear PCM), "PCM_F" (floating point PCM),
             "ULAW" (mu-law), and "ALAW" (a-law).
-            For more details see torchaudio.backend.sox_io_backend.save().
+            For more details see ``torchaudio.backend.sox_io_backend.save()``.
         bits_per_sample (int or None, optional): change the bit depth
             for the supported formats
-            For more details see torchaudio.backend.sox_io_backend.save().
+            For more details see ``torchaudio.backend.sox_io_backend.save()``.
 
     Returns:
         ret (torch.Tensor): compressed signal (..., time)

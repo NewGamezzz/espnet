@@ -162,7 +162,7 @@ class ESPnet3LightningTrainer:
 
     def _validate_strategy_compatibility(self, strategy) -> None:
         """Reject unsupported strategies for the multiple-optimizer path only."""
-        # Named `optimizers` enables the manual multi-optimizer training path.
+        # Named ``optimizers`` enables the manual multi-optimizer training path.
         if getattr(self.model.config, "optimizers", None) is None:
             return
 
@@ -183,17 +183,17 @@ class ESPnet3LightningTrainer:
         clip_val = getattr(self.config, "gradient_clip_val", None)
         if clip_val not in (None, 0, 0.0):
             raise AssertionError(
-                "Trainer-level `gradient_clip_val` is not supported when multiple "
-                "optimizers are configured. Set per-optimizer `gradient_clip_val` in "
-                "`config.optimizers.<name>` instead."
+                "Trainer-level ``gradient_clip_val`` is not supported when multiple "
+                "optimizers are configured. Set per-optimizer ``gradient_clip_val`` in "
+                "``config.optimizers.<name>`` instead."
             )
 
         clip_algorithm = getattr(self.config, "gradient_clip_algorithm", None)
         if clip_algorithm not in (None, "norm"):
             raise AssertionError(
-                "Trainer-level `gradient_clip_algorithm` is not supported when "
+                "Trainer-level ``gradient_clip_algorithm`` is not supported when "
                 "multiple optimizers are configured. Set per-optimizer "
-                "`gradient_clip_algorithm` in `config.optimizers.<name>` instead."
+                "``gradient_clip_algorithm`` in ``config.optimizers.<name>`` instead."
             )
 
     def _validate_strategy_config_compatibility(self) -> None:
@@ -202,7 +202,7 @@ class ESPnet3LightningTrainer:
         This runs before Hydra instantiates the strategy so ESPnet3 can fail fast
         on unsupported multiple-optimizer combinations such as DeepSpeed.
         """
-        # Named `optimizers` enables the manual multi-optimizer training path.
+        # Named ``optimizers`` enables the manual multi-optimizer training path.
         if getattr(self.model.config, "optimizers", None) is None:
             return
 
@@ -240,11 +240,11 @@ class ESPnet3LightningTrainer:
         """Start the training loop using Lightning's fit method.
 
         Args:
-            *args: Positional arguments passed to `trainer.fit()`.
-            **kwargs: Keyword arguments passed to `trainer.fit()`.
+            *args: Positional arguments passed to ``trainer.fit()``.
+            **kwargs: Keyword arguments passed to ``trainer.fit()``.
 
         Note:
-            Always uses the internally stored model (`self.model`) when calling `fit`.
+            Always uses the internally stored model (``self.model``) when calling ``fit``.
         """
         self.trainer.fit(
             *args,
@@ -256,8 +256,8 @@ class ESPnet3LightningTrainer:
         """Run validation using Lightning's validate method.
 
         Args:
-            *args: Positional arguments passed to `trainer.validate()`.
-            **kwargs: Keyword arguments passed to `trainer.validate()`.
+            *args: Positional arguments passed to ``trainer.validate()``.
+            **kwargs: Keyword arguments passed to ``trainer.validate()``.
 
         Returns:
             List[Dict[str, Any]]: Validation results.
@@ -272,8 +272,8 @@ class ESPnet3LightningTrainer:
         """Collect dataset statistics with the espnet-3's parallel package.
 
         Args:
-            *args: Positional arguments passed to `model.collect_stats()`.
-            **kwargs: Keyword arguments passed to `model.collect_stats()`.
+            *args: Positional arguments passed to ``model.collect_stats()``.
+            **kwargs: Keyword arguments passed to ``model.collect_stats()``.
 
         """
         return self.model.collect_stats(*args, **kwargs)

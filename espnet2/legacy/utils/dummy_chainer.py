@@ -12,7 +12,7 @@ class StandardUpdater:
         """Update at every step."""
         raise NotImplementedError(
             "This is a dummy object to solve version compatibility issues.\n"
-            "You need to install `chainer` if you want work with this class."
+            "You need to install ``chainer`` if you want work with this class."
         )
 
 
@@ -32,7 +32,7 @@ class Extension:
         """Plot and save imaged matrix of att_ws."""
         raise NotImplementedError(
             "This is a dummy object to solve version compatibility issues.\n"
-            "You need to install `chainer` if you want work with this class."
+            "You need to install ``chainer`` if you want work with this class."
         )
 
 
@@ -49,7 +49,7 @@ class Iterator:
         """Append values to serializer."""
         raise NotImplementedError(
             "This is a dummy object to solve version compatibility issues.\n"
-            "You need to install `chainer` if you want work with this class."
+            "You need to install ``chainer`` if you want work with this class."
         )
 
 
@@ -60,7 +60,7 @@ class Reporter:
         """Report at every step."""
         raise NotImplementedError(
             "This is a dummy object to solve version compatibility issues.\n"
-            "You need to install `chainer` if you want work with this class."
+            "You need to install ``chainer`` if you want work with this class."
         )
 
 
@@ -71,7 +71,7 @@ class Evaluator:
         """Report at every step."""
         raise NotImplementedError(
             "This is a dummy object to solve version compatibility issues.\n"
-            "You need to install `chainer` if you want work with this class."
+            "You need to install ``chainer`` if you want work with this class."
         )
 
 
@@ -82,7 +82,7 @@ class SerialIterator:
         """Report at every step."""
         raise NotImplementedError(
             "This is a dummy object to solve version compatibility issues.\n"
-            "You need to install `chainer` if you want work with this class."
+            "You need to install ``chainer`` if you want work with this class."
         )
 
 
@@ -93,5 +93,5 @@ class MultiprocessIterator:
         """Report at every step."""
         raise NotImplementedError(
             "This is a dummy object to solve version compatibility issues.\n"
-            "You need to install `chainer` if you want work with this class."
+            "You need to install ``chainer`` if you want work with this class."
         )
