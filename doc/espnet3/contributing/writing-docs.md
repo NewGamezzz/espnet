@@ -260,7 +260,45 @@ For most doc work:
 If you changed VuePress files or docs pages, treat docs validation as part of
 your local check set before you push.
 
-For homepage or VuePress UI debugging, use:
+### How doc generation works
+
+Running `ci/doc.sh` generates the Markdown pages that VuePress builds from.
+The output lands in `doc/vuepress/src/`:
+
+```bash
+bash ci/doc.sh
+```
+
+::: warning
+Every time `ci/doc.sh` runs, **all Markdown files under `doc/vuepress/src/`
+are deleted and regenerated**.
+Do not save work-in-progress edits there — they will be lost on the next run.
+The source of truth is `doc/`.
+:::
+
+::: tip Skipping notebook rendering
+Notebook rendering in `ci/doc.sh` takes a very long time.
+If you do not need notebooks for your current work,
+comment them out before running the script to run ci/doc.sh faster:
+
+```bash
+# incorporate espnet/notebook repository to docs
+# echo "::group::incorporate notebook to docs"
+# ./doc/notebook2rst.sh
+# echo "::endgroup::"
+```
+
+and further down:
+
+```bash
+# cp -r ./doc/notebook ./doc/vuepress/src/
+# rm -rf ./doc/vuepress/src/notebook/ESPnetEZ
+```
+:::
+
+### Dev server
+
+Once `doc/vuepress/src/` is populated, start the local preview server:
 
 ```bash
 cd doc/vuepress
@@ -268,10 +306,21 @@ cd doc/vuepress
 ```
 
 This starts the local debug server with file polling enabled.
-It polls every 5 seconds, so homepage changes are picked up even in WSL and
-other environments where normal file watching is unreliable.
+It polls every 5 seconds, so changes are picked up even in WSL and other
+environments where normal file watching is unreliable.
 
-At minimum, check the docs site locally and confirm:
+### Workflow for homepage or VuePress UI work
+
+1. Run `ci/doc.sh` to populate `doc/vuepress/src/` with the generated Markdown.
+2. Start `dev.sh` and open the local preview in a browser.
+3. Edit the Vue components or SCSS under `doc/vuepress/src/.vuepress/` and
+   watch the server pick up the changes.
+4. When satisfied, copy any new or edited **Markdown content** back to `doc/`
+   before running `ci/doc.sh` again — it will wipe `doc/vuepress/src/`.
+
+### What to check before pushing
+
+At minimum, confirm:
 
 - the docs build still works
 - links and frontmatter are valid
