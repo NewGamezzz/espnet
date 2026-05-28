@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+# set -euo pipefail
 
 . tools/activate_python.sh
 
@@ -11,10 +11,10 @@ clean_outputs() {
 
     rm -rf doc/_gen
     rm -rf doc/build
-    rm -rf doc/notebook
+    # rm -rf doc/notebook
 
     rm -rf doc/vuepress/src/*.md
-    rm -rf doc/vuepress/src/notebook
+    # rm -rf doc/vuepress/src/notebook
     rm -rf doc/vuepress/src/*
     rm -rf doc/vuepress/src/.vuepress/.temp
     rm -rf doc/vuepress/src/.vuepress/.cache
@@ -45,7 +45,6 @@ mkdir -p doc/_gen/guide
 
 # NOTE allow unbound variable (-u) inside kaldi scripts
 export LD_LIBRARY_PATH=${LD_LIBRARY_PATH-}
-set -euo pipefail
 # generate tools doc
 echo "::group::generate tools doc"
 mkdir utils_py
@@ -73,9 +72,9 @@ build_and_convert "tools/sentencepiece_commands/spm_encode" spm
 echo "::endgroup::"
 
 # incorporate espnet/notebook repository to docs
-echo "::group::incorporate notebook to docs"
-./doc/notebook2rst.sh
-echo "::endgroup::"
+# echo "::group::incorporate notebook to docs"
+# ./doc/notebook2rst.sh
+# echo "::endgroup::"
 
 # incorporate recipe template readme.md to docs
 echo "::group::incorporate recipe to docs"
@@ -85,7 +84,7 @@ echo "::endgroup::"
 # generate package doc
 echo "::group::generate package doc"
 python ./doc/members2rst.py --root espnet2 --dst ./doc/_gen/guide --exclude espnet2.bin
-python ./doc/members2rst.py --root espnetez --dst ./doc/_gen/guide
+python ./doc/members2rst.py --root espnet3 --dst ./doc/_gen/guide
 echo "::endgroup::"
 
 # build markdown
@@ -96,10 +95,14 @@ rm -f ./doc/_gen/tools/espnet2_bin/*_train.rst
 sphinx-build -M markdown ./doc/_gen ./doc/build
 echo "::endgroup::"
 
+# Generated docstring Markdown should not pass raw HTML/Vue tags through to
+# VuePress. Escape it before copying into the VuePress source tree.
+python ./doc/convert_custom_tags_to_html.py ./doc/build/markdown
+
 # copy markdown files to specific directory.
 cp -r ./doc/build/markdown/* ./doc/vuepress/src/
-cp -r ./doc/notebook ./doc/vuepress/src/
-rm -rf ./doc/vuepress/src/notebook/ESPnetEZ
+# cp -r ./doc/notebook ./doc/vuepress/src/
+# rm -rf ./doc/vuepress/src/notebook/ESPnetEZ
 cp -r ./doc/recipe ./doc/vuepress/src
 cp ./doc/*.md ./doc/vuepress/src/
 mv ./doc/vuepress/src/README.md ./doc/vuepress/src/document.md
@@ -115,11 +118,10 @@ python ./doc/convert_custom_tags_to_html.py ./doc/vuepress/src/tools
 python ./doc/convert_custom_tags_to_html.py ./doc/vuepress/src/recipe
 python ./doc/convert_custom_tags_to_html.py ./doc/vuepress/src/espnet3
 
-# Convert API document to specific html tags to display sphinx style
+# Convert generated guide/tool API documents to specific html tags to display
+# Sphinx-style headings. Hand-written recipe and espnet3 docs stay untouched.
 python ./doc/convert_md_to_homepage.py ./doc/vuepress/src/guide/
 python ./doc/convert_md_to_homepage.py ./doc/vuepress/src/tools/
-python ./doc/convert_md_to_homepage.py ./doc/vuepress/src/recipe
-python ./doc/convert_md_to_homepage.py ./doc/vuepress/src/espnet3
 
 # Create navbar and sidebar.
 cd ./doc/vuepress
