@@ -7,8 +7,6 @@ const activeTab = ref('abstract')
 <template>
   <section class="guide-section" id="provider">
     <div class="container">
-      <p class="section-num">03 / provider</p>
-      <h2 class="section-h2">Provider: two methods, two timings</h2>
       <p class="section-desc">
         The biggest source of confusion with <code>EnvironmentProvider</code> is that the two
         methods are called at completely different times and places.

@@ -10,8 +10,12 @@ import DocCard from "./components/DocCard.vue";
 import DocCards from "./components/DocCards.vue";
 import FileStageMappingWidget from "./components/FileStageMappingWidget.vue";
 import DataloaderDemo from "./components/DataloaderDemo.vue";
-import ESPnet3ParallelGuide from "./components/ESPnet3ParallelGuide.vue";
 import MetricsExplorer from "./components/MetricsExplorer.vue";
+import SectionConfigBuilder from "./components/SectionConfigBuilder.vue";
+import SectionExecutionModes from "./components/SectionExecutionModes.vue";
+import SectionOverview from "./components/SectionOverview.vue";
+import SectionProvider from "./components/SectionProvider.vue";
+import SectionShardLifecycle from "./components/SectionShardLifecycle.vue";
 import DemoConfigEditor from "./components/DemoConfigEditor.vue";
 
 export default defineClientConfig({
@@ -27,8 +31,12 @@ export default defineClientConfig({
     app.component("DocCards", DocCards);
     app.component("FileStageMappingWidget", FileStageMappingWidget);
     app.component("DataloaderDemo", DataloaderDemo);
-    app.component("ESPnet3ParallelGuide", ESPnet3ParallelGuide);
     app.component("MetricsExplorer", MetricsExplorer);
     app.component("DemoConfigEditor", DemoConfigEditor);
+    app.component("SectionConfigBuilder", SectionConfigBuilder);
+    app.component("SectionExecutionModes", SectionExecutionModes);
+    app.component("SectionOverview", SectionOverview);
+    app.component("SectionProvider", SectionProvider);
+    app.component("SectionShardLifecycle", SectionShardLifecycle);
   },
 });

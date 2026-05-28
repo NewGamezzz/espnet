@@ -46,8 +46,6 @@ const sbatchLines = computed(() => {
 <template>
   <section class="guide-section" id="config-builder" style="border-bottom: none">
     <div class="container">
-      <p class="section-num">05 / config builder</p>
-      <h2 class="section-h2">Config builder</h2>
       <p class="section-desc">
         Select an execution environment and fill in the values. The YAML config and the generated
         SLURM script update in real time.

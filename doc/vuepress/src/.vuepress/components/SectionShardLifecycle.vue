@@ -19,8 +19,6 @@ const indicesSharded = Array.from({ length: 40 }, (_, i) => ({ i, shard: Math.fl
 <template>
   <section class="guide-section" id="shard-lifecycle">
     <div class="container">
-      <p class="section-num">04 / shard lifecycle</p>
-      <h2 class="section-h2">Shard lifecycle</h2>
       <p class="section-desc">
         What happens internally between calling <code>runner(range(200))</code> and getting the
         result back. Step through each stage.

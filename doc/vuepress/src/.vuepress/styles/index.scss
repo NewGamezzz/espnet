@@ -1,5 +1,6 @@
 @use "./home-custom.scss" as *; // import all variables and mixins from home-custom.scss
 @use "./docs-tools.scss" as *;
+@use "./espnet3-guide.scss" as *;
 
 body {
   color: #1f1e33;

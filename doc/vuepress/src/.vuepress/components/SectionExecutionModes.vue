@@ -8,8 +8,6 @@ const activeMode = ref('local')
 <template>
   <section class="guide-section" id="execution-modes">
     <div class="container">
-      <p class="section-num">02 / execution modes</p>
-      <h2 class="section-h2">Execution modes: who runs where</h2>
       <p class="section-desc">
         A single value in <code>parallel_config.env</code> fundamentally changes where execution
         happens. Switch tabs to see the flow for each mode.

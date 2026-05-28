@@ -5,8 +5,6 @@
 <template>
   <section class="guide-section" id="overview">
     <div class="container">
-      <p class="section-num">01 / overview</p>
-      <h2 class="section-h2">Four roles, one pipeline</h2>
       <p class="section-desc">
         ESPnet3 parallel processing is built around four components. Each has a clear responsibility.
         Colors are used consistently throughout this guide.

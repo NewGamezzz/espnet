@@ -4,6 +4,12 @@ Guides are goal-oriented. Pick the track that matches what you want to do.
 
 <DocCards>
   <DocCard
+    title="Scaling"
+    desc="Scale training to multiple nodes, handle large datasets, and run batch inference pipelines."
+    icon="tabler:trending-up"
+    href="./scaling/index.html"
+  />
+  <DocCard
     title="Finetuning"
     desc="Load a checkpoint, adapt configs, freeze layers, and evaluate a finetuned model."
     icon="tabler:adjustments"

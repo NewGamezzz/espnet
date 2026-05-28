@@ -9,12 +9,23 @@ const submitted = ref(false);
 
 const canSubmitComment = computed(() => comment.value.trim().length > 0);
 
+const fireGaEvent = (helpful) => {
+  if (typeof window.gtag === "function") {
+    window.gtag("event", "feedback_click", {
+      page_path: window.location.pathname,
+      helpful,
+    });
+  }
+};
+
 const handleYes = () => {
+  fireGaEvent(true);
   selection.value = "yes";
   submitted.value = true;
 };
 
 const handleNo = () => {
+  fireGaEvent(false);
   selection.value = "no";
   submitted.value = false;
 };
