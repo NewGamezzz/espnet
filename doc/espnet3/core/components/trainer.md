@@ -84,7 +84,7 @@ The default stack includes:
 
 ESPnet3 adds these automatically.
 
-For details, see [Callbacks](./callbacks.md).
+For details, see [Callbacks](./callbacks.html).
 
 ## ESPnet dataloader behavior
 
@@ -115,7 +115,7 @@ Use per-optimizer settings under:
 - `optimizers.<name>.gradient_clip_val`
 - `optimizers.<name>.gradient_clip_algorithm`
 
-See [Multiple optimizers and schedulers](./multiple_optimizers_schedulers.md).
+See [Multiple optimizers and schedulers](./multiple_optimizers_schedulers.html).
 
 
 
@@ -176,18 +176,18 @@ If you need a custom trainer, use this pattern first.
     title="Training configuration"
     desc="See where trainer options are set in YAML."
     icon="tabler:settings-2"
-    href="../../config/training.md"
+    href="../../config/training.html"
   />
   <DocCard
     title="Callbacks"
     desc="See the callback layer attached to the trainer."
     icon="tabler:plug"
-    href="./callbacks.md"
+    href="./callbacks.html"
   />
   <DocCard
     title="Multiple optimizers"
     desc="See the trainer-side runtime behavior for multi-optimizer training."
     icon="tabler:git-merge"
-    href="./multiple_optimizers_schedulers.md"
+    href="./multiple_optimizers_schedulers.html"
   />
 </DocCards>

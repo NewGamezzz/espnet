@@ -26,7 +26,7 @@ This section is a hub for the main Python packages under `espnet3/`.
     title="System and stages"
     desc="Read how run.py, System classes, stages, config slots, and stage logs fit together."
     icon="tabler:hierarchy-2"
-    href="./system-and-stages.md"
+    href="./system-and-stages.html"
   />
   <DocCard
     title="Components"

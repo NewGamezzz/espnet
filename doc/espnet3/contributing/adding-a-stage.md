@@ -386,18 +386,18 @@ python run.py --stages prepare_labels --prepare_labels_config conf/prepare_label
     title="System and stages"
     desc="See how systems, run.py, and stage execution fit together."
     icon="tabler:hierarchy-2"
-    href="../core/system-and-stages.md"
+    href="../core/system-and-stages.html"
   />
   <DocCard
     title="Stage reference"
     desc="Read the stage docs for train, inference, metrics, and more."
     icon="tabler:route"
-    href="../stages/index.md"
+    href="../stages/index.html"
   />
   <DocCard
     title="Config overview"
     desc="See how stage settings are loaded from YAML configs."
     icon="tabler:settings-2"
-    href="../core/config/index.md"
+    href="../core/config/index.html"
   />
 </DocCards>

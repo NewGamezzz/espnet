@@ -276,7 +276,7 @@ A plain `torch.utils.data.Dataset` does not mean you lose ESPnet conveniences.
 You can still use ESPnet collate functions such as:
 
 - `espnet2.train.collate_fn.CommonCollateFn`
-- [CommonCollateFn reference](../../../guide/espnet2/train/CommonCollateFn.md)
+- [CommonCollateFn reference](../../../guide/espnet2/train/CommonCollateFn.html)
 
 That means you still get useful behavior like:
 
@@ -328,7 +328,7 @@ If you want to add a new dataset quickly, do this:
     title="Data pipeline"
     desc="Read the migration view of builders, datasets, augmentation, and collate."
     icon="tabler:database"
-    href="../migrating-from-espnet2/data-pipeline.md"
+    href="../migrating-from-espnet2/data-pipeline.html"
   />
   <DocCard
     title="Datasets"

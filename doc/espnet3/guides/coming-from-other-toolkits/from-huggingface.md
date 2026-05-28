@@ -69,30 +69,30 @@ Move code into `espnet3/` only when it is reusable across recipes.
     title="What is a recipe?"
     desc="See how ESPnet3 organizes one experiment as one recipe directory."
     icon="tabler:map"
-    href="../../get-started/what-is-a-recipe.md"
+    href="../../get-started/what-is-a-recipe.html"
   />
   <DocCard
     title="Coming from PyTorch"
     desc="See the closest mental model if you already understand raw PyTorch training code."
     icon="tabler:brand-pytorch"
-    href="../coming-from-pytorch/index.md"
+    href="../coming-from-pytorch/index.html"
   />
   <DocCard
     title="Config overview"
     desc="See how `training.yaml`, `inference.yaml`, and `metrics.yaml` split the workflow."
     icon="tabler:settings-2"
-    href="../../core/config/index.md"
+    href="../../core/config/index.html"
   />
   <DocCard
     title="Custom dataset"
     desc="See how to plug in your own dataset without adopting a special dataset base class."
     icon="tabler:database"
-    href="../finetuning/custom-dataset.md"
+    href="../finetuning/custom-dataset.html"
   />
   <DocCard
     title="Customize the model"
     desc="See how to use `src/model.py` and switch away from the task bridge when needed."
     icon="tabler:puzzle"
-    href="../finetuning/custom-model.md"
+    href="../finetuning/custom-model.html"
   />
 </DocCards>

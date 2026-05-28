@@ -201,18 +201,18 @@ or discriminator runs first.
     title="Optimizer configuration"
     desc="See the broader config surface for optimizer and scheduler setup."
     icon="tabler:adjustments"
-    href="./optimizer_configuration.md"
+    href="./optimizer_configuration.html"
   />
   <DocCard
     title="Trainer"
     desc="See where multiple-optimizer runtime rules are applied."
     icon="tabler:player-play"
-    href="./trainer.md"
+    href="./trainer.html"
   />
   <DocCard
     title="Training configuration"
     desc="See where the optimizer mappings are defined in YAML."
     icon="tabler:settings-2"
-    href="../../config/training.md"
+    href="../../config/training.html"
   />
 </DocCards>

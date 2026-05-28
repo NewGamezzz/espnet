@@ -24,9 +24,9 @@ const columns = [
     links: [
       { label: 'Core Reference',    href: 'core/' },
       { label: 'Config Reference',  href: 'core/config/' },
-      { label: 'Systems',           href: 'core/systems' },
-      { label: 'Components',        href: 'core/components' },
-      { label: 'Parallel & Distributed', href: 'core/parallel' },
+      { label: 'System and Stages', href: 'core/system-and-stages' },
+      { label: 'Components',        href: 'core/components/' },
+      { label: 'Parallel & Distributed', href: 'core/parallel/' },
       { label: 'Stages Overview',   href: 'stages/' },
     ],
   },
@@ -39,8 +39,8 @@ const columns = [
       { label: 'Migrating from ESPnet2',   href: 'guides/migrating-from-espnet2/' },
       { label: 'Coming from PyTorch',      href: 'guides/coming-from-pytorch/' },
       { label: 'Coming from other tools',  href: 'guides/coming-from-other-toolkits/' },
-      { label: 'Running a Baseline',       href: 'guides/running-a-baseline/' },
-      { label: 'Customize ESPnet3',        href: 'guides/customize/' },
+      { label: 'Custom Dataset',           href: 'guides/finetuning/custom-dataset' },
+      { label: 'Custom Model',             href: 'guides/finetuning/custom-model' },
     ],
   },
   {
@@ -49,7 +49,7 @@ const columns = [
       { label: 'GitHub',           href: 'https://github.com/espnet/espnet' },
       { label: 'Citation',         href: withBase('/citations.html') },
       { label: 'Contributing',     href: 'contributing/' },
-      { label: 'Troubleshooting',  href: 'troubleshooting' },
+      { label: 'Troubleshooting',  href: 'get-started/installation-troubleshooting' },
     ],
   },
 ]

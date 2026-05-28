@@ -68,30 +68,30 @@ ESPnet3 lets you split that work across:
     title="System and stages"
     desc="See the main architectural unit behind ESPnet3 recipe execution."
     icon="tabler:route"
-    href="../../core/system-and-stages.md"
+    href="../../core/system-and-stages.html"
   />
   <DocCard
     title="Config overview"
     desc="See the stage-specific config split used across ESPnet3."
     icon="tabler:settings-2"
-    href="../../core/config/index.md"
+    href="../../core/config/index.html"
   />
   <DocCard
     title="Custom dataset"
     desc="See how data loading is organized in ESPnet3."
     icon="tabler:database"
-    href="../finetuning/custom-dataset.md"
+    href="../finetuning/custom-dataset.html"
   />
   <DocCard
     title="Customize the model"
     desc="See how to wire a custom model and custom training logic."
     icon="tabler:puzzle"
-    href="../finetuning/custom-model.md"
+    href="../finetuning/custom-model.html"
   />
   <DocCard
     title="Customize the training loop"
     desc="See when to use recipe-local LightningModule or trainer wrappers."
     icon="tabler:settings-cog"
-    href="../finetuning/training-loop.md"
+    href="../finetuning/training-loop.html"
   />
 </DocCards>

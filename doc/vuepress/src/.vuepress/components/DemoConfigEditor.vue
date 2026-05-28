@@ -68,34 +68,14 @@
   </div>
 </template>
 
-<script setup lang="ts">
+<script setup>
 import { ref, computed, defineComponent, h } from 'vue'
-
-// ── Types ──────────────────────────────────────────────────────────────────
-
-interface Spec {
-  type: string
-  key?: string
-  label?: string
-}
-
-interface ParsedUI {
-  title?: string
-  description?: string
-  inputs: Spec[]
-  outputs: Spec[]
-}
-
-interface Preset {
-  label: string
-  yaml: string
-}
 
 // ── GradioComponent (inline) ───────────────────────────────────────────────
 
 const GradioComponent = defineComponent({
   props: {
-    spec: { type: Object as () => Spec, required: true },
+    spec: { type: Object, required: true },
     isInput: { type: Boolean, required: true },
   },
   setup(props) {
@@ -122,7 +102,7 @@ const GradioComponent = defineComponent({
 
 // ── Presets ────────────────────────────────────────────────────────────────
 
-const PRESETS: Record<string, Preset> = {
+const PRESETS = {
   basic: {
     label: 'basic ASR',
     yaml: `model:
@@ -199,16 +179,16 @@ upload_demo:
 // ── State ──────────────────────────────────────────────────────────────────
 
 const presetKeys = Object.keys(PRESETS)
-const activePreset = ref<string>('basic')
-const yamlText = ref<string>(PRESETS['basic'].yaml)
+const activePreset = ref('basic')
+const yamlText = ref(PRESETS['basic'].yaml)
 
 // ── YAML parser ────────────────────────────────────────────────────────────
 
-function parseYAML(text: string): ParsedUI {
-  const ui: ParsedUI = { inputs: [], outputs: [] }
-  let section: string | null = null
-  let list: 'inputs' | 'outputs' | null = null
-  let item: Spec | null = null
+function parseYAML(text) {
+  const ui = { inputs: [], outputs: [] }
+  let section = null
+  let list = null
+  let item = null
 
   for (const raw of text.split('\n')) {
     const line = raw.trimEnd()
@@ -256,14 +236,14 @@ function parseYAML(text: string): ParsedUI {
 
 // ── Computed ───────────────────────────────────────────────────────────────
 
-const parsedUI = computed<ParsedUI>(() => parseYAML(yamlText.value))
-const hasContent = computed<boolean>(
+const parsedUI = computed(() => parseYAML(yamlText.value))
+const hasContent = computed(
   () => parsedUI.value.inputs.length > 0 || parsedUI.value.outputs.length > 0,
 )
 
 // ── Actions ────────────────────────────────────────────────────────────────
 
-function selectPreset(key: string): void {
+function selectPreset(key) {
   activePreset.value = key
   yamlText.value = PRESETS[key].yaml
 }

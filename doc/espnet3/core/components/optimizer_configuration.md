@@ -125,7 +125,7 @@ General rules:
 - every optimizer entry must include `params` and `optimizer`
 - top-level `scheduler_interval` and `scheduler_monitor` are not used here
 - all detailed per-optimizer routing and runtime rules are documented in
-  [Multiple optimizers and `OptimizationStep`](./multiple_optimizers_schedulers.md)
+  [Multiple optimizers and `OptimizationStep`](./multiple_optimizers_schedulers.html)
 
 ## What not to mix
 
@@ -143,18 +143,18 @@ ESPnet3 rejects mixed configuration.
     title="Multiple optimizers"
     desc="See the multi-optimizer runtime contract and `OptimizationStep`."
     icon="tabler:git-merge"
-    href="./multiple_optimizers_schedulers.md"
+    href="./multiple_optimizers_schedulers.html"
   />
   <DocCard
     title="Trainer"
     desc="See where optimizer configuration is consumed by the training wrapper."
     icon="tabler:player-play"
-    href="./trainer.md"
+    href="./trainer.html"
   />
   <DocCard
     title="Training configuration"
     desc="See where optimizer and scheduler settings live in YAML."
     icon="tabler:settings-2"
-    href="../../config/training.md"
+    href="../../config/training.html"
   />
 </DocCards>

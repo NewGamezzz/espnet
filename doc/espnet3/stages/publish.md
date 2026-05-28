@@ -27,7 +27,7 @@ python run.py \
 ### Configure (in publish.yaml)
 
 Keep the core settings in `publish.yaml`. For the full list, see
-[Publish configuration](../core/config/publication.md).
+[Publish configuration](../core/config/publication.html).
 
 | Config section | Description |
 | -------------- | ----------- |

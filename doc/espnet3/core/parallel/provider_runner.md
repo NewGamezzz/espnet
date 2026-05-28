@@ -9,7 +9,7 @@ date: 2026-05-26
 
 This page is for people who want to implement or modify a parallel workload.
 
-Start with [ESPnet3 Parallel](./index.md) for the high-level flow.
+Start with [ESPnet3 Parallel](./index.html) for the high-level flow.
 This page focuses on:
 
 - subclass contracts
@@ -19,13 +19,13 @@ This page focuses on:
 
 ## What this page covers
 
-[`EnvironmentProvider`](../../../guide/espnet3/parallel/EnvironmentProvider.md)
-and [`BaseRunner`](../../../guide/espnet3/parallel/BaseRunner.md) are the two
+[`EnvironmentProvider`](../../../guide/espnet3/parallel/EnvironmentProvider.html)
+and [`BaseRunner`](../../../guide/espnet3/parallel/BaseRunner.html) are the two
 main extension points.
 
-- [`EnvironmentProvider`](../../../guide/espnet3/parallel/EnvironmentProvider.md)
+- [`EnvironmentProvider`](../../../guide/espnet3/parallel/EnvironmentProvider.html)
   decides how runtime objects are built
-- [`BaseRunner`](../../../guide/espnet3/parallel/BaseRunner.md) decides how one
+- [`BaseRunner`](../../../guide/espnet3/parallel/BaseRunner.html) decides how one
   shard is processed and how outputs are written
 
 Use this page when you are:
@@ -39,21 +39,21 @@ Use this page when you are:
 
 Read the generated API docs before changing these classes:
 
-- [`espnet3/parallel/env_provider.py`](../../../guide/espnet3/parallel/EnvironmentProvider.md)
-- [`espnet3/parallel/base_runner.py`](../../../guide/espnet3/parallel/BaseRunner.md)
+- [`espnet3/parallel/env_provider.py`](../../../guide/espnet3/parallel/EnvironmentProvider.html)
+- [`espnet3/parallel/base_runner.py`](../../../guide/espnet3/parallel/BaseRunner.html)
 
 Useful concrete examples:
 
-- [`espnet3/parallel/inference_provider.py`](../../../guide/espnet3/parallel/InferenceProvider.md)
-- [`espnet3/systems/base/inference_runner.py`](../../../guide/espnet3/systems/InferenceRunner.md)
+- [`espnet3/parallel/inference_provider.py`](../../../guide/espnet3/parallel/InferenceProvider.html)
+- [`espnet3/systems/base/inference_runner.py`](../../../guide/espnet3/systems/InferenceRunner.html)
 
 ## EnvironmentProvider
 
-[`EnvironmentProvider`](../../../guide/espnet3/parallel/EnvironmentProvider.md)
+[`EnvironmentProvider`](../../../guide/espnet3/parallel/EnvironmentProvider.html)
 has exactly two required methods:
 
-- [`build_env_local()`](../../../guide/espnet3/parallel/EnvironmentProvider.md)
-- [`build_worker_setup_fn()`](../../../guide/espnet3/parallel/EnvironmentProvider.md)
+- [`build_env_local()`](../../../guide/espnet3/parallel/EnvironmentProvider.html)
+- [`build_worker_setup_fn()`](../../../guide/espnet3/parallel/EnvironmentProvider.html)
 
 <div class='custom-h3'><p>build_env_local<span class="small-bracket">()</span></p></div>
 
@@ -111,7 +111,7 @@ Do not build large objects inside `forward()`.
 ## InferenceProvider
 
 If your task is inference-like, check
-[`espnet3/parallel/inference_provider.py`](../../../guide/espnet3/parallel/InferenceProvider.md).
+[`espnet3/parallel/inference_provider.py`](../../../guide/espnet3/parallel/InferenceProvider.html).
 
 It prebuilds the local env once:
 
@@ -133,7 +133,7 @@ That pattern is useful when:
 
 ## BaseRunner
 
-[`BaseRunner`](../../../guide/espnet3/parallel/BaseRunner.md) handles:
+[`BaseRunner`](../../../guide/espnet3/parallel/BaseRunner.html) handles:
 
 - batching indices
 - shard planning
@@ -143,7 +143,7 @@ That pattern is useful when:
 - final merge
 
 The main method you must implement is
-[`forward(...)`](../../../guide/espnet3/parallel/BaseRunner.md).
+[`forward(...)`](../../../guide/espnet3/parallel/BaseRunner.html).
 
 ## Minimal runner
 
@@ -211,18 +211,18 @@ Use this rule:
 - combine shard files on the driver: override `merge()`
 
 The main hooks are documented in the
-[`BaseRunner` API reference](../../../guide/espnet3/parallel/BaseRunner.md):
+[`BaseRunner` API reference](../../../guide/espnet3/parallel/BaseRunner.html):
 
-- [`open_writers(shard_dir, **env)`](../../../guide/espnet3/parallel/BaseRunner.md)
-- [`write_record(writers, result, state, **env)`](../../../guide/espnet3/parallel/BaseRunner.md)
-- [`close_writers(writers)`](../../../guide/espnet3/parallel/BaseRunner.md)
-- [`merge(shard_dirs)`](../../../guide/espnet3/parallel/BaseRunner.md)
+- [`open_writers(shard_dir, **env)`](../../../guide/espnet3/parallel/BaseRunner.html)
+- [`write_record(writers, result, state, **env)`](../../../guide/espnet3/parallel/BaseRunner.html)
+- [`close_writers(writers)`](../../../guide/espnet3/parallel/BaseRunner.html)
+- [`merge(shard_dirs)`](../../../guide/espnet3/parallel/BaseRunner.html)
 
 Lower-level state hooks also exist:
 
-- [`init_state(...)`](../../../guide/espnet3/parallel/BaseRunner.md)
-- [`reduce_state(...)`](../../../guide/espnet3/parallel/BaseRunner.md)
-- [`finalize_state(...)`](../../../guide/espnet3/parallel/BaseRunner.md)
+- [`init_state(...)`](../../../guide/espnet3/parallel/BaseRunner.html)
+- [`reduce_state(...)`](../../../guide/espnet3/parallel/BaseRunner.html)
+- [`finalize_state(...)`](../../../guide/espnet3/parallel/BaseRunner.html)
 
 Most subclasses should not override those lower-level methods first.
 
@@ -315,18 +315,18 @@ your dataset size.
 
 ## Real example: InferenceRunner
 
-[`espnet3/systems/base/inference_runner.py`](../../../guide/espnet3/systems/InferenceRunner.md)
+[`espnet3/systems/base/inference_runner.py`](../../../guide/espnet3/systems/InferenceRunner.html)
 is the best reference for writer-style parallel output.
 
 Key ideas from that implementation:
 
-- [`open_writers()`](../../../guide/espnet3/systems/InferenceRunner.md)
+- [`open_writers()`](../../../guide/espnet3/systems/InferenceRunner.html)
   prepares shard-local SCP metadata
-- [`write_record()`](../../../guide/espnet3/systems/InferenceRunner.md)
+- [`write_record()`](../../../guide/espnet3/systems/InferenceRunner.html)
   validates one result and writes `<field>.scp`
-- [`close_writers()`](../../../guide/espnet3/systems/InferenceRunner.md)
+- [`close_writers()`](../../../guide/espnet3/systems/InferenceRunner.html)
   closes handles and writes `field_keys.txt`
-- [`merge()`](../../../guide/espnet3/systems/InferenceRunner.md)
+- [`merge()`](../../../guide/espnet3/systems/InferenceRunner.html)
   concatenates shard-local SCP fragments into final outputs
 
 The write path looks like this:
@@ -369,7 +369,7 @@ for field_key in field_keys:
 ```
 
 See
-[`concatenate_shard_files()`](../../../guide/espnet3/parallel/concatenate_shard_files.md)
+[`concatenate_shard_files()`](../../../guide/espnet3/parallel/concatenate_shard_files.html)
 for the exact file merge behavior.
 
 That pattern is the right choice when:
@@ -409,7 +409,7 @@ If `resume=True`, completed shards are skipped.
 Use:
 
 - simple provider
-- [`forward()`](../../../guide/espnet3/parallel/BaseRunner.md) only
+- [`forward()`](../../../guide/espnet3/parallel/BaseRunner.html) only
 - no writer hooks
 
 Good for:
@@ -424,11 +424,11 @@ Good for:
 Use:
 
 - provider that builds dataset/model
-- [`forward()`](../../../guide/espnet3/parallel/BaseRunner.md) returning normalized dicts
-- [`open_writers()`](../../../guide/espnet3/parallel/BaseRunner.md) /
-  [`write_record()`](../../../guide/espnet3/parallel/BaseRunner.md) /
-  [`close_writers()`](../../../guide/espnet3/parallel/BaseRunner.md)
-- [`merge()`](../../../guide/espnet3/parallel/BaseRunner.md) that assembles final files
+- [`forward()`](../../../guide/espnet3/parallel/BaseRunner.html) returning normalized dicts
+- [`open_writers()`](../../../guide/espnet3/parallel/BaseRunner.html) /
+  [`write_record()`](../../../guide/espnet3/parallel/BaseRunner.html) /
+  [`close_writers()`](../../../guide/espnet3/parallel/BaseRunner.html)
+- [`merge()`](../../../guide/espnet3/parallel/BaseRunner.html) that assembles final files
 
 Good for:
 
@@ -441,7 +441,7 @@ Good for:
 
 Use:
 
-- [`build_worker_setup_fn()`](../../../guide/espnet3/parallel/EnvironmentProvider.md)
+- [`build_worker_setup_fn()`](../../../guide/espnet3/parallel/EnvironmentProvider.html)
   to construct heavy objects on each worker
 - env injection by name into `forward()`
 
@@ -545,36 +545,36 @@ When a new runner does not behave correctly, check these first:
     title="ESPnet3 Parallel"
     desc="Return to the high-level parallel execution overview."
     icon="tabler:route"
-    href="./index.md"
+    href="./index.html"
   />
   <DocCard
     title="Inference Provider"
     desc="See the inference-stage provider pattern and YAML wiring."
     icon="tabler:cpu"
-    href="./inference_provider.md"
+    href="./inference_provider.html"
   />
   <DocCard
     title="Parallel Config"
     desc="Review local, local GPU, and cluster backend settings."
     icon="tabler:settings"
-    href="../config/parallel.md"
+    href="../config/parallel.html"
   />
   <DocCard
     title="EnvironmentProvider API"
     desc="Read the generated contract for local and worker env setup."
     icon="tabler:book"
-    href="../../../guide/espnet3/parallel/EnvironmentProvider.md"
+    href="../../../guide/espnet3/parallel/EnvironmentProvider.html"
   />
   <DocCard
     title="BaseRunner API"
     desc="Read the generated contract for forward, writer hooks, and merge."
     icon="tabler:book"
-    href="../../../guide/espnet3/parallel/BaseRunner.md"
+    href="../../../guide/espnet3/parallel/BaseRunner.html"
   />
   <DocCard
     title="InferenceRunner API"
     desc="Inspect the writer-style runner used by base inference."
     icon="tabler:file-code"
-    href="../../../guide/espnet3/systems/InferenceRunner.md"
+    href="../../../guide/espnet3/systems/InferenceRunner.html"
   />
 </DocCards>

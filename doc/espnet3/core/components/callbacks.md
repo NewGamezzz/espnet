@@ -116,18 +116,18 @@ The default stack remains, and custom callbacks are appended after it.
     title="Trainer"
     desc="See how callbacks are attached and used by the trainer wrapper."
     icon="tabler:player-play"
-    href="./trainer.md"
+    href="./trainer.html"
   />
   <DocCard
     title="Training configuration"
     desc="See where callback settings live in YAML."
     icon="tabler:settings-2"
-    href="../../config/training.md"
+    href="../../config/training.html"
   />
   <DocCard
     title="Train stage"
     desc="Return to the stage-level training overview."
     icon="tabler:route"
-    href="../../stages/train.md"
+    href="../../stages/train.html"
   />
 </DocCards>

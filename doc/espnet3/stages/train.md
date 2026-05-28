@@ -27,7 +27,7 @@ Keep the core settings in `train.yaml`:
 - `exp_dir`, `stats_dir`
 
 For the full configuration list, see the
-[train config reference](../core/config/training.md).
+[train config reference](../core/config/training.html).
 
 | Section | Description |
 | --- | --- |
@@ -52,7 +52,7 @@ Typical outputs are written under:
 
 ### Details by topic
 
-### [Dataset](../core/config/dataset.md)
+### [Dataset](../core/config/dataset.html)
 
 Dataset uses `DataOrganizer` to define train/valid splits.
 <!-- TODO(masao): link to GitHub DataOrganizer once PR is merged. -->
@@ -72,7 +72,7 @@ dataset:
         manifest_path: ${dataset_dir}/manifest/train_dev.tsv
 ```
 
-### [Dataloader + Collate](../core/components/dataloader.md)
+### [Dataloader + Collate](../core/components/dataloader.html)
 
 Dataloader defines `collate_fn` and iterator behavior.
 You can use the ESPnet iterator setup (expected by collect_stats), or switch to
@@ -94,7 +94,7 @@ dataloader:
           - ${stats_dir}/train/feats_shape
 ```
 
-### [Trainer](../core/components/trainer.md)
+### [Trainer](../core/components/trainer.html)
 
 Trainer config maps to the Lightning Trainer.
 
@@ -112,7 +112,7 @@ trainer:
       name: tb_logger
 ```
 
-### [Optimizer + Scheduler](../core/components/optimizer_configuration.md)
+### [Optimizer + Scheduler](../core/components/optimizer_configuration.html)
 
 Optimizer and scheduler control updates and LR schedule.
 Multiple optimizers are supported when needed.
@@ -125,7 +125,7 @@ scheduler:
   warmup_steps: 15000
 ```
 
-### [Model](../core/components/model.md)
+### [Model](../core/components/model.html)
 
 Model defines the network and optional normalization.
 Both ESPnet2-derived models (via `task`) and custom models are supported.
@@ -139,7 +139,7 @@ model:
   decoder: transformer
 ```
 
-### [Callbacks](../core/components/callbacks.md)
+### [Callbacks](../core/components/callbacks.html)
 
 Callbacks let you inject custom behaviors into training.
 

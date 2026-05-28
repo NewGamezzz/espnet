@@ -56,7 +56,7 @@ demo/
 ### Configure (in demo.yaml)
 
 Keep the core settings in `demo.yaml`. For the full list, see
-[Demo configuration](../config/demo.md).
+[Demo configuration](../config/demo.html).
 
 | Config section | Description |
 | -------------- | ----------- |

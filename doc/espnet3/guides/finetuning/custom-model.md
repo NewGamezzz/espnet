@@ -162,13 +162,13 @@ Prefer `src/model.py` when:
     title="Custom dataset"
     desc="Make sure the dataset contract matches the recipe-local model."
     icon="tabler:database"
-    href="./custom-dataset.md"
+    href="./custom-dataset.html"
   />
   <DocCard
     title="Data pipeline"
     desc="See how dataset outputs and collate behavior affect custom models."
     icon="tabler:stack-2"
-    href="../migrating-from-espnet2/data-pipeline.md"
+    href="../migrating-from-espnet2/data-pipeline.html"
   />
   <DocCard
     title="Training Config"

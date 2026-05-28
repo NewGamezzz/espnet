@@ -411,6 +411,6 @@ Prefer online augmentation in `dataset.py` or `transform` when:
     title="Cluster and parallel"
     desc="See how heavy preparation loops can move from shell to provider/runner code."
     icon="tabler:binary-tree-2"
-    href="./cluster-and-parallel.md"
+    href="./cluster-and-parallel.html"
   />
 </DocCards>

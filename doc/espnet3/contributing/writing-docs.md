@@ -79,7 +79,7 @@ That means you can write components directly in a page, for example:
 
 ```md
 <DocCards :cols="2">
-  <DocCard title="Config overview" href="../core/config/index.md" />
+  <DocCard title="Config overview" href="../core/config/index.html" />
 </DocCards>
 ```
 
@@ -290,18 +290,18 @@ same local review set before you push.
     title="Docstring guide"
     desc="Write code documentation in the expected repository style."
     icon="tabler:file-text"
-    href="./docstring-guide.md"
+    href="./docstring-guide.html"
   />
   <DocCard
     title="CI and PR"
     desc="See what to check before opening a docs PR."
     icon="tabler:git-pull-request"
-    href="./ci-and-pr.md"
+    href="./ci-and-pr.html"
   />
   <DocCard
     title="Naming conventions"
     desc="Keep names consistent across code, config, docs, and imports."
     icon="tabler:abc"
-    href="./naming-conventions.md"
+    href="./naming-conventions.html"
   />
 </DocCards>

@@ -62,30 +62,30 @@ you port.
     title="Data and dataloader"
     desc="See the PyTorch-shaped explanation of datasets, collate functions, and builders."
     icon="tabler:database"
-    href="../coming-from-pytorch/data-and-dataloader.md"
+    href="../coming-from-pytorch/data-and-dataloader.html"
   />
   <DocCard
     title="Model and system"
     desc="See how model code and workflow code are separated in ESPnet3."
     icon="tabler:hierarchy-2"
-    href="../coming-from-pytorch/model-and-system.md"
+    href="../coming-from-pytorch/model-and-system.html"
   />
   <DocCard
     title="System and stages"
     desc="See the architecture behind stage execution."
     icon="tabler:route"
-    href="../../core/system-and-stages.md"
+    href="../../core/system-and-stages.html"
   />
   <DocCard
     title="Custom dataset"
     desc="See how to use ordinary PyTorch datasets in a recipe."
     icon="tabler:database"
-    href="../finetuning/custom-dataset.md"
+    href="../finetuning/custom-dataset.html"
   />
   <DocCard
     title="Customize the training loop"
     desc="See when to replace the default LightningModule or trainer wrapper."
     icon="tabler:settings-cog"
-    href="../finetuning/training-loop.md"
+    href="../finetuning/training-loop.html"
   />
 </DocCards>

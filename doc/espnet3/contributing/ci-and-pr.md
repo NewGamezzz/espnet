@@ -144,18 +144,18 @@ Use this as a final checklist:
     title="Naming conventions"
     desc="Use stable names for files, configs, stage names, and imports."
     icon="tabler:abc"
-    href="./naming-conventions.md"
+    href="./naming-conventions.html"
   />
   <DocCard
     title="Core overview"
     desc="Read the shared architecture docs before changing common ESPnet3 behavior."
     icon="tabler:stack-2"
-    href="../core/index.md"
+    href="../core/index.html"
   />
   <DocCard
     title="Writing docs"
     desc="See how docs work when your PR also changes VuePress content."
     icon="tabler:book-upload"
-    href="./writing-docs.md"
+    href="./writing-docs.html"
   />
 </DocCards>

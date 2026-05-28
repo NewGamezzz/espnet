@@ -209,12 +209,12 @@ So the level of abstraction is simply different.
     title="Config diff"
     desc="See how task-centered ESPnet2 config surfaces split into ESPnet3 files."
     icon="tabler:settings-2"
-    href="./config-diff.md"
+    href="./config-diff.html"
   />
   <DocCard
     title="Cluster and parallel"
     desc="See how shell-driven task execution changes in ESPnet3."
     icon="tabler:binary-tree-2"
-    href="./cluster-and-parallel.md"
+    href="./cluster-and-parallel.html"
   />
 </DocCards>

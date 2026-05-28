@@ -27,7 +27,7 @@ python run.py --stages infer --infer_config conf/infer.yaml
 ### Configure (in infer.yaml)
 
 Keep the core settings in `infer.yaml`. For the full list, see
-[Inference configuration](../core/config/inference.md).
+[Inference configuration](../core/config/inference.html).
 
 | Config section | Description |
 | -------------- | ----------- |
@@ -40,8 +40,8 @@ Keep the core settings in `infer.yaml`. For the full list, see
 
 See also:
 
-- [Provider / Runner](../core/parallel/provider_runner.md)
-- [Inference provider](../core/parallel/inference_provider.md)
+- [Provider / Runner](../core/parallel/provider_runner.html)
+- [Inference provider](../core/parallel/inference_provider.html)
 - [Parallel execution](../core/parallel/)
 
 ### Outputs

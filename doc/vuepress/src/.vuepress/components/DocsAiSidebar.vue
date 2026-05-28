@@ -19,11 +19,13 @@ const askChatGPT = () => {
   window.open(`https://chatgpt.com/?hint=search&q=${prompt}`, "_blank");
 };
 
-const copyMarkdown = async () => {
-  const title = page.value.title || document.title;
+const askClaude = () => {
   const url = window.location.href;
+  const prompt = encodeURIComponent(
+    `Read from ${url} so I can ask questions about its contents`,
+  );
 
-  await navigator.clipboard.writeText(`# ${title}\n\nSource: ${url}\n`);
+  window.open(`https://claude.ai/new?q=${prompt}`, "_blank");
 };
 </script>
 
@@ -32,20 +34,6 @@ const copyMarkdown = async () => {
     <div class="docs-ai-sidebar__title">AI Tools</div>
 
     <div class="docs-ai-sidebar__actions">
-      <button class="docs-ai-sidebar__action" type="button" @click="copyMarkdown">
-        <svg
-          class="docs-ai-sidebar__icon"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <path
-            d="M6 4.75A2.75 2.75 0 0 1 8.75 2h4.69c.73 0 1.43.29 1.94.81l2.81 2.81c.52.51.81 1.21.81 1.94v11.69A2.75 2.75 0 0 1 16.25 22h-7.5A2.75 2.75 0 0 1 6 19.25zm8 .75v2.25c0 .69.56 1.25 1.25 1.25h2.25zM9 12.25c0-.41.34-.75.75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1-.75-.75m0 3c0-.41.34-.75.75-.75h4.5a.75.75 0 0 1 0 1.5h-4.5a.75.75 0 0 1-.75-.75"
-            fill="currentColor"
-          />
-        </svg>
-        Copy as Markdown
-      </button>
-
       <button class="docs-ai-sidebar__action" type="button" @click="askChatGPT">
         <svg
           class="docs-ai-sidebar__icon"
@@ -60,7 +48,7 @@ const copyMarkdown = async () => {
         Ask ChatGPT
       </button>
 
-      <a class="docs-ai-sidebar__action" href="">
+      <button class="docs-ai-sidebar__action" type="button" @click="askClaude">
         <svg
           class="docs-ai-sidebar__icon"
           viewBox="0 0 24 24"
@@ -72,21 +60,7 @@ const copyMarkdown = async () => {
           />
         </svg>
         Ask Claude
-      </a>
-
-      <a class="docs-ai-sidebar__action" href="">
-        <svg
-          class="docs-ai-sidebar__icon"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
-          <path
-            d="M12 3.5a8.5 8.5 0 1 0 8.07 11.2h-3.2a5.5 5.5 0 1 1 0-5.4h3.2A8.5 8.5 0 0 0 12 3.5m0 3a5.5 5.5 0 0 1 4.73 2.7H12v5.5h5.04A5.5 5.5 0 1 1 12 6.5"
-            fill="currentColor"
-          />
-        </svg>
-        Ask Gemini
-      </a>
+      </button>
 
       <a
         v-if="editLink"

@@ -204,18 +204,18 @@ Follow the Google Python Style Guide. Prefer short English sentences.
     title="CI and PR"
     desc="See review expectations before you open a pull request."
     icon="tabler:git-pull-request"
-    href="./ci-and-pr.md"
+    href="./ci-and-pr.html"
   />
   <DocCard
     title="Adding a stage"
     desc="See how new stage methods are added and documented."
     icon="tabler:route"
-    href="./adding-a-stage.md"
+    href="./adding-a-stage.html"
   />
   <DocCard
     title="Naming conventions"
     desc="Keep doc examples aligned with repository naming rules."
     icon="tabler:abc"
-    href="./naming-conventions.md"
+    href="./naming-conventions.html"
   />
 </DocCards>

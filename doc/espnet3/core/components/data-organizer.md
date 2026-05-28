@@ -191,18 +191,18 @@ egs3.librispeech_100.asr.dataset
     title="Datasets"
     desc="See dataset references, builders, and recipe-local dataset modules."
     icon="tabler:database"
-    href="./datasets.md"
+    href="./datasets.html"
   />
   <DocCard
     title="Dataloader"
     desc="See how organized datasets feed the collate and iterator layer."
     icon="tabler:stack-2"
-    href="./dataloader.md"
+    href="./dataloader.html"
   />
   <DocCard
     title="Create dataset stage"
     desc="Return to the stage-level dataset creation flow."
     icon="tabler:route"
-    href="../../stages/create-dataset.md"
+    href="../../stages/create-dataset.html"
   />
 </DocCards>

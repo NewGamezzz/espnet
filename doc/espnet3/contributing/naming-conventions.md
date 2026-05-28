@@ -302,18 +302,18 @@ from .builder import MyBuilder
     title="Adding a stage"
     desc="See how stage names and custom system methods fit together."
     icon="tabler:route"
-    href="./adding-a-stage.md"
+    href="./adding-a-stage.html"
   />
   <DocCard
     title="Docstring guide"
     desc="Write documentation that matches these naming choices."
     icon="tabler:file-text"
-    href="./docstring-guide.md"
+    href="./docstring-guide.html"
   />
   <DocCard
     title="CI and PR"
     desc="See review expectations for naming and cleanup changes."
     icon="tabler:git-pull-request"
-    href="./ci-and-pr.md"
+    href="./ci-and-pr.html"
   />
 </DocCards>

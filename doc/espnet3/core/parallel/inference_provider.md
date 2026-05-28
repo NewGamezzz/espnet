@@ -7,17 +7,17 @@ date: 2026-04-15
 
 # ESPnet3 Inference Provider
 
-[`InferenceProvider`](../../../guide/espnet3/systems/InferenceProvider.md) is
+[`InferenceProvider`](../../../guide/espnet3/systems/InferenceProvider.html) is
 the convenience provider for inference-time environment construction.
 
 ESPnet3 currently has two related layers:
 
-- [`espnet3.parallel.inference_provider.InferenceProvider`](../../../guide/espnet3/parallel/InferenceProvider.md)
-- [`espnet3.systems.base.inference_provider.InferenceProvider`](../../../guide/espnet3/systems/InferenceProvider.md)
+- [`espnet3.parallel.inference_provider.InferenceProvider`](../../../guide/espnet3/parallel/InferenceProvider.html)
+- [`espnet3.systems.base.inference_provider.InferenceProvider`](../../../guide/espnet3/systems/InferenceProvider.html)
 
 The stage-facing class used by `inference.yaml` is the second one:
 
-- [`espnet3.systems.base.inference_provider.InferenceProvider`](../../../guide/espnet3/systems/InferenceProvider.md)
+- [`espnet3.systems.base.inference_provider.InferenceProvider`](../../../guide/espnet3/systems/InferenceProvider.html)
 
 That class is the main focus of this page.
 
@@ -51,9 +51,9 @@ That makes it easy to inject small runtime values without changing the runner.
 The flow is:
 
 1. `infer()` resolves one `test_set`
-2. [`InferenceProvider`](../../../guide/espnet3/systems/InferenceProvider.md)
+2. [`InferenceProvider`](../../../guide/espnet3/systems/InferenceProvider.html)
    builds the dataset and model for that set
-3. [`InferenceRunner.forward(...)`](../../../guide/espnet3/systems/InferenceRunner.md)
+3. [`InferenceRunner.forward(...)`](../../../guide/espnet3/systems/InferenceRunner.html)
    receives the env by keyword name
 4. outputs are materialized under `inference_dir`
 
@@ -67,10 +67,10 @@ So this provider is the bridge between:
 
 The base class already implements:
 
-- [`build_env_local()`](../../../guide/espnet3/systems/InferenceProvider.md)
-- [`build_worker_setup_fn()`](../../../guide/espnet3/systems/InferenceProvider.md)
-- [`build_dataset(config)`](../../../guide/espnet3/systems/InferenceProvider.md)
-- [`build_model(config)`](../../../guide/espnet3/systems/InferenceProvider.md)
+- [`build_env_local()`](../../../guide/espnet3/systems/InferenceProvider.html)
+- [`build_worker_setup_fn()`](../../../guide/espnet3/systems/InferenceProvider.html)
+- [`build_dataset(config)`](../../../guide/espnet3/systems/InferenceProvider.html)
+- [`build_model(config)`](../../../guide/espnet3/systems/InferenceProvider.html)
 
 In many cases, you only need to subclass it if your dataset or model setup is
 special.
@@ -79,7 +79,7 @@ special.
 
 
 See the
-[`build_dataset` API docs](../../../guide/espnet3/systems/InferenceProvider.md)
+[`build_dataset` API docs](../../../guide/espnet3/systems/InferenceProvider.html)
 for the exact contract.
 
 The default implementation:
@@ -100,7 +100,7 @@ return dataset.test[config.test_set]
 
 
 See the
-[`build_model` API docs](../../../guide/espnet3/systems/InferenceProvider.md)
+[`build_model` API docs](../../../guide/espnet3/systems/InferenceProvider.html)
 for the exact contract.
 
 The default implementation:
@@ -237,12 +237,12 @@ Do not use them to smuggle large driver-side objects into workers.
 
 In local mode:
 
-- [`build_env_local()`](../../../guide/espnet3/systems/InferenceProvider.md)
+- [`build_env_local()`](../../../guide/espnet3/systems/InferenceProvider.html)
   runs once on the driver
 
 In Dask mode:
 
-- [`build_worker_setup_fn()`](../../../guide/espnet3/systems/InferenceProvider.md)
+- [`build_worker_setup_fn()`](../../../guide/espnet3/systems/InferenceProvider.html)
   returns a zero-argument setup function
 - that setup function runs once per worker
 - each worker builds its own dataset/model pair
@@ -304,18 +304,18 @@ Subclass it when:
     title="Systems InferenceProvider API"
     desc="Read the generated docstring contract for the stage-facing provider."
     icon="tabler:book"
-    href="../../../guide/espnet3/systems/InferenceProvider.md"
+    href="../../../guide/espnet3/systems/InferenceProvider.html"
   />
   <DocCard
     title="InferenceRunner API"
     desc="Read how env keys are consumed by the base inference runner."
     icon="tabler:file-code"
-    href="../../../guide/espnet3/systems/InferenceRunner.md"
+    href="../../../guide/espnet3/systems/InferenceRunner.html"
   />
   <DocCard
     title="Parallel InferenceProvider API"
     desc="Compare the lower-level parallel provider base class."
     icon="tabler:book"
-    href="../../../guide/espnet3/parallel/InferenceProvider.md"
+    href="../../../guide/espnet3/parallel/InferenceProvider.html"
   />
 </DocCards>

@@ -147,30 +147,30 @@ For example, a GAN helper that only one recipe uses can stay recipe-local.
     title="Customize the model"
     desc="See when `src/model.py` is enough and when you also need loop changes."
     icon="tabler:puzzle"
-    href="./custom-model.md"
+    href="./custom-model.html"
   />
   <DocCard
     title="Adding a stage"
     desc="See how to add custom stages and extra configs through `run.py`."
     icon="tabler:route"
-    href="../../contributing/adding-a-stage.md"
+    href="../../contributing/adding-a-stage.html"
   />
   <DocCard
     title="Trainer component"
     desc="Read the shared Lightning trainer wrapper behavior."
     icon="tabler:settings-cog"
-    href="../../core/components/trainer.md"
+    href="../../core/components/trainer.html"
   />
   <DocCard
     title="Multiple optimizers"
     desc="Read the contract used for named optimizer updates."
     icon="tabler:git-merge"
-    href="../../core/components/multiple_optimizers_schedulers.md"
+    href="../../core/components/multiple_optimizers_schedulers.html"
   />
   <DocCard
     title="Training config"
     desc="See where trainer, optimizer, scheduler, and profiler are configured."
     icon="tabler:settings-2"
-    href="../../core/config/training.md"
+    href="../../core/config/training.html"
   />
 </DocCards>

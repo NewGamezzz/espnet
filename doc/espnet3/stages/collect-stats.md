@@ -10,7 +10,7 @@ date: 2025-11-26
 The `collect_stats` stage computes dataset statistics (feature shapes and global
 stats) used by training and normalization. For background, motivation, and
 advanced use cases, see
-[Collect Stats Phase Overview](../core/stats-collection.md).
+[Collect Stats Phase Overview](../core/stats-collection.html).
 
 ## Quick usage
 
@@ -120,7 +120,7 @@ contract:
 
 This is an ASR-style example; for ASR datasets, `speech` and `text` are expected
 to be provided by the dataset class (see
-[Dataloader + Collate](../core/components/dataloader.md)).
+[Dataloader + Collate](../core/components/dataloader.html)).
 
 Sample custom model:
 

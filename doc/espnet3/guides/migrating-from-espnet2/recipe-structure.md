@@ -62,7 +62,7 @@ egs3/<recipe>/<task>/
   src/
     inference.py
     app.py
-  readme.md
+  readme.html
 ```
 
 This layout is much more Python-centered.
@@ -293,24 +293,24 @@ When porting a recipe tree, use this order:
     title="Task to system"
     desc="See why ESPnet3 moved from task-centric ownership to systems and stages."
     icon="tabler:hierarchy-2"
-    href="./task-to-system.md"
+    href="./task-to-system.html"
   />
   <DocCard
     title="Config diff"
     desc="See how ESPnet2 config surfaces split across ESPnet3 YAML files."
     icon="tabler:settings-2"
-    href="./config-diff.md"
+    href="./config-diff.html"
   />
   <DocCard
     title="Data pipeline"
     desc="See how `local/data.sh` maps to builders, datasets, and collate functions."
     icon="tabler:database"
-    href="./data-pipeline.md"
+    href="./data-pipeline.html"
   />
   <DocCard
     title="Cluster and parallel"
     desc="See how shell-driven recipe execution maps to provider and runner logic."
     icon="tabler:binary-tree-2"
-    href="./cluster-and-parallel.md"
+    href="./cluster-and-parallel.html"
   />
 </DocCards>

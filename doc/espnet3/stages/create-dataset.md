@@ -23,7 +23,7 @@ same directory, so logs and generated data live together in the dataset output
 path.
 
 In ESPnet3, `create_dataset` is driven by a callable defined in your
-`train.yaml` config (see the [train config reference](../core/config/training.md)).
+`train.yaml` config (see the [train config reference](../core/config/training.html)).
 The system resolves the function and passes the remaining config keys as keyword
 arguments.
 

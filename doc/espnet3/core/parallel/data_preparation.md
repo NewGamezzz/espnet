@@ -36,12 +36,12 @@ egs3/<recipe>/<system>/dataset/
 ![DatasetBuilder lifecycle](../images/data_builder.png)
 
 That layer is usually driven by
-[`DatasetBuilder`](../../../guide/espnet3/components/DatasetBuilder.md):
+[`DatasetBuilder`](../../../guide/espnet3/components/DatasetBuilder.html):
 
-- [`is_source_prepared()`](../../../guide/espnet3/components/DatasetBuilder.md)
-- [`prepare_source()`](../../../guide/espnet3/components/DatasetBuilder.md)
-- [`is_built()`](../../../guide/espnet3/components/DatasetBuilder.md)
-- [`build()`](../../../guide/espnet3/components/DatasetBuilder.md)
+- [`is_source_prepared()`](../../../guide/espnet3/components/DatasetBuilder.html)
+- [`prepare_source()`](../../../guide/espnet3/components/DatasetBuilder.html)
+- [`is_built()`](../../../guide/espnet3/components/DatasetBuilder.html)
+- [`build()`](../../../guide/espnet3/components/DatasetBuilder.html)
 
 See:
 
@@ -85,8 +85,8 @@ This is the fine-grained loop inside one expensive step:
 - compute one metadata record
 
 That inner loop is where
-[`EnvironmentProvider`](../../../guide/espnet3/parallel/EnvironmentProvider.md)
-and [`BaseRunner`](../../../guide/espnet3/parallel/BaseRunner.md) fit.
+[`EnvironmentProvider`](../../../guide/espnet3/parallel/EnvironmentProvider.html)
+and [`BaseRunner`](../../../guide/espnet3/parallel/BaseRunner.html) fit.
 
 ## Real ESPnet3 example: collect-stats
 
@@ -96,8 +96,8 @@ It is `collect_stats`.
 Implementation:
 
 - `espnet3/components/data/collect_stats.py`
-- [`CollectStatsInferenceProvider`](../../../guide/espnet3/components/CollectStatsInferenceProvider.md)
-- [`CollectStatsRunner`](../../../guide/espnet3/components/CollectStatsRunner.md)
+- [`CollectStatsInferenceProvider`](../../../guide/espnet3/components/CollectStatsInferenceProvider.html)
+- [`CollectStatsRunner`](../../../guide/espnet3/components/CollectStatsRunner.html)
 
 That code uses the same pattern:
 
@@ -196,8 +196,8 @@ Current recipe examples show the builder side clearly:
 
 Current core examples show the parallel side clearly:
 
-- [`CollectStatsInferenceProvider`](../../../guide/espnet3/components/CollectStatsInferenceProvider.md)
-- [`CollectStatsRunner`](../../../guide/espnet3/components/CollectStatsRunner.md)
+- [`CollectStatsInferenceProvider`](../../../guide/espnet3/components/CollectStatsInferenceProvider.html)
+- [`CollectStatsRunner`](../../../guide/espnet3/components/CollectStatsRunner.html)
 
 So a heavier dataset-preparation recipe usually combines those two ideas:
 
@@ -284,16 +284,16 @@ InferenceRunner.merge(...)
 ```
 
 For durable preparation outputs, use
-[`BaseRunner`](../../../guide/espnet3/parallel/BaseRunner.md) reducer hooks such
+[`BaseRunner`](../../../guide/espnet3/parallel/BaseRunner.html) reducer hooks such
 as:
 
-- [`open_writers()`](../../../guide/espnet3/parallel/BaseRunner.md)
-- [`write_record()`](../../../guide/espnet3/parallel/BaseRunner.md)
-- [`close_writers()`](../../../guide/espnet3/parallel/BaseRunner.md)
-- [`merge()`](../../../guide/espnet3/parallel/BaseRunner.md)
+- [`open_writers()`](../../../guide/espnet3/parallel/BaseRunner.html)
+- [`write_record()`](../../../guide/espnet3/parallel/BaseRunner.html)
+- [`close_writers()`](../../../guide/espnet3/parallel/BaseRunner.html)
+- [`merge()`](../../../guide/espnet3/parallel/BaseRunner.html)
 
 That is the pattern used by
-[`CollectStatsRunner`](../../../guide/espnet3/components/CollectStatsRunner.md).
+[`CollectStatsRunner`](../../../guide/espnet3/components/CollectStatsRunner.html).
 It is better when shard outputs are too large to keep in memory.
 
 ## Common mistakes
@@ -329,7 +329,7 @@ It is better when shard outputs are too large to keep in memory.
     title="DataOrganizer API"
     desc="Read the generated split orchestration contract."
     icon="tabler:book"
-    href="../../../guide/espnet3/components/DataOrganizer.md"
+    href="../../../guide/espnet3/components/DataOrganizer.html"
   />
   <DocCard
     title="Dataset Config"
@@ -347,18 +347,18 @@ It is better when shard outputs are too large to keep in memory.
     title="DatasetBuilder API"
     desc="Read the generated lifecycle contract for recipe dataset builders."
     icon="tabler:book"
-    href="../../../guide/espnet3/components/DatasetBuilder.md"
+    href="../../../guide/espnet3/components/DatasetBuilder.html"
   />
   <DocCard
     title="BaseRunner API"
     desc="Read the generated contract for forward, reducer hooks, and merge."
     icon="tabler:book"
-    href="../../../guide/espnet3/parallel/BaseRunner.md"
+    href="../../../guide/espnet3/parallel/BaseRunner.html"
   />
   <DocCard
     title="CollectStatsRunner API"
     desc="Inspect the in-tree reducer-style data pipeline example."
     icon="tabler:file-code"
-    href="../../../guide/espnet3/components/CollectStatsRunner.md"
+    href="../../../guide/espnet3/components/CollectStatsRunner.html"
   />
 </DocCards>

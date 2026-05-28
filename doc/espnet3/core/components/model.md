@@ -47,33 +47,33 @@ Below is a quick reference to ESPnet2 task names and their recipe docs.
 
 | Task | Description |
 | --- | --- |
-| [`asr1`](../../../recipe/asr1.md) | Automatic Speech Recognition (Multi-tasking) |
-| [`asr2`](../../../recipe/asr2.md) | Automatic Speech Recognition with Discrete Units |
-| [`asvspoof1`](../../../recipe/asvspoof1.md) | Speaker Verification Spoofing and Countermeasures |
-| [`cls1`](../../../recipe/cls1.md) | Classification |
-| [`codec1`](../../../recipe/codec1.md) | Speech Codec |
-| [`diar1`](../../../recipe/diar1.md) | Speaker Diarisation |
-| [`enh1`](../../../recipe/enh1.md) | Speech Enhancement |
-| [`enh_asr1`](../../../recipe/enh_asr1.md) | Speech Recognition with Speech Enhancement |
-| [`enh_diar1`](../../../recipe/enh_diar1.md) | Speaker Diarisation with Speech Enhancement |
-| [`enh_st1`](../../../recipe/enh_st1.md) | Speech-to-Text Translation with Speech Enhancement |
-| [`hubert1`](../../../recipe/hubert1.md) | Self-supervised Learning |
-| [`lid1`](../../../recipe/lid1.md) | Language Identification |
-| [`lm1`](../../../recipe/lm1.md) | Language Modeling |
-| [`mt1`](../../../recipe/mt1.md) | Machine Translation |
-| [`s2st1`](../../../recipe/s2st1.md) | Speech-to-Speech Translation |
-| [`s2t1`](../../../recipe/s2t1.md) | Weakly-supervised Learning (Speech-to-Text) |
-| [`sds1`](../../../recipe/sds1.md) | ESPnet-SDS |
-| [`slu1`](../../../recipe/slu1.md) | Spoken Language Understanding |
-| [`speechlm1`](../../../recipe/speechlm1.md) | Speech Language Model |
-| [`spk1`](../../../recipe/spk1.md) | Speaker Representation |
-| [`ssl1`](../../../recipe/ssl1.md) | Self-supervised Learning |
-| [`st1`](../../../recipe/st1.md) | Speech-to-Text Translation |
-| [`svs1`](../../../recipe/svs1.md) | Singing Voice Synthesis |
-| [`svs2`](../../../recipe/svs2.md) | ESPnet2 SVS2 Recipe TEMPLATE |
-| [`tts1`](../../../recipe/tts1.md) | Text-to-Speech |
-| [`tts2`](../../../recipe/tts2.md) | Text-to-Speech with Discrete Units |
-| [`uasr1`](../../../recipe/uasr1.md) | Unsupervised Automatic Speech Recognition |
+| [`asr1`](../../../recipe/asr1.html) | Automatic Speech Recognition (Multi-tasking) |
+| [`asr2`](../../../recipe/asr2.html) | Automatic Speech Recognition with Discrete Units |
+| [`asvspoof1`](../../../recipe/asvspoof1.html) | Speaker Verification Spoofing and Countermeasures |
+| [`cls1`](../../../recipe/cls1.html) | Classification |
+| [`codec1`](../../../recipe/codec1.html) | Speech Codec |
+| [`diar1`](../../../recipe/diar1.html) | Speaker Diarisation |
+| [`enh1`](../../../recipe/enh1.html) | Speech Enhancement |
+| [`enh_asr1`](../../../recipe/enh_asr1.html) | Speech Recognition with Speech Enhancement |
+| [`enh_diar1`](../../../recipe/enh_diar1.html) | Speaker Diarisation with Speech Enhancement |
+| [`enh_st1`](../../../recipe/enh_st1.html) | Speech-to-Text Translation with Speech Enhancement |
+| [`hubert1`](../../../recipe/hubert1.html) | Self-supervised Learning |
+| [`lid1`](../../../recipe/lid1.html) | Language Identification |
+| [`lm1`](../../../recipe/lm1.html) | Language Modeling |
+| [`mt1`](../../../recipe/mt1.html) | Machine Translation |
+| [`s2st1`](../../../recipe/s2st1.html) | Speech-to-Speech Translation |
+| [`s2t1`](../../../recipe/s2t1.html) | Weakly-supervised Learning (Speech-to-Text) |
+| [`sds1`](../../../recipe/sds1.html) | ESPnet-SDS |
+| [`slu1`](../../../recipe/slu1.html) | Spoken Language Understanding |
+| [`speechlm1`](../../../recipe/speechlm1.html) | Speech Language Model |
+| [`spk1`](../../../recipe/spk1.html) | Speaker Representation |
+| [`ssl1`](../../../recipe/ssl1.html) | Self-supervised Learning |
+| [`st1`](../../../recipe/st1.html) | Speech-to-Text Translation |
+| [`svs1`](../../../recipe/svs1.html) | Singing Voice Synthesis |
+| [`svs2`](../../../recipe/svs2.html) | ESPnet2 SVS2 Recipe TEMPLATE |
+| [`tts1`](../../../recipe/tts1.html) | Text-to-Speech |
+| [`tts2`](../../../recipe/tts2.html) | Text-to-Speech with Discrete Units |
+| [`uasr1`](../../../recipe/uasr1.html) | Unsupervised Automatic Speech Recognition |
 
 <div class='custom-h3'><p>Use custom/ESPnet3-only models <span class='small-bracket'>(model._target_)</span></p></div>
 
@@ -116,8 +116,8 @@ class MyCustomModel:
 If you want to use `collect_stats`, your model should implement `collect_feats()`.
 See:
 
-- Stage doc: `doc/vuepress/src/espnet3/stages/collect-stats.md`
-- Config doc: `doc/vuepress/src/espnet3/core/config/training.md`
+- Stage doc: `doc/vuepress/src/espnet3/stages/collect-stats.html`
+- Config doc: `doc/vuepress/src/espnet3/core/config/training.html`
 
 ## Related pages
 
@@ -126,18 +126,18 @@ See:
     title="Trainer"
     desc="See how model outputs are consumed by the training wrapper."
     icon="tabler:player-play"
-    href="./trainer.md"
+    href="./trainer.html"
   />
   <DocCard
     title="Metrics"
     desc="See how model outputs later flow into metrics and evaluation."
     icon="tabler:gauge"
-    href="./metrics.md"
+    href="./metrics.html"
   />
   <DocCard
     title="Training configuration"
     desc="See where model selection and normalization live in YAML."
     icon="tabler:settings-2"
-    href="../../config/training.md"
+    href="../../config/training.html"
   />
 </DocCards>

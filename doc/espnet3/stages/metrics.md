@@ -18,7 +18,7 @@ writes a `metrics.json` summary.
 For the full metric interface (how `AbsMetric` is called, how SCPs are aligned,
 and how to implement custom metrics), see:
 
-- [ESPnet3 Metrics](../core/components/metrics.md)
+- [ESPnet3 Metrics](../core/components/metrics.html)
 
 ## Quick usage
 
@@ -31,7 +31,7 @@ python run.py --stages metric --metric_config conf/metric.yaml
 ### Configure (in metric.yaml)
 
 Keep the core settings in `metric.yaml`. For the full list, see
-[Metric configuration](../core/config/metrics.md).
+[Metric configuration](../core/config/metrics.html).
 
 | Config section | Description |
 | -------------- | ----------- |
@@ -81,4 +81,4 @@ metrics:
 Metric classes are defined as `AbsMetric` subclasses and are instantiated from
 `metric.yaml`. See the core documentation for details:
 
-- [ESPnet3 Metrics](../core/components/metrics.md)
+- [ESPnet3 Metrics](../core/components/metrics.html)
