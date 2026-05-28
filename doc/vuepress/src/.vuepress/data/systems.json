@@ -74,7 +74,7 @@
   {
     "key": "st",
     "name": "Speech Translation",
-    "desc": "Speech-to-text translation across languages. Evaluation via BLEU score.",
+    "desc": "Speech-to-text translation across languages.",
     "group": "espnet[st]",
     "pkgs": [
       {
@@ -114,7 +114,7 @@
   {
     "key": "spk",
     "name": "Speaker",
-    "desc": "Speaker diarization, identification, and embedding extraction. Supports x-vector, ECAPA-TDNN and more.",
+    "desc": "Speaker diarization and identification. Supports x-vector, ECAPA-TDNN and more.",
     "group": "espnet[spk]",
     "pkgs": [
       {
