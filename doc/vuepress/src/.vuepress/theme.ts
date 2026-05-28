@@ -31,6 +31,10 @@ export default hopeTheme({
 
   editLink: false,
 
+  markdown: {
+    alert: true,
+  },
+
   plugins: {
 
     // All features are enabled for demo, only preserve features you need here
