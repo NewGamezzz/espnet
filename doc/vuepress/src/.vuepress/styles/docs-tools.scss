@@ -1,4 +1,6 @@
 .docs-page-shell {
+  position: relative;
+  isolation: isolate;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 240px;
   column-gap: 2.5rem;
@@ -13,6 +15,7 @@
 
 .docs-page-shell__sidebar {
   position: sticky;
+  z-index: 20;
   top: calc(var(--navbar-height, 0px) + 1.5rem);
   display: flex;
   flex-direction: column;
@@ -23,6 +26,8 @@
 }
 
 .docs-page-shell__main {
+  position: relative;
+  z-index: 0;
   min-width: 0;
 
   :where(
