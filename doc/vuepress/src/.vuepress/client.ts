@@ -17,6 +17,7 @@ import SectionOverview from "./components/SectionOverview.vue";
 import SectionProvider from "./components/SectionProvider.vue";
 import SectionShardLifecycle from "./components/SectionShardLifecycle.vue";
 import DemoConfigEditor from "./components/DemoConfigEditor.vue";
+import ShardingDemo from "./components/ShardingDemo.vue";
 
 export default defineClientConfig({
   enhance({ app }) {
@@ -38,5 +39,6 @@ export default defineClientConfig({
     app.component("SectionOverview", SectionOverview);
     app.component("SectionProvider", SectionProvider);
     app.component("SectionShardLifecycle", SectionShardLifecycle);
+    app.component("ShardingDemo", ShardingDemo);
   },
 });

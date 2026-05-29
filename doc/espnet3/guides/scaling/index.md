@@ -24,6 +24,12 @@ datasets, and through batch inference pipelines.
     href="./data-pipeline.html"
   />
   <DocCard
+    title="Dataset sharding"
+    desc="Implement ShardedDataset, understand the shard rotation formula, and wire up total_shards in YAML."
+    icon="tabler:layout-grid"
+    href="./dataset-sharding.html"
+  />
+  <DocCard
     title="Inference at scale"
     desc="Run batch inference with the provider/runner layer across a cluster or local multi-GPU setup."
     icon="tabler:player-play"
