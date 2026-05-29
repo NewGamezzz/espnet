@@ -16,6 +16,8 @@ import SectionExecutionModes from "./components/SectionExecutionModes.vue";
 import SectionOverview from "./components/SectionOverview.vue";
 import SectionProvider from "./components/SectionProvider.vue";
 import SectionShardLifecycle from "./components/SectionShardLifecycle.vue";
+import XVectorAnimation from "./components/XVectorAnimation.vue";
+import XVectorConfig from "./components/XVectorConfig.vue";
 import DemoConfigEditor from "./components/DemoConfigEditor.vue";
 import ShardingDemo from "./components/ShardingDemo.vue";
 
@@ -39,6 +41,8 @@ export default defineClientConfig({
     app.component("SectionOverview", SectionOverview);
     app.component("SectionProvider", SectionProvider);
     app.component("SectionShardLifecycle", SectionShardLifecycle);
+    app.component("XVectorAnimation", XVectorAnimation);
+    app.component("XVectorConfig", XVectorConfig);
     app.component("ShardingDemo", ShardingDemo);
   },
 });
