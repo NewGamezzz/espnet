@@ -1,0 +1,74 @@
+recipe_dir: .
+
+exp_tag:
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+data_dir: ${recipe_dir}/data
+inference_dir: ${exp_dir}/${self_name:}
+
+# No preprocessor: the F5 inference model needs the raw target text + raw
+# reference waveform, and does its own tokenization / mel extraction internally.
+# ref_mode selects a reference utterance per target from the same split:
+#   cross_speaker -> a different speaker's utterance (zero-shot voice cloning)
+#   same_speaker  -> a different utterance of the same speaker (cross-sentence)
+# The reference transcript (ref_text) is returned alongside ref_speech, as F5
+# conditions on ref_text + target text.
+dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  recipe_dir: ${recipe_dir}
+  test:
+    - name: valid
+      data_src_args:
+        split: valid
+        manifest_path: ${data_dir}/manifests_filtered/valid.tsv
+        load_speech: false
+        load_xvector: false
+        inference: true
+        ref_mode: cross_speaker
+        ref_seed: 0
+    - name: test
+      data_src_args:
+        split: test
+        manifest_path: ${data_dir}/manifests_filtered/test.tsv
+        load_speech: false
+        load_xvector: false
+        inference: true
+        ref_mode: cross_speaker
+        ref_seed: 0
+
+parallel:
+  env: local
+  n_workers: 1
+
+model:
+  _target_: src.f5_tts.inference.F5TTSInference
+  # Rebuilds ESPnetTTSModel(F5TTS) via the espnet2 task and matches training
+  # tokenization, both read from this training config.
+  train_config: ${recipe_dir}/conf/training_f5_tts.yaml
+  ckpt_path: ${exp_dir}/last.ckpt
+  use_ema: true
+  # Vocos mel vocoder (24 kHz, 100-mel) — matches the F5 "vocos" mel front-end.
+  vocoder_name: vocos
+  vocoder_path: null
+  target_sample_rate: 24000
+  # Sampling hyperparameters.
+  nfe_step: 32
+  cfg_strength: 2.0
+  sway_sampling_coef: -1.0
+  speed: 1.0
+  seed: null
+
+# Cross-speaker protocol: synthesize `text` in the voice of `ref_speech`, using
+# its transcript `ref_text`. For self-reference reconstruction instead, drop the
+# dataset ref_mode and use `input_key: [text, speech]`.
+input_key: [text, ref_speech, ref_text]
+batch_size: null
+output_fn: src.inference.build_output
+output_artifacts:
+  wav:
+    type: wav
+    sample_rate: 24000
+
+provider:
+  _target_: espnet3.systems.base.inference_provider.InferenceProvider
+runner:
+  _target_: espnet3.systems.base.inference_runner.InferenceRunner
