@@ -358,6 +358,41 @@ class TTSSystem(BaseSystem):
                 f"Manifest file not found for token list creation: {manifest_path}. Please ensure the manifest file is generated and the path is correct."
             )
 
+        # Optional custom vocab builder (e.g. F5 pinyin, prepare_emilia-style):
+        # a callable ``fn(texts: list[str], **conf) -> list[str]`` returning the
+        # full ordered token list. When set it fully replaces the default
+        # frequency-count + special-symbol construction below, so any dataset /
+        # tokenizer can plug its own vocab construction into this stage.
+        vocab_builder_path = tl_cfg.get("vocab_builder", None)
+        if vocab_builder_path is not None:
+            from hydra.utils import get_method
+
+            cleaner_fn = TextCleaner(tl_cfg.get("cleaner", None))
+            texts = []
+            with open(manifest_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    parts = line.rstrip("\n").split("\t")
+                    if len(parts) > 2 and parts[2].strip():
+                        texts.append(cleaner_fn(parts[2]))
+
+            builder = get_method(path=vocab_builder_path)
+            builder_conf = tl_cfg.get("vocab_builder_conf", {}) or {}
+            if not isinstance(builder_conf, dict):
+                builder_conf = OmegaConf.to_container(builder_conf, resolve=True)
+            tokens = builder(texts, **builder_conf)
+
+            with open(output_file, "w", encoding="utf-8") as f:
+                for tok in tokens:
+                    f.write(f"{tok}\n")
+            logger.info(
+                "create_token_list: built %d tokens from %d transcripts via %s -> %s",
+                len(tokens),
+                len(texts),
+                vocab_builder_path,
+                output_file,
+            )
+            return
+
         # Declare text processing parameters with defaults (matching espnet2 defaults where applicable)
         cleaner = tl_cfg.get("cleaner", None)
         token_type = tl_cfg.get("token_type", "char")
