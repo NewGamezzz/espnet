@@ -113,6 +113,8 @@ class F5TTSInference:
         speed: float = 1.0,
         target_rms: float = 0.1,
         cross_fade_duration: float = 0.15,
+        max_ref_sec: Optional[float] = None,
+        native_f5: bool = False,
         seed: Optional[int] = None,
     ):
         """Build the model, tokenizer and vocoder for inference.
@@ -128,6 +130,19 @@ class F5TTSInference:
             target_sample_rate: Output/vocoder sample rate.
             nfe_step / cfg_strength / sway_sampling_coef / speed / seed:
                 Sampling hyperparameters forwarded to ``CFM.sample``.
+            max_ref_sec: If set, clip the reference audio to at most this many
+                seconds (and trim ``ref_text`` proportionally). F5 trains with a
+                high mask ratio (``frac_lengths_mask`` ~0.7-1.0), so a reference
+                that is long relative to the target pushes generation
+                out-of-distribution; capping the reference keeps the target the
+                dominant (masked) part. ``None`` disables clipping.
+            native_f5: Load an OFFICIAL SWivid/F5-TTS checkpoint (``.pt`` or
+                ``.safetensors``) instead of an espnet/Lightning ckpt. The weights
+                are loaded straight into the ported CFM (``model.tts.cfm``), so
+                the architecture (``tts_conf``) and the pinyin ``token_list`` in
+                ``train_config`` MUST match the pretrained model (F5TTS_Base +
+                ``Emilia_ZH_EN_pinyin/vocab.txt``). Use this to sanity-check the
+                inference + tokenization path against known-good weights.
         """
         self.device = torch.device(device)
         self.target_sample_rate = target_sample_rate
@@ -137,12 +152,13 @@ class F5TTSInference:
         self.speed = speed
         self.target_rms = target_rms
         self.cross_fade_duration = cross_fade_duration
+        self.max_ref_sec = max_ref_sec
         self.seed = seed
 
         cfg = OmegaConf.to_container(OmegaConf.load(train_config), resolve=True)
         fe_conf = (cfg.get("model") or {}).get("feats_extract_conf") or {}
         self.hop_length = int(fe_conf.get("hop_length", 256))
-        model = self._build_model(cfg, ckpt_path, use_ema)
+        model = self._build_model(cfg, ckpt_path, use_ema, native_f5)
         # ESPnetTTSModel components used for generation.
         self.feats_extract = model.feats_extract
         self.cfm = model.tts.cfm
@@ -153,12 +169,21 @@ class F5TTSInference:
 
     # ------------------------------------------------------------------ build
 
-    def _build_model(self, cfg: dict, ckpt_path: str, use_ema: bool):
+    def _build_model(self, cfg: dict, ckpt_path: str, use_ema: bool, native_f5: bool = False):
         task = cfg.get("task")
         if not task:
             raise ValueError("train_config must set `task` (the espnet2 TTS task).")
         logger.info("Building TTS model via %s", task)
         model = get_espnet_model(task, cfg["model"])
+
+        if native_f5:
+            # Official SWivid/F5-TTS checkpoint: CFM-level keys (transformer.* /
+            # mel_spec.*, EMA prefixed ema_model.). Load straight into the ported
+            # CFM so the espnet wrapper prefixes (tts.cfm.) don't matter.
+            cfm_sd = self._load_native_f5_state(ckpt_path, use_ema)
+            missing, unexpected = model.tts.cfm.load_state_dict(cfm_sd, strict=False)
+            self._log_load("F5-native -> model.tts.cfm", ckpt_path, missing, unexpected)
+            return model.to(self.device).eval()
 
         ckpt = torch.load(ckpt_path, map_location="cpu")
         if use_ema and "ema_model_state_dict" in ckpt:
@@ -174,11 +199,46 @@ class F5TTSInference:
             logger.info("Loading raw (non-EMA) weights from %s", ckpt_path)
 
         missing, unexpected = model.load_state_dict(state_dict, strict=False)
-        if missing:
-            logger.warning("Missing keys when loading checkpoint: %s", missing)
-        if unexpected:
-            logger.warning("Unexpected keys when loading checkpoint: %s", unexpected)
+        self._log_load("espnet", ckpt_path, missing, unexpected)
         return model.to(self.device).eval()
+
+    @staticmethod
+    def _load_native_f5_state(ckpt_path: str, use_ema: bool) -> dict:
+        """CFM-level state dict from an official F5-TTS checkpoint.
+
+        Handles ``.pt`` (``torch.load`` -> ``model_state_dict`` /
+        ``ema_model_state_dict``) and ``.safetensors`` (a flat EMA tensor dict).
+        Returns keys at CFM level (``transformer.*``, ``mel_spec.*``): the
+        ``ema_model.`` prefix is stripped and the ``initted`` / ``step``
+        bookkeeping tensors are dropped, mirroring F5's own ``load_checkpoint``.
+        """
+        if str(ckpt_path).endswith(".safetensors"):
+            from safetensors.torch import load_file
+
+            raw = load_file(ckpt_path)  # flat: ema_model.* (+ initted/step)
+        else:
+            ckpt = torch.load(ckpt_path, map_location="cpu")
+            if use_ema and "ema_model_state_dict" in ckpt:
+                raw = ckpt["ema_model_state_dict"]
+            elif "model_state_dict" in ckpt:
+                raw = ckpt["model_state_dict"]
+            else:
+                raw = ckpt
+        return {
+            k.replace("ema_model.", "", 1): v
+            for k, v in raw.items()
+            if k not in ("initted", "step")
+        }
+
+    @staticmethod
+    def _log_load(tag: str, ckpt_path: str, missing, unexpected) -> None:
+        logger.info("Loaded %s weights from %s", tag, ckpt_path)
+        if missing:
+            logger.warning("[%s] missing keys (%d): %s", tag, len(missing), missing)
+        if unexpected:
+            logger.warning(
+                "[%s] unexpected keys (%d): %s", tag, len(unexpected), unexpected
+            )
 
     def _build_tokenizer(self, cfg: dict) -> None:
         """Replicate the training-time text tokenization for inference.
@@ -266,6 +326,28 @@ class F5TTSInference:
             wav = self.vocoder(mel)
         return wav.squeeze().detach().cpu()
 
+    def _clip_reference(self, audio: torch.Tensor, ref_text: str):
+        """Cap the reference to ``max_ref_sec`` and trim ``ref_text`` to match.
+
+        ``audio`` is ``[1, T]``. When the reference is longer than the cap, keep
+        its first ``max_ref_sec`` seconds and the proportional character prefix of
+        ``ref_text`` (cut back to a word boundary so we don't split a word), so the
+        reference audio and transcript stay roughly aligned.
+        """
+        if self.max_ref_sec is None or self.max_ref_sec <= 0:
+            return audio, ref_text
+        max_samples = int(self.max_ref_sec * self.target_sample_rate)
+        if audio.shape[-1] <= max_samples:
+            return audio, ref_text
+        keep_frac = max_samples / audio.shape[-1]
+        audio = audio[:, :max_samples]
+        n_keep = max(1, int(len(ref_text) * keep_frac))
+        clipped = ref_text[:n_keep]
+        space = clipped.rfind(" ")
+        if space > 0:
+            clipped = clipped[:space]
+        return audio, clipped.strip()
+
     @torch.no_grad()
     def infer_one(
         self,
@@ -284,6 +366,8 @@ class F5TTSInference:
             audio = audio.unsqueeze(0)
         if audio.shape[0] > 1:
             audio = audio.mean(dim=0, keepdim=True)
+        # Cap an over-long reference (keeps the target the dominant masked part).
+        audio, ref_text = self._clip_reference(audio, ref_text)
         rms = torch.sqrt(torch.mean(torch.square(audio)))
         if rms < self.target_rms:
             audio = audio * self.target_rms / rms
