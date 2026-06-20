@@ -59,6 +59,18 @@ def _read_manifest(path: Path) -> list[ManifestEntry]:
     return entries
 
 
+def _safe_duration(wav_path: Path) -> float:
+    """Audio duration in seconds (header read); +inf if unreadable.
+
+    Returning +inf means an unreadable file is excluded by a finite
+    ``[ref_min_sec, ref_max_sec]`` reference-duration filter.
+    """
+    try:
+        return float(sf.info(str(wav_path)).duration)
+    except Exception:
+        return float("inf")
+
+
 class LibriTTSDataset(TorchDataset):
     """LibriTTS dataset returning text/speech/spembs samples.
 
@@ -100,6 +112,8 @@ class LibriTTSDataset(TorchDataset):
         inference: bool = False,
         ref_mode: str | None = None,
         ref_seed: int = 0,
+        ref_max_sec: float | None = None,
+        ref_min_sec: float = 0.0,
     ) -> None:
         self.split = split
         self.load_speech = load_speech
@@ -113,6 +127,8 @@ class LibriTTSDataset(TorchDataset):
             )
         self.ref_mode = ref_mode
         self.ref_seed = ref_seed
+        self.ref_max_sec = ref_max_sec
+        self.ref_min_sec = ref_min_sec
         recipe_root = (
             Path(recipe_dir).resolve()
             if recipe_dir is not None
@@ -173,25 +189,52 @@ class LibriTTSDataset(TorchDataset):
         return len(self._entries)
 
     def _build_ref_index(self) -> list[int]:
-        """Pick one reference entry index per target, deterministically."""
+        """Pick one reference entry index per target, deterministically.
+
+        With ``ref_max_sec`` set, references are restricted to whole utterances
+        whose audio duration is within ``[ref_min_sec, ref_max_sec]``. F5 needs
+        ``ref_text`` to match ``ref_speech``, so we select short *whole*
+        utterances (and use their exact transcript) rather than clip a long one —
+        clipping the audio would desync the transcript. Keeping the prompt short
+        also stops it from dominating short targets (F5's high mask ratio).
+        """
         rng = random.Random(self.ref_seed)
+        n = len(self._entries)
+
+        if self.ref_max_sec is not None:
+            allowed = [
+                idx
+                for idx in range(n)
+                if self.ref_min_sec
+                <= _safe_duration(self._entries[idx].wav_path)
+                <= self.ref_max_sec
+            ]
+        else:
+            allowed = list(range(n))
+
         by_spk: dict[int, list[int]] = defaultdict(list)
-        for idx, entry in enumerate(self._entries):
-            by_spk[entry.sid].append(idx)
+        for idx in allowed:
+            by_spk[self._entries[idx].sid].append(idx)
         speakers = list(by_spk.keys())
 
         ref_idx: list[int] = []
         for i, entry in enumerate(self._entries):
+            choice: int | None = None
             if self.ref_mode == "same_speaker":
-                cands = [j for j in by_spk[entry.sid] if j != i]
-                choice = rng.choice(cands) if cands else i
+                cands = [j for j in by_spk.get(entry.sid, []) if j != i]
+                if cands:
+                    choice = rng.choice(cands)
             else:  # cross_speaker
-                other_spks = [s for s in speakers if s != entry.sid]
-                if other_spks:
-                    spk = rng.choice(other_spks)
-                    choice = rng.choice(by_spk[spk])
-                else:  # single-speaker split: fall back to self
-                    choice = i
+                others = [s for s in speakers if s != entry.sid]
+                if others:
+                    choice = rng.choice(by_spk[rng.choice(others)])
+            if choice is None:
+                # No in-range candidate (e.g. duration filter too strict): fall
+                # back to any other utterance so inference still runs.
+                pool = [j for j in allowed if j != i] or [
+                    j for j in range(n) if j != i
+                ]
+                choice = rng.choice(pool) if pool else i
             ref_idx.append(choice)
         return ref_idx
 
