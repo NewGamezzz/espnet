@@ -78,7 +78,6 @@ DEFAULT_STAGES = [
 ]
 
 ALL_STAGES = DEFAULT_STAGES
-DEFAULT_PACKAGE = "egs3.libritts.tts"
 DEFAULT_TRAINING_CONFIG = "training.yaml"
 DEFAULT_INFERENCE_CONFIG = "inference.yaml"
 DEFAULT_METRICS_CONFIG = "metrics.yaml"
@@ -87,30 +86,28 @@ DEFAULT_METRICS_CONFIG = "metrics.yaml"
 def main(args) -> None:
     stages_to_run = resolve_stages(args.stages, ALL_STAGES)
 
-    # Use each provided config file as its own merge base (config_name = its own
-    # filename) instead of always merging over the default training.yaml. The
-    # recipe ships multiple *independent* full configs (e.g. VITS training.yaml
-    # and F5 training_f5_tts.yaml); merging one over another would deep-merge
-    # incompatible blocks (e.g. model.tts_conf), so each must be self-based.
-    def _base_name(config_path, default_name):
-        return config_path.name if config_path is not None else default_name
-
+    # Each config is merged over the shared `egs3.TEMPLATE.tts` default (kept
+    # deliberately near-empty, see egs3/TEMPLATE/tts/conf/*.yaml), not over
+    # another recipe config. The recipe ships multiple *independent* full
+    # configs (e.g. VITS training.yaml and F5 training_f5_tts.yaml); merging
+    # one over another would deep-merge incompatible blocks (e.g.
+    # model.tts_conf), and merging a config over itself is a no-op that hides
+    # the intended default values entirely. `default_package` is left unset so
+    # `load_and_merge_config` auto-infers `egs3.TEMPLATE.tts` from the config
+    # path.
     training_config = load_and_merge_config(
         args.training_config,
-        config_name=_base_name(args.training_config, DEFAULT_TRAINING_CONFIG),
-        default_package=DEFAULT_PACKAGE,
+        config_name=DEFAULT_TRAINING_CONFIG,
         resolve=False,
     )
     inference_config = load_and_merge_config(
         args.inference_config,
-        config_name=_base_name(args.inference_config, DEFAULT_INFERENCE_CONFIG),
-        default_package=DEFAULT_PACKAGE,
+        config_name=DEFAULT_INFERENCE_CONFIG,
         resolve=False,
     )
     metrics_config = load_and_merge_config(
         args.metrics_config,
-        config_name=_base_name(args.metrics_config, DEFAULT_METRICS_CONFIG),
-        default_package=DEFAULT_PACKAGE,
+        config_name=DEFAULT_METRICS_CONFIG,
         resolve=False,
     )
     logger = configure_logging()
