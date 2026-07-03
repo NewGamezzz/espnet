@@ -1,11 +1,70 @@
-exp_tag: train_f5_tts_libritts
-
-# espnet2's TTS task. F5-TTS is registered natively as `tts: f5tts`
-# (see espnet2/tasks/tts.py), so the model is built by espnet2's ESPnetTTSModel
-# exactly like vits/fastspeech2 — feats_extract + normalize + tts.
+# F5-TTS-Small trained on LibriTTS, reproducing arXiv:2410.06885 Table 9 /
+# Appendix B.7 ("F5-TTS small models evaluation results ... model trained on
+# LibriTTS 585 hours"), evaluated on this recipe's own LibriTTS test split
+# instead of the paper's LibriSpeech-PC test-clean (see conf/inference_f5.yaml,
+# which already targets `manifests_filtered/test.tsv` with the paper's exact
+# eval protocol: CFG 2.0, sway -1.0, 32 NFE, Euler).
+#
+# Numbers below are taken from the paper (Table 3 arch config, Table 9 /
+# Sec. B.7 batch size, Sec. 4 optimizer/schedule) and cross-checked against
+# upstream's own src/f5_tts/configs/F5TTS_Small.yaml (github.com/SWivid/F5-TTS),
+# which matches exactly.
+#
+# Architecture (Table 3 "F5-TTS" row + upstream F5TTS_Small.yaml): dim=768,
+# depth=18, heads=12, ff_mult=2, conv_layers=4, text_dim=512. dim_head=64
+# unchanged (768/12 = 1024/16 = 64, same as the Base model in
+# training_f5_tts.yaml). text_mask_padding/pe_attn_head match upstream's
+# F5TTS_Small.yaml exactly (same flags training_f5_tts.yaml already applies
+# for the Base model).
+#
+# Batch size (Sec. B.7: "despite a batch size of 307,200 audio frames (0.91
+# hours) as base models" -- i.e. the SAME global batch as the Base model, NOT
+# the halved batch used for the separate WenetSpeech4TTS small-model ablation
+# in Sec. 5.1). Upstream's F5TTS_Small.yaml confirms this directly:
+# `batch_size_per_gpu: 38400` (frames) x 8 GPUs = 307,200, grad_accumulation_steps=1.
+#
+# Verified "frame" unit match: ESPnetTTSModel.collect_feats() (espnet2/tts/
+# espnet_model.py) returns MEL frames (via feats_extract), and collect_stats
+# writes exactly that into feats_shape, which numel batching bins on -- so
+# ESPnet's batch_bins = frames * n_mel_channels is the same "frame" unit as
+# the paper. Cross-check: 307,200 frames * (256/24000 s/frame) = 3276.8s =
+# 0.91 hours, matching the paper's own conversion exactly (a raw-waveform-
+# sample interpretation would give 12.8s, not 0.91h) -- confirms mel-frame,
+# not raw-sample, semantics on both sides.
+#
+# Hardware translation (8 GPUs in the paper -> 4x V100-32GB here): grad
+# accumulation makes up the missing 2x GPU factor while reproducing the
+# EXACT SAME per-GPU frame budget as upstream (38,400 frames/GPU):
+#   4 GPUs * accumulate_grad_batches(2) * batch_bins(3,840,000)/100 = 307,200
+# CAVEAT: upstream's 38,400 frames/GPU was tuned for a larger-memory GPU
+# (H100/A100-class), not confirmed safe on a V100-32GB for this arch size --
+# treat batch_bins/accumulate_grad_batches below as a STARTING POINT that
+# needs an empirical OOM check on the actual node. If it OOMs, halve
+# batch_bins and double accumulate_grad_batches (e.g. 1,920,000/4,
+# 960,000/8, ...) -- any such pair keeps the 307,200-frame effective batch
+# exact, since all are divisors of 30,720,000 total elements / 4 GPUs.
+#
+# Training length: Table 9 only tabulates checkpoints up to 600K updates for
+# the LibriTTS run (WER bottoms out ~2.20-2.23 around 400K-600K), so this
+# config targets 600K updates (trainer.max_steps, since real steps/epoch
+# aren't fixed under numel batching -- max_epochs alone would not reliably
+# stop here).
+#
+# KNOWN LIMITATION (do not "fix" by just editing total_steps): if you later
+# want to extend training past 600K by resuming from a checkpoint, bumping
+# `scheduler.total_steps` in this file and adding `fit.ckpt_path` will NOT
+# take effect on its own. Lightning rebuilds the scheduler fresh from this
+# config on resume, but then calls `load_state_dict()` on it from the
+# checkpoint, and torch's LRScheduler.load_state_dict does a full
+# `self.__dict__.update(...)` -- silently overwriting the freshly-built
+# LinearLR/SequentialLR's `total_iters`/`milestones` back to the OLD
+# checkpoint values. Net effect: the new total_steps is a no-op on resume,
+# and the LR keeps following the OLD 600K-step decay curve. Extending past
+# 600K needs either excluding scheduler state from the checkpoint restore or
+# manually patching the resumed scheduler -- not implemented here.
 task: espnet2.tasks.tts.TTSTask
 
-num_device: 1
+num_device: 4
 num_nodes: 1
 
 recipe_dir: .
@@ -13,6 +72,8 @@ data_dir: ${recipe_dir}/data
 exp_dir: ${recipe_dir}/exp/${exp_tag}
 stats_dir: ${exp_dir}/stats
 inference_dir: ${exp_dir}/inference
+
+exp_tag: train_f5_tts_small_libritts
 
 # Mel / audio front-end settings shared by feats_extract and the model.
 sample_rate: 24000
@@ -97,15 +158,15 @@ model:
     mel_spec_type: ${mel_spec_type}
   normalize: null                  # F5 trains on raw vocos log-mel
   tts: f5tts
-  tts_conf:                        # F5TTS_Base; reduce dim/depth for smaller GPUs
-    dim: 1024
-    depth: 22
-    heads: 16
+  tts_conf:                        # F5TTS_Small (Table 3 / upstream F5TTS_Small.yaml)
+    dim: 768
+    depth: 18
+    heads: 12
     dim_head: 64
     ff_mult: 2
     text_dim: 512
-    text_mask_padding: false   # match F5TTS_Base.yaml (was our default True)
-    pe_attn_head: 1            # match F5TTS_Base.yaml (was our default None)
+    text_mask_padding: false   # match F5TTS_Small.yaml
+    pe_attn_head: 1            # match F5TTS_Small.yaml
     conv_layers: 4
     sigma: 0.0
     audio_drop_prob: 0.3
@@ -132,7 +193,7 @@ scheduler:
   # total_steps MUST match the planned run (epochs * updates_per_epoch).
   _target_: espnet2.schedulers.linear_warmup_decay.linear_warmup_decay
   warmup_steps: 20000
-  total_steps: 1200000
+  total_steps: 600000
 scheduler_interval: step
 
 best_model_criterion:
@@ -160,7 +221,9 @@ dataloader:
         min_batch_size: 4
         shape_files:
           - ${stats_dir}/train/feats_shape
-        batch_bins: 1000000    # mel elements (frames * n_mel); tune for your GPU
+        # 38,400 mel-frames/GPU * 100 mel channels, matching upstream
+        # F5TTS_Small.yaml's batch_size_per_gpu exactly (see header note).
+        batch_bins: 3840000
   valid:
     num_shards: 1
     num_workers: 0
@@ -180,7 +243,12 @@ trainer:
   accelerator: auto
   devices: ${num_device}
   num_nodes: ${num_nodes}
-  accumulate_grad_batches: 1
+  # 4 GPUs * 2 accum * 38,400 frames/GPU = 307,200 frames/update (see header
+  # note for the OOM-tuning caveat + how to rescale if batch_bins changes).
+  accumulate_grad_batches: 2
+  # Real optimizer-update count isn't fixed under numel batching, so stop
+  # explicitly at the Table 9 target instead of relying on max_epochs.
+  max_steps: 600000
   check_val_every_n_epoch: 1
   log_every_n_steps: 50
   max_epochs: 1000
