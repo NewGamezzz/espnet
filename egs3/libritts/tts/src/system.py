@@ -12,11 +12,12 @@ from pathlib import Path
 from typing import Any, Dict
 
 import lightning as L
-import soundfile as sf
 import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
 from src.gan_trainer import build_gan_trainer
+from src.remove_long_short_provider import RemoveLongShortProvider
+from src.remove_long_short_runner import RemoveLongShortRunner
 from src.xvector_provider import XVectorProvider
 from src.xvector_runner import XVectorRunner
 
@@ -210,7 +211,7 @@ class TTSSystem(BaseSystem):
     def remove_long_short(self, *args, **kwargs):
         """Remove long-short utterances based on duration thresholds.
 
-        This stage processes manifest files to filter out utterances that are too short or too long based on specified duration thresholds. It uses librosa to check audio durations and saves filtered manifests for downstream stages.
+        This stage processes manifest files to filter out utterances that are too short or too long based on specified duration thresholds. It reads WAV headers via soundfile to check audio durations (in parallel, via RemoveLongShortProvider/Runner) and saves filtered manifests for downstream stages.
 
         Configuration should include:
             training_config.remove_long_short.min_wav_duration: Minimum duration in seconds
@@ -247,6 +248,11 @@ class TTSSystem(BaseSystem):
                 "max_wav_duration must be set for remove_long_short stage."
             )
 
+        # Parse the parallel configuration early to set up parallelism for
+        # the duration-filtering runner (mirrors compute_xvectors).
+        if self.training_config.get("parallel"):
+            set_parallel(self.training_config.parallel)
+
         # Get list of splits to process (Default: all splits)
         splits = rls_cfg.get("splits", ["train", "valid", "test"])
 
@@ -254,6 +260,8 @@ class TTSSystem(BaseSystem):
             splits = [splits]
 
         manifest_paths = rls_cfg.get("manifest_paths", {})
+        batch_size = rls_cfg.get("batch_size", None)
+        async_mode = rls_cfg.get("async_mode", False)
 
         save_path.mkdir(parents=True, exist_ok=True)
         logger.info(
@@ -274,32 +282,61 @@ class TTSSystem(BaseSystem):
                     f"Manifest file not found for split '{split}': {manifest_path}. Please generate the manifest file using the create_dataset stage and ensure the path is correct."
                 )
 
+            entries, n_dropped_empty = RemoveLongShortProvider._load_entries(
+                manifest_path
+            )
+            n_entries = len(entries)
+
+            provider = RemoveLongShortProvider(
+                config=self.training_config,
+                params={
+                    "manifest_path": str(manifest_path),
+                    "min_duration": min_duration,
+                    "max_duration": max_duration,
+                },
+            )
+
+            runner = RemoveLongShortRunner(
+                provider=provider,
+                batch_size=batch_size,
+                async_mode=async_mode,
+            )
+
+            logger.info(
+                f"Checking durations for {n_entries} utterances (split: {split})"
+            )
+
+            indices = list(range(n_entries))
+            results = runner(indices) if n_entries else []
+
+            if results is None:
+                logger.info(
+                    f"Async job submitted for split '{split}'. Check result "
+                    "directory for outputs."
+                )
+                continue
+
+            flat = []
+            for item in results:
+                if isinstance(item, list):
+                    flat.extend(item)
+                else:
+                    flat.append(item)
+
+            # parallel_for yields results in completion order, not submission
+            # order, so re-sort by idx to keep the manifest deterministic.
+            flat.sort(key=lambda r: r["idx"])
+            keep_by_idx = {r["idx"]: r["keep"] for r in flat}
+
             n_kept = 0
             n_dropped_duration = 0
-            n_dropped_empty = 0
             filtered_entries = []
-
-            with open(manifest_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    parts = line.rstrip("\n").split("\t")
-
-                    # Mirror espnet2's `NF != 1` filter: drop rows without text.
-                    if len(parts) < 3 or parts[2].strip() == "":
-                        n_dropped_empty += 1
-                        continue
-
-                    wav_path = parts[1]
-                    duration = sf.info(wav_path).duration
-
-                    # Strict inequalities to match espnet2 tts.sh awk filter.
-                    if duration <= min_duration or duration >= max_duration:
-                        n_dropped_duration += 1
-                        continue
-
-                    filtered_entries.append(
-                        line if line.endswith("\n") else line + "\n"
-                    )
+            for idx, (_, _, line) in enumerate(entries):
+                if keep_by_idx[idx]:
+                    filtered_entries.append(line)
                     n_kept += 1
+                else:
+                    n_dropped_duration += 1
 
             with open(filtered_manifest_path, "w", encoding="utf-8") as f:
                 f.writelines(filtered_entries)
