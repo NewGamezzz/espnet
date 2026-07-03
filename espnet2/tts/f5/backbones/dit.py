@@ -15,9 +15,9 @@ import threading
 import torch
 import torch.nn.functional as F
 from torch import nn
-from x_transformers.x_transformers import RotaryEmbedding
+from espnet2.tts.f5.rotary import RotaryEmbedding
 
-from src.f5_tts.model.modules import (
+from espnet2.tts.f5.modules import (
     AdaLayerNorm_Final,
     ConvNeXtV2Block,
     ConvPositionEmbedding,

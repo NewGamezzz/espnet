@@ -19,9 +19,9 @@ import torch.nn.functional as F
 import torchaudio
 from librosa.filters import mel as librosa_mel_fn
 from torch import nn
-from x_transformers.x_transformers import apply_rotary_pos_emb
+from espnet2.tts.f5.rotary import apply_rotary_pos_emb
 
-from src.f5_tts.model.utils import is_package_available
+from espnet2.tts.f5.utils import is_package_available
 
 
 # raw wav to mel spec

@@ -1,42 +1,36 @@
-"""Recipe-local, espnet2-compatible TTS task.
+"""Registration hook that adds F5-TTS to espnet2's TTS task.
 
-Mirrors the spirit of ``espnet3/systems/asr/task.py`` (which reuses the espnet2
-ASR task): this is a thin extension of espnet2's :class:`espnet2.tasks.tts.TTSTask`
-that stays fully compatible with the built-in espnet2 TTS models (tacotron2,
-fastspeech2, vits, jets, ...) while adding two F5-TTS components as named choices:
+This module is **not** a new task — it re-exports espnet2's
+:class:`espnet2.tasks.tts.TTSTask` unchanged. Its only job is the import-time
+side effect of registering two F5 components as named choices:
 
-    * ``tts: f5tts``               -> :class:`src.f5_tts.model.f5tts.F5TTS`
-    * ``feats_extract: vocoder_mel`` -> :class:`...feats_extract.vocoder_mel.VocoderMelSpec`
+    * ``tts: f5tts``                 -> :class:`espnet2.tts.f5.f5tts.F5TTS`
+    * ``feats_extract: vocoder_mel`` -> :class:`espnet2.tts.feats_extract.vocoder_mel.VocoderMelSpec`
 
-Selected in a training config via::
+Why this module has to exist
+----------------------------
+``TTSTask.build_model`` resolves these components **by name** through the
+module-level ``ClassChoices`` registries (``tts_choices.get_class(args.tts)``,
+see ``espnet2/tasks/tts.py``), not via a hydra ``_target_``. So the names must be
+registered before ``build_model`` runs.
 
-    task: src.f5_tts.task.TTSTask
-    model:
-      tts: f5tts
-      tts_conf: {...}
-      feats_extract: vocoder_mel
-      feats_extract_conf: {...}
+We deliberately register here rather than in ``espnet2/tasks/tts.py`` itself:
+doing it in core would import ``F5TTS`` (and thus ``x_transformers``) on *every*
+import of the TTS task, forcing that dependency on all ASR/TTS users. Keeping the
+registration recipe-local confines the extra deps to runs that actually use F5.
 
-Because espnet2's ``TTSTask.build_model`` resolves components through the
-module-level ``ClassChoices`` registries, we register the F5 classes into those
-registries here. ``ClassChoices`` reads its ``classes`` dict live, so the new
-names appear in ``--tts`` / ``--feats_extract`` and in ``build_model`` without
-copying the task. Importing this module (which the recipe always does via
-``task: src.f5_tts.task.TTSTask``) performs the registration.
+The config line ``task: src.f5_tts.task.TTSTask`` is what imports this module and
+triggers the registration; it then gets espnet2's real ``TTSTask``.
 """
 
-from espnet2.tasks.tts import TTSTask as _ESPnet2TTSTask
-from espnet2.tasks.tts import feats_extractor_choices, tts_choices
+from espnet2.tasks.tts import TTSTask, feats_extractor_choices, tts_choices
 
-from src.f5_tts.feats_extract.vocoder_mel import VocoderMelSpec
-from src.f5_tts.model.f5tts import F5TTS
+from espnet2.tts.f5.f5tts import F5TTS
+from espnet2.tts.feats_extract.vocoder_mel import VocoderMelSpec
 
-# Register F5-TTS components as named choices (idempotent).
+# Register F5-TTS components as named choices (idempotent). Re-exporting
+# espnet2's TTSTask keeps `task: src.f5_tts.task.TTSTask` working unchanged.
 tts_choices.classes.setdefault("f5tts", F5TTS)
 feats_extractor_choices.classes.setdefault("vocoder_mel", VocoderMelSpec)
 
-
-class TTSTask(_ESPnet2TTSTask):
-    """espnet2 TTSTask + F5-TTS (``f5tts``) and vocoder mel (``vocoder_mel``)."""
-
-    pass
+__all__ = ["TTSTask"]

@@ -25,6 +25,10 @@ dataset:
         inference: true
         ref_mode: cross_speaker
         ref_seed: 0
+        # Pick SHORT whole utterances as the voice prompt (exact transcript, no
+        # clipping). Keeps the prompt from dominating short targets.
+        ref_min_sec: 1.0
+        ref_max_sec: 4.0
     - name: test
       data_src_args:
         split: test
@@ -34,6 +38,8 @@ dataset:
         inference: true
         ref_mode: cross_speaker
         ref_seed: 0
+        ref_min_sec: 1.0
+        ref_max_sec: 4.0
 
 parallel:
   env: local

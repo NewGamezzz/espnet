@@ -17,7 +17,7 @@ from typing import Any, Dict, Optional, Tuple
 import torch
 
 from espnet2.tts.feats_extract.abs_feats_extract import AbsFeatsExtract
-from src.f5_tts.model.modules import MelSpec
+from espnet2.tts.f5.modules import MelSpec
 
 
 class VocoderMelSpec(AbsFeatsExtract):

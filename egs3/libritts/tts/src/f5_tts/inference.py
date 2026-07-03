@@ -252,7 +252,7 @@ class F5TTSInference:
 
         if "F5PinyinPreprocessor" in target or prep.get("vocab_file"):
             # F5 zh+en pinyin: F5's own tokenizer + vocab (unknown token -> 0).
-            from src.f5_tts.text.pinyin import load_vocab_char_map, text_to_pinyin_ids
+            from espnet2.text.f5_pinyin import load_vocab_char_map, text_to_pinyin_ids
 
             vocab_char_map = load_vocab_char_map(prep["vocab_file"])
             self._tokenize_fn = lambda text: text_to_pinyin_ids(text, vocab_char_map)
@@ -265,7 +265,7 @@ class F5TTSInference:
                 "Could not find dataset.preprocessor.token_list in train_config."
             )
         if prep.get("g2p_type") == "f5_pinyin":
-            from src.f5_tts.text.pinyin import register_f5_pinyin_g2p
+            from espnet2.text.f5_pinyin import register_f5_pinyin_g2p
 
             register_f5_pinyin_g2p()
         cleaner = TextCleaner(prep.get("text_cleaner"))

@@ -22,8 +22,8 @@ from typing import Dict, Optional, Tuple
 import torch
 
 from espnet2.tts.abs_tts import AbsTTS
-from src.f5_tts.model.backbones.dit import DiT
-from src.f5_tts.model.cfm import CFM
+from espnet2.tts.f5.backbones.dit import DiT
+from espnet2.tts.f5.cfm import CFM
 
 
 class F5TTS(AbsTTS):

@@ -14,7 +14,7 @@ A plain callable (not an ``AbsPreprocessor``), so ESPnet3 calls ``preprocessor(s
 
 from __future__ import annotations
 
-from src.f5_tts.text.pinyin import load_vocab_char_map, text_to_pinyin_ids
+from espnet2.text.f5_pinyin import load_vocab_char_map, text_to_pinyin_ids
 
 
 class F5PinyinPreprocessor:

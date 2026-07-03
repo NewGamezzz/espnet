@@ -5,7 +5,8 @@ from __future__ import annotations
 import torch
 import torch.distributed as dist
 import lightning.pytorch as pl
-from ema_pytorch import EMA
+
+from src.f5_tts.callbacks.vendored_ema import EMA
 
 
 class EMACallback(pl.Callback):

@@ -17,10 +17,10 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
-from torchdiffeq import odeint
+from espnet2.tts.f5.solvers import odeint
 
-from src.f5_tts.model.modules import MelSpec
-from src.f5_tts.model.utils import (
+from espnet2.tts.f5.modules import MelSpec
+from espnet2.tts.f5.utils import (
     default,
     exists,
     get_epss_timesteps,

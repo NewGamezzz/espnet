@@ -104,6 +104,8 @@ model:
     dim_head: 64
     ff_mult: 2
     text_dim: 512
+    text_mask_padding: false   # match F5TTS_Base.yaml (was our default True)
+    pe_attn_head: 1            # match F5TTS_Base.yaml (was our default None)
     conv_layers: 4
     sigma: 0.0
     audio_drop_prob: 0.3
@@ -128,7 +130,7 @@ optimizer:
 scheduler:
   # F5-TTS schedule: linear warmup then linear decay to ~0 (SequentialLR).
   # total_steps MUST match the planned run (epochs * updates_per_epoch).
-  _target_: src.f5_tts.schedulers.linear_warmup_decay
+  _target_: espnet2.schedulers.linear_warmup_decay.linear_warmup_decay
   warmup_steps: 20000
   total_steps: 1200000
 scheduler_interval: step
