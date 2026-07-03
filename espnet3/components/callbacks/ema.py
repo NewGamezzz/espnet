@@ -1,4 +1,4 @@
-# f5tts/callbacks/ema_callback.py
+# espnet3/components/callbacks/ema.py
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import torch
 import torch.distributed as dist
 import lightning.pytorch as pl
 
-from src.f5_tts.callbacks.vendored_ema import EMA
+from espnet3.components.callbacks.vendored_ema import EMA
 
 
 class EMACallback(pl.Callback):
@@ -18,9 +18,8 @@ class EMACallback(pl.Callback):
     - Saves under 'ema_model_state_dict' matching F5-TTS checkpoint format.
     """
 
-    def __init__(self, decay: float = 0.9999, warmup_steps: int = 0, **ema_kwargs):
+    def __init__(self, decay: float = 0.9999, **ema_kwargs):
         self.decay = decay
-        self.warmup_steps = warmup_steps
         self.ema_kwargs = ema_kwargs
         self.ema: EMA | None = None
         self._backup: dict | None = None
@@ -45,13 +44,15 @@ class EMACallback(pl.Callback):
         #           ema_model.update()
         # on_train_batch_end runs AFTER optimizer.step()/scheduler.step()/zero_grad(),
         # so this is the post-zero_grad, once-per-update, main-only placement.
+        # Warmup is handled entirely inside EMA.update() via update_after_step /
+        # update_every (settable through ema_kwargs) — same as upstream, which
+        # never gates the call to ema_model.update() itself.
         if self.ema is None or not trainer.is_global_zero:
             return
         accum = max(int(getattr(trainer, "accumulate_grad_batches", 1)), 1)
         if (batch_idx + 1) % accum != 0:  # not a true optimizer step yet
             return
-        if trainer.global_step >= self.warmup_steps:
-            self.ema.update()
+        self.ema.update()
 
     def _swap_in_ema(self, trainer, pl_module):
         """Load the EMA weights into the online model for evaluation.

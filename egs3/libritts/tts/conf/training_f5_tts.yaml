@@ -1,9 +1,9 @@
 exp_tag: train_f5_tts_libritts
 
-# Recipe-local, espnet2-compatible TTS task. F5-TTS is registered as `tts: f5tts`
-# (see src/f5_tts/task.py), so the model is built by espnet2's ESPnetTTSModel
+# espnet2's TTS task. F5-TTS is registered natively as `tts: f5tts`
+# (see espnet2/tasks/tts.py), so the model is built by espnet2's ESPnetTTSModel
 # exactly like vits/fastspeech2 — feats_extract + normalize + tts.
-task: src.f5_tts.task.TTSTask
+task: espnet2.tasks.tts.TTSTask
 
 num_device: 1
 num_nodes: 1
@@ -187,7 +187,7 @@ trainer:
   gradient_clip_val: 1.0
   strategy: auto
   callbacks:
-    - _target_: src.f5_tts.callbacks.ema.EMACallback
+    - _target_: espnet3.components.callbacks.ema.EMACallback
       decay: 0.9999
   logger:
     _target_: lightning.pytorch.loggers.WandbLogger

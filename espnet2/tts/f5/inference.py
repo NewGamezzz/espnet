@@ -1,6 +1,7 @@
-"""F5-TTS inference engine for the ESPnet3 LibriTTS recipe.
+"""F5-TTS inference engine.
 
-Built by the ``infer`` stage (``model._target_: src.f5_tts.inference.F5TTSInference``).
+Built by a recipe's ``infer`` stage
+(``model._target_: espnet2.tts.f5.inference.F5TTSInference``).
 For each test sample the runner calls ``model(**{key: data[key] for key in input_key})``
 with ``input_key: [text, ref_speech, ref_text]`` (cross/same-speaker protocol) and
 feeds the result to ``src.inference.build_output`` (which needs a ``"wav"`` entry).

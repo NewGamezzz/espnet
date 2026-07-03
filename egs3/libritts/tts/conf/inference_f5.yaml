@@ -46,7 +46,7 @@ parallel:
   n_workers: 1
 
 model:
-  _target_: src.f5_tts.inference.F5TTSInference
+  _target_: espnet2.tts.f5.inference.F5TTSInference
   # Rebuilds ESPnetTTSModel(F5TTS) via the espnet2 task and matches training
   # tokenization, both read from this training config.
   train_config: ${recipe_dir}/conf/training_f5_tts.yaml

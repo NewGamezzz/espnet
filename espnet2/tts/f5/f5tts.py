@@ -146,7 +146,7 @@ class F5TTS(AbsTTS):
 
         F5 is zero-shot: it needs a reference. ``speech`` is the reference mel or
         waveform; ``text`` should be the (ref + target) token ids — for the full
-        cross-speaker recipe protocol use ``src.f5_tts.inference.F5TTSInference``,
+        cross-speaker recipe protocol use ``espnet2.tts.f5.inference.F5TTSInference``,
         which handles reference pairing and vocoding.
 
         Returns ``{"feat_gen": mel[T_gen, odim]}``.
