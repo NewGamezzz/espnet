@@ -115,6 +115,7 @@ def main(args) -> None:
         training_config=training_config,
         inference_config=inference_config,
         metrics_config=metrics_config,
+        publication_config=None,
         log=logger,
     )
     validate_experiment_context(
