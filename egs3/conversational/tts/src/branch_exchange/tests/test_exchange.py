@@ -4,6 +4,7 @@ and pad-mask semantics. No espnet imports here."""
 
 import pytest
 import torch
+
 from branch_exchange import BranchMHAExchange, IdentityExchange, TACExchange
 
 DIM = 32
@@ -51,11 +52,7 @@ def test_permutation_equivariance(kind, with_pad):
     n = 4
     ex = randomize(make_exchange(kind))
     h = make_h(n)
-    pad = (
-        torch.tensor([[False, False, True, False], [False, True, False, False]])
-        if with_pad
-        else None
-    )
+    pad = torch.tensor([[False, False, True, False], [False, True, False, False]]) if with_pad else None
     torch.manual_seed(1)
     perm = torch.randperm(n)
     with torch.no_grad():

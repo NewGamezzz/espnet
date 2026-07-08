@@ -71,7 +71,9 @@ class RemoveLongShortProvider(EnvironmentProvider):
                 "remove_long_short stage."
             )
 
-        entries, n_dropped_empty = RemoveLongShortProvider._load_entries(manifest_path)
+        entries, n_dropped_empty = RemoveLongShortProvider._load_entries(
+            manifest_path
+        )
 
         return {
             "entries": entries,

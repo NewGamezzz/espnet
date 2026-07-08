@@ -82,13 +82,7 @@ class ExchangedBlock(nn.Module):
     exchange and producing wrong gradients.
     """
 
-    def __init__(
-        self,
-        base_block: nn.Module,
-        exchange: nn.Module,
-        ctx: BranchContext,
-        spec: BlockSpec,
-    ):
+    def __init__(self, base_block: nn.Module, exchange: nn.Module, ctx: BranchContext, spec: BlockSpec):
         super().__init__()
         self.base_block = base_block
         self.exchange = exchange
@@ -114,9 +108,7 @@ class ExchangedBlock(nn.Module):
         if _current_graph_task_id() != -1:
             self._validate_recompute()
         else:
-            object.__setattr__(
-                self, "_fwd_snapshot", (self.ctx.n_branch, self.ctx.pad_mask)
-            )
+            object.__setattr__(self, "_fwd_snapshot", (self.ctx.n_branch, self.ctx.pad_mask))
         out = self.base_block(*args, **kwargs)
         if not self.ctx.active:
             return out
@@ -131,10 +123,7 @@ def _resolve_blocks(model: nn.Module, path: str) -> nn.ModuleList:
     for part in path.split("."):
         obj = getattr(obj, part)
     if not isinstance(obj, nn.ModuleList):
-        raise TypeError(
-            f"{path!r} on {type(model).__name__} is {type(obj).__name__}, "
-            "expected nn.ModuleList"
-        )
+        raise TypeError(f"{path!r} on {type(model).__name__} is {type(obj).__name__}, expected nn.ModuleList")
     return obj
 
 
@@ -150,15 +139,11 @@ def inject_exchange(
     """
     blocks = _resolve_blocks(model, spec.path)
     if schedule.depth != len(blocks):
-        raise ValueError(
-            f"schedule depth {schedule.depth} != number of blocks {len(blocks)}"
-        )
+        raise ValueError(f"schedule depth {schedule.depth} != number of blocks {len(blocks)}")
     for i in range(len(blocks)):
         if schedule.mode(i) is Mode.P_TAC:
             if isinstance(blocks[i], ExchangedBlock):
-                raise ValueError(
-                    f"block {i} is already an ExchangedBlock; remove_exchange first"
-                )
+                raise ValueError(f"block {i} is already an ExchangedBlock; remove_exchange first")
             blocks[i] = ExchangedBlock(blocks[i], schedule.exchange_for(i), ctx, spec)
     return model
 

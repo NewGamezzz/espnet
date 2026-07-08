@@ -7,6 +7,8 @@ import subprocess
 from importlib import resources
 from pathlib import Path
 
+from espnet2.text.build_tokenizer import build_tokenizer
+from espnet2.text.phoneme_tokenizer import PhonemeTokenizer
 from espnet3.components.data.dataset_builder import DatasetBuilder
 from espnet3.utils.config_utils import load_config_with_defaults
 
@@ -24,8 +26,7 @@ _CFG = _load_builder_config()
 
 def _scan_subset_entries(subset_dir: Path) -> list[tuple[str, Path, str, str]]:
     """
-    Scan a subset directory and return a list of
-    (utt_id, wav_path, text, spk_key) tuples.
+    Scan a subset directory and return a list of (utt_id, wav_path, text, spk_key) tuples.
 
     Args:
         subset_dir: Path to the subset directory (e.g., "LibriTTS/train-clean-100")
@@ -89,8 +90,7 @@ class LibriTTSBuilder(DatasetBuilder):
             This method:
             1. Checks for the presence of required LibriTTS subsets.
             2. If not present, it runs the download script for each missing subset.
-            3. Verifies that the required subsets are present after the
-               download attempt.
+            3. Verifies that the required subsets are present after the download attempt.
 
         """
         dataset_root = Path(recipe_dir).resolve() / _CFG["dataset_path"]

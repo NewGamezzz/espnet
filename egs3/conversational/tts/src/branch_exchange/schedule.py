@@ -38,14 +38,12 @@ def _parse_mode(value) -> Mode:
         return value
     key = str(value).strip()
     if key not in _MODE_ALIASES:
-        raise ValueError(
-            f"unknown exchange mode {value!r}; expected one of {sorted(_MODE_ALIASES)}"
-        )
+        raise ValueError(f"unknown exchange mode {value!r}; expected one of {sorted(_MODE_ALIASES)}")
     return _MODE_ALIASES[key]
 
 
 def _parse_range(key: str) -> tuple[int, int]:
-    """Parse a 1-indexed inclusive range key like ``"1-6"`` or an index ``"7"``."""
+    """Parse a 1-indexed inclusive range key like ``"1-6"`` or a single index ``"7"``."""
     key = key.strip()
     if "-" in key:
         lo_s, hi_s = key.split("-", 1)
@@ -53,9 +51,7 @@ def _parse_range(key: str) -> tuple[int, int]:
     else:
         lo = hi = int(key)
     if lo < 1 or hi < lo:
-        raise ValueError(
-            f"invalid block range {key!r}: must be 1-indexed with start <= end"
-        )
+        raise ValueError(f"invalid block range {key!r}: must be 1-indexed with start <= end")
     return lo, hi
 
 
@@ -85,9 +81,7 @@ class ExchangeSchedule:
                 raise ValueError(f"range {key!r} exceeds depth {depth}")
             for i in range(lo - 1, hi):
                 if modes[i] is not None:
-                    raise ValueError(
-                        f"block {i + 1} covered more than once (by range {key!r})"
-                    )
+                    raise ValueError(f"block {i + 1} covered more than once (by range {key!r})")
                 modes[i] = mode
         missing = [i + 1 for i, m in enumerate(modes) if m is None]
         if missing:
