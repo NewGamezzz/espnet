@@ -127,6 +127,7 @@ Demonstration
     - Conformer FastSpeech & FastSpeech2
     - VITS
     - JETS
+    - F5-TTS
 - Multi-speaker & multi-language extension
     - Pre-trained speaker embedding (e.g., X-vector)
     - Speaker ID embedding
