@@ -19,6 +19,12 @@ from torch import nn
 from .registry import BlockSpec
 from .schedule import ExchangeSchedule, Mode
 
+_NO_SNAPSHOT = object()
+
+# Same signal torch.utils.checkpoint uses to key recomputation: user code only
+# runs inside a graph task while backward re-executes a checkpointed region.
+_current_graph_task_id = getattr(torch._C, "_current_graph_task_id", lambda: -1)
+
 
 class BranchContext:
     """Runtime switch telling every ``ExchangedBlock`` how many branches are
@@ -38,7 +44,13 @@ class BranchContext:
 
     @contextmanager
     def branches(self, n: int, pad_mask: torch.Tensor | None = None):
-        """Activate exchanges for ``n`` folded branches; exception-safe."""
+        """Activate exchanges for ``n`` folded branches; exception-safe.
+
+        With activation checkpointing (``use_reentrant=False``), ``backward()``
+        must also run inside this context: the recompute re-executes each
+        ``ExchangedBlock.forward``, which verifies the context still matches
+        the one seen at forward time and raises ``RuntimeError`` otherwise.
+        """
         self.n_branch = n
         self.pad_mask = pad_mask
         try:
@@ -61,6 +73,13 @@ class ExchangedBlock(nn.Module):
     batches (cond and uncond concatenated along batch) because each segment's
     length is a multiple of ``n_branch``, so groups never straddle the
     segment boundary.
+
+    The context is read at call time, so under activation checkpointing
+    (``use_reentrant=False``) ``backward()`` must run inside the same
+    ``ctx.branches(...)`` context as the forward: each forward snapshots the
+    context state, and the checkpoint recompute raises ``RuntimeError`` if the
+    context has since been exited or changed, instead of silently skipping the
+    exchange and producing wrong gradients.
     """
 
     def __init__(self, base_block: nn.Module, exchange: nn.Module, ctx: BranchContext, spec: BlockSpec):
@@ -69,8 +88,27 @@ class ExchangedBlock(nn.Module):
         self.exchange = exchange
         object.__setattr__(self, "ctx", ctx)
         object.__setattr__(self, "spec", spec)
+        object.__setattr__(self, "_fwd_snapshot", _NO_SNAPSHOT)
+
+    def _validate_recompute(self):
+        snapshot = self._fwd_snapshot
+        if snapshot is _NO_SNAPSHOT:
+            return
+        n_branch, pad_mask = snapshot
+        if self.ctx.n_branch != n_branch or self.ctx.pad_mask is not pad_mask:
+            raise RuntimeError(
+                "BranchContext changed between the checkpointed forward and its "
+                f"recomputation during backward: forward saw n_branch={n_branch}, "
+                f"recompute sees n_branch={self.ctx.n_branch}. With activation "
+                "checkpointing, backward() must be called inside the same "
+                "ctx.branches(...) context as the forward pass."
+            )
 
     def forward(self, *args, **kwargs):
+        if _current_graph_task_id() != -1:
+            self._validate_recompute()
+        else:
+            object.__setattr__(self, "_fwd_snapshot", (self.ctx.n_branch, self.ctx.pad_mask))
         out = self.base_block(*args, **kwargs)
         if not self.ctx.active:
             return out

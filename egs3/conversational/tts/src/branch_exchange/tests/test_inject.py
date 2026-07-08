@@ -123,6 +123,39 @@ def test_gradient_flow(kind, ckpt):
             assert p.grad.abs().sum().item() > 0, name
 
 
+# ---- checkpoint recompute guard: backward must stay inside ctx.branches ----
+
+
+@pytest.mark.parametrize("kind", ["tac", "mha"])
+def test_checkpoint_backward_outside_context_fails(kind):
+    model = make_dit(checkpoint_activations=True)
+    ctx = inject_all(model, FACTORIES[kind])
+    inputs = make_branch_inputs(3)
+
+    with ctx.branches(3):
+        loss = run_folded(model, inputs).sum()
+    with pytest.raises(RuntimeError, match="BranchContext changed"):
+        loss.backward()
+
+    model.zero_grad(set_to_none=True)
+    with ctx.branches(3):
+        loss = run_folded(model, inputs).sum()
+    with ctx.branches(2), pytest.raises(RuntimeError, match="BranchContext changed"):
+        loss.backward()
+
+
+def test_backward_outside_context_ok_without_checkpointing():
+    model = make_dit(checkpoint_activations=False)
+    ctx = inject_all(model, FACTORIES["tac"])
+    inputs = make_branch_inputs(3)
+
+    with ctx.branches(3):
+        loss = run_folded(model, inputs).sum()
+    loss.backward()
+    for m in iter_exchanges(model):
+        assert m.g.grad is not None
+
+
 # ---- test 5a: identity exchange / inactive ctx guards ----
 
 
