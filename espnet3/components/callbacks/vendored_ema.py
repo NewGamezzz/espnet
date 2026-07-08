@@ -47,7 +47,9 @@ def maybe_coerce_dtype(t, dtype):
     return t.to(dtype)
 
 
-def inplace_copy(tgt: Tensor, src: Tensor, *, auto_move_device=False, coerce_dtype=False):
+def inplace_copy(
+    tgt: Tensor, src: Tensor, *, auto_move_device=False, coerce_dtype=False
+):
     if auto_move_device:
         src = src.to(tgt.device)
 
@@ -57,7 +59,9 @@ def inplace_copy(tgt: Tensor, src: Tensor, *, auto_move_device=False, coerce_dty
     tgt.copy_(src)
 
 
-def inplace_lerp(tgt: Tensor, src: Tensor, weight, *, auto_move_device=False, coerce_dtype=False):
+def inplace_lerp(
+    tgt: Tensor, src: Tensor, weight, *, auto_move_device=False, coerce_dtype=False
+):
     if auto_move_device:
         src = src.to(tgt.device)
 
@@ -72,7 +76,8 @@ class EMA(Module):
     Implements exponential moving average shadowing for your model.
 
     Utilizes an inverse decay schedule to manage longer term training runs.
-    By adjusting the power, you can control how fast EMA will ramp up to your specified beta.
+    By adjusting the power, you can control how fast EMA will ramp up to your
+    specified beta.
 
     @crowsonkb's notes on EMA Warmup:
 
@@ -116,7 +121,8 @@ class EMA(Module):
 
         self.is_frozen = beta == 1.0
 
-        # whether to include the online model within the module tree, so that state_dict also saves it
+        # whether to include the online model within the module tree,
+        # so that state_dict also saves it
 
         self.include_online_model = include_online_model
 
@@ -142,8 +148,16 @@ class EMA(Module):
 
         # tensor update functions
 
-        self.inplace_copy = partial(inplace_copy, auto_move_device=allow_different_devices, coerce_dtype=coerce_dtype)
-        self.inplace_lerp = partial(inplace_lerp, auto_move_device=allow_different_devices, coerce_dtype=coerce_dtype)
+        self.inplace_copy = partial(
+            inplace_copy,
+            auto_move_device=allow_different_devices,
+            coerce_dtype=coerce_dtype,
+        )
+        self.inplace_lerp = partial(
+            inplace_lerp,
+            auto_move_device=allow_different_devices,
+            coerce_dtype=coerce_dtype,
+        )
 
         # updating hyperparameters
 
@@ -155,7 +169,9 @@ class EMA(Module):
         self.min_value = min_value
 
         assert isinstance(param_or_buffer_names_no_ema, (set, list))
-        self.param_or_buffer_names_no_ema = param_or_buffer_names_no_ema  # parameter or buffer
+        self.param_or_buffer_names_no_ema = (
+            param_or_buffer_names_no_ema  # parameter or buffer
+        )
 
         self.ignore_names = ignore_names
         self.ignore_startswith_names = ignore_startswith_names
@@ -199,7 +215,10 @@ class EMA(Module):
                 self.ema_model = deepcopy(self.model)
             except Exception as e:
                 print(f"Error: While trying to deepcopy model: {e}")
-                print("Your model was not copyable. Please make sure you are not using any LazyLinear")
+                print(
+                    "Your model was not copyable. Please make sure "
+                    "you are not using any LazyLinear"
+                )
                 exit()
 
         for p in self.ema_model.parameters():
@@ -328,7 +347,9 @@ class EMA(Module):
         if should_update:
             self.update_moving_average(self.ema_model, self.model)
 
-        if exists(self.update_model_with_ema_every) and divisible_by(step, self.update_model_with_ema_every):
+        if exists(self.update_model_with_ema_every) and divisible_by(
+            step, self.update_model_with_ema_every
+        ):
             self.update_model_with_ema()
 
     @torch.no_grad()
@@ -338,7 +359,9 @@ class EMA(Module):
 
         # move ema model to online model device if not same and needed
 
-        if self.move_ema_to_online_device and get_module_device(ma_model) != get_module_device(current_model):
+        if self.move_ema_to_online_device and get_module_device(
+            ma_model
+        ) != get_module_device(current_model):
             ma_model.to(get_module_device(current_model))
 
         # get current decay
@@ -359,7 +382,9 @@ class EMA(Module):
             if name in self.ignore_names:
                 continue
 
-            if any([name.startswith(prefix) for prefix in self.ignore_startswith_names]):
+            if any(
+                [name.startswith(prefix) for prefix in self.ignore_startswith_names]
+            ):
                 continue
 
             if name in self.param_or_buffer_names_no_ema:
@@ -376,7 +401,9 @@ class EMA(Module):
             if name in self.ignore_names:
                 continue
 
-            if any([name.startswith(prefix) for prefix in self.ignore_startswith_names]):
+            if any(
+                [name.startswith(prefix) for prefix in self.ignore_startswith_names]
+            ):
                 continue
 
             if name in self.param_or_buffer_names_no_ema:
@@ -399,12 +426,22 @@ class EMA(Module):
             # use foreach if available and specified
 
             if self.allow_different_devices:
-                tensors_to_copy = [(tgt, src.to(tgt.device)) for tgt, src in tensors_to_copy]
-                tensors_to_lerp = [(tgt, src.to(tgt.device)) for tgt, src in tensors_to_lerp]
+                tensors_to_copy = [
+                    (tgt, src.to(tgt.device)) for tgt, src in tensors_to_copy
+                ]
+                tensors_to_lerp = [
+                    (tgt, src.to(tgt.device)) for tgt, src in tensors_to_lerp
+                ]
 
             if self.coerce_dtype:
-                tensors_to_copy = [(tgt, maybe_coerce_dtype(src, tgt.dtype)) for tgt, src in tensors_to_copy]
-                tensors_to_lerp = [(tgt, maybe_coerce_dtype(src, tgt.dtype)) for tgt, src in tensors_to_lerp]
+                tensors_to_copy = [
+                    (tgt, maybe_coerce_dtype(src, tgt.dtype))
+                    for tgt, src in tensors_to_copy
+                ]
+                tensors_to_lerp = [
+                    (tgt, maybe_coerce_dtype(src, tgt.dtype))
+                    for tgt, src in tensors_to_lerp
+                ]
 
             if len(tensors_to_copy) > 0:
                 tgt_copy, src_copy = zip(*tensors_to_copy)

@@ -8,7 +8,6 @@ import sys
 
 import pytest
 import torch
-
 from branch_exchange import (
     REGISTRY,
     BranchContext,
@@ -22,11 +21,11 @@ from branch_exchange import (
     remove_exchange,
 )
 from conftest import (
-    B,
     DEPTH,
     DIM,
     MEL,
     SRC_DIR,
+    B,
     T,
     inject_all,
     iter_exchanges,
@@ -239,7 +238,9 @@ def test_cfg_segments_no_cross_mixing():
 
 def test_schedule_spec_parsing_and_validation():
     factory = IdentityExchange
-    sched = ExchangeSchedule.from_spec({"1-2": "P", "3": "P+TAC", "4-4": "P_TAC"}, depth=4, factory=factory)
+    sched = ExchangeSchedule.from_spec(
+        {"1-2": "P", "3": "P+TAC", "4-4": "P_TAC"}, depth=4, factory=factory
+    )
     assert [sched.mode(i) for i in range(4)] == [Mode.P, Mode.P, Mode.P_TAC, Mode.P_TAC]
     assert sched.exchange_for(0) is None
     assert isinstance(sched.exchange_for(2), IdentityExchange)
@@ -260,7 +261,9 @@ def test_schedule_spec_parsing_and_validation():
 def test_p_blocks_stay_untouched():
     model = make_dit()
     orig_blocks = list(model.transformer_blocks)
-    sched = ExchangeSchedule.from_spec({"1-2": "P", "3-4": "P+TAC"}, depth=4, factory=FACTORIES["tac"])
+    sched = ExchangeSchedule.from_spec(
+        {"1-2": "P", "3-4": "P+TAC"}, depth=4, factory=FACTORIES["tac"]
+    )
     inject_exchange(model, REGISTRY["f5_dit"], sched, BranchContext())
 
     assert model.transformer_blocks[0] is orig_blocks[0]
@@ -278,7 +281,8 @@ def test_import_purity():
         "import sys\n"
         f"sys.path.insert(0, {str(SRC_DIR)!r})\n"
         "import branch_exchange\n"
-        "bad = sorted(m for m in sys.modules if m.split('.')[0] in ('espnet2', 'espnet3'))\n"
+        "bad = sorted(m for m in sys.modules"
+        " if m.split('.')[0] in ('espnet2', 'espnet3'))\n"
         "assert not bad, f'branch_exchange imported espnet modules: {bad}'\n"
     )
     subprocess.run([sys.executable, "-c", code], check=True)

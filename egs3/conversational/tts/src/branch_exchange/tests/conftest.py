@@ -45,7 +45,9 @@ def make_branch_inputs(n_branch, seed=0, batch=B, t=T, nt=NT, mel_dim=MEL):
     gen = torch.Generator().manual_seed(seed)
     x = torch.randn(batch, n_branch, t, mel_dim, generator=gen)
     cond = torch.randn(batch, n_branch, t, mel_dim, generator=gen)
-    text = torch.randint(0, DIT_KWARGS["text_num_embeds"], (batch, n_branch, nt), generator=gen)
+    text = torch.randint(
+        0, DIT_KWARGS["text_num_embeds"], (batch, n_branch, nt), generator=gen
+    )
     time = torch.rand(batch, n_branch, generator=gen)
     return x, cond, text, time
 
@@ -53,23 +55,34 @@ def make_branch_inputs(n_branch, seed=0, batch=B, t=T, nt=NT, mel_dim=MEL):
 def run_independent(model, inputs):
     """Run the model separately on each branch's inputs and stack: (B, N, T, mel)."""
     x, cond, text, time = inputs
-    outs = [model(x[:, i], cond[:, i], text[:, i], time[:, i]) for i in range(x.shape[1])]
+    outs = [
+        model(x[:, i], cond[:, i], text[:, i], time[:, i]) for i in range(x.shape[1])
+    ]
     return torch.stack(outs, dim=1)
 
 
 def run_folded(model, inputs):
     """Fold the branch axis into batch, run once, unfold: (B, N, T, mel)."""
     x, cond, text, time = inputs
-    out = model(x.flatten(0, 1), cond.flatten(0, 1), text.flatten(0, 1), time.flatten(0, 1))
+    out = model(
+        x.flatten(0, 1), cond.flatten(0, 1), text.flatten(0, 1), time.flatten(0, 1)
+    )
     return out.unflatten(0, (x.shape[0], x.shape[1]))
 
 
 def inject_all(model, factory, depth=DEPTH):
     """Inject P+TAC at every block; returns the (inactive) BranchContext."""
-    from branch_exchange import REGISTRY, BranchContext, ExchangeSchedule, inject_exchange
+    from branch_exchange import (
+        REGISTRY,
+        BranchContext,
+        ExchangeSchedule,
+        inject_exchange,
+    )
 
     ctx = BranchContext()
-    schedule = ExchangeSchedule.from_spec({f"1-{depth}": "P+TAC"}, depth=depth, factory=factory)
+    schedule = ExchangeSchedule.from_spec(
+        {f"1-{depth}": "P+TAC"}, depth=depth, factory=factory
+    )
     inject_exchange(model, REGISTRY["f5_dit"], schedule, ctx)
     return ctx
 

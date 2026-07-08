@@ -91,17 +91,20 @@ class TTSSystem(BaseSystem):
             training_config.xvector.pretrained_model: Model tag or path
             training_config.xvector.toolkit: 'espnet', 'speechbrain', or 'rawnet'
             training_config.xvector.save_path: Output directory
-            training_config.xvector.splits: List of splits to process (train, valid, test)
+            training_config.xvector.splits: List of splits to process (train,
+                valid, test)
             training_config.xvector.batch_size: Batch size for processing
             training_config.xvector.device: Device to use (default: cuda:0 if available)
 
         Raises:
-            RuntimeError: If required configuration is missing or manifest files not found.
+            RuntimeError: If required configuration is missing or manifest
+                files not found.
         """
         self._reject_stage_args("compute_xvectors", args, kwargs)
         logger.info("TTSSystem.compute_xvectors(): starting x-vector computation")
 
-        # Parse the parallel configuration early to set up parallelism for the x-vector runner
+        # Parse the parallel configuration early to set up parallelism for
+        # the x-vector runner
         if self.training_config.get("parallel"):
             set_parallel(self.training_config.parallel)
 
@@ -113,7 +116,8 @@ class TTSSystem(BaseSystem):
         save_path_str = xvec_cfg.get("save_path", None)
         if save_path_str is None:
             raise RuntimeError(
-                "training_config.xvector.save_path must be set for compute_xvectors stage."
+                "training_config.xvector.save_path must be set "
+                "for compute_xvectors stage."
             )
         save_path = Path(save_path_str)
         save_path.mkdir(parents=True, exist_ok=True)
@@ -148,7 +152,10 @@ class TTSSystem(BaseSystem):
             manifest_path = Path(manifest_path).resolve()
             if not manifest_path.exists():
                 raise RuntimeError(
-                    f"Manifest file not found for split '{split}': {manifest_path}. Please generate the manifest file using the create_dataset stage and ensure the path is correct."
+                    f"Manifest file not found for split '{split}': "
+                    f"{manifest_path}. Please generate the manifest file "
+                    "using the create_dataset stage and ensure the path "
+                    "is correct."
                 )
 
             utterances, _ = XVectorProvider._load_manifest(manifest_path)
@@ -181,7 +188,8 @@ class TTSSystem(BaseSystem):
             )
 
             logger.info(
-                f"Processing {n_utts} utterances for x-vector extraction (split: {split})"
+                f"Processing {n_utts} utterances for x-vector extraction "
+                f"(split: {split})"
             )
 
             indices = list(range(n_utts))
@@ -189,7 +197,8 @@ class TTSSystem(BaseSystem):
 
             if results is None:
                 logger.info(
-                    f"Async job submitted for split '{split}'. Check result directory for outputs."
+                    f"Async job submitted for split '{split}'. "
+                    "Check result directory for outputs."
                 )
                 continue
 
@@ -211,17 +220,27 @@ class TTSSystem(BaseSystem):
     def remove_long_short(self, *args, **kwargs):
         """Remove long-short utterances based on duration thresholds.
 
-        This stage processes manifest files to filter out utterances that are too short or too long based on specified duration thresholds. It reads WAV headers via soundfile to check audio durations (in parallel, via RemoveLongShortProvider/Runner) and saves filtered manifests for downstream stages.
+        This stage processes manifest files to filter out utterances that are
+        too short or too long based on specified duration thresholds. It reads
+        WAV headers via soundfile to check audio durations (in parallel, via
+        RemoveLongShortProvider/Runner) and saves filtered manifests for
+        downstream stages.
 
         Configuration should include:
-            training_config.remove_long_short.min_wav_duration: Minimum duration in seconds
-            training_config.remove_long_short.max_wav_duration: Maximum duration in seconds
-            training_config.remove_long_short.save_path: Directory to save filtered manifests
-            training_config.remove_long_short.splits: List of splits to process (train, valid, test)
-            training_config.remove_long_short.manifest_paths: Optional dict of split to manifest path (default: data/manifest/{split}.tsv)
+            training_config.remove_long_short.min_wav_duration: Minimum
+                duration in seconds
+            training_config.remove_long_short.max_wav_duration: Maximum
+                duration in seconds
+            training_config.remove_long_short.save_path: Directory to save
+                filtered manifests
+            training_config.remove_long_short.splits: List of splits to
+                process (train, valid, test)
+            training_config.remove_long_short.manifest_paths: Optional dict of
+                split to manifest path (default: data/manifest/{split}.tsv)
 
         Raises:
-            RuntimeError: If required configuration is missing or manifest files not found.
+            RuntimeError: If required configuration is missing or manifest
+                files not found.
         """
         self._reject_stage_args("remove_long_short", args, kwargs)
         logger.info(
@@ -231,12 +250,14 @@ class TTSSystem(BaseSystem):
         rls_cfg = self.training_config.get("remove_long_short", None)
         if rls_cfg is None:
             raise RuntimeError(
-                "training_config.remove_long_short must be set for remove_long_short stage."
+                "training_config.remove_long_short must be set "
+                "for remove_long_short stage."
             )
         save_path_str = rls_cfg.get("save_path", None)
         if save_path_str is None:
             raise RuntimeError(
-                "training_config.remove_long_short.save_path must be set for remove_long_short stage."
+                "training_config.remove_long_short.save_path must be set "
+                "for remove_long_short stage."
             )
         save_path = Path(save_path_str)
 
@@ -279,7 +300,10 @@ class TTSSystem(BaseSystem):
             filtered_manifest_path = save_path / manifest_path.name
             if not manifest_path.exists():
                 raise RuntimeError(
-                    f"Manifest file not found for split '{split}': {manifest_path}. Please generate the manifest file using the create_dataset stage and ensure the path is correct."
+                    f"Manifest file not found for split '{split}': "
+                    f"{manifest_path}. Please generate the manifest file "
+                    "using the create_dataset stage and ensure the path "
+                    "is correct."
                 )
 
             entries, n_dropped_empty = RemoveLongShortProvider._load_entries(
@@ -348,20 +372,25 @@ class TTSSystem(BaseSystem):
             )
 
         logger.info(
-            f"Long-short utterance removal completed. Filtered manifests saved to: {save_path}"
+            "Long-short utterance removal completed. "
+            f"Filtered manifests saved to: {save_path}"
         )
 
     def create_token_list(self, *args, **kwargs):
         """Create token list from training data.
 
-        This stage processes the training manifest to extract unique tokens from the text transcriptions and saves them to a token list file.
+        This stage processes the training manifest to extract unique tokens
+        from the text transcriptions and saves them to a token list file.
 
         Configuration should include:
-            training_config.create_token_list.save_path: Path to save the token list file
-            training_config.create_token_list.manifest_path: Path to the training manifest file (default: data/manifest/train.tsv)
+            training_config.create_token_list.save_path: Path to save the
+                token list file
+            training_config.create_token_list.manifest_path: Path to the
+                training manifest file (default: data/manifest/train.tsv)
 
         Raises:
-            RuntimeError: If required configuration is missing or manifest file not found.
+            RuntimeError: If required configuration is missing or manifest
+                file not found.
         """
         self._reject_stage_args("create_token_list", args, kwargs)
         logger.info("TTSSystem.create_token_list(): starting token list creation")
@@ -369,12 +398,14 @@ class TTSSystem(BaseSystem):
         tl_cfg = self.training_config.get("create_token_list", None)
         if tl_cfg is None:
             raise RuntimeError(
-                "training_config.create_token_list must be set for create_token_list stage."
+                "training_config.create_token_list must be set "
+                "for create_token_list stage."
             )
         save_path_str = tl_cfg.get("save_path", None)
         if save_path_str is None:
             raise RuntimeError(
-                "training_config.create_token_list.save_path must be set for create_token_list stage."
+                "training_config.create_token_list.save_path must be set "
+                "for create_token_list stage."
             )
         filename = tl_cfg.get("filename", None)
         if filename is None:
@@ -392,7 +423,9 @@ class TTSSystem(BaseSystem):
 
         if not manifest_path.exists():
             raise RuntimeError(
-                f"Manifest file not found for token list creation: {manifest_path}. Please ensure the manifest file is generated and the path is correct."
+                f"Manifest file not found for token list creation: "
+                f"{manifest_path}. Please ensure the manifest file is "
+                "generated and the path is correct."
             )
 
         # Optional custom vocab builder (e.g. F5 pinyin, prepare_emilia-style):
@@ -430,7 +463,8 @@ class TTSSystem(BaseSystem):
             )
             return
 
-        # Declare text processing parameters with defaults (matching espnet2 defaults where applicable)
+        # Declare text processing parameters with defaults (matching espnet2
+        # defaults where applicable)
         cleaner = tl_cfg.get("cleaner", None)
         token_type = tl_cfg.get("token_type", "char")
         bpemodel = tl_cfg.get("bpemodel", None)

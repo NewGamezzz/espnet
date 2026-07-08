@@ -6,6 +6,7 @@ nt - text sequence
 nw - raw wave length
 d - dimension
 """
+
 # ruff: noqa: F722 F821
 
 from __future__ import annotations
@@ -19,10 +20,9 @@ import torch.nn.functional as F
 import torchaudio
 from librosa.filters import mel as librosa_mel_fn
 from torch import nn
+
 from espnet2.tts.f5.rotary import apply_rotary_pos_emb
-
 from espnet2.tts.f5.utils import is_package_available
-
 
 # raw wav to mel spec
 
@@ -44,18 +44,31 @@ def get_bigvgan_mel_spectrogram(
     center=False,
 ):  # Copy from https://github.com/NVIDIA/BigVGAN/tree/main
     device = waveform.device
-    key = f"{n_fft}_{n_mel_channels}_{target_sample_rate}_{hop_length}_{win_length}_{fmin}_{fmax}_{device}"
+    key = (
+        f"{n_fft}_{n_mel_channels}_{target_sample_rate}"
+        f"_{hop_length}_{win_length}_{fmin}_{fmax}_{device}"
+    )
 
     if key not in mel_basis_cache:
-        mel = librosa_mel_fn(sr=target_sample_rate, n_fft=n_fft, n_mels=n_mel_channels, fmin=fmin, fmax=fmax)
-        mel_basis_cache[key] = torch.from_numpy(mel).float().to(device)  # TODO: why they need .float()?
+        mel = librosa_mel_fn(
+            sr=target_sample_rate,
+            n_fft=n_fft,
+            n_mels=n_mel_channels,
+            fmin=fmin,
+            fmax=fmax,
+        )
+        mel_basis_cache[key] = (
+            torch.from_numpy(mel).float().to(device)
+        )  # TODO: why they need .float()?
         hann_window_cache[key] = torch.hann_window(win_length).to(device)
 
     mel_basis = mel_basis_cache[key]
     hann_window = hann_window_cache[key]
 
     padding = (n_fft - hop_length) // 2
-    waveform = torch.nn.functional.pad(waveform.unsqueeze(1), (padding, padding), mode="reflect").squeeze(1)
+    waveform = torch.nn.functional.pad(
+        waveform.unsqueeze(1), (padding, padding), mode="reflect"
+    ).squeeze(1)
 
     spec = torch.stft(
         waveform,
@@ -86,7 +99,10 @@ def get_vocos_mel_spectrogram(
     win_length=1024,
 ):
     device = waveform.device
-    key = f"{n_fft}_{n_mel_channels}_{target_sample_rate}_{hop_length}_{win_length}_{device}"
+    key = (
+        f"{n_fft}_{n_mel_channels}_{target_sample_rate}"
+        f"_{hop_length}_{win_length}_{device}"
+    )
     if key not in vocos_mel_stft_cache:
         vocos_mel_stft_cache[key] = torchaudio.transforms.MelSpectrogram(
             sample_rate=target_sample_rate,
@@ -120,7 +136,9 @@ class MelSpec(nn.Module):
         mel_spec_type="vocos",
     ):
         super().__init__()
-        assert mel_spec_type in ["vocos", "bigvgan"], print("We only support two extract mel backend: vocos or bigvgan")
+        assert mel_spec_type in ["vocos", "bigvgan"], print(
+            "We only support two extract mel backend: vocos or bigvgan"
+        )
 
         self.n_fft = n_fft
         self.hop_length = hop_length
@@ -182,7 +200,9 @@ class ConvPositionEmbedding(nn.Module):
             nn.Conv1d(dim, dim, kernel_size, groups=groups, padding=kernel_size // 2),
             nn.Mish(),
         )
-        self.layer_need_mask_idx = [i for i, layer in enumerate(self.conv1d) if isinstance(layer, nn.Conv1d)]
+        self.layer_need_mask_idx = [
+            i for i, layer in enumerate(self.conv1d) if isinstance(layer, nn.Conv1d)
+        ]
 
     def forward(self, x: float["b n d"], mask: bool["b n"] | None = None):
         if mask is not None:
@@ -204,8 +224,11 @@ class ConvPositionEmbedding(nn.Module):
 # rotary positional embedding related
 
 
-def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, theta_rescale_factor=1.0):
-    # proposed by reddit user bloc97, to rescale rotary embeddings to longer sequence length without fine-tuning
+def precompute_freqs_cis(
+    dim: int, end: int, theta: float = 10000.0, theta_rescale_factor=1.0
+):
+    # proposed by reddit user bloc97, to rescale rotary embeddings to longer
+    # sequence length without fine-tuning
     # has some connection to NTK literature
     # https://www.reddit.com/r/LocalLLaMA/comments/14lz7j5/ntkaware_scaled_rope_allows_llama_models_to_have/
     # https://github.com/lucidrains/rotary-embedding-torch/blob/main/rotary_embedding_torch/rotary_embedding_torch.py
@@ -220,10 +243,15 @@ def precompute_freqs_cis(dim: int, end: int, theta: float = 10000.0, theta_resca
 
 def get_pos_embed_indices(start, length, max_pos, scale=1.0):
     # length = length if isinstance(length, int) else length.max()
-    scale = scale * torch.ones_like(start, dtype=torch.float32)  # in case scale is a scalar
+    scale = scale * torch.ones_like(
+        start, dtype=torch.float32
+    )  # in case scale is a scalar
     pos = (
         start.unsqueeze(1)
-        + (torch.arange(length, device=start.device, dtype=torch.float32).unsqueeze(0) * scale.unsqueeze(1)).long()
+        + (
+            torch.arange(length, device=start.device, dtype=torch.float32).unsqueeze(0)
+            * scale.unsqueeze(1)
+        ).long()
     )
     # avoid extra long error.
     pos = torch.where(pos < max_pos, pos, max_pos - 1)
@@ -245,7 +273,8 @@ class GRN(nn.Module):
         return self.gamma * (x * Nx) + self.beta + x
 
 
-# ConvNeXt-V2 Block https://github.com/facebookresearch/ConvNeXt-V2/blob/main/models/convnextv2.py
+# ConvNeXt-V2 Block
+# https://github.com/facebookresearch/ConvNeXt-V2/blob/main/models/convnextv2.py
 # ref: https://github.com/bfs18/e2_tts/blob/main/rfwave/modules.py#L108
 
 
@@ -262,7 +291,9 @@ class ConvNeXtV2Block(nn.Module):
             dim, dim, kernel_size=7, padding=padding, groups=dim, dilation=dilation
         )  # depthwise conv
         self.norm = nn.LayerNorm(dim, eps=1e-6)
-        self.pwconv1 = nn.Linear(dim, intermediate_dim)  # pointwise/1x1 convs, implemented with linear layers
+        self.pwconv1 = nn.Linear(
+            dim, intermediate_dim
+        )  # pointwise/1x1 convs, implemented with linear layers
         self.act = nn.GELU()
         self.grn = GRN(intermediate_dim)
         self.pwconv2 = nn.Linear(intermediate_dim, dim)
@@ -294,7 +325,9 @@ class RMSNorm(nn.Module):
         if self.native_rms_norm:
             if self.weight.dtype in [torch.float16, torch.bfloat16]:
                 x = x.to(self.weight.dtype)
-            x = F.rms_norm(x, normalized_shape=(x.shape[-1],), weight=self.weight, eps=self.eps)
+            x = F.rms_norm(
+                x, normalized_shape=(x.shape[-1],), weight=self.weight, eps=self.eps
+            )
         else:
             variance = x.to(torch.float32).pow(2).mean(-1, keepdim=True)
             x = x * torch.rsqrt(variance + self.eps)
@@ -320,7 +353,9 @@ class AdaLayerNorm(nn.Module):
 
     def forward(self, x, emb=None):
         emb = self.linear(self.silu(emb))
-        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = torch.chunk(emb, 6, dim=1)
+        shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = torch.chunk(
+            emb, 6, dim=1
+        )
 
         x = self.norm(x) * (1 + scale_msa[:, None]) + shift_msa[:, None]
         return x, gate_msa, shift_mlp, scale_mlp, gate_mlp
@@ -351,14 +386,18 @@ class AdaLayerNorm_Final(nn.Module):
 
 
 class FeedForward(nn.Module):
-    def __init__(self, dim, dim_out=None, mult=4, dropout=0.0, approximate: str = "none"):
+    def __init__(
+        self, dim, dim_out=None, mult=4, dropout=0.0, approximate: str = "none"
+    ):
         super().__init__()
         inner_dim = int(dim * mult)
         dim_out = dim_out if dim_out is not None else dim
 
         activation = nn.GELU(approximate=approximate)
         project_in = nn.Sequential(nn.Linear(dim, inner_dim), activation)
-        self.ff = nn.Sequential(project_in, nn.Dropout(dropout), nn.Linear(inner_dim, dim_out))
+        self.ff = nn.Sequential(
+            project_in, nn.Dropout(dropout), nn.Linear(inner_dim, dim_out)
+        )
 
     def forward(self, x):
         return self.ff(x)
@@ -383,7 +422,10 @@ class Attention(nn.Module):
         super().__init__()
 
         if not hasattr(F, "scaled_dot_product_attention"):
-            raise ImportError("Attention equires PyTorch 2.0, to use it, please upgrade PyTorch to 2.0.")
+            raise ImportError(
+                "Attention equires PyTorch 2.0, to use it, "
+                "please upgrade PyTorch to 2.0."
+            )
 
         self.processor = processor
 
@@ -436,7 +478,9 @@ class Attention(nn.Module):
         c_mask: bool["b nt"] | None = None,  # text mask
     ) -> torch.Tensor:
         if c is not None:
-            return self.processor(self, x, c=c, mask=mask, rope=rope, c_rope=c_rope, c_mask=c_mask)
+            return self.processor(
+                self, x, c=c, mask=mask, rope=rope, c_rope=c_rope, c_mask=c_mask
+            )
         else:
             return self.processor(self, x, mask=mask, rope=rope)
 
@@ -451,15 +495,20 @@ if is_package_available("flash_attn"):
 class AttnProcessor:
     def __init__(
         self,
-        pe_attn_head: int | None = None,  # number of attention head to apply rope, None for all
+        pe_attn_head: (
+            int | None
+        ) = None,  # number of attention head to apply rope, None for all
         attn_backend: str = "torch",  # "torch" or "flash_attn"
         attn_mask_enabled: bool = True,
     ):
         if attn_backend == "flash_attn":
-            assert is_package_available("flash_attn"), "Please install flash-attn first."
+            assert is_package_available(
+                "flash_attn"
+            ), "Please install flash-attn first."
         if attn_backend == "torch" and attn_mask_enabled:
             warnings.warn(
-                "attn_mask_enabled=True with attn_backend='torch' can consume large GPU memory. "
+                "attn_mask_enabled=True with attn_backend='torch' "
+                "can consume large GPU memory. "
                 "Please switch attn_backend to 'flash_attn'.",
                 UserWarning,
             )
@@ -498,25 +547,36 @@ class AttnProcessor:
         # apply rotary position embedding
         if rope is not None:
             freqs, xpos_scale = rope
-            q_xpos_scale, k_xpos_scale = (xpos_scale, xpos_scale**-1.0) if xpos_scale is not None else (1.0, 1.0)
+            q_xpos_scale, k_xpos_scale = (
+                (xpos_scale, xpos_scale**-1.0) if xpos_scale is not None else (1.0, 1.0)
+            )
 
             if self.pe_attn_head is not None:
                 pn = self.pe_attn_head
-                query[:, :pn, :, :] = apply_rotary_pos_emb(query[:, :pn, :, :], freqs, q_xpos_scale)
-                key[:, :pn, :, :] = apply_rotary_pos_emb(key[:, :pn, :, :], freqs, k_xpos_scale)
+                query[:, :pn, :, :] = apply_rotary_pos_emb(
+                    query[:, :pn, :, :], freqs, q_xpos_scale
+                )
+                key[:, :pn, :, :] = apply_rotary_pos_emb(
+                    key[:, :pn, :, :], freqs, k_xpos_scale
+                )
             else:
                 query = apply_rotary_pos_emb(query, freqs, q_xpos_scale)
                 key = apply_rotary_pos_emb(key, freqs, k_xpos_scale)
 
         if self.attn_backend == "torch":
-            # mask. e.g. inference got a batch with different target durations, mask out the padding
+            # mask. e.g. inference got a batch with different target
+            # durations, mask out the padding
             if self.attn_mask_enabled and mask is not None:
                 attn_mask = mask
                 attn_mask = attn_mask.unsqueeze(1).unsqueeze(1)  # 'b n -> b 1 1 n'
-                attn_mask = attn_mask.expand(batch_size, attn.heads, query.shape[-2], key.shape[-2])
+                attn_mask = attn_mask.expand(
+                    batch_size, attn.heads, query.shape[-2], key.shape[-2]
+                )
             else:
                 attn_mask = None
-            x = F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False)
+            x = F.scaled_dot_product_attention(
+                query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False
+            )
             x = x.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
 
         elif self.attn_backend == "flash_attn":
@@ -524,7 +584,9 @@ class AttnProcessor:
             key = key.transpose(1, 2)
             value = value.transpose(1, 2)
             if self.attn_mask_enabled and mask is not None:
-                query, indices, q_cu_seqlens, q_max_seqlen_in_batch, _ = unpad_input(query, mask)
+                query, indices, q_cu_seqlens, q_max_seqlen_in_batch, _ = unpad_input(
+                    query, mask
+                )
                 key, _, k_cu_seqlens, k_max_seqlen_in_batch, _ = unpad_input(key, mask)
                 value, _, _, _, _ = unpad_input(value, mask)
                 x = flash_attn_varlen_func(
@@ -567,10 +629,13 @@ class JointAttnProcessor:
         attn_mask_enabled: bool = True,
     ):
         if attn_backend == "flash_attn":
-            assert is_package_available("flash_attn"), "Please install flash-attn first."
+            assert is_package_available(
+                "flash_attn"
+            ), "Please install flash-attn first."
         if attn_backend == "torch" and attn_mask_enabled:
             warnings.warn(
-                "attn_mask_enabled=True with attn_backend='torch' can consume large GPU memory. "
+                "attn_mask_enabled=True with attn_backend='torch' "
+                "can consume large GPU memory. "
                 "Please switch attn_backend to 'flash_attn'.",
                 UserWarning,
             )
@@ -626,12 +691,16 @@ class JointAttnProcessor:
         # apply rope for context and noised input independently
         if rope is not None:
             freqs, xpos_scale = rope
-            q_xpos_scale, k_xpos_scale = (xpos_scale, xpos_scale**-1.0) if xpos_scale is not None else (1.0, 1.0)
+            q_xpos_scale, k_xpos_scale = (
+                (xpos_scale, xpos_scale**-1.0) if xpos_scale is not None else (1.0, 1.0)
+            )
             query = apply_rotary_pos_emb(query, freqs, q_xpos_scale)
             key = apply_rotary_pos_emb(key, freqs, k_xpos_scale)
         if c_rope is not None:
             freqs, xpos_scale = c_rope
-            q_xpos_scale, k_xpos_scale = (xpos_scale, xpos_scale**-1.0) if xpos_scale is not None else (1.0, 1.0)
+            q_xpos_scale, k_xpos_scale = (
+                (xpos_scale, xpos_scale**-1.0) if xpos_scale is not None else (1.0, 1.0)
+            )
             c_query = apply_rotary_pos_emb(c_query, freqs, q_xpos_scale)
             c_key = apply_rotary_pos_emb(c_key, freqs, k_xpos_scale)
 
@@ -648,14 +717,19 @@ class JointAttnProcessor:
                 mask = F.pad(mask, (0, c.shape[1]), value=True)
 
         if self.attn_backend == "torch":
-            # mask. e.g. inference got a batch with different target durations, mask out the padding
+            # mask. e.g. inference got a batch with different target
+            # durations, mask out the padding
             if self.attn_mask_enabled and mask is not None:
                 attn_mask = mask
                 attn_mask = attn_mask.unsqueeze(1).unsqueeze(1)  # 'b n -> b 1 1 n'
-                attn_mask = attn_mask.expand(batch_size, attn.heads, query.shape[-2], key.shape[-2])
+                attn_mask = attn_mask.expand(
+                    batch_size, attn.heads, query.shape[-2], key.shape[-2]
+                )
             else:
                 attn_mask = None
-            x = F.scaled_dot_product_attention(query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False)
+            x = F.scaled_dot_product_attention(
+                query, key, value, attn_mask=attn_mask, dropout_p=0.0, is_causal=False
+            )
             x = x.transpose(1, 2).reshape(batch_size, -1, attn.heads * head_dim)
 
         elif self.attn_backend == "flash_attn":
@@ -664,7 +738,9 @@ class JointAttnProcessor:
             value = value.transpose(1, 2)
             if self.attn_mask_enabled and mask is not None:
                 total_seq_len = query.shape[1]
-                query, indices, q_cu_seqlens, q_max_seqlen_in_batch, _ = unpad_input(query, mask)
+                query, indices, q_cu_seqlens, q_max_seqlen_in_batch, _ = unpad_input(
+                    query, mask
+                )
                 key, _, k_cu_seqlens, k_max_seqlen_in_batch, _ = unpad_input(key, mask)
                 value, _, _, _, _ = unpad_input(value, mask)
                 x = flash_attn_varlen_func(
@@ -738,7 +814,9 @@ class DiTBlock(nn.Module):
         )
 
         self.ff_norm = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
-        self.ff = FeedForward(dim=dim, mult=ff_mult, dropout=dropout, approximate="tanh")
+        self.ff = FeedForward(
+            dim=dim, mult=ff_mult, dropout=dropout, approximate="tanh"
+        )
 
     def forward(self, x, t, mask=None, rope=None):  # x: noised input, t: time embedding
         # pre-norm & modulation for attention input
@@ -788,7 +866,11 @@ class MMDiTBlock(nn.Module):
             context_dim = dim
         self.context_pre_only = context_pre_only
 
-        self.attn_norm_c = AdaLayerNorm_Final(context_dim) if context_pre_only else AdaLayerNorm(context_dim)
+        self.attn_norm_c = (
+            AdaLayerNorm_Final(context_dim)
+            if context_pre_only
+            else AdaLayerNorm(context_dim)
+        )
         self.attn_norm_x = AdaLayerNorm(dim)
         self.attn = Attention(
             processor=JointAttnProcessor(
@@ -805,13 +887,19 @@ class MMDiTBlock(nn.Module):
         )
 
         if not context_pre_only:
-            self.ff_norm_c = nn.LayerNorm(context_dim, elementwise_affine=False, eps=1e-6)
-            self.ff_c = FeedForward(dim=context_dim, mult=ff_mult, dropout=dropout, approximate="tanh")
+            self.ff_norm_c = nn.LayerNorm(
+                context_dim, elementwise_affine=False, eps=1e-6
+            )
+            self.ff_c = FeedForward(
+                dim=context_dim, mult=ff_mult, dropout=dropout, approximate="tanh"
+            )
         else:
             self.ff_norm_c = None
             self.ff_c = None
         self.ff_norm_x = nn.LayerNorm(dim, elementwise_affine=False, eps=1e-6)
-        self.ff_x = FeedForward(dim=dim, mult=ff_mult, dropout=dropout, approximate="tanh")
+        self.ff_x = FeedForward(
+            dim=dim, mult=ff_mult, dropout=dropout, approximate="tanh"
+        )
 
     def forward(
         self, x, c, t, mask=None, rope=None, c_rope=None, c_mask=None
@@ -820,11 +908,17 @@ class MMDiTBlock(nn.Module):
         if self.context_pre_only:
             norm_c = self.attn_norm_c(c, t)
         else:
-            norm_c, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.attn_norm_c(c, emb=t)
-        norm_x, x_gate_msa, x_shift_mlp, x_scale_mlp, x_gate_mlp = self.attn_norm_x(x, emb=t)
+            norm_c, c_gate_msa, c_shift_mlp, c_scale_mlp, c_gate_mlp = self.attn_norm_c(
+                c, emb=t
+            )
+        norm_x, x_gate_msa, x_shift_mlp, x_scale_mlp, x_gate_mlp = self.attn_norm_x(
+            x, emb=t
+        )
 
         # attention
-        x_attn_output, c_attn_output = self.attn(x=norm_x, c=norm_c, mask=mask, rope=rope, c_rope=c_rope, c_mask=c_mask)
+        x_attn_output, c_attn_output = self.attn(
+            x=norm_x, c=norm_c, mask=mask, rope=rope, c_rope=c_rope, c_mask=c_mask
+        )
 
         # process attention output for context c
         if self.context_pre_only:
@@ -832,7 +926,9 @@ class MMDiTBlock(nn.Module):
         else:  # if not last layer
             c = c + c_gate_msa.unsqueeze(1) * c_attn_output
 
-            norm_c = self.ff_norm_c(c) * (1 + c_scale_mlp[:, None]) + c_shift_mlp[:, None]
+            norm_c = (
+                self.ff_norm_c(c) * (1 + c_scale_mlp[:, None]) + c_shift_mlp[:, None]
+            )
             c_ff_output = self.ff_c(norm_c)
             c = c + c_gate_mlp.unsqueeze(1) * c_ff_output
 
@@ -853,7 +949,9 @@ class TimestepEmbedding(nn.Module):
     def __init__(self, dim, freq_embed_dim=256):
         super().__init__()
         self.time_embed = SinusPositionEmbedding(freq_embed_dim)
-        self.time_mlp = nn.Sequential(nn.Linear(freq_embed_dim, dim), nn.SiLU(), nn.Linear(dim, dim))
+        self.time_mlp = nn.Sequential(
+            nn.Linear(freq_embed_dim, dim), nn.SiLU(), nn.Linear(dim, dim)
+        )
 
     def forward(self, timestep: float["b"]):
         time_hidden = self.time_embed(timestep)

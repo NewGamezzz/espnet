@@ -6,10 +6,9 @@ import json
 import logging
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Dict
 
 import yaml
-from omegaconf import OmegaConf
 
 from espnet3.components.metrics.base_metric import BaseMetric
 

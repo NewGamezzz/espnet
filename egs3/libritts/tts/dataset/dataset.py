@@ -9,10 +9,10 @@ from importlib import resources
 from pathlib import Path
 from typing import Any
 
-import torchaudio
 import numpy as np
 import soundfile as sf
 import torch
+import torchaudio
 from torch.utils.data import Dataset as TorchDataset
 
 from egs3.libritts.tts.dataset.builder import LibriTTSBuilder
@@ -78,26 +78,30 @@ class LibriTTSDataset(TorchDataset):
       - ``text``  : raw transcript string (tokenized later by ``CommonPreprocessor``)
       - ``speech``: float32 waveform
       - ``spembs``: float32 speaker embedding (x-vector) loaded from a ``.pt`` file
-    
+
     The dataset cosumnes a following argument during initialization:
         - ``split``: A string key for the dataset split
         - ``recipe_dir``: Optional path to the recipe root, used to resolve the default
-        - ``manifest_path``: Optional path to the manifest TSV file. If not supplied, the dataset
-            will look for the default manifest path for the given split in the recipe's data directory.
+        - ``manifest_path``: Optional path to the manifest TSV file. If not
+            supplied, the dataset will look for the default manifest path for
+            the given split in the recipe's data directory.
         - ``load_speech``: Whether to load the speech waveform from disk. If False
             the sample will not include the "speech" key. Default: True.
         - ``load_xvector``: Whether to load the speaker embedding (x-vector) from
             disk. If False the sample will not include the "spembs" key. Default: True.
-        - ``xvector_dir``: Optional path to the directory containing x-vector .pt files
-            (one per utterance, named {utt_id}.pt). Required if ``load_xvector`` is True.
-        - ``fs``: Optional target sampling rate for the speech waveform. If supplied,
-            the waveform will be resampled to this rate after loading. Default: None (no resampling).
+        - ``xvector_dir``: Optional path to the directory containing x-vector
+            .pt files (one per utterance, named {utt_id}.pt). Required if
+            ``load_xvector`` is True.
+        - ``fs``: Optional target sampling rate for the speech waveform. If
+            supplied, the waveform will be resampled to this rate after
+            loading. Default: None (no resampling).
         - ``inference``: If True, the dataset will include additional metadata in each
             sample for inference purposes (utt_id, wav_path, raw_text). Default: False.
         - ``ref_mode``: If not None, include a reference utterance in each sample
             for zero-shot voice cloning inference. Must be one of "same_speaker" or
             "cross_speaker". Default: None (no reference).
-        - ``ref_seed``: Random seed for deterministic reference selection when ``ref_mode`` is not None. Default: 0.
+        - ``ref_seed``: Random seed for deterministic reference selection when
+            ``ref_mode`` is not None. Default: 0.
     """
 
     def __init__(
@@ -231,9 +235,7 @@ class LibriTTSDataset(TorchDataset):
             if choice is None:
                 # No in-range candidate (e.g. duration filter too strict): fall
                 # back to any other utterance so inference still runs.
-                pool = [j for j in allowed if j != i] or [
-                    j for j in range(n) if j != i
-                ]
+                pool = [j for j in allowed if j != i] or [j for j in range(n) if j != i]
                 choice = rng.choice(pool) if pool else i
             ref_idx.append(choice)
         return ref_idx
@@ -248,10 +250,17 @@ class LibriTTSDataset(TorchDataset):
             speech, speech_fs = sf.read(str(entry.wav_path))
             sample["speech"] = np.asarray(speech, dtype=np.float32)
             if self.fs is not None and speech_fs != self.fs:
-                # Resample if a target sampling rate is specified and different from the original.
-                sample["speech"] = torchaudio.functional.resample(
-                    torch.from_numpy(sample["speech"]), orig_freq=speech_fs, new_freq=self.fs
-                ).numpy().astype(np.float32)
+                # Resample if a target sampling rate is specified and differs
+                # from the original.
+                sample["speech"] = (
+                    torchaudio.functional.resample(
+                        torch.from_numpy(sample["speech"]),
+                        orig_freq=speech_fs,
+                        new_freq=self.fs,
+                    )
+                    .numpy()
+                    .astype(np.float32)
+                )
         if self.load_xvector:
             pt_path = self.xvector_dir / f"{entry.utt_id}.pt"
             if not pt_path.is_file():

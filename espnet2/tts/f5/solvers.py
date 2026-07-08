@@ -34,7 +34,9 @@ import torch
 _FIXED_STEP = {"euler", "midpoint"}
 
 
-def odeint(func: Callable, y0: torch.Tensor, t: torch.Tensor, method: str = "euler", **kwargs):
+def odeint(
+    func: Callable, y0: torch.Tensor, t: torch.Tensor, method: str = "euler", **kwargs
+):
     """Fixed-step ODE integration; torchdiffeq fallback for other methods."""
     if method not in _FIXED_STEP:
         # Adaptive / higher-order solvers: defer to torchdiffeq if available.

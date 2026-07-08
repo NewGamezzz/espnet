@@ -6,6 +6,7 @@ nt - text sequence
 nw - raw wave length
 d - dimension
 """
+
 # ruff: noqa: F722 F821
 
 from __future__ import annotations
@@ -17,9 +18,9 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from torch.nn.utils.rnn import pad_sequence
-from espnet2.tts.f5.solvers import odeint
 
 from espnet2.tts.f5.modules import MelSpec
+from espnet2.tts.f5.solvers import odeint
 from espnet2.tts.f5.utils import (
     default,
     exists,
@@ -134,19 +135,24 @@ class CFM(nn.Module):
 
         duration = torch.maximum(
             torch.maximum((text != -1).sum(dim=-1), lens) + 1, duration
-        )  # duration at least text/audio prompt length plus one token, so something is generated
+        )  # duration at least text/audio prompt length plus one token,
+        # so something is generated
         duration = duration.clamp(max=max_duration)
         max_duration = duration.amax()
 
         # duplicate test corner for inner time step oberservation
         if duplicate_test:
-            test_cond = F.pad(cond, (0, 0, cond_seq_len, max_duration - 2 * cond_seq_len), value=0.0)
+            test_cond = F.pad(
+                cond, (0, 0, cond_seq_len, max_duration - 2 * cond_seq_len), value=0.0
+            )
 
         cond = F.pad(cond, (0, 0, 0, max_duration - cond_seq_len), value=0.0)
         if no_ref_audio:
             cond = torch.zeros_like(cond)
 
-        cond_mask = F.pad(cond_mask, (0, max_duration - cond_mask.shape[-1]), value=False)
+        cond_mask = F.pad(
+            cond_mask, (0, max_duration - cond_mask.shape[-1]), value=False
+        )
         cond_mask = cond_mask.unsqueeze(-1)
         step_cond = torch.where(
             cond_mask, cond, torch.zeros_like(cond)
@@ -191,13 +197,18 @@ class CFM(nn.Module):
             return pred + (pred - null_pred) * cfg_strength
 
         # noise input
-        # to make sure batch inference result is same with different batch size, and for sure single inference
+        # to make sure batch inference result is same with different batch
+        # size, and for sure single inference
         # still some difference maybe due to convolutional layers
         y0 = []
         for dur in duration:
             if exists(seed):
                 torch.manual_seed(seed)
-            y0.append(torch.randn(dur, self.num_channels, device=self.device, dtype=step_cond.dtype))
+            y0.append(
+                torch.randn(
+                    dur, self.num_channels, device=self.device, dtype=step_cond.dtype
+                )
+            )
         y0 = pad_sequence(y0, padding_value=0, batch_first=True)
 
         t_start = 0
@@ -208,10 +219,14 @@ class CFM(nn.Module):
             y0 = (1 - t_start) * y0 + t_start * test_cond
             steps = int(steps * (1 - t_start))
 
-        if t_start == 0 and use_epss:  # use Empirically Pruned Step Sampling for low NFE
+        if (
+            t_start == 0 and use_epss
+        ):  # use Empirically Pruned Step Sampling for low NFE
             t = get_epss_timesteps(steps, device=self.device, dtype=step_cond.dtype)
         else:
-            t = torch.linspace(t_start, 1, steps + 1, device=self.device, dtype=step_cond.dtype)
+            t = torch.linspace(
+                t_start, 1, steps + 1, device=self.device, dtype=step_cond.dtype
+            )
         if sway_sampling_coef is not None:
             t = t + sway_sampling_coef * (torch.cos(torch.pi / 2 * t) - 1 + t)
 
@@ -242,7 +257,11 @@ class CFM(nn.Module):
             inp = inp.permute(0, 2, 1)
             assert inp.shape[-1] == self.num_channels
 
-        batch, seq_len, dtype, device, _σ1 = *inp.shape[:2], inp.dtype, self.device, self.sigma
+        batch, seq_len, dtype, device = (
+            *inp.shape[:2],
+            inp.dtype,
+            self.device,
+        )
 
         # handle text as string
         if isinstance(text, list):
@@ -258,7 +277,11 @@ class CFM(nn.Module):
         mask = lens_to_mask(lens, length=seq_len)
 
         # get a random span to mask out for training conditionally
-        frac_lengths = torch.zeros((batch,), device=self.device).float().uniform_(*self.frac_lengths_mask)
+        frac_lengths = (
+            torch.zeros((batch,), device=self.device)
+            .float()
+            .uniform_(*self.frac_lengths_mask)
+        )
         rand_span_mask = mask_from_frac_lengths(lens, frac_lengths)
 
         if exists(mask):
@@ -290,9 +313,16 @@ class CFM(nn.Module):
         else:
             drop_text = False
 
-        # apply mask will use more memory; might adjust batchsize or batchsampler long sequence threshold
+        # apply mask will use more memory; might adjust batchsize or
+        # batchsampler long sequence threshold
         pred = self.transformer(
-            x=φ, cond=cond, text=text, time=time, drop_audio_cond=drop_audio_cond, drop_text=drop_text, mask=mask
+            x=φ,
+            cond=cond,
+            text=text,
+            time=time,
+            drop_audio_cond=drop_audio_cond,
+            drop_text=drop_text,
+            mask=mask,
         )
 
         # flow matching loss

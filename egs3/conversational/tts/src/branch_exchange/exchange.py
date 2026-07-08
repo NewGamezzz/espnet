@@ -24,7 +24,9 @@ from torch import nn
 class IdentityExchange(nn.Module):
     """No-communication baseline: returns its ``(B, N, T, d)`` input unchanged."""
 
-    def forward(self, h: torch.Tensor, pad_mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self, h: torch.Tensor, pad_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         return h
 
 
@@ -54,7 +56,9 @@ class TACExchange(nn.Module):
         self.concat = nn.Sequential(nn.Linear(2 * hidden, dim), nn.PReLU())
         self.g = nn.Parameter(torch.zeros(()))
 
-    def forward(self, h: torch.Tensor, pad_mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self, h: torch.Tensor, pad_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         z = self.transform(h)  # (B, N, T, hidden)
         if pad_mask is None:
             z_bar = z.mean(dim=1, keepdim=True)
@@ -96,7 +100,9 @@ class BranchMHAExchange(nn.Module):
         self.w_o = nn.Linear(d_c, dim)
         self.g = nn.Parameter(torch.zeros(()))
 
-    def forward(self, h: torch.Tensor, pad_mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(
+        self, h: torch.Tensor, pad_mask: torch.Tensor | None = None
+    ) -> torch.Tensor:
         b, n, t, _ = h.shape
         x = rearrange(self.norm(h), "b n t d -> (b t) n d")
         q = rearrange(self.w_q(x), "bt n (nh e) -> bt nh n e", nh=self.n_heads)
