@@ -16,7 +16,7 @@ DIT_KWARGS = dict(dim=64, depth=4, heads=2, dim_head=32, mel_dim=20, text_num_em
 DIM = DIT_KWARGS["dim"]
 DEPTH = DIT_KWARGS["depth"]
 MEL = DIT_KWARGS["mel_dim"]
-B, T, NT = 2, 16, 8
+T, NT = 16, 8
 
 
 def make_dit(seed=0, **overrides):
@@ -40,16 +40,6 @@ def make_dit(seed=0, **overrides):
     return model
 
 
-def make_branch_inputs(n_branch, seed=0, batch=B, t=T, nt=NT, mel_dim=MEL):
-    """Per-branch DiT inputs with a leading branch axis: shapes (B, N, ...)."""
-    gen = torch.Generator().manual_seed(seed)
-    x = torch.randn(batch, n_branch, t, mel_dim, generator=gen)
-    cond = torch.randn(batch, n_branch, t, mel_dim, generator=gen)
-    text = torch.randint(0, DIT_KWARGS["text_num_embeds"], (batch, n_branch, nt), generator=gen)
-    time = torch.rand(batch, n_branch, generator=gen)
-    return x, cond, text, time
-
-
 def make_packed_inputs(counts, seed=0, t=T, nt=NT, mel_dim=MEL):
     """Packed DiT inputs: one row per branch, conversations stacked, no padding."""
     gen = torch.Generator().manual_seed(seed)
@@ -62,24 +52,10 @@ def make_packed_inputs(counts, seed=0, t=T, nt=NT, mel_dim=MEL):
 
 
 def slice_conversation(inputs, counts, i):
-    """Extract conversation ``i`` from packed inputs as rectangular (1, N_i, ...)."""
+    """Extract conversation ``i``'s rows from packed inputs: shapes (N_i, ...)."""
     start = int(sum(counts[:i]))
     end = start + counts[i]
-    return tuple(t_[start:end].unsqueeze(0) for t_ in inputs)
-
-
-def run_independent(model, inputs):
-    """Run the model separately on each branch's inputs and stack: (B, N, T, mel)."""
-    x, cond, text, time = inputs
-    outs = [model(x[:, i], cond[:, i], text[:, i], time[:, i]) for i in range(x.shape[1])]
-    return torch.stack(outs, dim=1)
-
-
-def run_folded(model, inputs):
-    """Fold the branch axis into batch, run once, unfold: (B, N, T, mel)."""
-    x, cond, text, time = inputs
-    out = model(x.flatten(0, 1), cond.flatten(0, 1), text.flatten(0, 1), time.flatten(0, 1))
-    return out.unflatten(0, (x.shape[0], x.shape[1]))
+    return tuple(t_[start:end] for t_ in inputs)
 
 
 def inject_all(model, factory, depth=DEPTH):

@@ -1,22 +1,13 @@
 """Branch-communication (exchange) modules.
 
-Every exchange supports two input layouts:
-
-- Packed ``forward_packed(h, conv_id, n_conv=None)``:
-  ``(M, T, d) -> (M, T, d)`` where ``M = sum(N_i)`` stacks the branches of all
-  conversations in the batch with NO padding rows at all. ``conv_id: (M,)``
-  integer tensor gives each row's conversation (values in ``[0, n_conv)``);
-  branches communicate only within their conversation. Rows need not be
-  sorted or contiguous by conversation. This is the layout to train with:
-  ragged speaker counts cost zero wasted compute or memory.
-- Dense ``forward(h)``: ``(B, N, T, d) -> (B, N, T, d)`` where ``N`` is the
-  branch axis (one branch per speaker), for batches where every conversation
-  has the same speaker count.
-
-The packed form is the core implementation; the dense form is a thin wrapper
-(``conv_id = arange(B).repeat_interleave(N)``), so there is a single source
-of truth for the math. There is deliberately NO padding/mask API: batches
-with mixed speaker counts use the packed layout instead.
+Every exchange maps a packed batch ``(M, T, d) -> (M, T, d)``, where
+``M = sum(N_i)`` stacks the branches of all conversations in the batch with
+NO padding rows at all. ``conv_id: (M,)`` integer tensor gives each row's
+conversation (values in ``[0, n_conv)``); branches communicate only within
+their conversation. Rows need not be sorted or contiguous by conversation.
+Ragged speaker counts therefore cost zero wasted compute or memory; a
+uniform batch of ``B`` conversations with ``n`` branches each is simply
+``conv_id = arange(B).repeat_interleave(n)``.
 
 Contract shared by every exchange:
 
@@ -48,38 +39,19 @@ def _check_conv_id(h: torch.Tensor, conv_id: torch.Tensor, n_conv: int | None) -
 
 
 class IdentityExchange(nn.Module):
-    """No-communication baseline: returns its input unchanged in both layouts."""
+    """No-communication baseline: returns its ``(M, T, d)`` input unchanged."""
 
-    def forward(self, h: torch.Tensor) -> torch.Tensor:
-        return h
-
-    def forward_packed(
+    def forward(
         self, h: torch.Tensor, conv_id: torch.Tensor | None = None, n_conv: int | None = None
     ) -> torch.Tensor:
         return h
 
 
-class _PackedExchange(nn.Module):
-    """Base class implementing the dense ``(B, N, T, d)`` layout as a thin
-    wrapper over the packed core ``forward_packed``.
-    """
-
-    def forward_packed(
-        self, h: torch.Tensor, conv_id: torch.Tensor, n_conv: int | None = None
-    ) -> torch.Tensor:
-        raise NotImplementedError
-
-    def forward(self, h: torch.Tensor) -> torch.Tensor:
-        b, n = h.shape[:2]
-        conv_id = torch.arange(b, device=h.device).repeat_interleave(n)
-        return self.forward_packed(h.flatten(0, 1), conv_id, n_conv=b).unflatten(0, (b, n))
-
-
-class TACExchange(_PackedExchange):
+class TACExchange(nn.Module):
     """Transform-average-concatenate exchange (Luo et al., ICASSP 2020) with a
     zero-init scalar gate.
 
-    Packed core, per time frame on ``(M, T, d)`` rows grouped by ``conv_id``:
+    Per time frame on ``(M, T, d)`` rows grouped by ``conv_id``:
 
     1. Transform: shared ``Linear(dim, hidden) + PReLU`` on every branch -> ``z_i``.
     2. Average: segment mean of ``z_i`` over each conversation's branches
@@ -102,7 +74,7 @@ class TACExchange(_PackedExchange):
         self.concat = nn.Sequential(nn.Linear(2 * hidden, dim), nn.PReLU())
         self.g = nn.Parameter(torch.zeros(()))
 
-    def forward_packed(
+    def forward(
         self, h: torch.Tensor, conv_id: torch.Tensor, n_conv: int | None = None
     ) -> torch.Tensor:
         conv_id = conv_id.long()
@@ -115,10 +87,10 @@ class TACExchange(_PackedExchange):
         return h + self.g * u
 
 
-class BranchMHAExchange(_PackedExchange):
+class BranchMHAExchange(nn.Module):
     """Multi-head self-attention over the branch axis with a zero-init scalar gate.
 
-    Packed core on ``(M, T, d)`` rows grouped by ``conv_id``:
+    On ``(M, T, d)`` rows grouped by ``conv_id``:
 
     1. Pre-norm: shared ``LayerNorm(dim)``.
     2. Fold time into batch: ``(M, T, d) -> (T, M, d)`` so the branch rows are
@@ -145,7 +117,7 @@ class BranchMHAExchange(_PackedExchange):
         self.w_o = nn.Linear(d_c, dim)
         self.g = nn.Parameter(torch.zeros(()))
 
-    def forward_packed(
+    def forward(
         self, h: torch.Tensor, conv_id: torch.Tensor, n_conv: int | None = None
     ) -> torch.Tensor:
         conv_id = conv_id.long()
