@@ -7,9 +7,9 @@ restores the original blocks (and the original state-dict keys) exactly.
 The branch axis is folded into the batch dimension, in one of two modes set
 on the shared ``BranchContext``:
 
-- Rectangular ``ctx.branches(n, pad_mask=None)``: the wrapped model is called
-  with hidden states of shape ``(B*N, T, d)`` and each wrapper unfolds to
-  ``(B, N, T, d)`` for the exchange.
+- Rectangular ``ctx.branches(n)``: the wrapped model is called with hidden
+  states of shape ``(B*N, T, d)`` and each wrapper unfolds to
+  ``(B, N, T, d)`` for the exchange (every conversation has ``n`` branches).
 - Packed ``ctx.branches(counts=[n_1, ..., n_B])``: the model is called with
   ``(M, T, d)`` where ``M = sum(n_i)`` - conversations with different speaker
   counts stacked with NO padding rows - and each wrapper hands the packed
@@ -44,7 +44,6 @@ class BranchContext:
 
     def __init__(self):
         self.n_branch: int | None = None
-        self.pad_mask: torch.Tensor | None = None
         self.conv_id: torch.Tensor | None = None
         self.n_conv: int | None = None
         self._segment_cache: dict = {}
@@ -58,20 +57,13 @@ class BranchContext:
         return self.conv_id is not None
 
     @contextmanager
-    def branches(
-        self,
-        n: int | None = None,
-        pad_mask: torch.Tensor | None = None,
-        *,
-        counts=None,
-        device=None,
-    ):
+    def branches(self, n: int | None = None, *, counts=None, device=None):
         """Activate exchanges for the enclosed forward/backward; exception-safe.
 
         Exactly one of ``n`` and ``counts`` must be given:
 
-        - ``n``: rectangular mode, ``n`` branches folded as ``(B*N, T, d)``,
-          with optional ``pad_mask: (B, N)`` marking ghost branches.
+        - ``n``: rectangular mode, ``n`` branches folded as ``(B*N, T, d)``
+          (every conversation has ``n`` branches).
         - ``counts``: packed mode, a sequence of per-conversation branch
           counts; the model input stacks all branches as ``(sum(counts), T,
           d)`` with no padding. ``device`` places the derived per-row
@@ -86,8 +78,6 @@ class BranchContext:
         if (n is None) == (counts is None):
             raise ValueError("pass exactly one of n= (rectangular) or counts= (packed)")
         if counts is not None:
-            if pad_mask is not None:
-                raise ValueError("pad_mask does not apply in packed mode: no padding rows exist")
             counts_t = torch.as_tensor(counts, dtype=torch.long)
             if counts_t.ndim != 1 or counts_t.numel() == 0 or bool((counts_t < 1).any()):
                 raise ValueError(f"counts must be a non-empty sequence of positive ints, got {counts!r}")
@@ -97,12 +87,10 @@ class BranchContext:
             self.n_conv = counts_t.numel()
         else:
             self.n_branch = n
-            self.pad_mask = pad_mask
         try:
             yield self
         finally:
             self.n_branch = None
-            self.pad_mask = None
             self.conv_id = None
             self.n_conv = None
             self._segment_cache.clear()
@@ -175,12 +163,8 @@ class ExchangedBlock(nn.Module):
         snapshot = self._fwd_snapshot
         if snapshot is _NO_SNAPSHOT:
             return
-        n_branch, pad_mask, conv_id = snapshot
-        if (
-            self.ctx.n_branch != n_branch
-            or self.ctx.pad_mask is not pad_mask
-            or self.ctx.conv_id is not conv_id
-        ):
+        n_branch, conv_id = snapshot
+        if self.ctx.n_branch != n_branch or self.ctx.conv_id is not conv_id:
             raise RuntimeError(
                 "BranchContext changed between the checkpointed forward and its "
                 f"recomputation during backward: forward saw n_branch={n_branch}, "
@@ -194,9 +178,7 @@ class ExchangedBlock(nn.Module):
         if _current_graph_task_id() != -1:
             self._validate_recompute()
         else:
-            object.__setattr__(
-                self, "_fwd_snapshot", (self.ctx.n_branch, self.ctx.pad_mask, self.ctx.conv_id)
-            )
+            object.__setattr__(self, "_fwd_snapshot", (self.ctx.n_branch, self.ctx.conv_id))
         out = self.base_block(*args, **kwargs)
         if not self.ctx.active:
             return out
@@ -205,8 +187,7 @@ class ExchangedBlock(nn.Module):
             conv_id, n_conv = self.ctx.segment_conv_id(h.shape[0], h.device)
             return self.spec.repack(out, self.exchange.forward_packed(h, conv_id, n_conv=n_conv))
         h = h.unflatten(0, (-1, self.ctx.n_branch))  # (B, N, T, d)
-        h = self.exchange(h, pad_mask=self.ctx.pad_mask)
-        return self.spec.repack(out, h.flatten(0, 1))
+        return self.spec.repack(out, self.exchange(h).flatten(0, 1))
 
 
 def _resolve_blocks(model: nn.Module, path: str) -> nn.ModuleList:

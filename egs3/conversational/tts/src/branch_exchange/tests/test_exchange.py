@@ -1,6 +1,6 @@
-"""Module-level tests for the exchange contract: (B, N, T, d) -> (B, N, T, d),
+"""Module-level tests for the exchange contract (dense and packed layouts):
 zero-init identity, permutation equivariance, branch-count generalization,
-and pad-mask semantics. No espnet imports here."""
+and conversation isolation. No espnet imports here."""
 
 import pytest
 import torch
@@ -36,28 +36,24 @@ def make_h(n_branch, seed=0):
 
 
 @pytest.mark.parametrize("kind", ["tac", "mha"])
-@pytest.mark.parametrize("with_pad", [False, True])
-def test_zero_init_identity(kind, with_pad):
+def test_zero_init_identity(kind):
     ex = make_exchange(kind)
     h = make_h(3)
-    pad = torch.tensor([[False, False, True]] * B) if with_pad else None
     with torch.no_grad():
-        out = ex(h, pad_mask=pad)
+        out = ex(h)
     assert torch.equal(out, h)
 
 
 @pytest.mark.parametrize("kind", ["tac", "mha"])
-@pytest.mark.parametrize("with_pad", [False, True])
-def test_permutation_equivariance(kind, with_pad):
+def test_permutation_equivariance(kind):
     n = 4
     ex = randomize(make_exchange(kind))
     h = make_h(n)
-    pad = torch.tensor([[False, False, True, False], [False, True, False, False]]) if with_pad else None
     torch.manual_seed(1)
     perm = torch.randperm(n)
     with torch.no_grad():
-        out = ex(h, pad_mask=pad)
-        out_perm = ex(h[:, perm], pad_mask=pad[:, perm] if pad is not None else None)
+        out = ex(h)
+        out_perm = ex(h[:, perm])
     assert torch.allclose(out_perm, out[:, perm], atol=1e-5)
 
 
@@ -71,25 +67,10 @@ def test_any_branch_count(kind):
         assert out.shape == h.shape
 
 
-@pytest.mark.parametrize("kind", ["tac", "mha"])
-def test_padding_equals_absence(kind):
-    """A fully padded ghost branch must not influence the real branches."""
-    ex = randomize(make_exchange(kind))
-    h2 = make_h(2, seed=7)
-    ghost = torch.randn(B, 1, T, DIM, generator=torch.Generator().manual_seed(99))
-    h3 = torch.cat((h2, ghost), dim=1)
-    pad = torch.tensor([[False, False, True]] * B)
-    with torch.no_grad():
-        out2 = ex(h2)
-        out3 = ex(h3, pad_mask=pad)
-    assert torch.allclose(out3[:, :2], out2, atol=1e-5)
-
-
 def test_identity_exchange():
     h = make_h(3)
     ex = IdentityExchange()
-    out = ex(h, pad_mask=torch.zeros(B, 3, dtype=torch.bool))
-    assert torch.equal(out, h)
+    assert torch.equal(ex(h), h)
     flat = h.flatten(0, 1)
     assert torch.equal(ex.forward_packed(flat, conv_id_of((3,) * B)), flat)
 

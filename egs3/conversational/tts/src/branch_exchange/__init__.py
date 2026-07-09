@@ -2,10 +2,10 @@
 communication (exchange) modules injected between blocks.
 
 Branches are folded into the batch dimension, either rectangularly as
-``(B*N, T, d)`` (``ctx.branches(n)``, optional pad mask for ghost branches)
-or packed as ``(sum(N_i), T, d)`` (``ctx.branches(counts=[...])``), where
-conversations with different speaker counts are stacked with no padding rows
-and exchanges group rows by per-row conversation ids. Exchanges are
+``(B*N, T, d)`` (``ctx.branches(n)``, uniform speaker count) or packed as
+``(sum(N_i), T, d)`` (``ctx.branches(counts=[...])``), where conversations
+with different speaker counts are stacked with no padding rows and exchanges
+group rows by per-row conversation ids. Exchanges are
 permutation-equivariant on the branch axis with NO positional encoding, so
 branches are interchangeable. Backbone-agnostic: only ``torch``, ``einops``,
 and the standard library are imported.

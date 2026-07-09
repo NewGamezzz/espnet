@@ -70,7 +70,7 @@ def test_zero_init_identity(kind, ckpt):
     assert torch.allclose(out, ref_independent, atol=1e-6)
 
 
-# ---- test 3: count generalization + padding == absence ----
+# ---- test 3: count generalization ----
 
 
 @pytest.mark.parametrize("kind", ["tac", "mha"])
@@ -85,17 +85,6 @@ def test_count_generalization(kind):
         with torch.no_grad(), ctx.branches(n):
             out = run_folded(model, inputs)
         assert out.shape == (B, n, T, MEL)
-
-    inputs2 = make_branch_inputs(2, seed=7)
-    ghost = make_branch_inputs(1, seed=99)
-    inputs3 = tuple(torch.cat((real, g_), dim=1) for real, g_ in zip(inputs2, ghost))
-    pad = torch.tensor([[False, False, True]] * B)
-    with torch.no_grad():
-        with ctx.branches(2):
-            out2 = run_folded(model, inputs2)
-        with ctx.branches(3, pad_mask=pad):
-            out3 = run_folded(model, inputs3)
-    assert torch.allclose(out3[:, :2], out2, atol=1e-5)
 
 
 # ---- test 4 (and 5d backward half): gradient flow ----
@@ -354,9 +343,6 @@ def test_branches_argument_validation():
             pass
     with pytest.raises(ValueError):
         with ctx.branches(counts=(2, 0)):
-            pass
-    with pytest.raises(ValueError):
-        with ctx.branches(counts=COUNTS, pad_mask=torch.zeros(1, 5, dtype=torch.bool)):
             pass
     assert not ctx.active and not ctx.packed
 

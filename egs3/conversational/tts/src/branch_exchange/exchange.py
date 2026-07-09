@@ -9,16 +9,14 @@ Every exchange supports two input layouts:
   branches communicate only within their conversation. Rows need not be
   sorted or contiguous by conversation. This is the layout to train with:
   ragged speaker counts cost zero wasted compute or memory.
-- Dense ``forward(h, pad_mask=None)``: ``(B, N, T, d) -> (B, N, T, d)`` where
-  ``N`` is the branch axis (one branch per speaker). Conversations with fewer
-  speakers are padded to ``N`` and marked in ``pad_mask: (B, N)`` bool
-  (``True`` = padded ghost branch); ghost branches never influence real ones
-  and pass through unchanged.
+- Dense ``forward(h)``: ``(B, N, T, d) -> (B, N, T, d)`` where ``N`` is the
+  branch axis (one branch per speaker), for batches where every conversation
+  has the same speaker count.
 
 The packed form is the core implementation; the dense form is a thin wrapper
-(``conv_id = arange(B).repeat_interleave(N)``, with ghost rows dropped before
-the exchange and restored unchanged after), so there is a single source of
-truth for the math.
+(``conv_id = arange(B).repeat_interleave(N)``), so there is a single source
+of truth for the math. There is deliberately NO padding/mask API: batches
+with mixed speaker counts use the packed layout instead.
 
 Contract shared by every exchange:
 
@@ -52,7 +50,7 @@ def _check_conv_id(h: torch.Tensor, conv_id: torch.Tensor, n_conv: int | None) -
 class IdentityExchange(nn.Module):
     """No-communication baseline: returns its input unchanged in both layouts."""
 
-    def forward(self, h: torch.Tensor, pad_mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, h: torch.Tensor) -> torch.Tensor:
         return h
 
     def forward_packed(
@@ -64,10 +62,6 @@ class IdentityExchange(nn.Module):
 class _PackedExchange(nn.Module):
     """Base class implementing the dense ``(B, N, T, d)`` layout as a thin
     wrapper over the packed core ``forward_packed``.
-
-    In the dense wrapper, padded ghost branches are dropped before the
-    exchange (so they get no compute and cannot influence real branches) and
-    their rows pass through unchanged.
     """
 
     def forward_packed(
@@ -75,16 +69,10 @@ class _PackedExchange(nn.Module):
     ) -> torch.Tensor:
         raise NotImplementedError
 
-    def forward(self, h: torch.Tensor, pad_mask: torch.Tensor | None = None) -> torch.Tensor:
+    def forward(self, h: torch.Tensor) -> torch.Tensor:
         b, n = h.shape[:2]
         conv_id = torch.arange(b, device=h.device).repeat_interleave(n)
-        flat = h.flatten(0, 1)  # (B*N, T, d)
-        if pad_mask is None:
-            out = self.forward_packed(flat, conv_id, n_conv=b)
-        else:
-            real = (~pad_mask.reshape(-1)).nonzero(as_tuple=True)[0]
-            out = flat.index_copy(0, real, self.forward_packed(flat[real], conv_id[real], n_conv=b))
-        return out.unflatten(0, (b, n))
+        return self.forward_packed(h.flatten(0, 1), conv_id, n_conv=b).unflatten(0, (b, n))
 
 
 class TACExchange(_PackedExchange):
