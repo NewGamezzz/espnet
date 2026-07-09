@@ -1,8 +1,9 @@
 """Non-invasive injection of exchange modules into an existing backbone.
 
-``inject_exchange`` replaces selected entries of the backbone's block
-``nn.ModuleList`` with ``ExchangedBlock`` wrappers; ``remove_exchange``
-restores the original blocks (and the original state-dict keys) exactly.
+``inject_exchange`` replaces selected transformer blocks (located by the
+spec's ``target``: dotted path, depth regex, or explicit name list - see
+``BlockSpec``) with ``ExchangedBlock`` wrappers; ``remove_exchange`` restores
+the original blocks (and the original state-dict keys) exactly.
 
 The branch axis is folded into the batch dimension as a packed layout:
 ``ctx.branches(counts=[n_1, ..., n_B])`` declares that the model is called
@@ -13,6 +14,8 @@ hidden states plus per-row conversation ids to its exchange.
 
 from __future__ import annotations
 
+import difflib
+import re
 from contextlib import contextmanager
 
 import torch
@@ -156,13 +159,122 @@ class ExchangedBlock(nn.Module):
         return self.spec.repack(out, self.exchange(h, conv_id, n_conv=n_conv))
 
 
-def _resolve_blocks(model: nn.Module, path: str) -> nn.ModuleList:
-    obj = model
-    for part in path.split("."):
-        obj = getattr(obj, part)
-    if not isinstance(obj, nn.ModuleList):
-        raise TypeError(f"{path!r} on {type(model).__name__} is {type(obj).__name__}, expected nn.ModuleList")
-    return obj
+def _is_attr_path(target: str) -> bool:
+    return all(part.isidentifier() for part in target.split("."))
+
+
+def _check_no_nesting(names, target) -> None:
+    """A matched block must never live inside another matched block: that is
+    the silent mis-scoping failure of a loose pattern (``layers.0.self_attn``
+    next to ``layers.0``)."""
+    for outer in names:
+        prefix = outer + "."
+        for inner in names:
+            if inner.startswith(prefix):
+                raise ValueError(
+                    f"target {target!r} matches {inner!r}, which lives inside "
+                    f"another matched block {outer!r}; tighten the target so "
+                    "it matches only the blocks themselves"
+                )
+
+
+def _near_misses(target: str, modules) -> list:
+    names = [n for n in modules if n]
+    for literal in sorted(re.findall(r"[A-Za-z_]{2,}", target), key=len, reverse=True):
+        near = [n for n in names if literal in n]
+        if near:
+            return near[:5]
+    return difflib.get_close_matches(target, names, n=5, cutoff=0.3)
+
+
+def _match_regex(target: str, modules) -> list:
+    pattern = re.compile(target)
+    if pattern.groups < 1:
+        raise ValueError(
+            f"regex target {target!r} needs a capture group for the block "
+            r'depth, e.g. r"layers\.(\d+)"'
+        )
+    matches = []
+    for name in modules:
+        m = pattern.fullmatch(name)
+        if m is None:
+            continue
+        try:
+            depth = int(m.group(1))
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"regex target {target!r} captured {m.group(1)!r} from {name!r}; "
+                "the first capture group must be the block's integer depth"
+            ) from None
+        matches.append((name, depth))
+    if not matches:
+        raise ValueError(
+            f"regex target {target!r} matched no module names (re.fullmatch "
+            f"against named_modules()); near misses: {_near_misses(target, modules)}"
+        )
+    _check_no_nesting([name for name, _ in matches], target)
+    by_depth: dict[int, str] = {}
+    for name, depth in matches:
+        if depth in by_depth:
+            raise ValueError(
+                f"regex target {target!r} matched both {by_depth[depth]!r} and "
+                f"{name!r} at depth {depth}; models with multiple block stacks "
+                "need an explicit list of module names"
+            )
+        by_depth[depth] = name
+    depths = sorted(by_depth)
+    if depths != list(range(len(depths))):
+        raise ValueError(
+            f"regex target {target!r} resolved depths {depths}; the capture "
+            f"group must yield exactly 0..{len(depths) - 1} with no gaps"
+        )
+    return [by_depth[d] for d in depths]
+
+
+def _lookup_names(target, modules) -> list:
+    names = list(target)
+    if not names:
+        raise ValueError("explicit target list must not be empty")
+    if len(set(names)) != len(names):
+        raise ValueError(f"explicit target list has duplicate names: {names!r}")
+    missing = [n for n in names if n not in modules]
+    if missing:
+        hints = {n: _near_misses(n, modules) for n in missing}
+        raise ValueError(f"target module names not found: {hints!r}")
+    _check_no_nesting(names, names)
+    return names
+
+
+def _resolve_blocks(model: nn.Module, target) -> list:
+    """Resolve ``target`` (dotted path / depth regex / explicit name list,
+    see ``BlockSpec``) to an ordered list of ``(parent, key, block)`` triples
+    whose position is the depth."""
+    if isinstance(target, str) and _is_attr_path(target):
+        obj = model
+        for part in target.split("."):
+            obj = getattr(obj, part)
+        if not isinstance(obj, nn.ModuleList):
+            raise TypeError(
+                f"{target!r} on {type(model).__name__} is {type(obj).__name__}, expected nn.ModuleList"
+            )
+        return [(obj, str(i), block) for i, block in enumerate(obj)]
+    modules = dict(model.named_modules())
+    if isinstance(target, str):
+        names = _match_regex(target, modules)
+    else:
+        names = _lookup_names(target, modules)
+    triples = []
+    for name in names:
+        parent_name, _, key = name.rpartition(".")
+        triples.append((modules[parent_name], key, modules[name]))
+    return triples
+
+
+def _set_block(parent: nn.Module, key: str, module: nn.Module) -> None:
+    if isinstance(parent, nn.ModuleList):
+        parent[int(key)] = module
+    else:
+        setattr(parent, key, module)
 
 
 def inject_exchange(
@@ -171,18 +283,19 @@ def inject_exchange(
     schedule: ExchangeSchedule,
     ctx: BranchContext,
 ) -> nn.Module:
-    """Replace ``blocks[i]`` with an ``ExchangedBlock`` for every ``P_TAC``
-    depth in ``schedule``; ``P`` blocks stay untouched (original object,
-    original state-dict keys). Modifies ``model`` in place and returns it.
+    """Replace the block at depth ``i`` with an ``ExchangedBlock`` for every
+    ``P_TAC`` depth in ``schedule``; ``P`` blocks stay untouched (original
+    object, original state-dict keys). Modifies ``model`` in place and
+    returns it.
     """
-    blocks = _resolve_blocks(model, spec.path)
+    blocks = _resolve_blocks(model, spec.target)
     if schedule.depth != len(blocks):
         raise ValueError(f"schedule depth {schedule.depth} != number of blocks {len(blocks)}")
-    for i in range(len(blocks)):
+    for i, (parent, key, block) in enumerate(blocks):
         if schedule.mode(i) is Mode.P_TAC:
-            if isinstance(blocks[i], ExchangedBlock):
+            if isinstance(block, ExchangedBlock):
                 raise ValueError(f"block {i} is already an ExchangedBlock; remove_exchange first")
-            blocks[i] = ExchangedBlock(blocks[i], schedule.exchange_for(i), ctx, spec)
+            _set_block(parent, key, ExchangedBlock(block, schedule.exchange_for(i), ctx, spec))
     return model
 
 
@@ -192,8 +305,7 @@ def remove_exchange(model: nn.Module, spec: BlockSpec) -> nn.Module:
     Modifies ``model`` in place and returns it; the resulting state dict has
     exactly the original keys and values.
     """
-    blocks = _resolve_blocks(model, spec.path)
-    for i in range(len(blocks)):
-        if isinstance(blocks[i], ExchangedBlock):
-            blocks[i] = blocks[i].base_block
+    for parent, key, block in _resolve_blocks(model, spec.target):
+        if isinstance(block, ExchangedBlock):
+            _set_block(parent, key, block.base_block)
     return model
