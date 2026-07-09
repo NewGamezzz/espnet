@@ -46,8 +46,9 @@ def read_window_manifest(path: str | Path) -> list[WindowRecord]:
 
 
 def read_vocab(path: str | Path) -> list[str]:
-    with Path(path).open("r", encoding="utf-8") as f:
-        return [line.rstrip("\n") for line in f if line.rstrip("\n")]
+    # Verbatim lines: the line index IS the token id (a token may be a literal
+    # space, as in the F5 Emilia vocab, so no whitespace filtering).
+    return Path(path).read_text(encoding="utf-8").splitlines()
 
 
 class ConversationDataset(TorchDataset):

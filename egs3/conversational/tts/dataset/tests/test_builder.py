@@ -103,6 +103,26 @@ class TestVocabSafety:
             NEW_TOKENS[1]: len(base_vocab) + 1,
         }
 
+    def test_emilia_style_vocab_space_token_and_crlf(self, fake_corpus, tmp_path):
+        """The F5 Emilia vocab starts with a literal space token and uses CRLF
+        line endings; neither may shift the pretrained ids."""
+        tokens = [" ", "!", "a", "b", "c"]
+        vocab = tmp_path / "emilia_vocab.txt"
+        vocab.write_bytes(("\r\n".join(tokens) + "\r\n").encode("utf-8"))
+        recipe_dir = tmp_path / "emilia_recipe"
+        builder = SSSDBuilder()
+        builder.build(
+            recipe_dir=recipe_dir,
+            dataset_root=fake_corpus["root"],
+            seed=0,
+            base_vocab_path=vocab,
+        )
+        written = (recipe_dir / "data/tokens/vocab.txt").read_text().splitlines()
+        assert written == tokens + list(NEW_TOKENS)
+        meta = json.loads((recipe_dir / "data/tokens/vocab_meta.json").read_text())
+        assert meta["base_size"] == len(tokens)
+        assert meta["new_tokens"][NEW_TOKENS[0]] == len(tokens)
+
     def test_missing_base_vocab_fails_loudly(self, fake_corpus, tmp_path):
         builder = SSSDBuilder()
         with pytest.raises(ValueError, match="base_vocab_path is required"):

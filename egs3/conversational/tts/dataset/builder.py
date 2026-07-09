@@ -171,11 +171,11 @@ class SSSDBuilder(DatasetBuilder):
         base_vocab_path = Path(base_vocab_path)
         if not base_vocab_path.is_file():
             raise FileNotFoundError(f"base vocab not found: {base_vocab_path}")
-        base_tokens = [
-            line.rstrip("\n")
-            for line in base_vocab_path.read_text(encoding="utf-8").splitlines()
-            if line.strip()
-        ]
+        # Keep every line verbatim: the line index IS the token id, and the F5
+        # Emilia vocab's very first token is a literal space, which any
+        # whitespace-based filtering would silently drop, shifting all ids.
+        # splitlines() also absorbs CRLF endings (the Emilia file uses \r\n).
+        base_tokens = base_vocab_path.read_text(encoding="utf-8").splitlines()
         extended = extend_vocab(base_tokens)
         charset = vocab_charset(extended)
 
