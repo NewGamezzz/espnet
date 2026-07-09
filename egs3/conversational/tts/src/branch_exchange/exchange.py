@@ -64,6 +64,10 @@ class TACExchange(nn.Module):
 
     Permutation-equivariant on the branch axis (the segment mean is
     order-free); no positional encoding anywhere on the branch axis.
+
+    Note: the segment mean uses ``index_add_``/``bincount``, which are
+    nondeterministic on CUDA and will raise under
+    ``torch.use_deterministic_algorithms(True)``.
     """
 
     def __init__(self, dim: int, hidden: int | None = None):

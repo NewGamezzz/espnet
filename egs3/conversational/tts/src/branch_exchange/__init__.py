@@ -11,7 +11,15 @@ and the standard library are imported.
 """
 
 from .exchange import BranchMHAExchange, IdentityExchange, TACExchange
-from .inject import BranchContext, ExchangedBlock, inject_exchange, remove_exchange
+from .inject import (
+    BranchContext,
+    ExchangedBlock,
+    exchange_state_dict,
+    get_context,
+    inject_exchange,
+    load_exchange_state_dict,
+    remove_exchange,
+)
 from .registry import REGISTRY, BlockSpec
 from .schedule import ExchangeSchedule, Mode
 
@@ -25,6 +33,9 @@ __all__ = [
     "ExchangedBlock",
     "inject_exchange",
     "remove_exchange",
+    "get_context",
+    "exchange_state_dict",
+    "load_exchange_state_dict",
     "BlockSpec",
     "REGISTRY",
 ]

@@ -61,7 +61,13 @@ class BranchContext:
         must also run inside this context: the recompute re-executes each
         ``ExchangedBlock.forward``, which verifies the context still matches
         the one seen at forward time and raises ``RuntimeError`` otherwise.
+
+        Not re-entrant: activating an already-active context would overwrite
+        its state and the inner exit would clear what the outer block still
+        needs, so nesting raises ``RuntimeError`` instead.
         """
+        if self.conv_id is not None:
+            raise RuntimeError("BranchContext is already active; ctx.branches(...) does not nest")
         counts_t = torch.as_tensor(counts, dtype=torch.long)
         if counts_t.ndim != 1 or counts_t.numel() == 0 or bool((counts_t < 1).any()):
             raise ValueError(f"counts must be a non-empty sequence of positive ints, got {counts!r}")
@@ -124,6 +130,11 @@ class ExchangedBlock(nn.Module):
     context state, and the checkpoint recompute raises ``RuntimeError`` if the
     context has since been exited or changed, instead of silently skipping the
     exchange and producing wrong gradients.
+
+    ``copy.deepcopy`` of an injected model (e.g. for EMA) deepcopies ``ctx``
+    too: the copy's blocks share one NEW context that the original's
+    ``ctx.branches(...)`` does not activate. Retrieve the copy's own context
+    with ``get_context(copy)``.
     """
 
     def __init__(self, base_block: nn.Module, exchange: nn.Module, ctx: BranchContext, spec: BlockSpec):
@@ -286,16 +297,19 @@ def inject_exchange(
     """Replace the block at depth ``i`` with an ``ExchangedBlock`` for every
     ``P_TAC`` depth in ``schedule``; ``P`` blocks stay untouched (original
     object, original state-dict keys). Modifies ``model`` in place and
-    returns it.
+    returns it; on error the model is left unchanged (all checks run before
+    any block is replaced).
     """
     blocks = _resolve_blocks(model, spec.target)
     if schedule.depth != len(blocks):
         raise ValueError(f"schedule depth {schedule.depth} != number of blocks {len(blocks)}")
-    for i, (parent, key, block) in enumerate(blocks):
-        if schedule.mode(i) is Mode.P_TAC:
-            if isinstance(block, ExchangedBlock):
-                raise ValueError(f"block {i} is already an ExchangedBlock; remove_exchange first")
-            _set_block(parent, key, ExchangedBlock(block, schedule.exchange_for(i), ctx, spec))
+    scheduled = [i for i in range(len(blocks)) if schedule.mode(i) is Mode.P_TAC]
+    already = [i for i in scheduled if isinstance(blocks[i][2], ExchangedBlock)]
+    if already:
+        raise ValueError(f"blocks {already} are already ExchangedBlocks; remove_exchange first")
+    for i in scheduled:
+        parent, key, block = blocks[i]
+        _set_block(parent, key, ExchangedBlock(block, schedule.exchange_for(i), ctx, spec))
     return model
 
 
@@ -308,4 +322,74 @@ def remove_exchange(model: nn.Module, spec: BlockSpec) -> nn.Module:
     for parent, key, block in _resolve_blocks(model, spec.target):
         if isinstance(block, ExchangedBlock):
             _set_block(parent, key, block.base_block)
+    return model
+
+
+def _injected_blocks(model: nn.Module) -> list:
+    """Every ``ExchangedBlock`` in the model, in module-traversal order
+    (stable for a fixed architecture and schedule)."""
+    return [m for m in model.modules() if isinstance(m, ExchangedBlock)]
+
+
+def get_context(model: nn.Module) -> BranchContext:
+    """The single ``BranchContext`` shared by the model's ``ExchangedBlock``s.
+
+    ``copy.deepcopy`` of an injected model (e.g. for EMA) deepcopies the
+    context too, so the copy's blocks share one NEW context that the
+    original's ``ctx.branches(...)`` does not activate; use this helper to
+    retrieve the copy's own context. Raises ``ValueError`` if the model has
+    no injected blocks or its blocks hold more than one context.
+    """
+    contexts = {id(b.ctx): b.ctx for b in _injected_blocks(model)}
+    if not contexts:
+        raise ValueError("model has no ExchangedBlock; inject_exchange first")
+    if len(contexts) > 1:
+        raise ValueError(
+            f"model's ExchangedBlocks hold {len(contexts)} different BranchContexts; expected one"
+        )
+    return next(iter(contexts.values()))
+
+
+def exchange_state_dict(model: nn.Module) -> dict:
+    """Adapter-style state dict of every injected exchange, and nothing else.
+
+    Keys are ``"{i}.exchange.{param}"`` where ``i`` is the ``ExchangedBlock``'s
+    position in module-traversal order - stable for a fixed architecture and
+    schedule, and independent of wrapper nesting, so exchange checkpoints stay
+    separate from backbone checkpoints (whose keys shift under wrapping).
+    """
+    blocks = _injected_blocks(model)
+    if not blocks:
+        raise ValueError("model has no ExchangedBlock; inject_exchange first")
+    out = {}
+    for i, block in enumerate(blocks):
+        for key, value in block.exchange.state_dict().items():
+            out[f"{i}.exchange.{key}"] = value
+    return out
+
+
+def load_exchange_state_dict(model: nn.Module, state_dict: dict, strict: bool = True) -> nn.Module:
+    """Inverse of ``exchange_state_dict``; modifies ``model`` in place.
+
+    With ``strict=True`` (default) the keys must match exactly; otherwise a
+    ``RuntimeError`` lists the missing and unexpected keys.
+    """
+    blocks = _injected_blocks(model)
+    if not blocks:
+        raise ValueError("model has no ExchangedBlock; inject_exchange first")
+    expected = {
+        f"{i}.exchange.{key}"
+        for i, block in enumerate(blocks)
+        for key in block.exchange.state_dict()
+    }
+    missing = sorted(expected - set(state_dict))
+    unexpected = sorted(set(state_dict) - expected)
+    if strict and (missing or unexpected):
+        raise RuntimeError(
+            f"exchange state dict mismatch; missing keys: {missing}; unexpected keys: {unexpected}"
+        )
+    for i, block in enumerate(blocks):
+        prefix = f"{i}.exchange."
+        sub = {k[len(prefix):]: v for k, v in state_dict.items() if k.startswith(prefix)}
+        block.exchange.load_state_dict(sub, strict=strict)
     return model

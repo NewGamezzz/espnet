@@ -4,6 +4,7 @@ generalization, gradient flow, injection guards (identity / inactive ctx /
 state-dict restore / CFG segments / activation checkpointing), schedule
 parsing, and import purity."""
 
+import copy
 import subprocess
 import sys
 
@@ -19,7 +20,10 @@ from branch_exchange import (
     IdentityExchange,
     Mode,
     TACExchange,
+    exchange_state_dict,
+    get_context,
     inject_exchange,
+    load_exchange_state_dict,
     remove_exchange,
 )
 from conftest import (
@@ -188,6 +192,81 @@ def test_injection_guard(kind):
     assert torch.equal(out_inactive, ref)
 
 
+# ---- deepcopy (EMA) detaches the context: get_context recovers it ----
+
+
+@pytest.mark.parametrize("kind", ["tac", "mha"])
+def test_get_context_after_deepcopy(kind):
+    model = make_dit()
+    ctx = inject_all(model, FACTORIES[kind])
+    set_gates(model, 0.5)
+    randomize_exchanges(model)
+    inputs = make_packed_inputs(COUNTS, seed=23)
+    model_copy = copy.deepcopy(model)
+
+    with torch.no_grad():
+        base = model(*inputs)  # ctx inactive: exchanges skipped
+        with ctx.branches(counts=COUNTS):
+            out_orig = model(*inputs)
+            # The original's context does NOT activate the deepcopy: its
+            # blocks share a deepcopied context of their own.
+            out_copy_inactive = model_copy(*inputs)
+        copy_ctx = get_context(model_copy)
+        assert copy_ctx is not ctx
+        with copy_ctx.branches(counts=COUNTS):
+            out_copy = model_copy(*inputs)
+
+    assert torch.equal(out_copy_inactive, base)
+    assert not torch.equal(out_orig, base)
+    assert torch.equal(out_copy, out_orig)
+
+
+def test_get_context_validation():
+    with pytest.raises(ValueError, match="no ExchangedBlock"):
+        get_context(make_dit())
+
+    model = make_dit()
+    sched_a = ExchangeSchedule.from_spec({"1-2": "P+TAC", "3-4": "P"}, depth=DEPTH, factory=FACTORIES["tac"])
+    sched_b = ExchangeSchedule.from_spec({"1-2": "P", "3-4": "P+TAC"}, depth=DEPTH, factory=FACTORIES["tac"])
+    inject_exchange(model, REGISTRY["f5_dit"], sched_a, BranchContext())
+    inject_exchange(model, REGISTRY["f5_dit"], sched_b, BranchContext())
+    with pytest.raises(ValueError, match="different BranchContexts"):
+        get_context(model)
+
+
+# ---- adapter-style exchange-only checkpoints ----
+
+
+@pytest.mark.parametrize("kind", ["tac", "mha"])
+def test_exchange_state_dict_roundtrip(kind):
+    model_a = make_dit()
+    inject_all(model_a, FACTORIES[kind])
+    set_gates(model_a, 0.5)
+    randomize_exchanges(model_a, seed=7)
+    sd = exchange_state_dict(model_a)
+    assert sd and all(".exchange." in key for key in sd)
+
+    model_b = make_dit(seed=1)
+    inject_all(model_b, FACTORIES[kind])
+    load_exchange_state_dict(model_b, sd)
+    for ex_a, ex_b in zip(iter_exchanges(model_a), iter_exchanges(model_b)):
+        for (name_a, p_a), (name_b, p_b) in zip(ex_a.named_parameters(), ex_b.named_parameters()):
+            assert name_a == name_b
+            assert torch.equal(p_a, p_b), name_a
+
+    with pytest.raises(RuntimeError, match="missing"):
+        load_exchange_state_dict(model_b, dict(list(sd.items())[1:]))
+    with pytest.raises(RuntimeError, match="unexpected"):
+        load_exchange_state_dict(model_b, {**sd, "9.exchange.bogus": torch.zeros(())})
+
+
+def test_exchange_state_dict_requires_injection():
+    with pytest.raises(ValueError, match="no ExchangedBlock"):
+        exchange_state_dict(make_dit())
+    with pytest.raises(ValueError, match="no ExchangedBlock"):
+        load_exchange_state_dict(make_dit(), {})
+
+
 # ---- remove_exchange restores the exact state dict ----
 
 
@@ -250,6 +329,36 @@ def test_branches_argument_validation():
         with ctx.branches(counts=(2, 0)):
             pass
     assert not ctx.active
+
+
+def test_branches_is_not_reentrant():
+    ctx = BranchContext()
+    with ctx.branches(counts=(2,)):
+        with pytest.raises(RuntimeError, match="already active"):
+            with ctx.branches(counts=(3,)):
+                pass
+        assert ctx.active  # outer state survives the rejected inner activation
+    assert not ctx.active
+
+
+def test_failed_injection_is_atomic():
+    model = make_dit()
+    orig_blocks = list(model.transformer_blocks)
+    partial = ExchangeSchedule.from_spec(
+        {"1": "P", "2": "P+TAC", "3-4": "P"}, depth=DEPTH, factory=FACTORIES["tac"]
+    )
+    inject_exchange(model, REGISTRY["f5_dit"], partial, BranchContext())
+    wrapped = model.transformer_blocks[1]
+
+    full = ExchangeSchedule.from_spec({f"1-{DEPTH}": "P+TAC"}, depth=DEPTH, factory=FACTORIES["tac"])
+    with pytest.raises(ValueError, match="already ExchangedBlocks"):
+        inject_exchange(model, REGISTRY["f5_dit"], full, BranchContext())
+    # Nothing was mutated: block 0 (scheduled BEFORE the offending index) is
+    # still the original, not a fresh ExchangedBlock.
+    assert model.transformer_blocks[0] is orig_blocks[0]
+    assert model.transformer_blocks[1] is wrapped
+    assert model.transformer_blocks[2] is orig_blocks[2]
+    assert model.transformer_blocks[3] is orig_blocks[3]
 
 
 # ---- schedule parsing / partial injection ----
