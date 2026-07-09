@@ -10,7 +10,6 @@ branch axis, so mixed channel counts per batch need no special casing.
 from __future__ import annotations
 
 import json
-import os
 import random
 from importlib import resources
 from pathlib import Path
@@ -23,6 +22,7 @@ from torch.utils.data import Dataset as TorchDataset
 from espnet2.fileio.sound_scp import soundfile_read
 from espnet3.utils.config_utils import load_config_with_defaults
 
+from .builder import resolve_dataset_root
 from .text import build_branch_texts, encode_tokens, make_token2id
 from .windows import WindowRecord, from_json
 
@@ -31,16 +31,6 @@ with resources.as_file(_CONFIG_RESOURCE) as _CONFIG_PATH:
     _CONFIG = load_config_with_defaults(str(_CONFIG_PATH), resolve=False)
 _DATASET_CFG = _CONFIG["dataset"]
 _BUILDER_CFG = _CONFIG["builder"]
-
-
-def resolve_dataset_root(explicit: str | Path | None = None) -> Path:
-    """Corpus root resolution used across the recipe: explicit argument >
-    ``$SSSD_ROOT`` > ``builder.dataset_root`` in config.yaml."""
-    if explicit is not None:
-        return Path(explicit)
-    if os.environ.get("SSSD_ROOT"):
-        return Path(os.environ["SSSD_ROOT"])
-    return Path(_BUILDER_CFG["dataset_root"])
 
 
 def read_window_manifest(path: str | Path) -> list[WindowRecord]:

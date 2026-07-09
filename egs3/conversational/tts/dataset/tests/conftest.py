@@ -65,3 +65,73 @@ def base_vocab() -> list[str]:
         "'",
         "<sos/eos>",
     ]
+
+
+def _alternating_sups(session_id, num_channels, duration, utt_len=2.5, gap=1.5):
+    """Round-robin utterances across channels with clean inter-turn silences."""
+    sups = []
+    t, i = 0.5, 0
+    texts = ["Can you hear me?", "yes, loud and clear!", "great. let's start"]
+    while t + utt_len + 0.5 < duration:
+        channel = i % num_channels
+        sups.append(
+            {
+                "id": f"{session_id}_ch{channel}_utt{i:04d}",
+                "recording_id": session_id,
+                "start": round(t, 3),
+                "duration": utt_len,
+                "channel": channel,
+                "text": texts[i % len(texts)],
+                "speaker": f"{session_id}_spk{channel}",
+            }
+        )
+        t += utt_len + gap
+        i += 1
+    return sups
+
+
+@pytest.fixture
+def fake_corpus(tmp_path, base_vocab):
+    """Miniature SSSD corpus tree + base vocab file + empty recipe dir."""
+    import gzip
+    import json
+
+    root = tmp_path / "corpus"
+    sessions = [("sess_long", 2, 60.0), ("sess_tri", 3, 40.0), ("sess_short", 2, 8.0)]
+    recordings, supervisions = [], []
+    for session_id, num_channels, duration in sessions:
+        write_flac(root / "original" / f"{session_id}_mixed.flac", num_channels, duration)
+        recordings.append(
+            {
+                "id": session_id,
+                "sources": [
+                    {
+                        "type": "file",
+                        "channels": list(range(num_channels)),
+                        # Absolute prefix is bogus on purpose: the loader must
+                        # remap onto dataset_root instead of trusting it.
+                        "source": f"/scratch/elsewhere/original/{session_id}_mixed.flac",
+                    }
+                ],
+                "sampling_rate": 48000,
+                "num_samples": int(duration * 48000),
+                "duration": duration,
+                "channel_ids": list(range(num_channels)),
+            }
+        )
+        supervisions.extend(_alternating_sups(session_id, num_channels, duration))
+
+    manifests = root / "lhotse_manifests_48"
+    manifests.mkdir(parents=True)
+    with gzip.open(manifests / "recordings.jsonl.gz", "wt", encoding="utf-8") as f:
+        for rec in recordings:
+            f.write(json.dumps(rec) + "\n")
+    with gzip.open(manifests / "supervisions.jsonl.gz", "wt", encoding="utf-8") as f:
+        for sup in supervisions:
+            f.write(json.dumps(sup) + "\n")
+
+    vocab_path = tmp_path / "base_vocab.txt"
+    vocab_path.write_text("\n".join(base_vocab) + "\n", encoding="utf-8")
+    recipe_dir = tmp_path / "recipe"
+    recipe_dir.mkdir()
+    return {"root": root, "base_vocab_path": vocab_path, "recipe_dir": recipe_dir}
