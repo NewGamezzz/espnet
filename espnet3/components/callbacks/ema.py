@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import lightning.pytorch as pl
 import torch
 import torch.distributed as dist
+import lightning.pytorch as pl
 
 from espnet3.components.callbacks.vendored_ema import EMA
 
@@ -85,9 +85,7 @@ class EMACallback(pl.Callback):
         }
         if self.ema is not None:  # main rank: put EMA weights into the online model
             pl_module.model.load_state_dict(self.ema.ema_model.state_dict())
-        if (
-            distributed
-        ):  # send main's (EMA) weights to every rank, in registration order
+        if distributed:  # send main's (EMA) weights to every rank, in registration order
             for tensor in pl_module.model.state_dict().values():
                 if torch.is_tensor(tensor):
                     dist.broadcast(tensor, src=0)

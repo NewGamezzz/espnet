@@ -9,8 +9,7 @@ unknown-> 0 fallback.
 
 It only tokenizes ``text`` (-> int64 ids) and passes the waveform through; the mel
 is produced in the model by ``feats_extract: vocoder_mel``, same as the char recipe.
-A plain callable (not an ``AbsPreprocessor``), so ESPnet3 calls
-``preprocessor(sample)``.
+A plain callable (not an ``AbsPreprocessor``), so ESPnet3 calls ``preprocessor(sample)``.
 """
 
 from __future__ import annotations
@@ -42,7 +41,5 @@ class F5PinyinPreprocessor:
         return len(self.vocab_char_map)
 
     def __call__(self, data: dict) -> dict:
-        data[self.text_name] = text_to_pinyin_ids(
-            data[self.text_name], self.vocab_char_map
-        )
+        data[self.text_name] = text_to_pinyin_ids(data[self.text_name], self.vocab_char_map)
         return data

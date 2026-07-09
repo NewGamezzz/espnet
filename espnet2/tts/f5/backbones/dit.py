@@ -6,7 +6,6 @@ nt - text sequence
 nw - raw wave length
 d - dimension
 """
-
 # ruff: noqa: F722 F821
 
 from __future__ import annotations
@@ -16,6 +15,7 @@ import threading
 import torch
 import torch.nn.functional as F
 from torch import nn
+from espnet2.tts.f5.rotary import RotaryEmbedding
 
 from espnet2.tts.f5.modules import (
     AdaLayerNorm_Final,
@@ -25,49 +25,29 @@ from espnet2.tts.f5.modules import (
     TimestepEmbedding,
     precompute_freqs_cis,
 )
-from espnet2.tts.f5.rotary import RotaryEmbedding
+
 
 # Text embedding
 
 
 class TextEmbedding(nn.Module):
     def __init__(
-        self,
-        text_num_embeds,
-        text_dim,
-        mask_padding=True,
-        average_upsampling=False,
-        conv_layers=0,
-        conv_mult=2,
+        self, text_num_embeds, text_dim, mask_padding=True, average_upsampling=False, conv_layers=0, conv_mult=2
     ):
         super().__init__()
-        self.text_embed = nn.Embedding(
-            text_num_embeds + 1, text_dim
-        )  # use 0 as filler token
+        self.text_embed = nn.Embedding(text_num_embeds + 1, text_dim)  # use 0 as filler token
 
         self.mask_padding = mask_padding  # mask filler and batch padding tokens or not
-        # zipvoice-style text late average upsampling (after text encoder)
-        self.average_upsampling = average_upsampling
+        self.average_upsampling = average_upsampling  # zipvoice-style text late average upsampling (after text encoder)
         if average_upsampling:
-            assert (
-                mask_padding
-            ), "text_embedding_average_upsampling requires text_mask_padding to be True"
+            assert mask_padding, "text_embedding_average_upsampling requires text_mask_padding to be True"
 
         if conv_layers > 0:
             self.extra_modeling = True
-            self.precompute_max_pos = (
-                8192  # 8192 is ~87.38s of 24khz audio; 4096 is ~43.69s of 24khz audio
-            )
-            self.register_buffer(
-                "freqs_cis",
-                precompute_freqs_cis(text_dim, self.precompute_max_pos),
-                persistent=False,
-            )
+            self.precompute_max_pos = 8192  # 8192 is ~87.38s of 24khz audio; 4096 is ~43.69s of 24khz audio
+            self.register_buffer("freqs_cis", precompute_freqs_cis(text_dim, self.precompute_max_pos), persistent=False)
             self.text_blocks = nn.Sequential(
-                *[
-                    ConvNeXtV2Block(text_dim, text_dim * conv_mult)
-                    for _ in range(conv_layers)
-                ]
+                *[ConvNeXtV2Block(text_dim, text_dim * conv_mult) for _ in range(conv_layers)]
             )
         else:
             self.extra_modeling = False
@@ -96,9 +76,7 @@ class TextEmbedding(nn.Module):
                 repeat_count = base_repeat + (1 if j >= text_len - remainder else 0)
                 indices.extend([j] * repeat_count)
 
-            indices = torch.tensor(
-                indices[:audio_len], device=text.device, dtype=torch.long
-            )
+            indices = torch.tensor(indices[:audio_len], device=text.device, dtype=torch.long)
             upsampled = valid_data[indices]  # [audio_len, text_dim]
 
             upsampled_text[i, :audio_len, :] = upsampled
@@ -106,9 +84,7 @@ class TextEmbedding(nn.Module):
         return upsampled_text
 
     def forward(self, text: int["b nt"], seq_len, drop_text=False):
-        text = (
-            text + 1
-        )  # use 0 as filler token. preprocess of batch pad -1, see list_str_to_idx()
+        text = text + 1  # use 0 as filler token. preprocess of batch pad -1, see list_str_to_idx()
         valid_pos_mask = None
         if torch.is_tensor(seq_len):
             seq_len = seq_len.to(device=text.device, dtype=torch.long)
@@ -116,9 +92,7 @@ class TextEmbedding(nn.Module):
         else:
             max_seq_len = int(seq_len)
 
-        text = text[
-            :, :max_seq_len
-        ]  # curtail if character tokens are more than the mel spec tokens
+        text = text[:, :max_seq_len]  # curtail if character tokens are more than the mel spec tokens
         text = F.pad(text, (0, max_seq_len - text.shape[1]), value=0)
 
         if torch.is_tensor(seq_len):
@@ -134,31 +108,23 @@ class TextEmbedding(nn.Module):
 
         text = self.text_embed(text)  # b n -> b n d
         if valid_pos_mask is not None:
-            # Keep short-sample tail strictly zero (equivalent to per-sample
-            # pad_sequence(..., 0)).
+            # Keep short-sample tail strictly zero (equivalent to per-sample pad_sequence(..., 0)).
             text = text.masked_fill(~valid_pos_mask.unsqueeze(-1), 0.0)
 
         # possible extra modeling
         if self.extra_modeling:
-            # sinus pos emb; for variable seq lengths, only add positions
-            # within each sample's valid range.
+            # sinus pos emb; for variable seq lengths, only add positions within each sample's valid range.
             freqs = self.freqs_cis[:max_seq_len, :]
             if valid_pos_mask is not None:
-                freqs = freqs.unsqueeze(0) * valid_pos_mask.unsqueeze(-1).to(
-                    freqs.dtype
-                )
+                freqs = freqs.unsqueeze(0) * valid_pos_mask.unsqueeze(-1).to(freqs.dtype)
             text = text + freqs
 
             # convnextv2 blocks
             if self.mask_padding:
-                text = text.masked_fill(
-                    text_mask.unsqueeze(-1).expand(-1, -1, text.size(-1)), 0.0
-                )
+                text = text.masked_fill(text_mask.unsqueeze(-1).expand(-1, -1, text.size(-1)), 0.0)
                 for block in self.text_blocks:
                     text = block(text)
-                    text = text.masked_fill(
-                        text_mask.unsqueeze(-1).expand(-1, -1, text.size(-1)), 0.0
-                    )
+                    text = text.masked_fill(text_mask.unsqueeze(-1).expand(-1, -1, text.size(-1)), 0.0)
             else:
                 text = self.text_blocks(text)
 
@@ -166,9 +132,7 @@ class TextEmbedding(nn.Module):
             if torch.is_tensor(seq_len):
                 target_lens = seq_len.to(device=text.device, dtype=torch.long)
             else:
-                target_lens = torch.full(
-                    (text.shape[0],), int(seq_len), device=text.device, dtype=torch.long
-                )
+                target_lens = torch.full((text.shape[0],), int(seq_len), device=text.device, dtype=torch.long)
 
             text = self.average_upsample_text_by_mask(text, ~text_mask, target_lens)
 
@@ -261,9 +225,7 @@ class DiT(nn.Module):
                 for _ in range(depth)
             ]
         )
-        self.long_skip_connection = (
-            nn.Linear(dim * 2, dim, bias=False) if long_skip_connection else None
-        )
+        self.long_skip_connection = nn.Linear(dim * 2, dim, bias=False) if long_skip_connection else None
 
         self.norm_out = AdaLayerNorm_Final(dim)  # final modulation
         self.proj_out = nn.Linear(dim, mel_dim)
@@ -347,9 +309,7 @@ class DiT(nn.Module):
             else:
                 text_embed = self.text_cond
 
-        x = self.input_embed(
-            x, cond, text_embed, drop_audio_cond=drop_audio_cond, audio_mask=audio_mask
-        )
+        x = self.input_embed(x, cond, text_embed, drop_audio_cond=drop_audio_cond, audio_mask=audio_mask)
 
         return x
 
@@ -376,35 +336,17 @@ class DiT(nn.Module):
         t = self.time_embed(time)
         if cfg_infer:  # pack cond & uncond forward: b n d -> 2b n d
             x_cond = self.get_input_embed(
-                x,
-                cond,
-                text,
-                drop_audio_cond=False,
-                drop_text=False,
-                cache=cache,
-                audio_mask=mask,
+                x, cond, text, drop_audio_cond=False, drop_text=False, cache=cache, audio_mask=mask
             )
             x_uncond = self.get_input_embed(
-                x,
-                cond,
-                text,
-                drop_audio_cond=True,
-                drop_text=True,
-                cache=cache,
-                audio_mask=mask,
+                x, cond, text, drop_audio_cond=True, drop_text=True, cache=cache, audio_mask=mask
             )
             x = torch.cat((x_cond, x_uncond), dim=0)
             t = torch.cat((t, t), dim=0)
             mask = torch.cat((mask, mask), dim=0) if mask is not None else None
         else:
             x = self.get_input_embed(
-                x,
-                cond,
-                text,
-                drop_audio_cond=drop_audio_cond,
-                drop_text=drop_text,
-                cache=cache,
-                audio_mask=mask,
+                x, cond, text, drop_audio_cond=drop_audio_cond, drop_text=drop_text, cache=cache, audio_mask=mask
             )
 
         rope = self.rotary_embed.forward_from_seq_len(seq_len)
@@ -415,9 +357,7 @@ class DiT(nn.Module):
         for block in self.transformer_blocks:
             if self.checkpoint_activations:
                 # https://pytorch.org/docs/stable/checkpoint.html#torch.utils.checkpoint.checkpoint
-                x = torch.utils.checkpoint.checkpoint(
-                    self.ckpt_wrapper(block), x, t, mask, rope, use_reentrant=False
-                )
+                x = torch.utils.checkpoint.checkpoint(self.ckpt_wrapper(block), x, t, mask, rope, use_reentrant=False)
             else:
                 x = block(x, t, mask=mask, rope=rope)
 

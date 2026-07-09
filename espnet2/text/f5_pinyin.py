@@ -25,9 +25,7 @@ from typing import Dict, Iterable, List
 import numpy as np
 
 
-def convert_char_to_pinyin(
-    text_list: List[str], polyphone: bool = True
-) -> List[List[str]]:
+def convert_char_to_pinyin(text_list: List[str], polyphone: bool = True) -> List[List[str]]:
     """F5-TTS tokenizer: hanzi -> pinyin syllables, else char-level."""
     import rjieba
     from pypinyin import Style, lazy_pinyin
@@ -49,9 +47,7 @@ def convert_char_to_pinyin(
                 if char_list and seg_byte_len > 1 and char_list[-1] not in " :'\"":
                     char_list.append(" ")
                 char_list.extend(seg)
-            elif polyphone and seg_byte_len == 3 * len(
-                seg
-            ):  # if pure east asian characters
+            elif polyphone and seg_byte_len == 3 * len(seg):  # if pure east asian characters
                 seg_ = lazy_pinyin(seg, style=Style.TONE3, tone_sandhi=True)
                 for i, c in enumerate(seg):
                     if is_chinese(c):
@@ -63,9 +59,7 @@ def convert_char_to_pinyin(
                         char_list.extend(c)
                     elif is_chinese(c):
                         char_list.append(" ")
-                        char_list.extend(
-                            lazy_pinyin(c, style=Style.TONE3, tone_sandhi=True)
-                        )
+                        char_list.extend(lazy_pinyin(c, style=Style.TONE3, tone_sandhi=True))
                     else:
                         char_list.append(c)
         final_text_list.append(char_list)

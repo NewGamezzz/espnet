@@ -72,10 +72,7 @@ def _chunk_text(text: str, max_chars: int) -> List[str]:
 def _cross_fade(
     waves: List[np.ndarray], cross_fade_duration: float, sample_rate: int
 ) -> np.ndarray:
-    """Concatenate waves with a linear cross-fade.
-
-    Ported from F5 infer_batch_process.
-    """
+    """Concatenate waves with a linear cross-fade. Ported from F5 infer_batch_process."""
     if not waves:
         return np.zeros(1, dtype=np.float32)
     if len(waves) == 1:
@@ -173,9 +170,7 @@ class F5TTSInference:
 
     # ------------------------------------------------------------------ build
 
-    def _build_model(
-        self, cfg: dict, ckpt_path: str, use_ema: bool, native_f5: bool = False
-    ):
+    def _build_model(self, cfg: dict, ckpt_path: str, use_ema: bool, native_f5: bool = False):
         task = cfg.get("task")
         if not task:
             raise ValueError("train_config must set `task` (the espnet2 TTS task).")
@@ -195,7 +190,7 @@ class F5TTSInference:
         if use_ema and "ema_model_state_dict" in ckpt:
             prefix = "ema_model."
             state_dict = {
-                k[len(prefix) :]: v
+                k[len(prefix):]: v
                 for k, v in ckpt["ema_model_state_dict"].items()
                 if k.startswith(prefix)
             }
