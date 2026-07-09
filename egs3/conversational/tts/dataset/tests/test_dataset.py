@@ -72,7 +72,12 @@ def corpus(tmp_path, base_vocab):
             f.write(json.dumps(to_json(w)) + "\n")
     vocab_path = tmp_path / "vocab.txt"
     vocab_path.write_text("\n".join(extend_vocab(base_vocab)) + "\n", encoding="utf-8")
-    return {"root": tmp_path, "manifest": manifest, "vocab": vocab_path, "windows": windows}
+    return {
+        "root": tmp_path,
+        "manifest": manifest,
+        "vocab": vocab_path,
+        "windows": windows,
+    }
 
 
 def make_dataset(corpus, **kwargs):
@@ -169,7 +174,9 @@ class TestPermutation:
         turn_id = ds.token2id[TURN_TOKEN]
         other_id = ds.token2id[OTHER_TOKEN]
         for texts in (ref["text"], item["text"]):
-            marker_positions = {tuple((t == turn_id).nonzero().flatten().tolist()) for t in texts}
+            marker_positions = {
+                tuple((t == turn_id).nonzero().flatten().tolist()) for t in texts
+            }
             assert len(marker_positions) == 1  # identical across branches
         # <OTHER> totals are branch-dependent but perm-invariant as a multiset.
         ref_counts = sorted(int((t == other_id).sum()) for t in ref["text"])

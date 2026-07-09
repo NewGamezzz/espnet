@@ -44,7 +44,11 @@ class TestMaskingRoundTrip:
         branches = build_branch_texts(turns_3spk, N_SPK)
         for i in range(N_SPK):
             segments = _segments(branches[i])
-            own = ["".join(seg) for turn, seg in zip(turns_3spk, segments) if turn.channel == i]
+            own = [
+                "".join(seg)
+                for turn, seg in zip(turns_3spk, segments)
+                if turn.channel == i
+            ]
             expected = [turn.text for turn in turns_3spk if turn.channel == i]
             assert own == expected
 
@@ -146,4 +150,6 @@ class TestNormalizeAndEncode:
     def test_render_tokens(self, turns_3spk):
         branches = build_branch_texts(turns_3spk[:2], 2)
         rendered = render_tokens(branches[0])
-        assert rendered == "|good afternoon. how are you?|" + "#" * len(turns_3spk[1].text)
+        assert rendered == "|good afternoon. how are you?|" + "#" * len(
+            turns_3spk[1].text
+        )

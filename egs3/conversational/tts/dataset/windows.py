@@ -10,7 +10,7 @@ through one of its internal sub-``merge_gap`` gaps.
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Sequence
 
 from .sssd import Recording, Turn, occupied_intervals
@@ -85,7 +85,9 @@ def select_window_spans(
     window_min.
     """
     if not (0 < window_min <= window_max):
-        raise ValueError(f"need 0 < window_min <= window_max, got {window_min}, {window_max}")
+        raise ValueError(
+            f"need 0 < window_min <= window_max, got {window_min}, {window_max}"
+        )
     stats = WindowingStats()
     spans: list[tuple[float, float]] = []
     cur = 0.0

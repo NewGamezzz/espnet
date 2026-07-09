@@ -44,26 +44,36 @@ class TestMergeTurns:
     """AC3: merge below merge_gap, stay separate at/above, single-space join."""
 
     def test_gap_below_merges(self):
-        turns = merge_turns([sup(0, 0.0, 1.0, "hello"), sup(0, 1.9, 3.0, "world")], MERGE_GAP)
+        turns = merge_turns(
+            [sup(0, 0.0, 1.0, "hello"), sup(0, 1.9, 3.0, "world")], MERGE_GAP
+        )
         assert len(turns) == 1
         assert turns[0].text == "hello world"
         assert (turns[0].start, turns[0].end) == (0.0, 3.0)
 
     def test_gap_above_stays_separate(self):
-        turns = merge_turns([sup(0, 0.0, 1.0, "hello"), sup(0, 2.1, 3.0, "world")], MERGE_GAP)
+        turns = merge_turns(
+            [sup(0, 0.0, 1.0, "hello"), sup(0, 2.1, 3.0, "world")], MERGE_GAP
+        )
         assert [t.text for t in turns] == ["hello", "world"]
 
     def test_gap_exactly_merge_gap_stays_separate(self):
-        turns = merge_turns([sup(0, 0.0, 1.0, "hello"), sup(0, 2.0, 3.0, "world")], MERGE_GAP)
+        turns = merge_turns(
+            [sup(0, 0.0, 1.0, "hello"), sup(0, 2.0, 3.0, "world")], MERGE_GAP
+        )
         assert len(turns) == 2
 
     def test_overlapping_same_channel_spans_merge(self):
-        turns = merge_turns([sup(0, 0.0, 2.0, "hello"), sup(0, 1.5, 3.0, "world")], MERGE_GAP)
+        turns = merge_turns(
+            [sup(0, 0.0, 2.0, "hello"), sup(0, 1.5, 3.0, "world")], MERGE_GAP
+        )
         assert len(turns) == 1
         assert turns[0].end == 3.0
 
     def test_cross_channel_never_merges(self):
-        turns = merge_turns([sup(0, 0.0, 1.0, "hello"), sup(1, 1.1, 2.0, "hi")], MERGE_GAP)
+        turns = merge_turns(
+            [sup(0, 0.0, 1.0, "hello"), sup(1, 1.1, 2.0, "hi")], MERGE_GAP
+        )
         assert len(turns) == 2
         assert [t.channel for t in turns] == [0, 1]
 
@@ -224,7 +234,9 @@ class TestWindowIntegrity:
                 inside = t.start >= w.t0 and t.end <= w.t1
                 outside = t.end <= w.t0 or t.start >= w.t1
                 assert inside or outside, f"turn {t} straddles window ({w.t0}, {w.t1})"
-            assert w.turns == tuple(t for t in turns if t.start >= w.t0 and t.end <= w.t1)
+            assert w.turns == tuple(
+                t for t in turns if t.start >= w.t0 and t.end <= w.t1
+            )
             assert len(w.turns) > 0
         durations = [w.duration for w in records]
         for d in durations[:-1]:
@@ -258,7 +270,9 @@ class TestWindowIntegrity:
     def test_session_shorter_than_window_min_is_tail(self):
         rec = make_recording(8.0)
         turns = dialogue_turns(8.0)
-        records, _ = build_windows("s1", rec, turns, rng=random.Random("s"), **WINDOW_KW)
+        records, _ = build_windows(
+            "s1", rec, turns, rng=random.Random("s"), **WINDOW_KW
+        )
         assert len(records) == 1
         assert (records[0].t0, records[0].t1) == (0.0, 8.0)
 
@@ -299,9 +313,11 @@ class TestWindowDeterminism:
     def test_same_seed_identical(self):
         rec = make_recording(300.0)
         turns = dialogue_turns(300.0)
-        run = lambda: build_windows(
-            "sess1", rec, turns, rng=random.Random("0:window:sess1"), **WINDOW_KW
-        )
+
+        def run():
+            return build_windows(
+                "sess1", rec, turns, rng=random.Random("0:window:sess1"), **WINDOW_KW
+            )
         records_a, stats_a = run()
         records_b, stats_b = run()
         assert records_a == records_b

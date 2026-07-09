@@ -32,7 +32,10 @@ if str(_REPO_ROOT) not in sys.path:
 import numpy as np  # noqa: E402
 import soundfile as sf  # noqa: E402
 
-from egs3.conversational.tts.dataset.builder import resolve_dataset_root, _CFG  # noqa: E402
+from egs3.conversational.tts.dataset.builder import (  # noqa: E402
+    _CFG,
+    resolve_dataset_root,
+)
 from egs3.conversational.tts.dataset.sssd import (  # noqa: E402
     load_recordings,
     load_supervisions,
@@ -128,7 +131,9 @@ def main() -> None:
     rows: list[tuple] = []
     for sid in sample:
         rec = recordings[sid]
-        per_channel: dict[int, list[Interval]] = {c: [] for c in range(rec.num_channels)}
+        per_channel: dict[int, list[Interval]] = {
+            c: [] for c in range(rec.num_channels)
+        }
         for sup in supervisions[sid]:
             per_channel.setdefault(sup.channel, []).append((sup.start, sup.end))
         per_channel = {c: merge_intervals(ivs) for c, ivs in per_channel.items()}
@@ -154,7 +159,10 @@ def main() -> None:
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
     with args.out.open("w", encoding="utf-8") as f:
-        f.write("session_id\tchannel\tonly_other_channel\tonly_other_sec\tbleed_db\town_db\n")
+        f.write(
+            "session_id\tchannel\tonly_other_channel\t"
+            "only_other_sec\tbleed_db\town_db\n"
+        )
         for sid, k, j, sec, bleed, own in rows:
             f.write(f"{sid}\t{k}\t{j}\t{sec:.1f}\t{bleed:.2f}\t{own:.2f}\n")
 

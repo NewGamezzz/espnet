@@ -127,7 +127,9 @@ class ConversationDataset(TorchDataset):
         if self._fixed_perm is not None:
             perm = list(self._fixed_perm)
             if sorted(perm) != list(range(n)):
-                raise ValueError(f"fixed perm {perm} is not a permutation of range({n})")
+                raise ValueError(
+                    f"fixed perm {perm} is not a permutation of range({n})"
+                )
             return perm
         if not self.permute_channels:
             return list(range(n))

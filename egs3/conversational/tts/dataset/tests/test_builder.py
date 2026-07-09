@@ -3,7 +3,6 @@
 import json
 
 import pytest
-import torch
 
 from egs3.conversational.tts.dataset.builder import (
     SSSDBuilder,

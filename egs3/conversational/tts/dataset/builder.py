@@ -112,7 +112,10 @@ class SSSDBuilder(DatasetBuilder):
     """Prepare SSSD window manifests and the extended vocab for ESPnet3 TTS."""
 
     def is_source_prepared(
-        self, recipe_dir: str | Path | None = None, dataset_root: str | Path | None = None, **_
+        self,
+        recipe_dir: str | Path | None = None,
+        dataset_root: str | Path | None = None,
+        **_,
     ) -> bool:
         root = resolve_dataset_root(dataset_root)
         manifests = root / _CFG["manifests_subdir"]
@@ -123,7 +126,10 @@ class SSSDBuilder(DatasetBuilder):
         )
 
     def prepare_source(
-        self, recipe_dir: str | Path | None = None, dataset_root: str | Path | None = None, **_
+        self,
+        recipe_dir: str | Path | None = None,
+        dataset_root: str | Path | None = None,
+        **_,
     ) -> None:
         if not self.is_source_prepared(dataset_root=dataset_root):
             root = resolve_dataset_root(dataset_root)
@@ -250,20 +256,25 @@ class SSSDBuilder(DatasetBuilder):
         )
 
         print(f"SSSD build summary (seed={seed}, root={root})")
-        print(f"  sessions: {len(session_ids)}" + (
-            f" (+{len(skipped_no_speech)} skipped, no supervisions)"
-            if skipped_no_speech
-            else ""
-        ))
+        print(
+            f"  sessions: {len(session_ids)}"
+            + (
+                f" (+{len(skipped_no_speech)} skipped, no supervisions)"
+                if skipped_no_speech
+                else ""
+            )
+        )
         print(f"  turns dropped empty after normalization: {dropped_empty_turns}")
         ratio = overlap_time / speech_time if speech_time else 0.0
         print(f"  overlap ratio (>=2 channels active / any active): {ratio:.3f}")
         for split in ("train", "valid", "test"):
             st = stats[split]
             print(
-                f"  {split}: {st.n_windows} windows over {len(splits[split])} sessions; "
+                f"  {split}: {st.n_windows} windows over "
+                f"{len(splits[split])} sessions; "
                 f"dropped {st.dropped_span_sec:.1f}s unbreakable spans, "
-                f"{st.dropped_tail_sec:.1f}s tails, {st.dropped_empty_windows} empty windows"
+                f"{st.dropped_tail_sec:.1f}s tails, "
+                f"{st.dropped_empty_windows} empty windows"
             )
             print(f"    duration[s]: {_distribution(durations[split])}")
             print(f"    turns/window: {_distribution(turns_per_window[split])}")

@@ -1,0 +1,142 @@
+# Conversational F5-TTS recipe (SSSD)
+
+Data pipeline for multi-channel conversational TTS fine-tuning on the ScalableSpontaneousSpeechDataset (SSSD).
+It windows long dyadic sessions into training segments, preprocesses transcripts into per-branch masked token sequences, and provides a dataset plus a packed collator ready for training.
+The trainer, model wrapper, and training loop are a later task; this recipe currently covers data only.
+The `src/branch_exchange/` package (communication modules between transformer blocks) is documented in its own module docstrings.
+
+## The masking scheme
+
+Each conversation window has N audio channels (branches).
+Branch `i` receives, for each turn in conversation order: one `<turn>` separator token, then the turn text as characters if the turn belongs to speaker `i`, else exactly one `<OTHER>` token per character of the turn text.
+
+```
+Spk1: Good afternoon. How are you?
+Spk2: Good. What about you?
+Spk1: Good, but I have a problem with...
+
+Input branch 1: <turn> Good afternoon. How are you? <turn> <OTHER>*21 <turn> Good, but I have a problem with...
+Input branch 2: <turn> <OTHER>*30 <turn> Good. What about you? <turn> <OTHER>*35
+```
+
+Rules (fixed by design, see `dataset/text.py`):
+
+- Turn ORDER only: no timestamps, durations, or alignment information ever appear in the token sequence.
+- One `<OTHER>` per character preserves the conversation's length budget without using timestamps.
+- `<OTHER>` is a new vocab token, distinct from F5's internal filler ("another speaker is talking" vs "text has ended").
+- Turn markers carry NO speaker identity: a single `<turn>` token precedes every turn, identical across branches and speakers, so no vocab token depends on the speaker count.
+- No trailing padding in preprocessing; the F5 model pads text up to the mel length itself.
+
+## New vocab tokens
+
+The builder appends exactly two tokens, `<turn>` and `<OTHER>`, at the END of the user-supplied base vocab, so every pretrained token id is unchanged.
+The extended vocab is written as a new file (`data/tokens/vocab.txt`, pure token-per-line; the original is never edited).
+Because the line index IS the token id, the vocab file itself carries no header comment; the new ids are documented in `data/tokens/vocab_meta.json`:
+
+```json
+{
+  "base_vocab_path": "...", "base_size": 2545,
+  "new_tokens": {"<turn>": 2545, "<OTHER>": 2546}, "total_size": 2547
+}
+```
+
+## Building
+
+```bash
+python -m egs3.conversational.tts.dataset.builder \
+    --dataset-root /work/hdd/bbjs/ttrachu/dataset/ScalableSpontaneousSpeechDataset \
+    --base-vocab-path /path/to/pretrained/char_tokens.txt \
+    --seed 0
+```
+
+`base_vocab_path` is required (one token per line, `char_tokens.txt` format); the builder fails loudly without it.
+The build prints a summary: windows per split, window duration distribution, turns per window, overlap ratio, speaker overlap across splits, and dropped-audio statistics.
+`SSSDBuilder` subclasses the espnet3 `DatasetBuilder`, so it also plugs into the stage machinery once a `run.py` exists.
+
+### Dataset-root remapping rule
+
+Absolute audio paths inside `recordings.jsonl.gz` are valid only on the machine that wrote them.
+The loader keeps only `original/<basename>` and joins it onto `dataset_root`, resolved as: explicit argument > `$SSSD_ROOT` > `builder.dataset_root` in `dataset/config.yaml`.
+The corpus directory is treated as strictly read-only; only `lhotse_manifests_48/` and `original/` (48 kHz) are used.
+
+## Pipeline
+
+1. **Turn construction** (`dataset/sssd.py`): per session, supervisions are sorted by start; consecutive same-channel utterances merge into one turn when the gap is below `merge_gap` (default 1.0 s); texts join with single spaces.
+2. **Text normalization** (`dataset/text.py`): turn texts are normalized ONCE at build time against the extended vocab charset (whitespace collapse, lowercase fallback, OOV drop), so `<OTHER>` counts can never desync between branches.
+3. **Windowing** (`dataset/windows.py`): sessions are cut into windows with target duration uniform in `[window_min, window_max]` (default 10-30 s); cut points fall only where no turn is active on any channel for at least `silence_min` (default 0.2 s), so no utterance is ever truncated; stretches with no valid cut are dropped and reported; the session tail is emitted iff it is at least `tail_min` (default 5 s); windows without speech are dropped.
+4. **Splits**: session-level train/valid/test split, seeded, ratios in config; speaker overlap between splits is reported (not enforced).
+5. **Audio loading** (`dataset/dataset.py`, on the fly): only the window's segment is seek-read from the FLAC, channels stay separate, and audio is resampled 48 -> 24 kHz with `torchaudio.functional.resample`; no precomputed audio copies.
+
+## Window-manifest schema (`data/manifest/{train,valid,test}.jsonl`)
+
+One JSON object per line:
+
+```json
+{
+  "window_id": "<session>_w00007",
+  "session_id": "<session>",
+  "audio_relpath": "original/<session>_mixed.flac",
+  "num_channels": 2,
+  "sample_rate": 48000,
+  "t0": 123.456, "t1": 145.052, "duration": 21.596,
+  "turns": [
+    {"channel": 0, "speaker": "<hash>", "text": "can you hear me", "start": 124.01, "end": 126.33}
+  ]
+}
+```
+
+Turn `start`/`end` are absolute session seconds and exist for windowing and later evaluation only; they never become tokens.
+
+## Dataset and packed collator
+
+`ConversationDataset[idx]` returns per-channel audio `(N, T)` at 24 kHz, a list of N variable-length token-id tensors, and the channel permutation applied.
+Per-sample channel permutation augmentation (train split only by default) is applied consistently to audio channels and token sequences; it guards against systematic ch0/ch1 artifacts in the corpus.
+`collate_conversations` emits the packed layout of the merged `branch_exchange` package: a per-conversation `counts` list plus row-stacked tensors with no padding rows on the branch axis.
+
+```
+counts:          [N_1, ..., N_B]                    -> BranchContext.branches(counts)
+speech:          float32 (sum(counts), T_max)       pad 0.0
+speech_lengths:  int64   (sum(counts),)
+speech_mask:     bool    (sum(counts), T_max)       True = valid
+text:            int64   (sum(counts), L_max)       pad -1 (F5 shifts ids by +1; 0 = filler)
+text_lengths:    int64   (sum(counts),)
+window_ids:      [str] * B
+```
+
+Batches do not need a homogeneous channel count; a duration-bucketed sampler should budget by total rows (sum of N_i x frames), not by conversation count.
+
+## `dataset/config.yaml` parameters
+
+| key | default | meaning |
+|---|---|---|
+| `builder.dataset_root` | Delta corpus path | corpus root; overridden by `$SSSD_ROOT` or explicit args |
+| `builder.manifests_subdir` | `lhotse_manifests_48` | 48 kHz lhotse manifests (never the 16 kHz copies) |
+| `builder.audio_subdir` | `original` | 48 kHz FLAC directory |
+| `builder.base_vocab_path` | `null` (required) | pretrained char vocab to extend |
+| `builder.seed` | `0` | drives windowing and splits |
+| `builder.merge_gap` | `1.0` | max same-channel gap (s) merged into one turn |
+| `builder.window_min/max` | `10.0` / `30.0` | window target duration range (s) |
+| `builder.silence_min` | `0.2` | min all-channel silence (s) around a cut point |
+| `builder.tail_min` | `5.0` | shortest emitted session-tail window (s) |
+| `builder.split_ratios` | 0.96/0.02/0.02 | session-level split |
+| `dataset.sample_rate` | `24000` | training rate (48 kHz source is downsampled 2:1) |
+| `dataset.text_pad_value` | `-1` | F5 text padding convention |
+
+## Debug tools
+
+```bash
+# Mixdown wav + human-readable branch texts (<turn> as |, <OTHER> as #) for eyeballing:
+python local/dump_debug.py --split valid --num-windows 5 --out-dir exp/debug_dump
+
+# Channel-bleed measurement over solo-speech regions (report, not an assertion):
+python local/crosstalk_report.py --num-sessions 20 --out exp/crosstalk_report.tsv
+```
+
+## Tests
+
+```bash
+pytest egs3/conversational/tts/dataset/tests   # CPU-only, no corpus needed
+SSSD_ROOT=/path/to/corpus pytest egs3/conversational/tts/dataset/tests/test_integration_sssd.py
+```
+
+All unit tests run on fabricated fixtures (synthetic FLAC files and hand-built manifests); the integration test over the real corpus is skipped unless `SSSD_ROOT` is set.

@@ -55,7 +55,9 @@ def make_token2id(tokens: Sequence[str]) -> dict[str, int]:
     token2id: dict[str, int] = {}
     for i, token in enumerate(tokens):
         if token in token2id:
-            raise ValueError(f"duplicate token {token!r} at ids {token2id[token]} and {i}")
+            raise ValueError(
+                f"duplicate token {token!r} at ids {token2id[token]} and {i}"
+            )
         token2id[token] = i
     if " " not in token2id and SPACE_SYMBOL in token2id:
         token2id[" "] = token2id[SPACE_SYMBOL]

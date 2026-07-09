@@ -56,7 +56,9 @@ def _iter_jsonl_gz(path: Path) -> Iterator[dict]:
                 yield json.loads(line)
 
 
-def load_recordings(path: str | Path, audio_subdir: str = "original") -> dict[str, Recording]:
+def load_recordings(
+    path: str | Path, audio_subdir: str = "original"
+) -> dict[str, Recording]:
     """Parse ``recordings.jsonl.gz`` into ``Recording`` objects keyed by id.
 
     The absolute prefix of each source path is discarded and replaced by

@@ -36,7 +36,9 @@ def main() -> None:
     parser.add_argument("--split", default="valid")
     parser.add_argument("--num-windows", type=int, default=5)
     parser.add_argument("--out-dir", type=Path, default=Path("exp/debug_dump"))
-    parser.add_argument("--recipe-dir", type=Path, default=Path(__file__).resolve().parents[1])
+    parser.add_argument(
+        "--recipe-dir", type=Path, default=Path(__file__).resolve().parents[1]
+    )
     parser.add_argument("--dataset-root", type=Path, default=None)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument(
