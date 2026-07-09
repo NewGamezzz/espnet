@@ -50,6 +50,24 @@ def make_branch_inputs(n_branch, seed=0, batch=B, t=T, nt=NT, mel_dim=MEL):
     return x, cond, text, time
 
 
+def make_packed_inputs(counts, seed=0, t=T, nt=NT, mel_dim=MEL):
+    """Packed DiT inputs: one row per branch, conversations stacked, no padding."""
+    gen = torch.Generator().manual_seed(seed)
+    m = int(sum(counts))
+    x = torch.randn(m, t, mel_dim, generator=gen)
+    cond = torch.randn(m, t, mel_dim, generator=gen)
+    text = torch.randint(0, DIT_KWARGS["text_num_embeds"], (m, nt), generator=gen)
+    time = torch.rand(m, generator=gen)
+    return x, cond, text, time
+
+
+def slice_conversation(inputs, counts, i):
+    """Extract conversation ``i`` from packed inputs as rectangular (1, N_i, ...)."""
+    start = int(sum(counts[:i]))
+    end = start + counts[i]
+    return tuple(t_[start:end].unsqueeze(0) for t_ in inputs)
+
+
 def run_independent(model, inputs):
     """Run the model separately on each branch's inputs and stack: (B, N, T, mel)."""
     x, cond, text, time = inputs

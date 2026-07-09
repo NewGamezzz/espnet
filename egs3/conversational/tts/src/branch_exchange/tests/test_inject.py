@@ -32,10 +32,12 @@ from conftest import (
     iter_exchanges,
     make_branch_inputs,
     make_dit,
+    make_packed_inputs,
     randomize_exchanges,
     run_folded,
     run_independent,
     set_gates,
+    slice_conversation,
 )
 
 FACTORIES = {
@@ -232,6 +234,131 @@ def test_cfg_segments_no_cross_mixing():
             torch.cat((time, torch.zeros_like(time))),
         )
     assert torch.allclose(out_cat[: x.shape[0]], out_first_only, atol=1e-5)
+
+
+# ---- packed (ragged, padding-free) mode through the injected backbone ----
+
+COUNTS = (2, 3)
+
+
+@pytest.mark.parametrize("kind", ["tac", "mha"])
+@pytest.mark.parametrize("ckpt", [False, True])
+def test_packed_zero_init_identity(kind, ckpt):
+    model = make_dit(checkpoint_activations=ckpt)
+    inputs = make_packed_inputs(COUNTS)
+    with torch.no_grad():
+        ref = model(*inputs)
+    ctx = inject_all(model, FACTORIES[kind])
+    with torch.no_grad(), ctx.branches(counts=COUNTS):
+        out = model(*inputs)
+    assert torch.equal(out, ref)
+
+
+@pytest.mark.parametrize("kind", ["tac", "mha"])
+def test_packed_equals_per_conversation(kind):
+    """A ragged packed batch matches each conversation run on its own through
+    the rectangular path, so conversations never mix and no padding is needed."""
+    model = make_dit()
+    ctx = inject_all(model, FACTORIES[kind])
+    set_gates(model, 0.5)
+    randomize_exchanges(model)
+    inputs = make_packed_inputs(COUNTS, seed=13)
+    with torch.no_grad():
+        with ctx.branches(counts=COUNTS):
+            out = model(*inputs)
+        start = 0
+        for i, n in enumerate(COUNTS):
+            with ctx.branches(n):
+                ref = run_folded(model, slice_conversation(inputs, COUNTS, i))
+            assert torch.allclose(out[start : start + n], ref[0], atol=1e-5)
+            start += n
+
+
+@pytest.mark.parametrize("kind", ["tac", "mha"])
+def test_packed_matches_rectangular(kind):
+    """With uniform counts, packed mode agrees with the rectangular n= path."""
+    model = make_dit()
+    ctx = inject_all(model, FACTORIES[kind])
+    set_gates(model, 0.5)
+    randomize_exchanges(model)
+    inputs = make_branch_inputs(3)  # (B=2, N=3, ...)
+    flat = tuple(t_.flatten(0, 1) for t_ in inputs)
+    with torch.no_grad():
+        with ctx.branches(3):
+            ref = run_folded(model, inputs)
+        with ctx.branches(counts=(3, 3)):
+            out = model(*flat)
+    assert torch.allclose(out.unflatten(0, (B, 3)), ref, atol=1e-5)
+
+
+def test_packed_cfg_segments_no_cross_mixing():
+    model = make_dit()
+    ctx = inject_all(model, FACTORIES["tac"])
+    set_gates(model, 0.5)
+    randomize_exchanges(model)
+    x, cond, text, time = make_packed_inputs(COUNTS, seed=17)
+    with torch.no_grad(), ctx.branches(counts=COUNTS):
+        out_first_only = model(x, cond, text, time)
+        out_cat = model(
+            torch.cat((x, torch.zeros_like(x))),
+            torch.cat((cond, torch.zeros_like(cond))),
+            torch.cat((text, torch.zeros_like(text))),
+            torch.cat((time, torch.zeros_like(time))),
+        )
+    assert torch.allclose(out_cat[: x.shape[0]], out_first_only, atol=1e-5)
+
+
+@pytest.mark.parametrize("kind", ["tac", "mha"])
+@pytest.mark.parametrize("ckpt", [False, True])
+def test_packed_gradient_flow(kind, ckpt):
+    model = make_dit(checkpoint_activations=ckpt)
+    ctx = inject_all(model, FACTORIES[kind])
+    set_gates(model, 0.5)
+    inputs = make_packed_inputs(COUNTS)
+    with ctx.branches(counts=COUNTS):
+        model(*inputs).sum().backward()
+    for m in iter_exchanges(model):
+        for name, p in m.named_parameters():
+            assert p.grad is not None, name
+            assert p.grad.abs().sum().item() > 0, name
+
+
+def test_packed_checkpoint_backward_outside_context_fails():
+    model = make_dit(checkpoint_activations=True)
+    ctx = inject_all(model, FACTORIES["tac"])
+    inputs = make_packed_inputs(COUNTS)
+    with ctx.branches(counts=COUNTS):
+        loss = model(*inputs).sum()
+    with pytest.raises(RuntimeError, match="BranchContext changed"):
+        loss.backward()
+
+
+def test_packed_row_count_must_be_multiple_of_total():
+    model = make_dit()
+    ctx = inject_all(model, FACTORIES["tac"])
+    inputs = make_packed_inputs((2, 2))  # 4 rows, but the context declares 5
+    with ctx.branches(counts=COUNTS), pytest.raises(RuntimeError, match="not a multiple"):
+        model(*inputs)
+
+
+def test_branches_argument_validation():
+    ctx = BranchContext()
+    with pytest.raises(ValueError):
+        with ctx.branches():
+            pass
+    with pytest.raises(ValueError):
+        with ctx.branches(3, counts=COUNTS):
+            pass
+    with pytest.raises(ValueError):
+        with ctx.branches(counts=()):
+            pass
+    with pytest.raises(ValueError):
+        with ctx.branches(counts=(2, 0)):
+            pass
+    with pytest.raises(ValueError):
+        with ctx.branches(counts=COUNTS, pad_mask=torch.zeros(1, 5, dtype=torch.bool)):
+            pass
+    assert not ctx.active and not ctx.packed
 
 
 # ---- schedule parsing / partial injection ----

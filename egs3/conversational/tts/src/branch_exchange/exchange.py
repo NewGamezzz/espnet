@@ -1,14 +1,31 @@
 """Branch-communication (exchange) modules.
 
-Contract shared by every exchange in this file:
+Every exchange supports two input layouts:
 
-- Input ``(B, N, T, d)`` -> output ``(B, N, T, d)`` where ``N`` is the branch
-  axis (one branch per speaker, all weights shared across branches).
-- Permutation-equivariant in ``N`` and valid for any ``N >= 1``.
+- Packed ``forward_packed(h, conv_id, n_conv=None)``:
+  ``(M, T, d) -> (M, T, d)`` where ``M = sum(N_i)`` stacks the branches of all
+  conversations in the batch with NO padding rows at all. ``conv_id: (M,)``
+  integer tensor gives each row's conversation (values in ``[0, n_conv)``);
+  branches communicate only within their conversation. Rows need not be
+  sorted or contiguous by conversation. This is the layout to train with:
+  ragged speaker counts cost zero wasted compute or memory.
+- Dense ``forward(h, pad_mask=None)``: ``(B, N, T, d) -> (B, N, T, d)`` where
+  ``N`` is the branch axis (one branch per speaker). Conversations with fewer
+  speakers are padded to ``N`` and marked in ``pad_mask: (B, N)`` bool
+  (``True`` = padded ghost branch); ghost branches never influence real ones
+  and pass through unchanged.
+
+The packed form is the core implementation; the dense form is a thin wrapper
+(``conv_id = arange(B).repeat_interleave(N)``, with ghost rows dropped before
+the exchange and restored unchanged after), so there is a single source of
+truth for the math.
+
+Contract shared by every exchange:
+
+- Weights are shared across branches and conversations.
+- Permutation-equivariant on the branch axis and valid for any count >= 1.
 - NO positional encoding, index embedding, or any other branch-order-dependent
   computation on the branch axis: branches must be interchangeable.
-- Optional ``pad_mask: (B, N)`` bool marks padded ghost branches
-  (``True`` = padded); padded branches must not influence real ones.
 - A scalar gate parameter ``g`` initialized to 0 makes the module exactly the
   identity at init (output bit-equal to input).
 """
@@ -17,33 +34,76 @@ from __future__ import annotations
 
 import torch
 import torch.nn.functional as F
-from einops import rearrange, repeat
+from einops import rearrange
 from torch import nn
 
 
+def _check_conv_id(h: torch.Tensor, conv_id: torch.Tensor, n_conv: int | None) -> int:
+    if conv_id.ndim != 1 or conv_id.shape[0] != h.shape[0]:
+        raise ValueError(
+            f"conv_id must have shape ({h.shape[0]},) matching the packed rows, "
+            f"got {tuple(conv_id.shape)}"
+        )
+    if n_conv is None:
+        n_conv = int(conv_id.max().item()) + 1 if conv_id.numel() else 0
+    return n_conv
+
+
 class IdentityExchange(nn.Module):
-    """No-communication baseline: returns its ``(B, N, T, d)`` input unchanged."""
+    """No-communication baseline: returns its input unchanged in both layouts."""
 
     def forward(self, h: torch.Tensor, pad_mask: torch.Tensor | None = None) -> torch.Tensor:
         return h
 
+    def forward_packed(
+        self, h: torch.Tensor, conv_id: torch.Tensor | None = None, n_conv: int | None = None
+    ) -> torch.Tensor:
+        return h
 
-class TACExchange(nn.Module):
+
+class _PackedExchange(nn.Module):
+    """Base class implementing the dense ``(B, N, T, d)`` layout as a thin
+    wrapper over the packed core ``forward_packed``.
+
+    In the dense wrapper, padded ghost branches are dropped before the
+    exchange (so they get no compute and cannot influence real branches) and
+    their rows pass through unchanged.
+    """
+
+    def forward_packed(
+        self, h: torch.Tensor, conv_id: torch.Tensor, n_conv: int | None = None
+    ) -> torch.Tensor:
+        raise NotImplementedError
+
+    def forward(self, h: torch.Tensor, pad_mask: torch.Tensor | None = None) -> torch.Tensor:
+        b, n = h.shape[:2]
+        conv_id = torch.arange(b, device=h.device).repeat_interleave(n)
+        flat = h.flatten(0, 1)  # (B*N, T, d)
+        if pad_mask is None:
+            out = self.forward_packed(flat, conv_id, n_conv=b)
+        else:
+            real = (~pad_mask.reshape(-1)).nonzero(as_tuple=True)[0]
+            out = flat.index_copy(0, real, self.forward_packed(flat[real], conv_id[real], n_conv=b))
+        return out.unflatten(0, (b, n))
+
+
+class TACExchange(_PackedExchange):
     """Transform-average-concatenate exchange (Luo et al., ICASSP 2020) with a
     zero-init scalar gate.
 
-    Maps ``(B, N, T, d) -> (B, N, T, d)`` per time frame:
+    Packed core, per time frame on ``(M, T, d)`` rows grouped by ``conv_id``:
 
     1. Transform: shared ``Linear(dim, hidden) + PReLU`` on every branch -> ``z_i``.
-    2. Average: mean of ``z_i`` over the branch axis (excluding padded branches,
-       divided by the real-branch count), then shared
-       ``Linear(hidden, hidden) + PReLU`` -> ``z_bar``.
+    2. Average: segment mean of ``z_i`` over each conversation's branches
+       (``index_add`` sum divided by the per-conversation branch count), then
+       shared ``Linear(hidden, hidden) + PReLU`` -> ``z_bar``, gathered back to
+       each row via ``conv_id``.
     3. Concatenate: per branch, ``Linear(2*hidden, dim) + PReLU`` on
        ``[z_i ; z_bar]`` -> ``u_i``.
     4. Output: ``h_i + g * u_i`` with ``g`` init 0 (exact identity at init).
 
-    Permutation-equivariant in ``N`` (the branch average is order-free); no
-    positional encoding anywhere on the branch axis.
+    Permutation-equivariant on the branch axis (the segment mean is
+    order-free); no positional encoding anywhere on the branch axis.
     """
 
     def __init__(self, dim: int, hidden: int | None = None):
@@ -54,32 +114,33 @@ class TACExchange(nn.Module):
         self.concat = nn.Sequential(nn.Linear(2 * hidden, dim), nn.PReLU())
         self.g = nn.Parameter(torch.zeros(()))
 
-    def forward(self, h: torch.Tensor, pad_mask: torch.Tensor | None = None) -> torch.Tensor:
-        z = self.transform(h)  # (B, N, T, hidden)
-        if pad_mask is None:
-            z_bar = z.mean(dim=1, keepdim=True)
-        else:
-            keep = (~pad_mask).to(z.dtype)[:, :, None, None]  # (B, N, 1, 1)
-            count = keep.sum(dim=1, keepdim=True).clamp(min=1.0)
-            z_bar = (z * keep).sum(dim=1, keepdim=True) / count
-        z_bar = self.average(z_bar)  # (B, 1, T, hidden)
-        u = self.concat(torch.cat((z, z_bar.expand_as(z)), dim=-1))
+    def forward_packed(
+        self, h: torch.Tensor, conv_id: torch.Tensor, n_conv: int | None = None
+    ) -> torch.Tensor:
+        conv_id = conv_id.long()
+        n_conv = _check_conv_id(h, conv_id, n_conv)
+        z = self.transform(h)  # (M, T, hidden)
+        z_sum = z.new_zeros((n_conv,) + z.shape[1:]).index_add_(0, conv_id, z)
+        count = torch.bincount(conv_id, minlength=n_conv).clamp(min=1)
+        z_bar = self.average(z_sum / count[:, None, None].to(z.dtype))  # (n_conv, T, hidden)
+        u = self.concat(torch.cat((z, z_bar[conv_id]), dim=-1))
         return h + self.g * u
 
 
-class BranchMHAExchange(nn.Module):
+class BranchMHAExchange(_PackedExchange):
     """Multi-head self-attention over the branch axis with a zero-init scalar gate.
 
-    Maps ``(B, N, T, d) -> (B, N, T, d)``:
+    Packed core on ``(M, T, d)`` rows grouped by ``conv_id``:
 
     1. Pre-norm: shared ``LayerNorm(dim)``.
-    2. Fold time into batch: ``(B, N, T, d) -> (B*T, N, d)`` so the branch axis
-       is the attention sequence axis.
-    3. MHA over the ``N`` branch tokens with shared projections
-       ``W_q, W_k, W_v: dim -> d_c`` and ``W_o: d_c -> dim``; self-attention
-       includes self; ``pad_mask`` acts as the key padding mask.
+    2. Fold time into batch: ``(M, T, d) -> (T, M, d)`` so the branch rows are
+       the attention sequence axis.
+    3. MHA over the ``M`` branch tokens with shared projections
+       ``W_q, W_k, W_v: dim -> d_c`` and ``W_o: d_c -> dim``, restricted to a
+       block-diagonal pattern (``conv_id[i] == conv_id[j]``) so branches only
+       attend within their conversation; self-attention includes self.
        NO positional encoding on the branch axis, so the module is
-       permutation-equivariant in ``N``.
+       permutation-equivariant on it.
     4. Output: ``h_i + g * attn_out_i`` with ``g`` init 0 (exact identity at init).
     """
 
@@ -96,21 +157,22 @@ class BranchMHAExchange(nn.Module):
         self.w_o = nn.Linear(d_c, dim)
         self.g = nn.Parameter(torch.zeros(()))
 
-    def forward(self, h: torch.Tensor, pad_mask: torch.Tensor | None = None) -> torch.Tensor:
-        b, n, t, _ = h.shape
-        x = rearrange(self.norm(h), "b n t d -> (b t) n d")
-        q = rearrange(self.w_q(x), "bt n (nh e) -> bt nh n e", nh=self.n_heads)
-        k = rearrange(self.w_k(x), "bt n (nh e) -> bt nh n e", nh=self.n_heads)
-        v = rearrange(self.w_v(x), "bt n (nh e) -> bt nh n e", nh=self.n_heads)
+    def forward_packed(
+        self, h: torch.Tensor, conv_id: torch.Tensor, n_conv: int | None = None
+    ) -> torch.Tensor:
+        conv_id = conv_id.long()
+        _check_conv_id(h, conv_id, n_conv)
+        x = rearrange(self.norm(h), "m t d -> t m d")
+        q = rearrange(self.w_q(x), "t m (nh e) -> t nh m e", nh=self.n_heads)
+        k = rearrange(self.w_k(x), "t m (nh e) -> t nh m e", nh=self.n_heads)
+        v = rearrange(self.w_v(x), "t m (nh e) -> t nh m e", nh=self.n_heads)
 
-        attn_mask = None
-        if pad_mask is not None:
-            # True = attend (SDPA convention); padded branches are masked out as
-            # keys so they never influence real branches. Padded queries still
-            # produce values, but those land only on padded output rows.
-            attn_mask = repeat(~pad_mask, "b n -> (b t) 1 1 n", t=t)
+        # True = attend (SDPA convention): block-diagonal same-conversation
+        # mask, broadcast over the (T, heads) batch dims. Branches of other
+        # conversations are masked out as keys, so they never mix.
+        attn_mask = conv_id[:, None] == conv_id[None, :]  # (M, M)
 
         out = F.scaled_dot_product_attention(q, k, v, attn_mask=attn_mask)
-        out = rearrange(out, "bt nh n e -> bt n (nh e)")
-        out = rearrange(self.w_o(out), "(b t) n d -> b n t d", b=b)
+        out = rearrange(out, "t nh m e -> t m (nh e)")
+        out = rearrange(self.w_o(out), "t m d -> m t d")
         return h + self.g * out

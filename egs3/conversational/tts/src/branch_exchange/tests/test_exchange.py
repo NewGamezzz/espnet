@@ -90,3 +90,64 @@ def test_identity_exchange():
     ex = IdentityExchange()
     out = ex(h, pad_mask=torch.zeros(B, 3, dtype=torch.bool))
     assert torch.equal(out, h)
+    flat = h.flatten(0, 1)
+    assert torch.equal(ex.forward_packed(flat, conv_id_of((3,) * B)), flat)
+
+
+# ---- packed (ragged, padding-free) layout ----
+
+COUNTS = (2, 3)
+
+
+def conv_id_of(counts):
+    return torch.repeat_interleave(torch.arange(len(counts)), torch.tensor(counts))
+
+
+def make_packed_h(counts, seed=0):
+    gen = torch.Generator().manual_seed(seed)
+    return torch.randn(int(sum(counts)), T, DIM, generator=gen)
+
+
+@pytest.mark.parametrize("kind", ["tac", "mha"])
+def test_packed_zero_init_identity(kind):
+    ex = make_exchange(kind)
+    h = make_packed_h(COUNTS)
+    with torch.no_grad():
+        out = ex.forward_packed(h, conv_id_of(COUNTS))
+    assert torch.equal(out, h)
+
+
+@pytest.mark.parametrize("kind", ["tac", "mha"])
+def test_packed_equals_dense_per_conversation(kind):
+    """A ragged packed batch matches each conversation run separately (dense,
+    no padding), so conversations in one packed batch never mix."""
+    ex = randomize(make_exchange(kind))
+    h = make_packed_h(COUNTS, seed=3)
+    with torch.no_grad():
+        out = ex.forward_packed(h, conv_id_of(COUNTS))
+        start = 0
+        for n in COUNTS:
+            dense = ex(h[start : start + n].unsqueeze(0))
+            assert torch.allclose(out[start : start + n], dense[0], atol=1e-5)
+            start += n
+
+
+@pytest.mark.parametrize("kind", ["tac", "mha"])
+def test_packed_permutation_equivariance(kind):
+    """Rows may arrive in any order; only conv_id defines the groups."""
+    ex = randomize(make_exchange(kind))
+    h = make_packed_h(COUNTS, seed=5)
+    cid = conv_id_of(COUNTS)
+    perm = torch.randperm(h.shape[0], generator=torch.Generator().manual_seed(11))
+    with torch.no_grad():
+        out = ex.forward_packed(h, cid)
+        out_perm = ex.forward_packed(h[perm], cid[perm])
+    assert torch.allclose(out_perm, out[perm], atol=1e-5)
+
+
+@pytest.mark.parametrize("kind", ["tac", "mha"])
+def test_packed_conv_id_shape_validation(kind):
+    ex = make_exchange(kind)
+    h = make_packed_h(COUNTS)
+    with pytest.raises(ValueError):
+        ex.forward_packed(h, torch.zeros(h.shape[0] + 1, dtype=torch.long))

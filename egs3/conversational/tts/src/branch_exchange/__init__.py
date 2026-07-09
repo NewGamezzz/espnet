@@ -1,11 +1,14 @@
 """branch_exchange: run N weight-shared copies of a transformer stack with
 communication (exchange) modules injected between blocks.
 
-Branches are folded into the batch dimension as ``(B*N, T, d)``; exchanges
-operate on the unfolded ``(B, N, T, d)`` view and are permutation-equivariant
-in ``N`` with NO positional encoding on the branch axis, so branches are
-interchangeable. Backbone-agnostic: only ``torch``, ``einops``, and the
-standard library are imported.
+Branches are folded into the batch dimension, either rectangularly as
+``(B*N, T, d)`` (``ctx.branches(n)``, optional pad mask for ghost branches)
+or packed as ``(sum(N_i), T, d)`` (``ctx.branches(counts=[...])``), where
+conversations with different speaker counts are stacked with no padding rows
+and exchanges group rows by per-row conversation ids. Exchanges are
+permutation-equivariant on the branch axis with NO positional encoding, so
+branches are interchangeable. Backbone-agnostic: only ``torch``, ``einops``,
+and the standard library are imported.
 """
 
 from .exchange import BranchMHAExchange, IdentityExchange, TACExchange
