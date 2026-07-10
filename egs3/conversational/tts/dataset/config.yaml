@@ -1,0 +1,58 @@
+builder:
+  # Root of the ScalableSpontaneousSpeechDataset corpus (read-only).
+  # Resolution order at runtime: explicit argument > $SSSD_ROOT > this value.
+  dataset_root: /work/hdd/bbjs/ttrachu/dataset/ScalableSpontaneousSpeechDataset
+  manifests_subdir: lhotse_manifests_48
+  audio_subdir: original
+  # Pretrained char vocab to extend (one token per line, char_tokens.txt format).
+  # REQUIRED at build time; the builder fails if unset or missing.
+  base_vocab_path: null
+  data_path: data
+  manifest_paths:
+    train: manifest/train.jsonl
+    valid: manifest/valid.jsonl
+    test: manifest/test.jsonl
+  vocab_path: tokens/vocab.txt
+  vocab_meta_path: tokens/vocab_meta.json
+  seed: 0
+  # Same-channel utterances closer than merge_gap seconds merge into one turn.
+  merge_gap: 1.0
+  # Training window target duration is drawn uniformly from [window_min, window_max].
+  window_min: 10.0
+  # 60 s exceeds the F5 pretraining clip regime (< 30 s Emilia clips); chosen
+  # deliberately to capture longer interactions - revisit if fine-tuning
+  # quality degrades on long windows.
+  window_max: 60.0
+  # Utterance-boundary cuts; eligibility follows CoVoMix's Fisher
+  # segmentation (arXiv:2404.06690), the placement search is ours (hybrid
+  # closest-to-target with restart retry, see preprocessing/windows.py).
+  # A boundary at t
+  # is eligible iff every turn ends >= boundary_guard before t or starts
+  # >= boundary_guard after it.  0.0 is faithful to CoVoMix (zero margin,
+  # human LDC timestamps); SSSD timestamps are Parakeet pseudo-labels, so
+  # this knob exists to reject boundaries where the neighboring utterance's
+  # alignment jitter could leak un-covered speech into the window.  May be
+  # raised after inspecting debug dumps.
+  boundary_guard: 0.0
+  # Shortest emitted window below window_min: bounds both the session tail
+  # and mid-session mini-windows emitted before an oversized blocked span.
+  tail_min: 5.0
+  split_ratios:
+    train: 0.96
+    valid: 0.02
+    test: 0.02
+  source_sample_rate: 48000
+
+dataset:
+  sample_rate: 24000
+  split_manifest_paths:
+    train: manifest/train.jsonl
+    valid: manifest/valid.jsonl
+    test: manifest/test.jsonl
+  # Built by the builder, consumed by the preprocessor, not the dataset:
+  # training configs point ConversationalTextPreprocessor's token_list here
+  # (the dataset itself is vocab-agnostic and yields raw turns).
+  vocab_path: tokens/vocab.txt
+  # F5 convention: the model does text + 1 and uses 0 as its internal filler,
+  # so batches pad text ids with -1 (see espnet2/tts/f5/backbones/dit.py).
+  text_pad_value: -1
