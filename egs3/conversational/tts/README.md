@@ -19,7 +19,7 @@ Input branch 1: <turn> Good afternoon. How are you? <turn> <OTHER>*21 <turn> Goo
 Input branch 2: <turn> <OTHER>*30 <turn> Good. What about you? <turn> <OTHER>*35
 ```
 
-Rules (fixed by design, see `dataset/text.py`):
+Rules (fixed by design, see `dataset/preprocessing/text.py`):
 
 - Turn ORDER only: no timestamps, durations, or alignment information ever appear in the token sequence.
 - One `<OTHER>` per character preserves the conversation's length budget without using timestamps.
@@ -35,10 +35,13 @@ Because the line index IS the token id, the vocab file itself carries no header 
 
 ```json
 {
-  "base_vocab_path": "...", "base_size": 2545,
+  "base_vocab_path": "...", "base_vocab_size": 2545,
+  "base_vocab_sha256": "<hash of the base vocab file bytes>",
   "new_tokens": {"<turn>": 2545, "<OTHER>": 2546}, "total_size": 2547
 }
 ```
+
+`base_vocab_size` and `base_vocab_sha256` are a provenance guard: before loading pretrained weights, training asserts them against the vocab shipped with the checkpoint, so a build against the wrong base vocab fails before it can corrupt the text-embedding alignment.
 
 ## Building
 
@@ -62,9 +65,11 @@ The corpus directory is treated as strictly read-only; only `lhotse_manifests_48
 
 ## Pipeline
 
-1. **Turn construction** (`dataset/sssd.py`): per session, supervisions are sorted by start; consecutive same-channel utterances merge into one turn when the gap is below `merge_gap` (default 1.0 s); texts join with single spaces.
-2. **Text normalization** (`dataset/text.py`): turn texts are normalized ONCE at build time against the extended vocab charset (whitespace collapse, lowercase fallback, OOV drop), so `<OTHER>` counts can never desync between branches.
-3. **Windowing** (`dataset/windows.py`): sessions are cut into windows at eligible utterance boundaries, with target duration uniform in `[window_min, window_max]` (default 10-60 s).
+The pure algorithms live in the `dataset/preprocessing/` package; `dataset/builder.py` (build time), `dataset/dataset.py`, and `dataset/preprocessor.py` (training time) orchestrate them.
+
+1. **Turn construction** (`dataset/preprocessing/sssd.py`): per session, supervisions are sorted by start; consecutive same-channel utterances merge into one turn when the gap is below `merge_gap` (default 1.0 s); texts join with single spaces.
+2. **Text normalization** (`dataset/preprocessing/text.py`): turn texts are normalized ONCE at build time against the extended vocab charset (whitespace collapse, lowercase fallback, OOV drop), so `<OTHER>` counts can never desync between branches.
+3. **Windowing** (`dataset/preprocessing/windows.py`): sessions are cut into windows at eligible utterance boundaries, with target duration uniform in `[window_min, window_max]` (default 10-60 s).
    A time instant `t` is an eligible boundary iff every merged turn on every channel ends at least `boundary_guard` before `t` or starts at least `boundary_guard` after it; with the default `boundary_guard: 0.0` this means no turn strictly contains `t`, so zero-gap speaker exchanges are valid cut points and no utterance is ever truncated.
    The eligibility rule follows CoVoMix's Fisher segmentation ([arXiv:2404.06690](https://arxiv.org/abs/2404.06690)); `boundary_guard` exists because SSSD timestamps are Parakeet pseudo-labels rather than human alignments, so a positive guard rejects boundaries where a neighbor's alignment jitter could leak un-covered speech into the window.
    The placement search is ours (CoVoMix streams to the first clean boundary and has no target duration): each window cuts at the eligible boundary in `[window_min, window_max]` from the current position closest to its drawn target.
@@ -99,10 +104,21 @@ One JSON object per line:
 Turn `start`/`end` are absolute session seconds and exist for windowing and later evaluation only; they never become tokens.
 `num_active_speakers` (channels with at least one turn), `channel_speech_sec` (per-channel sum of turn durations), and `exchange_count` (speaker alternations in start order; 0 for single-speaker windows) are derived from the turns and enable training-time filtering (e.g. a `min_active_speakers` threshold) or interaction-density weighting without a rebuild.
 
-## Dataset and packed collator
+## Dataset, preprocessor, and packed collator
 
-`ConversationDataset[idx]` returns per-channel audio `(N, T)` at 24 kHz, a list of N variable-length token-id tensors, and the channel permutation applied.
-Per-sample channel permutation augmentation (train split only by default) is applied consistently to audio channels and token sequences; it guards against systematic ch0/ch1 artifacts in the corpus.
+`ConversationDataset[idx]` is vocab-agnostic and returns raw material: per-channel audio `(N, T)` at 24 kHz, the window's turns, and the channel permutation applied.
+Turn `channel` fields are already remapped to post-permutation row indices, so everything downstream is permutation-agnostic.
+Tokenization happens in `ConversationalTextPreprocessor` (`dataset/preprocessor.py`), configured with the extended vocab as `token_list`; it derives the N per-branch token-id tensors from the turns and fills in the item's `text` key.
+This mirrors the libritts recipe shape (there `CommonPreprocessor` fills the slot): training configs wire it via the `DataOrganizer` `preprocessor:` slot, e.g.
+
+```yaml
+preprocessor:
+  _target_: egs3.conversational.tts.dataset.preprocessor.ConversationalTextPreprocessor
+  token_list: ${data_dir}/tokens/vocab.txt
+```
+
+Unlike `CommonPreprocessor` there is deliberately no cleaner and no `<blank>/<unk>/<sos/eos>` symbols: tokenization must stay exactly the pretrained F5TTS_Base convention (raw characters, case preserved, id = vocab line index), or the ids stop aligning with the pretrained text-embedding matrix.
+Per-sample channel permutation augmentation (train split only by default) is applied consistently to audio channels and turn channels; it guards against systematic ch0/ch1 artifacts in the corpus.
 `collate_conversations` emits the packed layout of the merged `branch_exchange` package: a per-conversation `counts` list plus row-stacked tensors with no padding rows on the branch axis.
 
 ```

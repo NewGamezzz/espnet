@@ -25,7 +25,8 @@ builder:
   window_max: 60.0
   # Utterance-boundary cuts; eligibility follows CoVoMix's Fisher
   # segmentation (arXiv:2404.06690), the placement search is ours (hybrid
-  # closest-to-target with restart retry, see windows.py).  A boundary at t
+  # closest-to-target with restart retry, see preprocessing/windows.py).
+  # A boundary at t
   # is eligible iff every turn ends >= boundary_guard before t or starts
   # >= boundary_guard after it.  0.0 is faithful to CoVoMix (zero margin,
   # human LDC timestamps); SSSD timestamps are Parakeet pseudo-labels, so
@@ -48,6 +49,9 @@ dataset:
     train: manifest/train.jsonl
     valid: manifest/valid.jsonl
     test: manifest/test.jsonl
+  # Built by the builder, consumed by the preprocessor, not the dataset:
+  # training configs point ConversationalTextPreprocessor's token_list here
+  # (the dataset itself is vocab-agnostic and yields raw turns).
   vocab_path: tokens/vocab.txt
   # F5 convention: the model does text + 1 and uses 0 as its internal filler,
   # so batches pad text ids with -1 (see espnet2/tts/f5/backbones/dit.py).

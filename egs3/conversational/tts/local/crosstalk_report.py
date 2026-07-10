@@ -36,7 +36,7 @@ from egs3.conversational.tts.dataset.builder import (  # noqa: E402
     _CFG,
     resolve_dataset_root,
 )
-from egs3.conversational.tts.dataset.sssd import (  # noqa: E402
+from egs3.conversational.tts.dataset.preprocessing.sssd import (  # noqa: E402
     load_recordings,
     load_supervisions,
 )

@@ -1,4 +1,5 @@
-"""Tests for ConversationDataset and the packed collator (AC5-AC8)."""
+"""Tests for ConversationDataset, preprocessor composition, and the packed
+collator (AC5-AC8)."""
 
 import json
 
@@ -10,14 +11,22 @@ from egs3.conversational.tts.dataset.dataset import (
     ConversationDataset,
     collate_conversations,
 )
-from egs3.conversational.tts.dataset.sssd import Turn
-from egs3.conversational.tts.dataset.text import (
+from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
+from egs3.conversational.tts.dataset.preprocessing.text import (
     OTHER_TOKEN,
     TURN_TOKEN,
     build_branch_texts,
+    encode_tokens,
     extend_vocab,
+    make_token2id,
 )
-from egs3.conversational.tts.dataset.windows import WindowRecord, to_json
+from egs3.conversational.tts.dataset.preprocessing.windows import (
+    WindowRecord,
+    to_json,
+)
+from egs3.conversational.tts.dataset.preprocessor import (
+    ConversationalTextPreprocessor,
+)
 
 FS = 24000
 SRC_SR = 48000
@@ -85,10 +94,19 @@ def make_dataset(corpus, **kwargs):
     return ConversationDataset(
         split="valid",
         manifest_path=corpus["manifest"],
-        vocab_path=corpus["vocab"],
         dataset_root=corpus["root"],
         **kwargs,
     )
+
+
+def make_preprocessor(corpus):
+    return ConversationalTextPreprocessor(token_list=corpus["vocab"])
+
+
+def load_item(ds, preprocess, idx):
+    """The training-time composition: DataOrganizer calls the preprocessor as
+    ``preprocessor(uid, sample)`` on top of the raw dataset item."""
+    return preprocess(str(idx), ds[idx])
 
 
 def dominant_hz(row: torch.Tensor, fs: int) -> float:
@@ -96,18 +114,31 @@ def dominant_hz(row: torch.Tensor, fs: int) -> float:
     return torch.argmax(spectrum).item() * fs / row.shape[0]
 
 
-class TestItem:
-    def test_shapes_and_types(self, corpus):
+class TestRawItem:
+    """The dataset is vocab-agnostic: raw turns + audio, no token ids."""
+
+    def test_raw_contract(self, corpus):
         ds = make_dataset(corpus)
         item = ds[0]
+        assert "text" not in item
         assert item["num_channels"] == 2
         assert item["speech"].shape[0] == 2
         assert item["speech"].dtype == torch.float32
-        assert len(item["text"]) == 2
-        assert all(t.dtype == torch.long for t in item["text"])
-        assert item["text"][0].shape != item["text"][1].shape or not torch.equal(
-            item["text"][0], item["text"][1]
-        )
+        w = corpus["windows"][0]
+        assert [
+            (t.channel, t.speaker, t.text, t.start, t.end) for t in item["turns"]
+        ] == [(t.channel, t.speaker, t.text, t.start, t.end) for t in w.turns]
+
+    def test_turn_channels_are_row_indices_under_perm(self, corpus):
+        ds = make_dataset(corpus)
+        perm = [2, 0, 1]
+        ds._fixed_perm = perm
+        item = ds[1]
+        inv = {orig: row for row, orig in enumerate(perm)}
+        w = corpus["windows"][1]
+        assert [t.channel for t in item["turns"]] == [inv[t.channel] for t in w.turns]
+        # Everything but the channel stays verbatim.
+        assert [t.text for t in item["turns"]] == [t.text for t in w.turns]
 
     def test_resampled_sample_count(self, corpus):
         """AC8: sample count matches round(fs * (t1 - t0)) within one sample."""
@@ -124,33 +155,72 @@ class TestItem:
             measured = dominant_hz(item["speech"][row_idx], FS)
             assert measured == pytest.approx(channel_tone_hz(row_idx), abs=5.0)
 
+
+class TestComposedItem:
+    """Dataset + ConversationalTextPreprocessor = the training-time item."""
+
+    def test_shapes_and_types(self, corpus):
+        item = load_item(make_dataset(corpus), make_preprocessor(corpus), 0)
+        assert len(item["text"]) == 2
+        assert all(t.dtype == torch.long for t in item["text"])
+        assert item["text"][0].shape != item["text"][1].shape or not torch.equal(
+            item["text"][0], item["text"][1]
+        )
+
     def test_text_matches_branch_construction(self, corpus):
-        ds = make_dataset(corpus)
-        item = ds[0]
+        pre = make_preprocessor(corpus)
+        item = load_item(make_dataset(corpus), pre, 0)
         w = corpus["windows"][0]
         expected = build_branch_texts(w.turns, w.num_channels)
         for i in range(w.num_channels):
-            expected_ids = [ds.token2id[t] for t in expected[i]]
+            expected_ids = [pre.token2id[t] for t in expected[i]]
             assert item["text"][i].tolist() == expected_ids
 
     def test_valid_split_deterministic(self, corpus):
         """AC5: permutation off -> bit-identical repeated reads."""
-        ds = make_dataset(corpus)
-        a, b = ds[0], ds[0]
+        ds, pre = make_dataset(corpus), make_preprocessor(corpus)
+        a, b = load_item(ds, pre, 0), load_item(ds, pre, 0)
         assert torch.equal(a["speech"], b["speech"])
         assert all(torch.equal(x, y) for x, y in zip(a["text"], b["text"]))
         assert torch.equal(a["perm"], torch.arange(2))
+
+    def test_equivalent_to_previous_dataset_contract(self, corpus):
+        """The composition reproduces exactly what the old __getitem__ (vocab
+        held by the dataset, branch p = perm[k] encoded inline) returned."""
+        perm = [2, 0, 1]
+        ds = make_dataset(corpus)
+        ds._fixed_perm = perm
+        item = load_item(ds, make_preprocessor(corpus), 1)
+
+        w = corpus["windows"][1]
+        token2id = make_token2id(
+            corpus["vocab"].read_text(encoding="utf-8").splitlines()
+        )
+        branch_tokens = build_branch_texts(w.turns, w.num_channels)
+        expected_text = [
+            torch.tensor(encode_tokens(branch_tokens[p], token2id), dtype=torch.long)
+            for p in perm
+        ]
+        ds_id = make_dataset(corpus)
+        expected_speech = ds_id[1]["speech"][perm]
+
+        assert torch.equal(item["speech"], expected_speech)
+        assert len(item["text"]) == len(expected_text)
+        for got, want in zip(item["text"], expected_text):
+            assert torch.equal(got, want)
+        assert item["perm"].tolist() == perm
 
 
 class TestPermutation:
     """AC6: permuting channels then building texts == building then permuting."""
 
     def test_injected_perm_consistency(self, corpus):
+        pre = make_preprocessor(corpus)
         ds_id = make_dataset(corpus)
         ds_perm = make_dataset(corpus)
         perm = [2, 0, 1]
         ds_perm._fixed_perm = perm
-        ref, item = ds_id[1], ds_perm[1]
+        ref, item = load_item(ds_id, pre, 1), load_item(ds_perm, pre, 1)
         assert torch.equal(item["speech"], ref["speech"][perm])
         for k, p in enumerate(perm):
             assert torch.equal(item["text"][k], ref["text"][p])
@@ -167,12 +237,13 @@ class TestPermutation:
             )
 
     def test_marker_positions_unaffected_by_perm(self, corpus):
+        pre = make_preprocessor(corpus)
         ds = make_dataset(corpus)
-        ref = ds[1]
+        ref = load_item(ds, pre, 1)
         ds._fixed_perm = [2, 0, 1]
-        item = ds[1]
-        turn_id = ds.token2id[TURN_TOKEN]
-        other_id = ds.token2id[OTHER_TOKEN]
+        item = load_item(ds, pre, 1)
+        turn_id = pre.token2id[TURN_TOKEN]
+        other_id = pre.token2id[OTHER_TOKEN]
         for texts in (ref["text"], item["text"]):
             marker_positions = {
                 tuple((t == turn_id).nonzero().flatten().tolist()) for t in texts
@@ -192,9 +263,13 @@ class TestPermutation:
 class TestCollator:
     """AC7: packed layout over a mixed [2, 3] batch."""
 
+    def batch_and_items(self, corpus):
+        ds, pre = make_dataset(corpus), make_preprocessor(corpus)
+        items = [load_item(ds, pre, 0), load_item(ds, pre, 1)]
+        return collate_conversations(items), items
+
     def test_packed_layout(self, corpus):
-        ds = make_dataset(corpus)
-        batch = collate_conversations([ds[0], ds[1]])
+        batch, (item0, item1) = self.batch_and_items(corpus)
         assert batch["counts"] == [2, 3]
         m = sum(batch["counts"])
         assert batch["speech"].shape[0] == m
@@ -202,7 +277,6 @@ class TestCollator:
         # Row order is conversation-contiguous: rows 0-1 from ds[0], 2-4 from ds[1].
         conv_id = torch.arange(2).repeat_interleave(torch.tensor(batch["counts"]))
         assert conv_id.tolist() == [0, 0, 1, 1, 1]
-        item0, item1 = ds[0], ds[1]
         for row, source in enumerate([*item0["speech"], *item1["speech"]]):
             n = source.shape[0]
             assert torch.equal(batch["speech"][row, :n], source)
@@ -212,9 +286,8 @@ class TestCollator:
             assert torch.all(batch["speech"][row, n:] == 0.0)
 
     def test_text_padding_convention(self, corpus):
-        ds = make_dataset(corpus)
-        batch = collate_conversations([ds[0], ds[1]])
-        rows = [*ds[0]["text"], *ds[1]["text"]]
+        batch, (item0, item1) = self.batch_and_items(corpus)
+        rows = [*item0["text"], *item1["text"]]
         for row, source in enumerate(rows):
             n = source.shape[0]
             assert batch["text_lengths"][row] == n
@@ -222,9 +295,13 @@ class TestCollator:
             assert torch.all(batch["text"][row, n:] == -1)
 
     def test_works_with_dataloader(self, corpus):
-        ds = make_dataset(corpus)
+        ds, pre = make_dataset(corpus), make_preprocessor(corpus)
+
+        def collate(samples):
+            return collate_conversations([pre(s["window_id"], s) for s in samples])
+
         loader = torch.utils.data.DataLoader(
-            ds, batch_size=2, collate_fn=collate_conversations, shuffle=False
+            ds, batch_size=2, collate_fn=collate, shuffle=False
         )
         batch = next(iter(loader))
         assert batch["counts"] == [2, 3]

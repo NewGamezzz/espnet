@@ -11,13 +11,19 @@ import random
 import pytest
 
 from egs3.conversational.tts.dataset.dataset import ConversationDataset
-from egs3.conversational.tts.dataset.sssd import (
+from egs3.conversational.tts.dataset.preprocessing.sssd import (
     load_recordings,
     load_supervisions,
     merge_turns,
 )
-from egs3.conversational.tts.dataset.text import extend_vocab
-from egs3.conversational.tts.dataset.windows import build_windows, to_json
+from egs3.conversational.tts.dataset.preprocessing.text import extend_vocab
+from egs3.conversational.tts.dataset.preprocessing.windows import (
+    build_windows,
+    to_json,
+)
+from egs3.conversational.tts.dataset.preprocessor import (
+    ConversationalTextPreprocessor,
+)
 
 pytestmark = pytest.mark.skipif(
     not os.environ.get("SSSD_ROOT"), reason="SSSD_ROOT not set"
@@ -77,12 +83,14 @@ def test_real_corpus_windows_and_item(corpus_root, tmp_path, base_vocab):
     ds = ConversationDataset(
         split="valid",
         manifest_path=manifest,
-        vocab_path=vocab_path,
         dataset_root=corpus_root,
         permute_channels=False,
     )
-    item = ds[0]
+    preprocess = ConversationalTextPreprocessor(token_list=vocab_path)
+    item = preprocess("0", ds[0])
     w = all_records[0]
     assert item["speech"].shape[0] == w.num_channels
     assert abs(item["speech"].shape[1] - round(24000 * (w.t1 - w.t0))) <= 1
     assert item["speech"].abs().max() > 0, "audio should not be silent"
+    assert len(item["text"]) == w.num_channels
+    assert all(t.numel() > 0 for t in item["text"])

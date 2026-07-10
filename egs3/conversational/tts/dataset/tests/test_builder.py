@@ -1,5 +1,6 @@
 """End-to-end builder tests over the fabricated mini corpus (AC5, AC7, AC9)."""
 
+import hashlib
 import json
 
 import pytest
@@ -13,8 +14,11 @@ from egs3.conversational.tts.dataset.dataset import (
     ConversationDataset,
     collate_conversations,
 )
-from egs3.conversational.tts.dataset.sssd import Turn
-from egs3.conversational.tts.dataset.text import NEW_TOKENS
+from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
+from egs3.conversational.tts.dataset.preprocessing.text import NEW_TOKENS
+from egs3.conversational.tts.dataset.preprocessor import (
+    ConversationalTextPreprocessor,
+)
 
 
 def build(fake_corpus, recipe_dir=None, seed=0):
@@ -65,7 +69,10 @@ class TestBuildEndToEnd:
         ds = ConversationDataset(
             split="train", recipe_dir=recipe_dir, dataset_root=fake_corpus["root"]
         )
-        batch = collate_conversations([ds[i] for i in range(len(ds))])
+        pre = ConversationalTextPreprocessor(
+            token_list=recipe_dir / "data/tokens/vocab.txt"
+        )
+        batch = collate_conversations([pre(str(i), ds[i]) for i in range(len(ds))])
         assert set(batch["counts"]) == {2, 3}
         assert batch["speech"].shape[0] == sum(batch["counts"])
         assert batch["text"].shape[0] == sum(batch["counts"])
@@ -96,7 +103,10 @@ class TestVocabSafety:
         vocab_bytes = (data_dir / "tokens/vocab.txt").read_bytes()
         assert vocab_bytes == base_bytes + "\n".join(NEW_TOKENS).encode() + b"\n"
         meta = json.loads((data_dir / "tokens/vocab_meta.json").read_text())
-        assert meta["base_size"] == len(base_vocab)
+        assert meta["base_vocab_size"] == len(base_vocab)
+        # Provenance guard: step 3 checks this against the vocab shipped with
+        # the pretrained checkpoint before loading weights.
+        assert meta["base_vocab_sha256"] == hashlib.sha256(base_bytes).hexdigest()
         assert meta["total_size"] == len(base_vocab) + 2
         assert meta["new_tokens"] == {
             NEW_TOKENS[0]: len(base_vocab),
@@ -120,7 +130,7 @@ class TestVocabSafety:
         written = (recipe_dir / "data/tokens/vocab.txt").read_text().splitlines()
         assert written == tokens + list(NEW_TOKENS)
         meta = json.loads((recipe_dir / "data/tokens/vocab_meta.json").read_text())
-        assert meta["base_size"] == len(tokens)
+        assert meta["base_vocab_size"] == len(tokens)
         assert meta["new_tokens"][NEW_TOKENS[0]] == len(tokens)
 
     def test_missing_base_vocab_fails_loudly(self, fake_corpus, tmp_path):

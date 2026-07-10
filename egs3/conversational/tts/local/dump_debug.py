@@ -25,7 +25,7 @@ if str(_REPO_ROOT) not in sys.path:
 import soundfile as sf  # noqa: E402
 
 from egs3.conversational.tts.dataset.dataset import ConversationDataset  # noqa: E402
-from egs3.conversational.tts.dataset.text import (  # noqa: E402
+from egs3.conversational.tts.dataset.preprocessing.text import (  # noqa: E402
     build_branch_texts,
     render_tokens,
 )

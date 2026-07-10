@@ -1,14 +1,19 @@
 """Conversation dataset backed by window manifests, plus the packed collator.
 
 Audio is seek-read from the session FLAC (only the window's segment), kept
-per-channel, and resampled 48 -> 24 kHz on the fly.  Batches use the packed
-layout of the ``branch_exchange`` package: a per-conversation ``counts`` list
-plus row-stacked ``(sum(counts), ...)`` tensors with no padding rows on the
-branch axis, so mixed channel counts per batch need no special casing.
+per-channel, and resampled 48 -> 24 kHz on the fly.  The dataset is
+vocab-agnostic: items carry the raw turns and tokenization happens in
+``preprocessor.ConversationalTextPreprocessor`` (the ``DataOrganizer``
+``preprocessor:`` slot), which fills in the ``text`` key the collator packs.
+Batches use the packed layout of the ``branch_exchange`` package: a
+per-conversation ``counts`` list plus row-stacked ``(sum(counts), ...)``
+tensors with no padding rows on the branch axis, so mixed channel counts per
+batch need no special casing.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import random
 from importlib import resources
@@ -23,8 +28,7 @@ from espnet2.fileio.sound_scp import soundfile_read
 from espnet3.utils.config_utils import load_config_with_defaults
 
 from .builder import resolve_dataset_root
-from .text import build_branch_texts, encode_tokens, make_token2id
-from .windows import WindowRecord, from_json
+from .preprocessing.windows import WindowRecord, from_json
 
 _CONFIG_RESOURCE = resources.files(__package__).joinpath("config.yaml")
 with resources.as_file(_CONFIG_RESOURCE) as _CONFIG_PATH:
@@ -45,12 +49,6 @@ def read_window_manifest(path: str | Path) -> list[WindowRecord]:
     return records
 
 
-def read_vocab(path: str | Path) -> list[str]:
-    # Verbatim lines: the line index IS the token id (a token may be a literal
-    # space, as in the F5 Emilia vocab, so no whitespace filtering).
-    return Path(path).read_text(encoding="utf-8").splitlines()
-
-
 class ConversationDataset(TorchDataset):
     """Multi-channel conversation windows for F5-TTS fine-tuning.
 
@@ -58,16 +56,23 @@ class ConversationDataset(TorchDataset):
       - ``window_id``    : str
       - ``num_channels`` : int, N of this conversation
       - ``speech``       : float32 tensor (N, T) at ``fs`` (default 24 kHz)
-      - ``text``         : list of N variable-length int64 tensors (no padding;
-                           the model pads text up to the mel length itself)
+      - ``turns``        : the window's ``Turn`` records in conversation
+                           order, with ``channel`` remapped to the
+                           post-permutation row index (``speaker``/``text``/
+                           ``start``/``end`` kept verbatim)
       - ``perm``         : int64 tensor (N,), the channel permutation applied
-                           to both audio rows and text sequences (row k holds
-                           original channel ``perm[k]``)
+                           to the audio rows (row k holds original channel
+                           ``perm[k]``)
+
+    No token ids here: tokenization lives in the recipe preprocessor
+    (``preprocessor.ConversationalTextPreprocessor``), which derives the
+    per-branch ``text`` tensors from ``turns``.  Because ``channel`` is
+    pre-remapped, everything downstream is permutation-agnostic.
 
     ``permute_channels`` defaults to ``split == "train"``; it guards against
     systematic ch0/ch1 artifacts in the corpus and is applied consistently to
-    audio and texts (turn markers carry no identity, so nothing else needs
-    re-indexing).
+    audio rows and turn channels (turn markers carry no identity, so nothing
+    else needs re-indexing).
     """
 
     def __init__(
@@ -76,7 +81,6 @@ class ConversationDataset(TorchDataset):
         recipe_dir: str | Path | None = None,
         manifest_path: str | Path | None = None,
         dataset_root: str | Path | None = None,
-        vocab_path: str | Path | None = None,
         fs: int | None = None,
         permute_channels: bool | None = None,
         seed: int = 0,
@@ -101,18 +105,13 @@ class ConversationDataset(TorchDataset):
             if split not in _DATASET_CFG["split_manifest_paths"]:
                 raise KeyError(f"unknown split {split!r} and no manifest_path given")
             manifest_path = data_dir / _DATASET_CFG["split_manifest_paths"][split]
-        if vocab_path is None:
-            vocab_path = data_dir / _DATASET_CFG["vocab_path"]
         manifest_path = Path(manifest_path)
-        vocab_path = Path(vocab_path)
-        for path, hint in ((manifest_path, "window manifest"), (vocab_path, "vocab")):
-            if not path.is_file():
-                raise FileNotFoundError(
-                    f"{hint} not found: {path}. Run the SSSD builder first "
-                    "(python -m egs3.conversational.tts.dataset.builder)."
-                )
+        if not manifest_path.is_file():
+            raise FileNotFoundError(
+                f"window manifest not found: {manifest_path}. Run the SSSD "
+                "builder first (python -m egs3.conversational.tts.dataset.builder)."
+            )
         self.records = read_window_manifest(manifest_path)
-        self.token2id = make_token2id(read_vocab(vocab_path))
 
         # Test hook: a fixed permutation (sequence of ints) overrides the RNG.
         self._fixed_perm: Sequence[int] | None = None
@@ -164,37 +163,24 @@ class ConversationDataset(TorchDataset):
         record = self.records[idx]
         n = record.num_channels
         speech = self._load_speech(record)
-        branch_tokens = build_branch_texts(record.turns, n)
         perm = self._draw_perm(n)
+        inv = {orig: row for row, orig in enumerate(perm)}
         sample: dict[str, Any] = {
             "window_id": record.window_id,
             "num_channels": n,
             "speech": speech[perm],
-            "text": [
-                torch.tensor(
-                    encode_tokens(branch_tokens[p], self.token2id), dtype=torch.long
-                )
-                for p in perm
+            "turns": [
+                dataclasses.replace(t, channel=inv[t.channel])  # row index
+                for t in record.turns
             ],
             "perm": torch.tensor(perm, dtype=torch.long),
         }
         if self.inference:
-            inv = {orig: row for row, orig in enumerate(perm)}
             sample.update(
                 session_id=record.session_id,
                 t0=record.t0,
                 t1=record.t1,
                 audio_path=str(self.dataset_root / record.audio_relpath),
-                turns=[
-                    {
-                        "channel": inv[t.channel],  # row index after permutation
-                        "speaker": t.speaker,
-                        "text": t.text,
-                        "start": t.start,
-                        "end": t.end,
-                    }
-                    for t in record.turns
-                ],
             )
         return sample
 

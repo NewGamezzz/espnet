@@ -6,7 +6,7 @@ import random
 
 import pytest
 
-from egs3.conversational.tts.dataset.sssd import (
+from egs3.conversational.tts.dataset.preprocessing.sssd import (
     Recording,
     Supervision,
     Turn,
@@ -16,7 +16,7 @@ from egs3.conversational.tts.dataset.sssd import (
     occupied_intervals,
     session_speakers,
 )
-from egs3.conversational.tts.dataset.windows import (
+from egs3.conversational.tts.dataset.preprocessing.windows import (
     _gap_at,
     blocked_intervals,
     build_windows,

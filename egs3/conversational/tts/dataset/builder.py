@@ -1,21 +1,24 @@
 """SSSD dataset builder: window manifests, splits, and the extended vocab.
 
-Thin orchestration in the libritts house style; the algorithms live in
-``sssd.py`` / ``windows.py`` / ``text.py`` so tests hit them with fabricated
-fixtures.  The corpus directory is treated as strictly read-only.
+Thin orchestration in the libritts house style; the algorithms live in the
+``preprocessing/`` package (``sssd.py`` / ``windows.py`` / ``text.py``) so
+tests hit them with fabricated fixtures.  The corpus directory is treated as
+strictly read-only.
 
 Build outputs (under ``<recipe_dir>/data/``):
   - ``manifest/{train,valid,test}.jsonl``  window manifests (one JSON per line)
   - ``tokens/vocab.txt``   base vocab + ``<turn>`` + ``<OTHER>`` appended at the
     end (pure token-per-line; the line index is the token id, so the file
     carries no comments -- ids are documented in the meta file instead)
-  - ``tokens/vocab_meta.json``  base path/size and the new token ids
+  - ``tokens/vocab_meta.json``  base vocab provenance (path, size, sha256)
+    and the new token ids
 """
 
 from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import os
 import random
@@ -28,15 +31,15 @@ from typing import Sequence
 from espnet3.components.data.dataset_builder import DatasetBuilder
 from espnet3.utils.config_utils import load_config_with_defaults
 
-from .sssd import (
+from .preprocessing.sssd import (
     Turn,
     load_recordings,
     load_supervisions,
     merge_turns,
     session_speakers,
 )
-from .text import NEW_TOKENS, extend_vocab, normalize_text, vocab_charset
-from .windows import WindowingStats, build_windows, to_json
+from .preprocessing.text import NEW_TOKENS, extend_vocab, normalize_text, vocab_charset
+from .preprocessing.windows import WindowingStats, build_windows, to_json
 
 
 def _load_builder_config() -> dict:
@@ -191,7 +194,8 @@ class SSSDBuilder(DatasetBuilder):
         # Emilia vocab's very first token is a literal space, which any
         # whitespace-based filtering would silently drop, shifting all ids.
         # splitlines() also absorbs CRLF endings (the Emilia file uses \r\n).
-        base_tokens = base_vocab_path.read_text(encoding="utf-8").splitlines()
+        base_vocab_bytes = base_vocab_path.read_bytes()
+        base_tokens = base_vocab_bytes.decode("utf-8").splitlines()
         extended = extend_vocab(base_tokens)
         charset = vocab_charset(extended)
 
@@ -268,9 +272,12 @@ class SSSDBuilder(DatasetBuilder):
         vocab_path = data_dir / _CFG["vocab_path"]
         vocab_path.parent.mkdir(parents=True, exist_ok=True)
         vocab_path.write_text("\n".join(extended) + "\n", encoding="utf-8")
+        # Provenance guard: step 3 asserts size + sha256 against the vocab
+        # shipped with the pretrained checkpoint before loading its weights.
         meta = {
             "base_vocab_path": str(base_vocab_path),
-            "base_size": len(base_tokens),
+            "base_vocab_size": len(base_tokens),
+            "base_vocab_sha256": hashlib.sha256(base_vocab_bytes).hexdigest(),
             "new_tokens": {
                 token: len(base_tokens) + i for i, token in enumerate(NEW_TOKENS)
             },

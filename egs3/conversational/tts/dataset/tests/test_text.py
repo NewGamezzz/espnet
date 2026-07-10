@@ -3,7 +3,7 @@
 import pytest
 from conftest import FakeTurn
 
-from egs3.conversational.tts.dataset.text import (
+from egs3.conversational.tts.dataset.preprocessing.text import (
     NEW_TOKENS,
     OTHER_TOKEN,
     TURN_TOKEN,
