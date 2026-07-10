@@ -335,7 +335,8 @@ class TestWindowIntegrity:
 
     def test_chained_overlap_region_dropped(self):
         # Turns overlap in an unbroken chain: no eligible boundary anywhere
-        # inside, so the whole span is dropped rather than emitted oversize.
+        # inside, so exactly the blocked span (0.5, 49.5) is dropped; the
+        # 0.5 s prefix is a sliver and the 0.5 s remainder a dropped tail.
         rec = make_recording(50.0)
         turns = [
             turn(i % 2, start, start + 11.0)
@@ -345,7 +346,8 @@ class TestWindowIntegrity:
             "sess1", rec, turns, rng=random.Random("s"), **WINDOW_KW
         )
         assert records == []
-        assert stats.dropped_span_sec == pytest.approx(49.5)
+        assert stats.dropped_span_sec == pytest.approx(49.0)
+        assert stats.dropped_sliver_sec == pytest.approx(0.5)
         assert stats.dropped_tail_sec == pytest.approx(0.5)
 
     def test_session_shorter_than_window_min_is_tail(self):
@@ -417,20 +419,134 @@ class TestWindowDeterminism:
             "sess1", rec, turns, rng=random.Random("s"), **WINDOW_KW
         )
         w = records[0]
-        assert from_json(json.loads(json.dumps(to_json(w)))) == w
+        d = json.loads(json.dumps(to_json(w)))
+        assert d["num_active_speakers"] == w.num_active_speakers
+        assert d["channel_speech_sec"] == list(w.channel_speech_sec)
+        assert d["exchange_count"] == w.exchange_count
+        assert from_json(d) == w
+
+
+class TestSpeakerActivity:
+    """Per-window speaker metadata: active channels, per-channel speech
+    seconds, and exchange (speaker alternation) counts."""
+
+    def test_a_b_a_dialogue(self):
+        rec = make_recording(9.5)
+        turns = [turn(0, 0.5, 3.0), turn(1, 3.5, 6.0), turn(0, 6.5, 9.0)]
+        records, _ = build_windows(
+            "s1", rec, turns, rng=random.Random("s"), **WINDOW_KW
+        )
+        assert len(records) == 1
+        w = records[0]
+        assert w.num_active_speakers == 2
+        assert w.exchange_count == 2
+        assert w.channel_speech_sec == (5.0, 2.5)
+
+    def test_single_speaker_window(self):
+        rec = make_recording(9.0)
+        turns = [turn(0, 0.5, 3.0), turn(0, 5.0, 8.0)]
+        records, _ = build_windows(
+            "s1", rec, turns, rng=random.Random("s"), **WINDOW_KW
+        )
+        w = records[0]
+        assert w.num_active_speakers == 1
+        assert w.exchange_count == 0
+        assert w.channel_speech_sec == (5.5, 0.0)
+
+    def test_three_channels_consistent_with_turns(self):
+        rec = make_recording(120.0, num_channels=3)
+        turns = dialogue_turns(120.0, num_channels=3)
+        records, _ = build_windows(
+            "s1", rec, turns, rng=random.Random("s"), **WINDOW_KW
+        )
+        assert records
+        for w in records:
+            assert len(w.channel_speech_sec) == 3
+            assert w.num_active_speakers == len({t.channel for t in w.turns})
+            assert w.exchange_count == sum(
+                1 for a, b in zip(w.turns, w.turns[1:]) if a.channel != b.channel
+            )
+            assert sum(w.channel_speech_sec) == pytest.approx(
+                sum(t.end - t.start for t in w.turns), abs=1e-5
+            )
+
+
+SELECT_KW = dict(window_min=10.0, window_max=30.0, tail_min=5.0)
 
 
 class TestSelectWindowSpans:
+    def test_hybrid_cut_is_closest_candidate_to_target(self):
+        # Eligible instants in the first search range [10, 30] are exactly
+        # {12, 15, 28}: consecutive blocks touch there and stay unmerged.
+        # The forward-only rule would always skip to the boundary at/after
+        # the target; the hybrid must pick the closest one, either side.
+        blocked = [(0.5, 12.0), (12.0, 15.0), (15.0, 28.0), (28.0, 35.0)]
+        backward_selected = False
+        for seed in range(30):
+            target = random.Random(str(seed)).uniform(10.0, 30.0)
+            expected = min([12.0, 15.0, 28.0], key=lambda c: (abs(c - target), c))
+            spans, _ = select_window_spans(
+                blocked, 35.0, rng=random.Random(str(seed)), **SELECT_KW
+            )
+            assert spans[0] == (0.0, expected)
+            backward_selected = backward_selected or expected < target
+        assert backward_selected, "no seed exercised a cut before its target"
+
+    def test_restart_captures_block_and_emits_mini_window(self):
+        # A block of length 25 (in (window_max - window_min, window_max])
+        # covers the whole search range from 0; only the restart at its start
+        # edge captures it, with the 8 s prefix emitted as a mini-window.
+        # Nothing is dropped at all.
+        spans, stats = select_window_spans(
+            [(8.0, 33.0)], 33.0, rng=random.Random("s"), **SELECT_KW
+        )
+        assert spans == [(0.0, 8.0), (8.0, 33.0)]
+        assert stats.n_windows == 2
+        assert stats.dropped_span_sec == pytest.approx(0.0)
+        assert stats.dropped_sliver_sec == pytest.approx(0.0)
+        assert stats.dropped_tail_sec == pytest.approx(0.0)
+
+    def test_short_prefix_becomes_dropped_sliver(self):
+        # Prefix before the covering block is under tail_min: counted as a
+        # sliver, not emitted; the block itself is still captured.
+        spans, stats = select_window_spans(
+            [(3.0, 30.5)], 33.0, rng=random.Random("s"), **SELECT_KW
+        )
+        assert spans == [(3.0, 33.0)]
+        assert stats.dropped_sliver_sec == pytest.approx(3.0)
+        assert stats.dropped_span_sec == pytest.approx(0.0)
+
+    def test_oversized_block_dropped_exactly(self):
+        # A 42 s block exceeds window_max: after the restart at 8.0 the drop
+        # is exactly [8, 50] - the preceding audio becomes a mini-window and
+        # is NOT part of the drop.
+        spans, stats = select_window_spans(
+            [(8.0, 50.0)], 80.0, rng=random.Random("s"), **SELECT_KW
+        )
+        assert spans == [(0.0, 8.0), (50.0, 80.0)]
+        assert stats.dropped_span_sec == pytest.approx(42.0)
+        assert stats.dropped_sliver_sec == pytest.approx(0.0)
+
+    def test_consecutive_oversized_blocks_terminate(self):
+        # Back-to-back oversized blocks force restart -> drop -> drop; the
+        # loop must strictly advance and never re-select cur as a cut.
+        spans, stats = select_window_spans(
+            [(1.0, 40.0), (40.0, 90.0)], 95.0, rng=random.Random("s"), **SELECT_KW
+        )
+        assert spans == [(90.0, 95.0)]
+        assert stats.dropped_sliver_sec == pytest.approx(1.0)
+        assert stats.dropped_span_sec == pytest.approx(89.0)
+
     def test_never_emits_oversize(self):
-        # One long blocked region: the span up to its end is dropped, then
-        # normal windows resume.
         blocked = [(5.0, 48.0)]
-        kw = {k: v for k, v in WINDOW_KW.items() if k != "boundary_guard"}
-        spans, stats = select_window_spans(blocked, 100.0, rng=random.Random("s"), **kw)
+        spans, stats = select_window_spans(
+            blocked, 100.0, rng=random.Random("s"), **SELECT_KW
+        )
         for t0, t1 in spans:
-            assert t1 - t0 <= WINDOW_KW["window_max"] + 1e-9
-        assert stats.dropped_span_sec == pytest.approx(48.0)
-        assert spans and spans[0][0] == 48.0
+            assert t1 - t0 <= SELECT_KW["window_max"] + 1e-9
+        assert spans[0] == (0.0, 5.0)  # 5 s prefix == tail_min: mini-window
+        assert spans[1][0] == 48.0
+        assert stats.dropped_span_sec == pytest.approx(43.0)
 
     def test_float_noise_on_turn_end_cut(self):
         # Cuts land exactly on turn endpoints, which carry float accumulation

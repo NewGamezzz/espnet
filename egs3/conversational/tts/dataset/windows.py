@@ -1,15 +1,20 @@
 """Utterance-boundary window selection over a session's turn timeline.
 
-Pure module: no I/O, no torch.  Windows are cut at utterance boundaries,
-CoVoMix-style (Fisher segmentation, arXiv:2404.06690 Algorithm 1, inherited
-by CoVoMix2): a time instant ``t`` is an *eligible boundary* iff every merged
-turn on every channel ends at least ``boundary_guard`` before ``t`` or starts
-at least ``boundary_guard`` after it.  With ``boundary_guard = 0`` this
-reduces to "no turn strictly contains ``t``" - turns touching ``t`` exactly
-at their start or end are allowed, so zero-gap speaker exchanges are valid
-cut points.  Activity is defined over merged turn spans (supersets of their
-supervisions), so a cut can never split a merged turn through one of its
-internal sub-``merge_gap`` gaps.
+Pure module: no I/O, no torch.  Windows are cut at utterance boundaries.
+The *eligibility* rule follows CoVoMix's Fisher segmentation (arXiv:2404.06690,
+inherited by CoVoMix2): a time instant ``t`` is an *eligible boundary* iff
+every merged turn on every channel ends at least ``boundary_guard`` before
+``t`` or starts at least ``boundary_guard`` after it.  With
+``boundary_guard = 0`` this reduces to "no turn strictly contains ``t``" -
+turns touching ``t`` exactly at their start or end are allowed, so zero-gap
+speaker exchanges are valid cut points.  Activity is defined over merged turn
+spans (supersets of their supervisions), so a cut can never split a merged
+turn through one of its internal sub-``merge_gap`` gaps.
+
+The *placement* search is ours (CoVoMix has no target duration at all): see
+``select_window_spans`` for the hybrid closest-to-target rule with a restart
+retry, which drops only genuinely oversized blocked spans, never audio
+adjacent to them.
 
 The session boundaries ``0.0`` and ``duration`` are always eligible: no
 speech can cross a file edge (supervisions are clamped to the recording).
@@ -28,6 +33,26 @@ from .sssd import Recording, Turn
 _EPS = 1e-9
 
 
+def speaker_activity(
+    turns: Sequence[Turn], num_channels: int
+) -> tuple[int, tuple[float, ...], int]:
+    """Per-window speaker-activity metadata for training-time filtering.
+
+    Returns ``(num_active_speakers, channel_speech_sec, exchange_count)``:
+    channels with at least one turn, per-channel speech seconds (sum of that
+    channel's turn durations, rounded like other times), and the number of
+    speaker alternations in the turns sorted by start time (0 for
+    single-speaker windows).
+    """
+    speech = [0.0] * num_channels
+    for t in turns:
+        speech[t.channel] += t.end - t.start
+    ordered = sorted(turns, key=lambda t: (t.start, t.channel))
+    exchanges = sum(1 for a, b in zip(ordered, ordered[1:]) if a.channel != b.channel)
+    num_active = sum(1 for s in speech if s > 0)
+    return num_active, tuple(round(s, 6) for s in speech), exchanges
+
+
 @dataclass(frozen=True)
 class WindowRecord:
     window_id: str
@@ -38,6 +63,17 @@ class WindowRecord:
     t0: float
     t1: float
     turns: tuple[Turn, ...]
+    # Derived from turns/num_channels, never passed in: always consistent
+    # with the stored (rounded) turn times, including after from_json.
+    num_active_speakers: int = field(init=False)
+    channel_speech_sec: tuple[float, ...] = field(init=False)
+    exchange_count: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        active, speech_sec, exchanges = speaker_activity(self.turns, self.num_channels)
+        object.__setattr__(self, "num_active_speakers", active)
+        object.__setattr__(self, "channel_speech_sec", speech_sec)
+        object.__setattr__(self, "exchange_count", exchanges)
 
     @property
     def duration(self) -> float:
@@ -47,8 +83,12 @@ class WindowRecord:
 @dataclass
 class WindowingStats:
     n_windows: int = 0
-    dropped_span_sec: float = 0.0  # spans with no eligible boundary in reach
+    dropped_span_sec: float = 0.0  # oversized blocked spans (> window_max)
     dropped_tail_sec: float = 0.0
+    # Prefixes shorter than tail_min discarded before a restart (see
+    # select_window_spans step 2); kept separate from dropped_span_sec so the
+    # summary distinguishes unbreakable audio from search slivers.
+    dropped_sliver_sec: float = 0.0
     dropped_empty_windows: int = 0
     # All-channel gap (next turn start - previous turn end) at each chosen
     # interior cut point; 0.0 for a zero-gap speaker exchange.
@@ -58,6 +98,7 @@ class WindowingStats:
         self.n_windows += other.n_windows
         self.dropped_span_sec += other.dropped_span_sec
         self.dropped_tail_sec += other.dropped_tail_sec
+        self.dropped_sliver_sec += other.dropped_sliver_sec
         self.dropped_empty_windows += other.dropped_empty_windows
         self.cut_gaps.extend(other.cut_gaps)
 
@@ -99,6 +140,18 @@ def first_eligible_boundary(blocked: Sequence[tuple[float, float]], t: float) ->
     return t
 
 
+def _containing_block(
+    blocked: Sequence[tuple[float, float]], t: float
+) -> tuple[float, float] | None:
+    """The blocked open interval strictly containing ``t``, or None."""
+    for a, b in blocked:
+        if a >= t:
+            break
+        if t < b:
+            return (a, b)
+    return None
+
+
 def select_window_spans(
     blocked: Sequence[tuple[float, float]],
     duration: float,
@@ -110,13 +163,27 @@ def select_window_spans(
 ) -> tuple[list[tuple[float, float]], WindowingStats]:
     """Greedy left-to-right span selection against the blocked-interval list.
 
-    Each window draws a target duration uniform in [window_min, window_max]
-    and extends to the FIRST eligible boundary at/after the target (CoVoMix
-    Algorithm 1).  If that boundary lies beyond ``window_max`` the span up to
-    it is dropped whole rather than emitted oversize.  The final remainder
-    (<= window_max by construction) is emitted iff >= tail_min; this tail is
-    the only window allowed below window_min.  Both edges of every emitted
-    window are eligible boundaries (0 and ``duration`` count as eligible).
+    Each iteration draws a target duration uniform in [window_min, window_max]
+    and applies a retry loop:
+
+    1. Hybrid cut: cut at the eligible boundary in
+       ``[cur + window_min, cur + window_max]`` closest to the target (ties
+       toward the earlier one).
+    2. Restart: if no such boundary exists, exactly one blocked interval
+       ``(bs, be)`` covers the whole search range.  When ``bs`` lies ahead of
+       ``cur``, emit the prefix ``[cur, bs]`` as a mini-window if it is at
+       least ``tail_min`` (mid-session windows in [tail_min, window_min) are
+       legal), otherwise count it as a dropped sliver; then restart from
+       ``bs``, so a block no longer than ``window_max`` is captured inside an
+       ordinary window.
+    3. Oversized drop: if the covering block starts at ``cur`` itself, it is
+       longer than ``window_max`` from here, so drop exactly ``[cur, be]`` -
+       never the audio adjacent to it.
+
+    The final remainder (<= window_max) is emitted iff >= tail_min.  Both
+    edges of every emitted window are eligible boundaries (0 and ``duration``
+    count as eligible).  Every branch strictly advances ``cur``, so the loop
+    terminates.
     """
     if not (0 < window_min <= window_max):
         raise ValueError(
@@ -134,13 +201,37 @@ def select_window_spans(
             else:
                 stats.dropped_tail_sec += remaining
             break
-        target = rng.uniform(window_min, window_max)
-        cut = min(first_eligible_boundary(blocked, cur + target), duration)
-        if cut - cur <= window_max + _EPS:
-            spans.append((cur, cut))
-            stats.n_windows += 1
+        lo, hi = cur + window_min, cur + window_max
+        target = cur + rng.uniform(window_min, window_max)
+        block = _containing_block(blocked, target)
+        if block is None:
+            cut = target  # the target itself is eligible
         else:
-            stats.dropped_span_sec += cut - cur
+            a, b = block
+            # The nearest eligible instants to a blocked target are exactly
+            # the containing block's edges; keep those inside [lo, hi].
+            cands = [c for c in (a, b) if lo - _EPS <= c <= hi + _EPS]
+            if cands:
+                cut = min(cands, key=lambda c: (abs(c - target), c))
+            elif a > cur + _EPS:
+                # (a, b) covers [lo, hi]: retry from its start edge, emitting
+                # the prefix as a mini-window when it is long enough.
+                if a - cur >= tail_min:
+                    spans.append((cur, a))
+                    stats.n_windows += 1
+                else:
+                    stats.dropped_sliver_sec += a - cur
+                cur = a
+                continue
+            else:
+                # The block starts at cur and extends past cur + window_max:
+                # genuinely oversized, drop it and nothing else.
+                end = min(b, duration)
+                stats.dropped_span_sec += end - cur
+                cur = end
+                continue
+        spans.append((cur, cut))
+        stats.n_windows += 1
         cur = cut
     return spans, stats
 
@@ -226,6 +317,9 @@ def to_json(w: WindowRecord) -> dict:
         "t0": w.t0,
         "t1": w.t1,
         "duration": round(w.t1 - w.t0, 6),
+        "num_active_speakers": w.num_active_speakers,
+        "channel_speech_sec": list(w.channel_speech_sec),
+        "exchange_count": w.exchange_count,
         "turns": [
             {
                 "channel": t.channel,

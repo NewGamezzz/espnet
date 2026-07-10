@@ -50,7 +50,8 @@ python -m egs3.conversational.tts.dataset.builder \
 ```
 
 `base_vocab_path` is required (one token per line, `char_tokens.txt` format); the builder fails loudly without it.
-The build prints a summary: windows per split, window duration distribution, turns per window, overlap ratio, speaker overlap across splits, dropped-audio statistics (seconds and hours of unbreakable spans), and the distribution of the all-channel gap at chosen cut points including how many fall below 0.2 s (boundaries the former all-channel-silence rule could not use).
+The build prints a summary: windows per split, window duration distribution, turns and exchanges per window, windows and hours by active speaker count, mini-window count and hours, overlap ratio, speaker overlap across splits, dropped-audio statistics (oversized blocked spans, slivers, and tails, all reported separately), and the distribution of the all-channel gap at chosen cut points including how many fall below 0.2 s (boundaries the former all-channel-silence rule could not use).
+Single-speaker windows are NOT filtered at build time; the per-window speaker-activity fields exist so filtering or weighting can happen at training time without a rebuild.
 `SSSDBuilder` subclasses the espnet3 `DatasetBuilder`, so it also plugs into the stage machinery once a `run.py` exists.
 
 ### Dataset-root remapping rule
@@ -63,10 +64,14 @@ The corpus directory is treated as strictly read-only; only `lhotse_manifests_48
 
 1. **Turn construction** (`dataset/sssd.py`): per session, supervisions are sorted by start; consecutive same-channel utterances merge into one turn when the gap is below `merge_gap` (default 1.0 s); texts join with single spaces.
 2. **Text normalization** (`dataset/text.py`): turn texts are normalized ONCE at build time against the extended vocab charset (whitespace collapse, lowercase fallback, OOV drop), so `<OTHER>` counts can never desync between branches.
-3. **Windowing** (`dataset/windows.py`): sessions are cut into windows with target duration uniform in `[window_min, window_max]` (default 10-30 s), each window extending to the FIRST eligible utterance boundary at/after its target.
+3. **Windowing** (`dataset/windows.py`): sessions are cut into windows at eligible utterance boundaries, with target duration uniform in `[window_min, window_max]` (default 10-60 s).
    A time instant `t` is an eligible boundary iff every merged turn on every channel ends at least `boundary_guard` before `t` or starts at least `boundary_guard` after it; with the default `boundary_guard: 0.0` this means no turn strictly contains `t`, so zero-gap speaker exchanges are valid cut points and no utterance is ever truncated.
-   This is exactly the segmentation CoVoMix uses on Fisher ([arXiv:2404.06690](https://arxiv.org/abs/2404.06690), Algorithm 1); `boundary_guard` exists because SSSD timestamps are Parakeet pseudo-labels rather than human alignments, so a positive guard rejects boundaries where a neighbor's alignment jitter could leak un-covered speech into the window.
-   Stretches with no eligible boundary within `window_max` (unbroken overlap chains) are dropped and reported; the session tail is emitted iff it is at least `tail_min` (default 5 s); windows without speech are dropped.
+   The eligibility rule follows CoVoMix's Fisher segmentation ([arXiv:2404.06690](https://arxiv.org/abs/2404.06690)); `boundary_guard` exists because SSSD timestamps are Parakeet pseudo-labels rather than human alignments, so a positive guard rejects boundaries where a neighbor's alignment jitter could leak un-covered speech into the window.
+   The placement search is ours (CoVoMix streams to the first clean boundary and has no target duration): each window cuts at the eligible boundary in `[window_min, window_max]` from the current position closest to its drawn target.
+   When one blocked span covers that whole range, the search restarts at the span's start edge, emitting the prefix as a mini-window if it is at least `tail_min` (mid-session windows in `[tail_min, window_min)` are legal) and counting it as a dropped sliver otherwise; a span longer than `window_max` is then dropped exactly, never the audio adjacent to it.
+   The default `window_max: 60` exceeds the F5 pretraining clip regime (< 30 s Emilia clips) deliberately, to capture longer interactions; revisit if fine-tuning quality degrades on long windows.
+   Force-splitting oversized spans at internal supervision pauses (ZipVoice-Dialog style) is future work.
+   The session tail is emitted iff it is at least `tail_min` (default 5 s); windows without speech are dropped.
 4. **Splits**: session-level train/valid/test split, seeded, ratios in config; speaker overlap between splits is reported (not enforced).
 5. **Audio loading** (`dataset/dataset.py`, on the fly): only the window's segment is seek-read from the FLAC, channels stay separate, and audio is resampled 48 -> 24 kHz with `torchaudio.functional.resample`; no precomputed audio copies.
 
@@ -82,6 +87,9 @@ One JSON object per line:
   "num_channels": 2,
   "sample_rate": 48000,
   "t0": 123.456, "t1": 145.052, "duration": 21.596,
+  "num_active_speakers": 2,
+  "channel_speech_sec": [12.4, 6.1],
+  "exchange_count": 3,
   "turns": [
     {"channel": 0, "speaker": "<hash>", "text": "can you hear me", "start": 124.01, "end": 126.33}
   ]
@@ -89,6 +97,7 @@ One JSON object per line:
 ```
 
 Turn `start`/`end` are absolute session seconds and exist for windowing and later evaluation only; they never become tokens.
+`num_active_speakers` (channels with at least one turn), `channel_speech_sec` (per-channel sum of turn durations), and `exchange_count` (speaker alternations in start order; 0 for single-speaker windows) are derived from the turns and enable training-time filtering (e.g. a `min_active_speakers` threshold) or interaction-density weighting without a rebuild.
 
 ## Dataset and packed collator
 
@@ -118,9 +127,9 @@ Batches do not need a homogeneous channel count; a duration-bucketed sampler sho
 | `builder.base_vocab_path` | `null` (required) | pretrained char vocab to extend |
 | `builder.seed` | `0` | drives windowing and splits |
 | `builder.merge_gap` | `1.0` | max same-channel gap (s) merged into one turn |
-| `builder.window_min/max` | `10.0` / `30.0` | window target duration range (s) |
+| `builder.window_min/max` | `10.0` / `60.0` | window target duration range (s); 60 exceeds the F5 pretraining clip regime on purpose |
 | `builder.boundary_guard` | `0.0` | margin (s) every turn must keep from a cut point; 0 = CoVoMix-faithful zero-gap boundaries |
-| `builder.tail_min` | `5.0` | shortest emitted session-tail window (s) |
+| `builder.tail_min` | `5.0` | shortest emitted window below `window_min` (session tails and mini-windows) (s) |
 | `builder.split_ratios` | 0.96/0.02/0.02 | session-level split |
 | `dataset.sample_rate` | `24000` | training rate (48 kHz source is downsampled 2:1) |
 | `dataset.text_pad_value` | `-1` | F5 text padding convention |

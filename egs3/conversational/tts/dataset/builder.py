@@ -20,6 +20,7 @@ import json
 import os
 import random
 import statistics
+from collections import Counter, defaultdict
 from importlib import resources
 from pathlib import Path
 from typing import Sequence
@@ -216,6 +217,12 @@ class SSSDBuilder(DatasetBuilder):
         stats = {split: WindowingStats() for split in writers}
         durations: dict[str, list[float]] = {split: [] for split in writers}
         turns_per_window: dict[str, list[int]] = {split: [] for split in writers}
+        exchange_counts: dict[str, list[int]] = {split: [] for split in writers}
+        # windows and seconds keyed by num_active_speakers, per split
+        spk_windows: dict[str, Counter] = {split: Counter() for split in writers}
+        spk_seconds: dict[str, defaultdict] = {
+            split: defaultdict(float) for split in writers
+        }
         speakers: dict[str, set[str]] = {split: set() for split in writers}
         overlap_time = speech_time = 0.0
         dropped_empty_turns = 0
@@ -251,6 +258,9 @@ class SSSDBuilder(DatasetBuilder):
                     writers[split].write(json.dumps(to_json(record)) + "\n")
                     durations[split].append(record.duration)
                     turns_per_window[split].append(len(record.turns))
+                    exchange_counts[split].append(record.exchange_count)
+                    spk_windows[split][record.num_active_speakers] += 1
+                    spk_seconds[split][record.num_active_speakers] += record.duration
         finally:
             for f in writers.values():
                 f.close()
@@ -288,12 +298,26 @@ class SSSDBuilder(DatasetBuilder):
                 f"  {split}: {st.n_windows} windows over "
                 f"{len(splits[split])} sessions; "
                 f"dropped {st.dropped_span_sec:.1f}s "
-                f"({st.dropped_span_sec / 3600:.1f}h) unbreakable spans, "
+                f"({st.dropped_span_sec / 3600:.1f}h) oversized blocked spans, "
+                f"{st.dropped_sliver_sec:.1f}s slivers, "
                 f"{st.dropped_tail_sec:.1f}s tails, "
                 f"{st.dropped_empty_windows} empty windows"
             )
             print(f"    duration[s]: {_distribution(durations[split])}")
             print(f"    turns/window: {_distribution(turns_per_window[split])}")
+            print(f"    exchanges/window: {_distribution(exchange_counts[split])}")
+            by_spk = ", ".join(
+                f"{k}spk {spk_windows[split][k]} "
+                f"({spk_seconds[split][k] / 3600:.1f}h)"
+                for k in sorted(spk_windows[split])
+            )
+            print(f"    windows by active speakers: {by_spk or 'n=0'}")
+            n_mini = sum(1 for d in durations[split] if d < _CFG["window_min"])
+            mini_sec = sum(d for d in durations[split] if d < _CFG["window_min"])
+            print(
+                f"    mini-windows ({_CFG['tail_min']:g} <= dur < "
+                f"{_CFG['window_min']:g}s): {n_mini} ({mini_sec / 3600:.1f}h)"
+            )
             print(f"    cut-point gap[s]: {_gap_summary(st.cut_gaps)}")
         for a, b in (("train", "valid"), ("train", "test"), ("valid", "test")):
             shared = len(speakers[a] & speakers[b])
