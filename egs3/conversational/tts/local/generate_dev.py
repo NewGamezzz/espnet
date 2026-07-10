@@ -67,8 +67,17 @@ def parse_args() -> argparse.Namespace:
 
 def load_model(config, ckpt_path: Path | None, use_ema: bool, device: torch.device):
     from hydra.utils import instantiate
+    from omegaconf import OmegaConf
 
-    model = instantiate(config.model)
+    # Resolve while the node is still attached to the root config (the model
+    # block interpolates ${data_dir}/${pretrained_dir}/${seed}).
+    model_config = OmegaConf.to_container(config.model, resolve=True)
+    if ckpt_path is not None:
+        # The training ckpt supersedes every pretrained weight: skip the
+        # native checkpoint load, the embedding surgery, and the provenance
+        # check (and with them the hard dependency on downloads/ existing).
+        model_config["pretrained_ckpt"] = None
+    model = instantiate(model_config)
     if ckpt_path is not None:
         ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         if use_ema and "ema_model_state_dict" in ckpt:

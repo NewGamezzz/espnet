@@ -179,6 +179,25 @@ def test_param_groups(ext_vocab_file):
     assert groups[1]["lr"] == 1e-5
 
 
+def test_builder_wires_mel_spec_kwargs(ext_vocab_file):
+    """The CFM's internal MelSpec (raw-wave prompt path of CFM.sample) must
+    match the training-time feats_extract, or the two mel front-ends
+    silently diverge when the feats_extract block changes."""
+    from espnet2.tts.f5.modules import get_vocos_mel_spectrogram
+
+    model = build_tiny(ext_vocab_file)
+    mel_spec = model.cfm.mel_spec
+    extractor = model.feats_extract
+    assert mel_spec.n_fft == extractor.n_fft
+    assert mel_spec.hop_length == extractor.hop_length
+    assert mel_spec.win_length == extractor.win_length
+    assert mel_spec.n_mel_channels == extractor.n_mels
+    assert mel_spec.target_sample_rate == extractor.fs
+    # MelSpec keeps the type only as the bound extractor function.
+    assert extractor.mel_spec_type == "vocos"
+    assert mel_spec.extractor is get_vocos_mel_spectrogram
+
+
 def test_builder_zero_init_gates(ext_vocab_file):
     model = build_tiny(ext_vocab_file)
     gates = [m.exchange.g for m in model.modules() if isinstance(m, ExchangedBlock)]

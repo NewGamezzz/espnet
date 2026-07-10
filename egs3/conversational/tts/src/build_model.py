@@ -256,11 +256,25 @@ def build_multibranch_f5(
     )
     odeint_method = cfm_config.pop("odeint_method", "euler")
     ctx = BranchContext()
+    # The CFM's internal MelSpec (used by CFM.sample on raw-wave prompts, and
+    # by forward's raw-wave branch) must stay bit-compatible with the
+    # training-time feats_extract; without this the two front-ends silently
+    # diverge as soon as the feats_extract block changes (degraded audio,
+    # never an error). Note the key renames vs VocoderMelSpec.
+    mel_spec_kwargs = dict(
+        n_fft=extractor.n_fft,
+        hop_length=extractor.hop_length,
+        win_length=extractor.win_length,
+        n_mel_channels=extractor.n_mels,
+        target_sample_rate=extractor.fs,
+        mel_spec_type=extractor.mel_spec_type,
+    )
     model_cfm = MultiBranchCFM(
         transformer,
         ctx=ctx,
         num_channels=mel_dim,
         odeint_kwargs=dict(method=odeint_method),
+        mel_spec_kwargs=mel_spec_kwargs,
         **cfm_config,
     )
 

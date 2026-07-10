@@ -177,7 +177,7 @@ class MultiBranchCFM(CFM):
         }
         return loss, stats, extras
 
-    def sample(self, cond, text, duration, *, counts, **kwargs):
+    def sample(self, cond, text, duration, *, counts, seed=None, **kwargs):
         """``CFM.sample`` with the exchanges active.
 
         ``cond``/``text`` rows are the packed channels described by
@@ -185,6 +185,16 @@ class MultiBranchCFM(CFM):
         trajectory at a common t, matching the shared-time training;
         CFG's cond/uncond concatenation is handled by the context's
         segment-aware conversation ids.
+
+        ``seed`` is intercepted: ``CFM.sample`` re-seeds the RNG before
+        EVERY row's noise draw (upstream batch-size invariance), which here
+        would give all channels of a window bit-identical y0 - off the
+        training distribution, where noise is independent per channel.
+        Seeding once and letting rows draw sequentially keeps runs
+        reproducible AND channels independent (reproducibility becomes
+        conditional on the window's N/duration, fine for sanity generation).
         """
+        if seed is not None:
+            torch.manual_seed(seed)
         with self.ctx.branches(counts, device=cond.device):
-            return super().sample(cond, text, duration, **kwargs)
+            return super().sample(cond, text, duration, seed=None, **kwargs)

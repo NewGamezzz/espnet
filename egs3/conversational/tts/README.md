@@ -196,6 +196,9 @@ python run.py --stages create_dataset          # SSSD manifests + extended vocab
 python run.py --stages train                   # logs total + per-channel losses
 ```
 
+`loss_ch{k}` is logged without DDP sync (its key set varies with the batch's largest channel count, and ragged key sets across ranks would deadlock the synced path).
+Under the random channel permutation the per-channel curves are symmetric in expectation, so they are a row-symmetry bug canary, not a quality metric: ch0/ch1 separating during training signals a broken branch symmetry (injection, collator ordering, masking).
+
 ### Sanity generation
 
 ```bash
@@ -207,7 +210,8 @@ python local/generate_dev.py \
 
 One dev window; the first `--prompt_sec` seconds of every channel are the acoustic prompt, each branch is conditioned on its full masked script, and the joint ODE runs with the exchanges active and CFG as in the single-channel inference path.
 Outputs per-channel wavs, a mixdown, and a dump of the masked scripts; separated channels with sensible turn-taking = POC signal (quality is not the criterion).
-Omitting `--ckpt` generates with the freshly assembled pretrained model (zero-init gates = N independent F5 passes), which is the audible baseline.
+Omitting `--ckpt` generates with the freshly assembled pretrained model (zero-init gates = N independent F5 passes), which is the audible baseline; with `--ckpt` the pretrained load is skipped entirely, so the `downloads/` dir is not needed on the generating machine.
+`--seed` reproduces a run bit-exactly while keeping the per-channel noise independent (`CFM.sample`'s upstream per-row reseed would start every channel from identical noise, off the training distribution).
 
 ## Debug tools
 

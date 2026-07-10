@@ -55,6 +55,32 @@ class ConversationalLightningModule(ESPnetLightningModule):
     """ESPnetLightningModule with exchange/backbone param groups and the
     conversation batch sampler (see module docstring)."""
 
+    def _log_stats(self, mode, stats, weight, extra_stats=None):
+        """Route per-channel loss means around the ``sync_dist`` path.
+
+        ``loss_ch{k}`` keys vary with the batch's largest channel count, and
+        the parent logs validation stats with ``sync_dist=True`` (one
+        all-reduce per metric): with mixed-N batches, two DDP ranks can log
+        different key sets in the same step - mismatched collectives, i.e. an
+        NCCL deadlock.  The per-channel means stay logged (under the random
+        channel permutation they are symmetric in expectation, so a
+        ch0/ch1 split during training is a row-symmetry bug canary), just
+        never synced.
+        """
+        stats = dict(stats)
+        per_channel = {k: stats.pop(k) for k in list(stats) if k.startswith("loss_ch")}
+        super()._log_stats(mode, stats, weight, extra_stats)
+        if per_channel and getattr(self, "_trainer", None) is not None:
+            self.log_dict(
+                {
+                    f"{mode}/{k}": v.item() if hasattr(v, "item") else v
+                    for k, v in per_channel.items()
+                },
+                prog_bar=False,
+                logger=True,
+                sync_dist=False,
+            )
+
     def configure_optimizers(self):
         """One optimizer over two param groups + the house-style scheduler.
 

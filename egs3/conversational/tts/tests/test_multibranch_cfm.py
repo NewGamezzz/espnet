@@ -112,3 +112,35 @@ def test_unequal_lens_within_conversation_raises():
     lens[1] = T - 2
     with pytest.raises(ValueError, match="share one length"):
         multibranch(mel, text, counts=[2], lens=lens)
+
+
+def test_sample_seed_reproducible_and_channels_independent():
+    """A fixed seed reproduces the run bit-exactly, but must NOT give the
+    channels identical noise (CFM.sample re-seeds per row; MultiBranchCFM
+    seeds once so rows draw sequentially)."""
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+
+    gen = torch.Generator().manual_seed(11)
+    # Identical cond and text on both channels: any output difference can
+    # only come from per-channel noise.
+    cond = torch.randn(1, T, MEL, generator=gen).repeat(2, 1, 1)
+    text = torch.randint(0, 12, (1, 8), generator=gen).repeat(2, 1)
+    lens = torch.full((2,), 4, dtype=torch.long)  # 4-frame prompt
+
+    def run():
+        out, _ = multibranch.sample(
+            cond,
+            text,
+            duration=T,
+            counts=[2],
+            lens=lens,
+            steps=2,
+            cfg_strength=0.0,
+            seed=123,
+        )
+        return out
+
+    out1, out2 = run(), run()
+    assert torch.equal(out1, out2)  # reproducible
+    generated = out1[:, 4:, :]  # past the prompt region
+    assert not torch.equal(generated[0], generated[1])  # independent noise
