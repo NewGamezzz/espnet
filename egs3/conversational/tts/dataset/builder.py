@@ -108,6 +108,21 @@ def _distribution(values: Sequence[float]) -> str:
     )
 
 
+def _gap_summary(gaps: Sequence[float], old_rule_threshold: float = 0.2) -> str:
+    """Distribution of the all-channel gap at chosen cut points, plus how many
+    of them the former all-channel-silence rule (>= 0.2 s) could not use."""
+    if not gaps:
+        return "n=0"
+    vals = sorted(gaps)
+    n = len(vals)
+    below = sum(1 for g in vals if g < old_rule_threshold)
+    return (
+        f"n={n} min={vals[0]:.3f} p10={vals[int(0.1 * (n - 1))]:.3f} "
+        f"median={vals[(n - 1) // 2]:.3f} mean={statistics.fmean(vals):.3f}; "
+        f"gaps < {old_rule_threshold}s: {below} ({100 * below / n:.1f}%)"
+    )
+
+
 class SSSDBuilder(DatasetBuilder):
     """Prepare SSSD window manifests and the extended vocab for ESPnet3 TTS."""
 
@@ -227,7 +242,7 @@ class SSSDBuilder(DatasetBuilder):
                     normalized,
                     window_min=_CFG["window_min"],
                     window_max=_CFG["window_max"],
-                    silence_min=_CFG["silence_min"],
+                    boundary_guard=_CFG["boundary_guard"],
                     tail_min=_CFG["tail_min"],
                     rng=random.Random(f"{seed}:window:{sid}"),
                 )
@@ -272,12 +287,14 @@ class SSSDBuilder(DatasetBuilder):
             print(
                 f"  {split}: {st.n_windows} windows over "
                 f"{len(splits[split])} sessions; "
-                f"dropped {st.dropped_span_sec:.1f}s unbreakable spans, "
+                f"dropped {st.dropped_span_sec:.1f}s "
+                f"({st.dropped_span_sec / 3600:.1f}h) unbreakable spans, "
                 f"{st.dropped_tail_sec:.1f}s tails, "
                 f"{st.dropped_empty_windows} empty windows"
             )
             print(f"    duration[s]: {_distribution(durations[split])}")
             print(f"    turns/window: {_distribution(turns_per_window[split])}")
+            print(f"    cut-point gap[s]: {_gap_summary(st.cut_gaps)}")
         for a, b in (("train", "valid"), ("train", "test"), ("valid", "test")):
             shared = len(speakers[a] & speakers[b])
             print(

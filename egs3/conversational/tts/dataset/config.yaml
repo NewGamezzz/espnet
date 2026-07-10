@@ -20,9 +20,15 @@ builder:
   # Training window target duration is drawn uniformly from [window_min, window_max].
   window_min: 10.0
   window_max: 30.0
-  # A cut point requires at least silence_min seconds with no supervision
-  # active on any channel.
-  silence_min: 0.2
+  # CoVoMix-style utterance-boundary cuts (arXiv:2404.06690, Algorithm 1);
+  # replaces the former all-channel `silence_min` rule.  A boundary at t is
+  # eligible iff every turn ends >= boundary_guard before t or starts
+  # >= boundary_guard after it.  0.0 is faithful to CoVoMix (zero margin,
+  # human LDC timestamps); SSSD timestamps are Parakeet pseudo-labels, so
+  # this knob exists to reject boundaries where the neighboring utterance's
+  # alignment jitter could leak un-covered speech into the window.  May be
+  # raised after inspecting debug dumps.
+  boundary_guard: 0.0
   # Shortest tail-remainder window still emitted at the end of a session.
   tail_min: 5.0
   split_ratios:

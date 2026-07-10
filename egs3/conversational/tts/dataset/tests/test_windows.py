@@ -1,4 +1,4 @@
-"""Tests for turn merging (AC3) and silence-aligned windowing (AC4, AC5)."""
+"""Tests for turn merging (AC3) and utterance-boundary windowing (AC4, AC5)."""
 
 import gzip
 import json
@@ -17,9 +17,12 @@ from egs3.conversational.tts.dataset.sssd import (
     session_speakers,
 )
 from egs3.conversational.tts.dataset.windows import (
+    _gap_at,
+    blocked_intervals,
     build_windows,
-    candidate_cut_points,
+    first_eligible_boundary,
     from_json,
+    is_eligible_boundary,
     select_window_spans,
     to_json,
 )
@@ -188,7 +191,7 @@ class TestManifestParsing:
             load_recordings(rec_path)
 
 
-WINDOW_KW = dict(window_min=10.0, window_max=30.0, silence_min=0.2, tail_min=5.0)
+WINDOW_KW = dict(window_min=10.0, window_max=30.0, boundary_guard=0.0, tail_min=5.0)
 
 
 def make_recording(duration, num_channels=2, rec_id="sess1"):
@@ -220,8 +223,71 @@ def dialogue_turns(duration, turn_len=3.0, gap=1.0, num_channels=2):
     return turns
 
 
+def turn(channel, start, end, text="hi there"):
+    return Turn(
+        channel=channel, speaker=f"spk{channel}", text=text, start=start, end=end
+    )
+
+
+class TestBoundaryEligibility:
+    """The CoVoMix cut rule: eligible iff no turn (with guard) covers t."""
+
+    def test_overlap_across_end_blocks_the_whole_region(self):
+        # ch1 overlaps ch0's end: no boundary may fall anywhere in (5, 12),
+        # in particular not at ch0's own end (t=10).
+        blocked = blocked_intervals([turn(0, 5.0, 10.0), turn(1, 8.0, 12.0)], 0.0)
+        assert blocked == [(5.0, 12.0)]
+        for t in (6.0, 8.0, 10.0, 11.9):
+            assert not is_eligible_boundary(blocked, t)
+        assert is_eligible_boundary(blocked, 5.0)
+        assert is_eligible_boundary(blocked, 12.0)
+
+    def test_back_to_back_turns_yield_boundary_iff_guard_zero(self):
+        turns = [turn(0, 0.0, 5.0), turn(1, 5.0, 9.0)]
+        assert is_eligible_boundary(blocked_intervals(turns, 0.0), 5.0)
+        assert first_eligible_boundary(blocked_intervals(turns, 0.0), 3.0) == 5.0
+        assert not is_eligible_boundary(blocked_intervals(turns, 0.1), 5.0)
+
+    def test_guard_rejects_activity_within_g_and_accepts_2g_gap(self):
+        g = 0.5
+        blocked = blocked_intervals([turn(0, 10.0, 20.0)], g)
+        assert not is_eligible_boundary(blocked, 9.7)  # turn active inside (t-g, t+g)
+        assert not is_eligible_boundary(blocked, 20.4)
+        assert is_eligible_boundary(blocked, 9.5)
+        assert is_eligible_boundary(blocked, 20.5)
+        # A gap of exactly 2g centered on t is accepted...
+        two_turns = [turn(0, 0.0, 10.0), turn(1, 11.0, 20.0)]
+        assert is_eligible_boundary(blocked_intervals(two_turns, g), 10.5)
+        # ... and rejected as soon as the guard exceeds half the gap.
+        assert not is_eligible_boundary(blocked_intervals(two_turns, 0.6), 10.5)
+
+    def test_merged_turn_is_never_split(self):
+        # Raw supervisions have a 0.5 s gap below merge_gap; the merged turn
+        # spans it, so no boundary may fall inside that internal gap.
+        sups = [sup(0, 0.0, 2.0, "hello"), sup(0, 2.5, 5.0, "world")]
+        turns = merge_turns(sups, MERGE_GAP)
+        assert len(turns) == 1
+        blocked = blocked_intervals(turns, 0.0)
+        for t in (2.0, 2.2, 2.5):
+            assert not is_eligible_boundary(blocked, t)
+
+    def test_first_eligible_boundary_chains_through_overlaps(self):
+        blocked = blocked_intervals(
+            [turn(0, 1.0, 4.0), turn(1, 3.5, 8.0), turn(0, 8.0, 9.0)], 0.0
+        )
+        assert first_eligible_boundary(blocked, 2.0) == 8.0
+        assert first_eligible_boundary(blocked, 0.5) == 0.5
+        assert first_eligible_boundary(blocked, 8.0) == 8.0
+
+    def test_gap_at(self):
+        turns = [turn(0, 1.0, 3.0), turn(1, 3.0, 5.0), turn(0, 6.0, 7.0)]
+        assert _gap_at(turns, 3.0) == pytest.approx(0.0)  # zero-gap exchange
+        assert _gap_at(turns, 5.5) == pytest.approx(1.0)  # inside the 5-6 silence
+        assert _gap_at(turns, 0.5) is None  # session edge: nothing before
+
+
 class TestWindowIntegrity:
-    """AC4: no boundary intersects a turn; durations in range; empty dropped."""
+    """AC4: no turn strictly contains a boundary; durations in range; empty dropped."""
 
     def test_boundaries_and_durations(self):
         rec = make_recording(120.0)
@@ -231,9 +297,10 @@ class TestWindowIntegrity:
         assert records, "expected at least one window from a 2-minute session"
         for w in records:
             for t in turns:
-                inside = t.start >= w.t0 and t.end <= w.t1
-                outside = t.end <= w.t0 or t.start >= w.t1
-                assert inside or outside, f"turn {t} straddles window ({w.t0}, {w.t1})"
+                for edge in (w.t0, w.t1):
+                    assert not (
+                        t.start < edge < t.end
+                    ), f"turn {t} strictly contains boundary {edge}"
             assert w.turns == tuple(
                 t for t in turns if t.start >= w.t0 and t.end <= w.t1
             )
@@ -244,6 +311,7 @@ class TestWindowIntegrity:
         # The tail may be shorter than window_min but never below tail_min.
         assert WINDOW_KW["tail_min"] <= durations[-1] <= WINDOW_KW["window_max"] + 1e-6
         assert stats.n_windows == len(records)
+        assert all(g >= 0 for g in stats.cut_gaps)
 
     def test_windows_tile_without_overlap(self):
         rec = make_recording(120.0)
@@ -254,18 +322,31 @@ class TestWindowIntegrity:
         for a, b in zip(records, records[1:]):
             assert a.t1 <= b.t0 + 1e-9
 
-    def test_unbreakable_overlap_region_dropped(self):
+    def test_near_zero_gaps_are_now_windowable(self):
+        # Continuous dialogue with 0.1 s gaps: unbreakable under the old
+        # all-channel-silence rule, fully windowable at utterance boundaries.
         rec = make_recording(50.0)
-        # Continuous speech with sub-silence_min gaps: no interior cut exists.
         turns = dialogue_turns(50.0, turn_len=3.0, gap=0.1)
         records, stats = build_windows(
             "sess1", rec, turns, rng=random.Random("s"), **WINDOW_KW
         )
+        assert records
+        assert stats.dropped_span_sec == pytest.approx(0.0)
+
+    def test_chained_overlap_region_dropped(self):
+        # Turns overlap in an unbroken chain: no eligible boundary anywhere
+        # inside, so the whole span is dropped rather than emitted oversize.
+        rec = make_recording(50.0)
+        turns = [
+            turn(i % 2, start, start + 11.0)
+            for i, start in enumerate([0.5, 10.0, 19.5, 29.0, 38.5])
+        ]  # last ends at 49.5
+        records, stats = build_windows(
+            "sess1", rec, turns, rng=random.Random("s"), **WINDOW_KW
+        )
         assert records == []
-        # Boundary silences allow cuts near 0 and duration, so the loss splits
-        # between the unbreakable span and a sub-tail_min tail.
-        assert stats.dropped_span_sec > 40.0
-        assert stats.dropped_span_sec + stats.dropped_tail_sec == pytest.approx(50.0)
+        assert stats.dropped_span_sec == pytest.approx(49.5)
+        assert stats.dropped_tail_sec == pytest.approx(0.5)
 
     def test_session_shorter_than_window_min_is_tail(self):
         rec = make_recording(8.0)
@@ -278,7 +359,7 @@ class TestWindowIntegrity:
 
     def test_session_shorter_than_tail_min_dropped(self):
         rec = make_recording(3.0)
-        turns = [Turn(0, "spk0", "hi", 0.5, 1.0)]
+        turns = [turn(0, 0.5, 1.0)]
         records, stats = build_windows(
             "s1", rec, turns, rng=random.Random("s"), **WINDOW_KW
         )
@@ -286,12 +367,12 @@ class TestWindowIntegrity:
         assert stats.dropped_tail_sec == pytest.approx(3.0)
 
     def test_zero_speech_window_dropped(self):
-        # 30 s of leading silence: the span (0.0, mid-silence cut) has no turns.
+        # 30 s of leading silence: the first window is speech-free and dropped.
         rec = make_recording(60.0)
         turns = [
-            Turn(0, "spk0", "hello there", 30.0, 33.0),
-            Turn(1, "spk1", "hi", 34.0, 36.0),
-            Turn(0, "spk0", "how are you", 37.0, 40.0),
+            turn(0, 30.0, 33.0),
+            turn(1, 34.0, 36.0),
+            turn(0, 37.0, 40.0),
         ]
         records, stats = build_windows(
             "s1", rec, turns, rng=random.Random("s"), **WINDOW_KW
@@ -299,12 +380,6 @@ class TestWindowIntegrity:
         assert stats.dropped_empty_windows >= 1
         for w in records:
             assert len(w.turns) > 0
-
-    def test_cut_points_respect_silence_min(self):
-        occupied = [(1.0, 2.0), (2.1, 3.0), (3.5, 4.0)]
-        cuts = candidate_cut_points(occupied, 10.0, silence_min=0.2)
-        # Gap 2.0-2.1 is below silence_min; gaps 3.0-3.5 and 4.0-10.0 qualify.
-        assert cuts == [0.0, 0.5, 3.25, 7.0, 10.0]
 
 
 class TestWindowDeterminism:
@@ -318,6 +393,7 @@ class TestWindowDeterminism:
             return build_windows(
                 "sess1", rec, turns, rng=random.Random("0:window:sess1"), **WINDOW_KW
             )
+
         records_a, stats_a = run()
         records_b, stats_b = run()
         assert records_a == records_b
@@ -346,10 +422,12 @@ class TestWindowDeterminism:
 
 class TestSelectWindowSpans:
     def test_never_emits_oversize(self):
-        cuts = [0.0, 12.0, 50.0, 62.0, 100.0]
-        kw = {k: v for k, v in WINDOW_KW.items() if k != "silence_min"}
-        spans, stats = select_window_spans(cuts, 100.0, rng=random.Random("s"), **kw)
+        # One long blocked region: the span up to its end is dropped, then
+        # normal windows resume.
+        blocked = [(5.0, 48.0)]
+        kw = {k: v for k, v in WINDOW_KW.items() if k != "boundary_guard"}
+        spans, stats = select_window_spans(blocked, 100.0, rng=random.Random("s"), **kw)
         for t0, t1 in spans:
             assert t1 - t0 <= WINDOW_KW["window_max"] + 1e-9
-        # 12 -> 50 is unbreakable (38 s, no cut in [22, 42]): dropped.
-        assert stats.dropped_span_sec > 0
+        assert stats.dropped_span_sec == pytest.approx(48.0)
+        assert spans and spans[0][0] == 48.0

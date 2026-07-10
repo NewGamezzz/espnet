@@ -50,7 +50,7 @@ python -m egs3.conversational.tts.dataset.builder \
 ```
 
 `base_vocab_path` is required (one token per line, `char_tokens.txt` format); the builder fails loudly without it.
-The build prints a summary: windows per split, window duration distribution, turns per window, overlap ratio, speaker overlap across splits, and dropped-audio statistics.
+The build prints a summary: windows per split, window duration distribution, turns per window, overlap ratio, speaker overlap across splits, dropped-audio statistics (seconds and hours of unbreakable spans), and the distribution of the all-channel gap at chosen cut points including how many fall below 0.2 s (boundaries the former all-channel-silence rule could not use).
 `SSSDBuilder` subclasses the espnet3 `DatasetBuilder`, so it also plugs into the stage machinery once a `run.py` exists.
 
 ### Dataset-root remapping rule
@@ -63,7 +63,10 @@ The corpus directory is treated as strictly read-only; only `lhotse_manifests_48
 
 1. **Turn construction** (`dataset/sssd.py`): per session, supervisions are sorted by start; consecutive same-channel utterances merge into one turn when the gap is below `merge_gap` (default 1.0 s); texts join with single spaces.
 2. **Text normalization** (`dataset/text.py`): turn texts are normalized ONCE at build time against the extended vocab charset (whitespace collapse, lowercase fallback, OOV drop), so `<OTHER>` counts can never desync between branches.
-3. **Windowing** (`dataset/windows.py`): sessions are cut into windows with target duration uniform in `[window_min, window_max]` (default 10-30 s); cut points fall only where no turn is active on any channel for at least `silence_min` (default 0.2 s), so no utterance is ever truncated; stretches with no valid cut are dropped and reported; the session tail is emitted iff it is at least `tail_min` (default 5 s); windows without speech are dropped.
+3. **Windowing** (`dataset/windows.py`): sessions are cut into windows with target duration uniform in `[window_min, window_max]` (default 10-30 s), each window extending to the FIRST eligible utterance boundary at/after its target.
+   A time instant `t` is an eligible boundary iff every merged turn on every channel ends at least `boundary_guard` before `t` or starts at least `boundary_guard` after it; with the default `boundary_guard: 0.0` this means no turn strictly contains `t`, so zero-gap speaker exchanges are valid cut points and no utterance is ever truncated.
+   This is exactly the segmentation CoVoMix uses on Fisher ([arXiv:2404.06690](https://arxiv.org/abs/2404.06690), Algorithm 1); `boundary_guard` exists because SSSD timestamps are Parakeet pseudo-labels rather than human alignments, so a positive guard rejects boundaries where a neighbor's alignment jitter could leak un-covered speech into the window.
+   Stretches with no eligible boundary within `window_max` (unbroken overlap chains) are dropped and reported; the session tail is emitted iff it is at least `tail_min` (default 5 s); windows without speech are dropped.
 4. **Splits**: session-level train/valid/test split, seeded, ratios in config; speaker overlap between splits is reported (not enforced).
 5. **Audio loading** (`dataset/dataset.py`, on the fly): only the window's segment is seek-read from the FLAC, channels stay separate, and audio is resampled 48 -> 24 kHz with `torchaudio.functional.resample`; no precomputed audio copies.
 
@@ -116,7 +119,7 @@ Batches do not need a homogeneous channel count; a duration-bucketed sampler sho
 | `builder.seed` | `0` | drives windowing and splits |
 | `builder.merge_gap` | `1.0` | max same-channel gap (s) merged into one turn |
 | `builder.window_min/max` | `10.0` / `30.0` | window target duration range (s) |
-| `builder.silence_min` | `0.2` | min all-channel silence (s) around a cut point |
+| `builder.boundary_guard` | `0.0` | margin (s) every turn must keep from a cut point; 0 = CoVoMix-faithful zero-gap boundaries |
 | `builder.tail_min` | `5.0` | shortest emitted session-tail window (s) |
 | `builder.split_ratios` | 0.96/0.02/0.02 | session-level split |
 | `dataset.sample_rate` | `24000` | training rate (48 kHz source is downsampled 2:1) |

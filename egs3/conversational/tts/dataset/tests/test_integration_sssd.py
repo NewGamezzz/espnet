@@ -23,7 +23,7 @@ pytestmark = pytest.mark.skipif(
     not os.environ.get("SSSD_ROOT"), reason="SSSD_ROOT not set"
 )
 
-WINDOW_KW = dict(window_min=10.0, window_max=30.0, silence_min=0.2, tail_min=5.0)
+WINDOW_KW = dict(window_min=10.0, window_max=30.0, boundary_guard=0.0, tail_min=5.0)
 
 
 @pytest.fixture(scope="module")

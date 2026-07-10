@@ -1,19 +1,27 @@
-"""Silence-aligned window selection over a session's turn timeline.
+"""Utterance-boundary window selection over a session's turn timeline.
 
-Pure module: no I/O, no torch.  Cut points are placed only where no turn is
-active on any channel for at least ``silence_min`` seconds, so no utterance is
-ever truncated.  Occupied intervals come from *merged turn spans* (supersets
-of their supervisions), which also guarantees a cut never splits a merged turn
-through one of its internal sub-``merge_gap`` gaps.
+Pure module: no I/O, no torch.  Windows are cut at utterance boundaries,
+CoVoMix-style (Fisher segmentation, arXiv:2404.06690 Algorithm 1, inherited
+by CoVoMix2): a time instant ``t`` is an *eligible boundary* iff every merged
+turn on every channel ends at least ``boundary_guard`` before ``t`` or starts
+at least ``boundary_guard`` after it.  With ``boundary_guard = 0`` this
+reduces to "no turn strictly contains ``t``" - turns touching ``t`` exactly
+at their start or end are allowed, so zero-gap speaker exchanges are valid
+cut points.  Activity is defined over merged turn spans (supersets of their
+supervisions), so a cut can never split a merged turn through one of its
+internal sub-``merge_gap`` gaps.
+
+The session boundaries ``0.0`` and ``duration`` are always eligible: no
+speech can cross a file edge (supervisions are clamped to the recording).
 """
 
 from __future__ import annotations
 
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Sequence
 
-from .sssd import Recording, Turn, occupied_intervals
+from .sssd import Recording, Turn
 
 # Float-safety slack for containment checks on exact-boundary turns.
 _EPS = 1e-9
@@ -38,36 +46,60 @@ class WindowRecord:
 @dataclass
 class WindowingStats:
     n_windows: int = 0
-    dropped_span_sec: float = 0.0  # unwindowable long-overlap spans
+    dropped_span_sec: float = 0.0  # spans with no eligible boundary in reach
     dropped_tail_sec: float = 0.0
     dropped_empty_windows: int = 0
+    # All-channel gap (next turn start - previous turn end) at each chosen
+    # interior cut point; 0.0 for a zero-gap speaker exchange.
+    cut_gaps: list[float] = field(default_factory=list)
 
     def merge(self, other: "WindowingStats") -> None:
         self.n_windows += other.n_windows
         self.dropped_span_sec += other.dropped_span_sec
         self.dropped_tail_sec += other.dropped_tail_sec
         self.dropped_empty_windows += other.dropped_empty_windows
+        self.cut_gaps.extend(other.cut_gaps)
 
 
-def candidate_cut_points(
-    occupied: Sequence[tuple[float, float]], duration: float, silence_min: float
-) -> list[float]:
-    """Cut candidates: midpoints of all-channel silences >= silence_min, plus
-    the session boundaries 0.0 and ``duration`` (nothing is active across
-    them; callers clamp supervisions to the recording first)."""
-    cuts = {0.0, duration}
-    prev_end = 0.0
-    for start, end in occupied:
-        if start - prev_end >= silence_min:
-            cuts.add((prev_end + start) / 2.0)
-        prev_end = max(prev_end, end)
-    if duration - prev_end >= silence_min:
-        cuts.add((prev_end + duration) / 2.0)
-    return sorted(cuts)
+def blocked_intervals(
+    turns: Sequence[Turn], boundary_guard: float
+) -> list[tuple[float, float]]:
+    """OPEN intervals where no boundary may fall: (start - g, end + g) per turn.
+
+    Intervals are merged only where their interiors overlap; intervals that
+    merely touch (``a.end + g == b.start - g``) stay separate so the touching
+    instant remains eligible (that is exactly the zero-gap exchange case when
+    ``g == 0``).
+    """
+    if boundary_guard < 0:
+        raise ValueError(f"boundary_guard must be >= 0, got {boundary_guard}")
+    spans = sorted((t.start - boundary_guard, t.end + boundary_guard) for t in turns)
+    merged: list[tuple[float, float]] = []
+    for a, b in spans:
+        if merged and a < merged[-1][1]:  # strict interior overlap of open intervals
+            merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def is_eligible_boundary(blocked: Sequence[tuple[float, float]], t: float) -> bool:
+    """True iff ``t`` falls inside no blocked open interval."""
+    return not any(a < t < b for a, b in blocked)
+
+
+def first_eligible_boundary(blocked: Sequence[tuple[float, float]], t: float) -> float:
+    """Smallest eligible instant >= ``t`` (blocked intervals sorted by start)."""
+    for a, b in blocked:
+        if a >= t:
+            break
+        if t < b:
+            t = b
+    return t
 
 
 def select_window_spans(
-    cuts: Sequence[float],
+    blocked: Sequence[tuple[float, float]],
     duration: float,
     *,
     window_min: float,
@@ -75,14 +107,15 @@ def select_window_spans(
     tail_min: float,
     rng: random.Random,
 ) -> tuple[list[tuple[float, float]], WindowingStats]:
-    """Greedy left-to-right span selection over the sorted cut list.
+    """Greedy left-to-right span selection against the blocked-interval list.
 
     Each window draws a target duration uniform in [window_min, window_max]
-    and ends at the cut closest to it (ties -> earlier).  A stretch with no
-    qualifying cut (e.g. sustained overlap) is dropped whole rather than
-    emitted oversize.  The final remainder (<= window_max by construction) is
-    emitted iff >= tail_min; this tail is the only window allowed below
-    window_min.
+    and extends to the FIRST eligible boundary at/after the target (CoVoMix
+    Algorithm 1).  If that boundary lies beyond ``window_max`` the span up to
+    it is dropped whole rather than emitted oversize.  The final remainder
+    (<= window_max by construction) is emitted iff >= tail_min; this tail is
+    the only window allowed below window_min.  Both edges of every emitted
+    window are eligible boundaries (0 and ``duration`` count as eligible).
     """
     if not (0 < window_min <= window_max):
         raise ValueError(
@@ -101,17 +134,24 @@ def select_window_spans(
                 stats.dropped_tail_sec += remaining
             break
         target = rng.uniform(window_min, window_max)
-        cand = [c for c in cuts if cur + window_min <= c <= cur + window_max]
-        if cand:
-            cut = min(cand, key=lambda c: (abs(c - (cur + target)), c))
+        cut = min(first_eligible_boundary(blocked, cur + target), duration)
+        if cut - cur <= window_max + _EPS:
             spans.append((cur, cut))
             stats.n_windows += 1
-            cur = cut
         else:
-            nxt = min(c for c in cuts if c > cur + window_max)
-            stats.dropped_span_sec += nxt - cur
-            cur = nxt
+            stats.dropped_span_sec += cut - cur
+        cur = cut
     return spans, stats
+
+
+def _gap_at(turns: Sequence[Turn], t: float) -> float | None:
+    """All-channel gap around an eligible boundary: next turn start minus
+    previous turn end (0.0 for a zero-gap exchange); None at session edges."""
+    before = [x.end for x in turns if x.end <= t + _EPS]
+    after = [x.start for x in turns if x.start >= t - _EPS]
+    if not before or not after:
+        return None
+    return max(0.0, min(after) - max(before))
 
 
 def build_windows(
@@ -121,15 +161,14 @@ def build_windows(
     *,
     window_min: float,
     window_max: float,
-    silence_min: float,
+    boundary_guard: float,
     tail_min: float,
     rng: random.Random,
 ) -> tuple[list[WindowRecord], WindowingStats]:
-    """Window one session: cut selection, turn assignment, empty-window drop."""
-    occupied = occupied_intervals(turns)
-    cuts = candidate_cut_points(occupied, rec.duration, silence_min)
+    """Window one session: boundary selection, turn assignment, empty-window drop."""
+    blocked = blocked_intervals(turns, boundary_guard)
     spans, stats = select_window_spans(
-        cuts,
+        blocked,
         rec.duration,
         window_min=window_min,
         window_max=window_max,
@@ -137,14 +176,18 @@ def build_windows(
         rng=rng,
     )
     records: list[WindowRecord] = []
+    edges: set[float] = set()
     for t0, t1 in spans:
-        # Cuts never intersect occupied intervals, so any turn overlapping the
-        # span is fully contained in it.
+        # Boundaries never fall strictly inside a turn, so any turn
+        # overlapping the span is fully contained in it (a turn touching t1
+        # at its start belongs to the next window, touching t0 at its end to
+        # the previous one).
         inside = tuple(t for t in turns if t.start >= t0 - _EPS and t.end <= t1 + _EPS)
         if not inside:
             stats.n_windows -= 1
             stats.dropped_empty_windows += 1
             continue
+        edges.update(edge for edge in (t0, t1) if _EPS < edge < rec.duration - _EPS)
         records.append(
             WindowRecord(
                 window_id=f"{session_id}_w{len(records):05d}",
@@ -157,6 +200,10 @@ def build_windows(
                 turns=inside,
             )
         )
+    for edge in sorted(edges):
+        gap = _gap_at(turns, edge)
+        if gap is not None:
+            stats.cut_gaps.append(gap)
     return records, stats
 
 
