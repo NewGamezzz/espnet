@@ -431,3 +431,25 @@ class TestSelectWindowSpans:
             assert t1 - t0 <= WINDOW_KW["window_max"] + 1e-9
         assert stats.dropped_span_sec == pytest.approx(48.0)
         assert spans and spans[0][0] == 48.0
+
+    def test_float_noise_on_turn_end_cut(self):
+        # Cuts land exactly on turn endpoints, which carry float accumulation
+        # noise; stored turns must still lie within the stored (rounded)
+        # window bounds. Several seeds so at least one cut hits the noisy end.
+        rec = make_recording(30.0)
+        turns = [
+            turn(0, 0.5, 11.6400000000001),
+            turn(1, 12.0, 14.0),
+            turn(0, 15.0, 29.5),
+        ]
+        kw = dict(window_min=5.0, window_max=12.0, boundary_guard=0.0, tail_min=5.0)
+        hit = False
+        for seed in range(20):
+            records, _ = build_windows(
+                "s1", rec, turns, rng=random.Random(f"{seed}"), **kw
+            )
+            for w in records:
+                hit = hit or w.t1 == 11.64
+                for t in w.turns:
+                    assert w.t0 <= t.start and t.end <= w.t1
+        assert hit, "no seed produced a cut at the noisy turn end"

@@ -17,6 +17,7 @@ speech can cross a file edge (supervisions are clamped to the recording).
 
 from __future__ import annotations
 
+import dataclasses
 import random
 from dataclasses import dataclass, field
 from typing import Sequence
@@ -197,7 +198,15 @@ def build_windows(
                 sample_rate=rec.sample_rate,
                 t0=round(t0, 6),
                 t1=round(t1, 6),
-                turns=inside,
+                # Turn times are rounded exactly like t0/t1: cuts land exactly
+                # on turn endpoints, whose float accumulation noise (e.g.
+                # end=912.6400000000001 vs cut rounded to 912.64) would
+                # otherwise leave a stored turn nominally outside its own
+                # window.  This also matches what to_json serializes.
+                turns=tuple(
+                    dataclasses.replace(t, start=round(t.start, 6), end=round(t.end, 6))
+                    for t in inside
+                ),
             )
         )
     for edge in sorted(edges):
