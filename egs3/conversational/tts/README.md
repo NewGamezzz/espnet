@@ -1,8 +1,7 @@
 # Conversational F5-TTS recipe (SSSD)
 
-Data pipeline for multi-channel conversational TTS fine-tuning on the ScalableSpontaneousSpeechDataset (SSSD).
-It windows long dyadic sessions into training segments, preprocesses transcripts into per-branch masked token sequences, and provides a dataset plus a packed collator ready for training.
-The trainer, model wrapper, and training loop are a later task; this recipe currently covers data only.
+Multi-channel conversational TTS fine-tuning on the ScalableSpontaneousSpeechDataset (SSSD).
+The data pipeline windows long dyadic sessions into training segments, preprocesses transcripts into per-branch masked token sequences, and provides a dataset plus a packed collator; the trainer fine-tunes pretrained F5TTS_Base as a multi-branch CFM with TAC exchanges injected at every block (see the Training section).
 The `src/branch_exchange/` package (communication modules between transformer blocks) is documented in its own module docstrings.
 
 ## The masking scheme
@@ -150,6 +149,66 @@ Batches do not need a homogeneous channel count; a duration-bucketed sampler sho
 | `dataset.sample_rate` | `24000` | training rate (48 kHz source is downsampled 2:1) |
 | `dataset.text_pad_value` | `-1` | F5 text padding convention |
 
+## Training (multi-branch CFM POC)
+
+`run.py --stages train --training_config conf/training_poc.yaml` fine-tunes pretrained F5TTS_Base on SSSD windows as a multi-branch CFM: every channel of a window is one packed transformer row, and the injected `branch_exchange` modules are the only cross-channel communication.
+
+### Model assembly (`src/build_model.py`, order is load-bearing)
+
+1. Build the DiT/CFM with the F5TTS_Base architecture values and `text_num_embeds` = size of the EXTENDED vocab from step 2.
+2. Load the pretrained checkpoint with text-embedding surgery: every original embedding row is copied bit-exactly (step 2 appended the new tokens at the end), `<turn>` is warm-started from the space character's row and `<OTHER>` from the filler row 0 (F5's internal padding token), each plus small Gaussian noise; every other weight must load exactly (strict load).
+   Before any weight is read, `vocab_meta.json`'s `base_vocab_sha256`/`base_vocab_size` are asserted against the vocab file shipped with the checkpoint.
+3. `inject_exchange` with the configured schedule (POC: `{"1-22": "P+TAC"}`, `TACExchange`).
+   Gates are zero-init, so at this instant the model computes exactly N independent pretrained F5 passes.
+4. At `configure_optimizers` time the recipe LightningModule (`src/lit_module.py`) builds ONE AdamW over two param groups: exchange parameters at `optim.lr_exchange`, backbone at `optim.lr_backbone`.
+
+### Shared span and shared flow time
+
+The infilling span is sampled once per conversation and shared by all its channels, so the region the model must generate is time-aligned across speakers while every channel's unmasked remainder acts as that speaker's voice prompt.
+The flow time is likewise shared per conversation because at inference all channels ride one ODE trajectory at a common t, and training must match; only the noise stays independent per channel.
+
+### Batching (`src/sampler.py`)
+
+A recipe-local duration-bucketed batch sampler computes each window's cost from metadata alone (`round(24000 * (t1 - t0))` sample-rows per channel; never loads audio) and packs batches under `dataloader.<split>.batch_bins`, padded to the longest window in the batch.
+The stock espnet3 iter_factory path was rejected: its shape files would have to stay in sync with the `min_active_speakers` filter, and `DataLoaderBuilder._build_iter_factory` calls `build_iter(epoch, shuffle=False)`, freezing the batch order across epochs even when the config says `shuffle: true`.
+The recipe LightningModule instead builds a standard `DataLoader` around the sampler each epoch (espnet3 forces `reload_dataloaders_every_n_epochs=1`) with the current epoch as the shuffle seed, and the sampler reproduces the iter_factory path's DDP policy (drop tail batches to a multiple of world size, stride by rank).
+
+### Config knobs (`conf/training_poc.yaml`)
+
+| key | default | meaning |
+|---|---|---|
+| `model.arch.*` | F5TTS_Base values | copied verbatim; wrong `text_mask_padding`/`pe_attn_head` loads cleanly but produces noise |
+| `model.exchange.schedule` | `{"1-22": P+TAC}` | 1-indexed inclusive block ranges; `P` = no exchange at that depth |
+| `model.exchange.hidden` | `null` (= dim) | TAC hidden width |
+| `model.init_noise_scale` | `0.02` | Gaussian noise on the two warm-started embedding rows |
+| `optim.lr_exchange` / `optim.lr_backbone` | `1e-4` / `1e-5` | the two param groups of the single AdamW |
+| `dataset.*.data_src_args.min_active_speakers` | `2` | drop windows with fewer active speakers (knob, not a rebuild; relax if per-channel quality drifts) |
+| `dataloader.train.batch_bins` | `6000000` | packed row budget in sample-rows (N x T_24k, padded); a 60 s N=2 window costs 2.88M |
+| `dataloader.train.min_batch_size` | `1` | counts conversations, not rows |
+
+### Running the smoke training
+
+```bash
+cd egs3/conversational/tts
+huggingface-cli download SWivid/F5-TTS F5TTS_Base/model_1200000.safetensors --local-dir downloads
+huggingface-cli download SWivid/F5-TTS F5TTS_Base/vocab.txt --local-dir downloads
+python run.py --stages create_dataset          # SSSD manifests + extended vocab
+python run.py --stages train                   # logs total + per-channel losses
+```
+
+### Sanity generation
+
+```bash
+python local/generate_dev.py \
+    --training_config conf/training_poc.yaml \
+    --ckpt exp/train_poc_multibranch_f5/checkpoints/last.ckpt \
+    --index 0 --prompt_sec 3.0 --out_dir exp/generate_dev
+```
+
+One dev window; the first `--prompt_sec` seconds of every channel are the acoustic prompt, each branch is conditioned on its full masked script, and the joint ODE runs with the exchanges active and CFG as in the single-channel inference path.
+Outputs per-channel wavs, a mixdown, and a dump of the masked scripts; separated channels with sensible turn-taking = POC signal (quality is not the criterion).
+Omitting `--ckpt` generates with the freshly assembled pretrained model (zero-init gates = N independent F5 passes), which is the audible baseline.
+
 ## Debug tools
 
 ```bash
@@ -163,8 +222,11 @@ python local/crosstalk_report.py --num-sessions 20 --out exp/crosstalk_report.ts
 ## Tests
 
 ```bash
-pytest egs3/conversational/tts/dataset/tests   # CPU-only, no corpus needed
+pytest egs3/conversational/tts/dataset/tests             # data pipeline
+pytest egs3/conversational/tts/src/branch_exchange/tests # exchange modules
+pytest egs3/conversational/tts/tests                     # trainer: CFM, assembly, sampler, smoke
 SSSD_ROOT=/path/to/corpus pytest egs3/conversational/tts/dataset/tests/test_integration_sssd.py
 ```
 
-All unit tests run on fabricated fixtures (synthetic FLAC files and hand-built manifests); the integration test over the real corpus is skipped unless `SSSD_ROOT` is set.
+All unit tests run on fabricated fixtures (synthetic FLAC files, hand-built manifests, random-init tiny DiT; CPU-only, no corpus or checkpoint needed); the integration test over the real corpus is skipped unless `SSSD_ROOT` is set.
+Run the three suites as separate pytest invocations: each has its own `conftest.py` helpers imported by basename, which pytest cannot disambiguate in a single combined run.

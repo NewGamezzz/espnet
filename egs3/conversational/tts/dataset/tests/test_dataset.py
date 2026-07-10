@@ -306,3 +306,49 @@ class TestCollator:
         batch = next(iter(loader))
         assert batch["counts"] == [2, 3]
         assert batch["window_ids"] == ["sess2ch_w00000", "sess3ch_w00000"]
+
+
+class TestMinActiveSpeakersFilter:
+    """min_active_speakers drops windows with too few active speakers."""
+
+    def _manifest_with_monologue(self, corpus, tmp_path):
+        from egs3.conversational.tts.dataset.preprocessing.windows import to_json
+
+        monologue = make_window(
+            "sess2ch",
+            2,
+            0.0,
+            8.0,
+            [Turn(0, "spk_a", "a long monologue", 0.5, 7.0)],
+            widx=9,
+        )
+        manifest = tmp_path / "manifest_with_mono.jsonl"
+        lines = corpus["manifest"].read_text(encoding="utf-8").splitlines()
+        lines.append(json.dumps(to_json(monologue)))
+        manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return manifest
+
+    def test_filter_drops_single_speaker_windows(self, corpus, tmp_path):
+        manifest = self._manifest_with_monologue(corpus, tmp_path)
+        common = dict(
+            split="valid",
+            manifest_path=manifest,
+            dataset_root=corpus["root"],
+            permute_channels=False,
+        )
+        unfiltered = ConversationDataset(**common)
+        filtered = ConversationDataset(**common, min_active_speakers=2)
+        assert len(unfiltered) == 3
+        assert len(filtered) == 2
+        assert all(r.num_active_speakers >= 2 for r in filtered.records)
+
+    def test_filter_to_empty_raises(self, corpus, tmp_path):
+        manifest = self._manifest_with_monologue(corpus, tmp_path)
+        with pytest.raises(RuntimeError, match="active speakers"):
+            ConversationDataset(
+                split="valid",
+                manifest_path=manifest,
+                dataset_root=corpus["root"],
+                permute_channels=False,
+                min_active_speakers=4,
+            )

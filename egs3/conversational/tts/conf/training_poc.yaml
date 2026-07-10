@@ -1,0 +1,169 @@
+exp_tag: train_poc_multibranch_f5
+
+num_device: 1
+num_nodes: 1
+seed: 0
+
+recipe_dir: .
+data_dir: ${recipe_dir}/data
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+
+# Pretrained F5TTS_Base (SWivid/F5-TTS) checkpoint + the vocab shipped with
+# it (the base vocab step 2 extended). Download once:
+#   huggingface-cli download SWivid/F5-TTS F5TTS_Base/model_1200000.safetensors \
+#     --local-dir ${recipe_dir}/downloads
+#   huggingface-cli download SWivid/F5-TTS F5TTS_Base/vocab.txt \
+#     --local-dir ${recipe_dir}/downloads
+pretrained_dir: ${recipe_dir}/downloads/F5TTS_Base
+
+# Mel / audio front-end shared by feats_extract and the model (must stay
+# bit-compatible with the pretrained checkpoint and the vocos vocoder).
+sample_rate: 24000
+n_mel_channels: 100
+hop_length: 256
+win_length: 1024
+n_fft: 1024
+mel_spec_type: vocos
+
+# create_dataset stage -> SSSDBuilder (dataset/builder.py). dataset_root
+# resolution: explicit value > $SSSD_ROOT > dataset/config.yaml default.
+create_dataset:
+  recipe_dir: ${recipe_dir}
+  base_vocab_path: ${pretrained_dir}/vocab.txt
+
+dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  recipe_dir: ${recipe_dir}
+  train:
+    - data_src: conversational/tts
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        # Concentrate gradient mass on actual interactions (knob, not a
+        # rebuild: relax it if per-channel speech quality drifts).
+        min_active_speakers: 2
+  valid:
+    - data_src: conversational/tts
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        min_active_speakers: 2
+  # Runtime tokenization against the EXTENDED vocab (base + <turn>/<OTHER>).
+  preprocessor:
+    _target_: egs3.conversational.tts.dataset.preprocessor.ConversationalTextPreprocessor
+    train: true
+    token_list: ${data_dir}/tokens/vocab.txt
+
+# Model assembly (src/build_model.py): DiT with the extended vocab, native
+# F5TTS_Base weights with text-embedding surgery, TAC exchanges injected at
+# every block with zero-init gates.
+model:
+  _target_: egs3.conversational.tts.src.build_model.build_multibranch_f5
+  vocab_file: ${data_dir}/tokens/vocab.txt
+  vocab_meta: ${data_dir}/tokens/vocab_meta.json
+  pretrained_ckpt: ${pretrained_dir}/model_1200000.safetensors
+  pretrained_vocab: ${pretrained_dir}/vocab.txt
+  init_noise_scale: 0.02
+  init_seed: ${seed}
+  # F5TTS_Base architecture, copied verbatim from the libritts recipe's
+  # training_f5_tts.yaml (getting text_mask_padding or pe_attn_head wrong
+  # loads cleanly but produces noise).
+  arch:
+    dim: 1024
+    depth: 22
+    heads: 16
+    dim_head: 64
+    ff_mult: 2
+    text_dim: 512
+    text_mask_padding: false
+    pe_attn_head: 1
+    conv_layers: 4
+    dropout: 0.1
+  cfm:
+    sigma: 0.0
+    audio_drop_prob: 0.3
+    cond_drop_prob: 0.2
+    frac_lengths_mask: [0.7, 1.0]
+    odeint_method: euler
+  exchange:
+    type: tac
+    schedule:
+      "1-22": P+TAC
+    hidden: null            # TAC hidden dim; null = dim
+  feats_extract:
+    fs: ${sample_rate}
+    n_fft: ${n_fft}
+    hop_length: ${hop_length}
+    win_length: ${win_length}
+    n_mels: ${n_mel_channels}
+    mel_spec_type: ${mel_spec_type}
+
+# One AdamW over two param groups (src/lit_module.py): the injected
+# exchanges train faster than the pretrained trunk.
+optim:
+  _target_: torch.optim.AdamW
+  lr_exchange: 1.0e-4
+  lr_backbone: 1.0e-5
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+
+scheduler:
+  _target_: espnet2.schedulers.linear_warmup_decay.linear_warmup_decay
+  warmup_steps: 2000
+  total_steps: 200000
+scheduler_interval: step
+
+best_model_criterion:
+  - - valid/loss
+    - 1
+    - min
+
+# Standard PyTorch DataLoader around ConversationBatchSampler (built per
+# epoch by the recipe LightningModule; the espnet3 iter_factory path is not
+# used - it cannot reshuffle batches across epochs, see src/sampler.py).
+dataloader:
+  collate_fn:
+    _target_: egs3.conversational.tts.src.lit_module.PackedConversationCollator
+  train:
+    # Packed row budget in sample-rows: N x T_24k summed over the batch,
+    # padded to the longest window. A 60 s N=2 window costs 2.88M
+    # (~11,250 transformer rows at ~94 frames/s) - size batch_bins and OOM
+    # headroom for that ceiling. 6M ~= two such windows per batch; tune per
+    # GPU.
+    batch_bins: 6000000
+    min_batch_size: 1      # conversations, not rows
+    shuffle: true
+    num_workers: 4
+    pin_memory: true
+  valid:
+    batch_bins: ${dataloader.train.batch_bins}
+    min_batch_size: 1
+    shuffle: false
+    num_workers: 4
+    pin_memory: true
+
+trainer:
+  accelerator: auto
+  devices: ${num_device}
+  num_nodes: ${num_nodes}
+  accumulate_grad_batches: 1
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 50
+  max_epochs: 1000
+  gradient_clip_val: 1.0
+  strategy: auto
+  callbacks:
+    - _target_: espnet3.components.callbacks.ema.EMACallback
+      decay: 0.9999
+  logger:
+    _target_: lightning.pytorch.loggers.WandbLogger
+    project: espnet3-conversational-f5
+    name: ${exp_tag}
+    save_dir: ${exp_dir}
+    log_model: false
+    id: ${exp_tag}
+    resume: allow
+
+fit: {}
