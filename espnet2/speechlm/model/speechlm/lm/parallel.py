@@ -9,8 +9,6 @@ import transformers
 from transformers import AutoConfig
 from transformers.cache_utils import DynamicCache
 
-from espnet2.speechlm.model.speechlm.lm.loss import fused_cross_entropy_loss
-
 
 def ParallelHFModel(model_hf_tag, **kwargs):
     """Factory function to create a parallel multimodal LLM from HuggingFace model.
@@ -51,7 +49,11 @@ def build_parallel_hf_class(model_hf_tag):
             cls,
             pretrained_model_name_or_path,
             multimodal_io,
-            vocab_meta,
+            vocab,
+            vocab_intervals,
+            max_loss_interval: int = 13192,
+            compile_transformer_body: bool = False,
+            freeze_text_embeddings: bool = False,
             **kwargs,
         ):
             """Load pretrained model and adapt it for multimodal parallel processing.
@@ -59,36 +61,32 @@ def build_parallel_hf_class(model_hf_tag):
             Args:
                 pretrained_model_name_or_path: HF model path or identifier
                 multimodal_io: Dict of IO handlers for different modalities
-                vocab_meta: Dict with vocab, intervals, weights, and size info
+                vocab_intervals: Token range mappings for each modality
+                max_loss_interval: Max interval size for efficient loss computation
+                compile_transformer_body: Whether to torch.compile the model
+                freeze_text_embeddings: Whether to freeze pretrained text embeddings
+                    by zeroing their gradients during backward pass
                 **kwargs: Additional HF model loading arguments
 
             Returns:
                 Model with rebuilt embeddings and multimodal components
             """
             # (1) Load the base model using parent's from_pretrained
-            tie_word_embeddings = kwargs.pop("tie_word_embeddings", False)
-            z_loss_weight = kwargs.pop("z_loss_weight", 0.0)
-
             model = super(ParallelLLM, cls).from_pretrained(
-                pretrained_model_name_or_path, **kwargs
-            )
-
-            model.z_loss_weight = z_loss_weight
-
-            # (1.5) Assert flash attention is used — our attn_args pre-compute
-            # cu_seqlens (pack) or attention_mask (bucket) for flash attention.
-            attn_impl = getattr(model.config, "_attn_implementation", "")
-            assert "flash_attention" in attn_impl, (
-                f"OpusLM requires Flash Attention "
-                f"(got attn_implementation={attn_impl!r}). "
-                f"Set attn_implementation: flash_attention_2 or "
-                f"flash_attention_3 in model_conf."
+                "./" + pretrained_model_name_or_path.replace("/", "-"), **kwargs
             )
 
             # (2) Rebuild embedding tables for multimodal vocabulary
             with torch.no_grad():
-                # (2.1) init new embedding and lm head
-                vocab_size = vocab_meta["vocab_size"]
+                # Calculate total vocabulary size across all modalities
+                vocab_size = max(
+                    [
+                        end
+                        for intervals in vocab_intervals.values()
+                        for _, end in intervals
+                    ]
+                )
+
                 embed_dim = model.config.hidden_size
                 new_embed_tokens = nn.Embedding(vocab_size, embed_dim, padding_idx=0)
                 new_lm_head = nn.Linear(embed_dim, vocab_size, bias=False)
@@ -96,45 +94,48 @@ def build_parallel_hf_class(model_hf_tag):
                 nn.init.normal_(new_embed_tokens.weight, mean=0.0, std=0.02)
                 nn.init.normal_(new_lm_head.weight, mean=0.0, std=0.02)
 
-                # (2.2) override by old embedding and lm head
-                assert hasattr(model.model, "embed_tokens")
-                assert hasattr(model, "lm_head")
-                text_start, text_end = vocab_meta["text_start"], vocab_meta["text_end"]
+                # Preserve pretrained text embeddings if text modality exists
+                if "text" in vocab_intervals:
 
-                old_embed = model.model.embed_tokens
-                old_lm_head = model.lm_head
-                orig_vocab_size = old_embed.weight.shape[0]
+                    if not (
+                        hasattr(model, "model") and hasattr(model.model, "embed_tokens")
+                    ):
+                        raise AttributeError(
+                            "Model must have 'model.embed_tokens' attribute"
+                        )
+                    if not hasattr(model, "lm_head"):
+                        raise AttributeError("Model must have 'lm_head' attribute")
 
-                # Validate text vocabulary size matches pretrained model
-                if text_end - text_start != orig_vocab_size:
-                    raise ValueError(
-                        f"text_end - text_start ({text_end - text_start}) "
-                        f"must equal original vocab size ({orig_vocab_size})"
-                    )
+                    text_start, text_end = vocab_intervals["text"][0]
 
-                # Copy pretrained weights to corresponding positions
-                new_embed_tokens.weight[text_start:text_end] = old_embed.weight
-                new_lm_head.weight[text_start:text_end] = old_lm_head.weight
+                    old_embed = model.model.embed_tokens
+                    old_lm_head = model.lm_head
+                    orig_vocab_size = old_embed.weight.shape[0]
+
+                    # Validate text vocabulary size matches pretrained model
+                    if text_end - text_start != orig_vocab_size:
+                        raise ValueError(
+                            f"text_end - text_start ({text_end - text_start}) "
+                            f"must equal original vocab size ({orig_vocab_size})"
+                        )
+
+                    # Copy pretrained weights to corresponding positions
+                    new_embed_tokens.weight[text_start:text_end] = old_embed.weight
+                    new_lm_head.weight[text_start:text_end] = old_lm_head.weight
 
                 model.model.embed_tokens = new_embed_tokens
-                if tie_word_embeddings:
-                    new_lm_head.weight = new_embed_tokens.weight
                 model.lm_head = new_lm_head
 
-            # (3) num_stream and stream_emb
-            model.num_stream = vocab_meta["num_stream"]
+            # (3) Create stream embeddings for multi-stream token processing
+            # Each stream gets its own embedding offset (except first stream)
+            possible_num_stream = [
+                io.num_stream() for io in multimodal_io.values() if io.is_discrete
+            ]
+            if len(possible_num_stream) == 0:
+                raise ValueError("Cannot proceed with all IOs being continuous")
+            model.num_stream = max(possible_num_stream)
             model.stream_emb = nn.Embedding(model.num_stream, embed_dim)
             nn.init.zeros_(model.stream_emb.weight)
-
-            # (4) multimodal_vocab_range, vocab_weight
-            model.multimodal_vocab_range = (
-                vocab_meta["mm_start"],
-                vocab_meta["mm_end"],
-            )
-            model.register_buffer("vocab_weight", vocab_meta["vocab_weight"])
-
-            model.vocab = vocab_meta["vocab"]
-            model.vocab_intervals = vocab_meta["vocab_intervals"]
 
             # (4) Setup multimodal IO handlers and adaptors
             # Discrete IOs use vocabulary, continuous IOs need linear adaptors
@@ -147,6 +148,47 @@ def build_parallel_hf_class(model_hf_tag):
                         model.config.hidden_size,
                     )
 
+            # (5) Create loss computation intervals for efficient softmax
+            # Split large vocabularies into smaller intervals to avoid OOM
+            model.vocab = vocab
+            model.vocab_intervals = vocab_intervals
+            model.loss_intervals = list()
+            for io_name, intervals in vocab_intervals.items():
+                # Skip text/special tokens (handled with full softmax in stream 0)
+                if io_name == "text" or io_name == "special_token":
+                    continue
+
+                cur_start, end = intervals[0]
+                # Split intervals if they exceed max_loss_interval size
+                for _, end in intervals[1:]:
+                    if end - cur_start <= max_loss_interval:
+                        continue
+                    else:
+                        model.loss_intervals.append((cur_start, end))
+                        cur_start = end
+
+                # Add final interval if any tokens remain
+                if end > cur_start:
+                    model.loss_intervals.append((cur_start, end))
+
+            # (6) Optionally compile the transformer body for faster execution
+            if compile_transformer_body:
+                model.model = torch.compile(model.model)
+
+            # (7) Freeze text embeddings if requested
+            # Register backward hooks to zero-out gradients for text token range
+            if freeze_text_embeddings and "text" in vocab_intervals:
+                text_start, text_end = vocab_intervals["text"][0]
+                model.freeze_text_start = text_start
+                model.freeze_text_end = text_end
+
+                def zero_text_embed_grad(grad):
+                    grad[model.freeze_text_start:model.freeze_text_end] = 0
+                    return grad
+
+                model.model.embed_tokens.weight.register_hook(zero_text_embed_grad)
+                model.lm_head.weight.register_hook(zero_text_embed_grad)
+
             return model
 
         def forward(self, **kwargs):
@@ -158,9 +200,6 @@ def build_parallel_hf_class(model_hf_tag):
                     - conti_feats: Dict of continuous features by modality
                     - loss_masks: Optional loss weight masks
                     - position_ids: Optional position encodings
-                    - attn_args: Pre-computed flash attention kwargs. Pack
-                      mode: cu_seq_lens_q/k and max_length_q/k (avoids
-                      per-layer .item() CPU-GPU sync). Bucket mode: empty.
                     - past_key_values: Optional KV cache for generation
 
             Returns:
@@ -171,122 +210,29 @@ def build_parallel_hf_class(model_hf_tag):
             input_ids = kwargs["seqs"]
             loss_mask = kwargs.get("loss_masks")
             position_ids = kwargs.get("position_ids", None)
-            attn_args = kwargs.get("attn_args", {})
 
             inputs_embeds = self._embed(input_ids, kwargs)
 
-            # Forward through base transformer model.
-            # attn_args carries pre-computed flash attention kwargs:
-            #   pack mode:   cu_seq_lens_q/k, max_length_q/k
-            #                (avoids per-layer .item() sync)
-            #   bucket mode: empty (flash attention uses is_causal=True)
+            # Forward through base transformer model
             output = self.model(
                 inputs_embeds=inputs_embeds,
                 position_ids=position_ids,
-                output_router_logits=True,
-                use_cache=False,
-                **attn_args,
             )
-
-            model_output = (
-                output.last_hidden_state,
-                getattr(output, "router_logits", None),
-            )
-            target = (input_ids, loss_mask)
-            scale = kwargs.get("loss_scale", None)
-            return self._loss(model_output, target, scale=scale)
-
-        def reset_loss_stats(self):
-            """Reset accumulated loss statistics before a new forward pass.
-
-            Must be called before _loss() to start fresh accumulation.
-            In PP mode, call this before schedule.step() so that stats from
-            all microbatches accumulate correctly.
-            """
-            self._loss_stats = {}
-
-        def _loss(self, model_output, target, scale=None):
-            """Compute loss from transformer output.
-
-            Applies stream embeddings, fused cross-entropy loss, and optional
-            MoE load balancing loss. Accumulates stats into
-            self._loss_stats so that the PP schedule — which only
-            propagates the returned loss tensor for backward — can still
-            access them after step(). Call reset_loss_stats() before the
-            first _loss() call in a step to start fresh.
-
-            Args:
-                model_output: Tuple of (last_hidden_state, router_logits).
-                    last_hidden_state: [batch, seq_len, hidden_dim].
-                    router_logits: Tuple of per-layer router logits, or None.
-                target: Tuple of (input_ids, loss_mask).
-                    input_ids: [batch, seq_len, num_streams] (unshifted;
-                        next-token shift is handled inside
-                        fused_cross_entropy_loss).
-                    loss_mask: [batch, seq_len, num_streams].
-                scale: Optional loss scale factor. In PP mode, the trainer
-                    pre-computes dp_size / (global_count * n_microbatches)
-                    and passes it here so the schedule's backward uses the
-                    correctly normalized loss.
-
-            Returns:
-                Scalar loss tensor (for backward).
-                Side-effects: accumulates into self._loss_stats.
-            """
-            last_hidden_state, router_logits = model_output
-            input_ids, loss_mask = target
 
             # Add stream embeddings to create stream-specific representations
             # Shape: [batch, seq, hidden] -> [batch, seq, streams, hidden]
-            hidden_states = last_hidden_state.unsqueeze(2)
+            hidden_states = output.last_hidden_state.unsqueeze(2)
+            stream_emb = self.stream_emb.weight.tile(1, 1, 1, 1)
+            stream_emb[:, :, 0] = 0.0  # First stream uses base representation
+            hidden_states = hidden_states + stream_emb
 
-            # Convert DTensor to regular tensor for in-place operations
-            stream_weight = self.stream_emb.weight
-            if hasattr(stream_weight, "full_tensor"):
-                stream_weight = stream_weight.full_tensor()
-
-            stream_weight = stream_weight[None, None, :, :].clone()
-            stream_weight[:, :, 0] = 0.0  # First stream uses base representation
-            hidden_states = hidden_states + stream_weight.to(hidden_states.dtype)
-
-            ce_loss, count, stats = fused_cross_entropy_loss(
-                hidden_states,
-                input_ids,
-                loss_mask,
-                self.lm_head.weight,
-                self.multimodal_vocab_range,
-                self.num_stream,
-                self.training,
-                z_loss_weight=getattr(self, "z_loss_weight", 0.0),
-                ce_weight=self.vocab_weight,
+            loss, stats = self._loss(
+                input_ids=input_ids,
+                hidden_states=hidden_states,
+                loss_mask=loss_mask,
+                router_logits=output.get("router_logits", None),
             )
-
-            stats["count"] = count.detach()
-            stats["ce_loss"] = ce_loss.clone().detach()
-
-            # MoE load balance loss (scale to raw-sum space to match ce_loss)
-            if router_logits is not None and hasattr(self, "load_balancing_loss_func"):
-                aux_loss = self.load_balancing_loss_func(
-                    router_logits,
-                    self.config.num_experts,
-                    self.config.num_experts_per_tok,
-                )
-                loss = ce_loss + aux_loss * count * self.config.router_aux_loss_coef
-                stats["load_balance_loss"] = (aux_loss * count).detach()
-            else:
-                loss = ce_loss
-
-            if scale is not None:
-                loss = loss * scale
-
-            for k, v in stats.items():
-                v = v.detach() if isinstance(v, torch.Tensor) else v
-                if k not in self._loss_stats:
-                    self._loss_stats[k] = v
-                else:
-                    self._loss_stats[k] = self._loss_stats[k] + v
-
-            return loss
+            return {"loss": loss, "stats": stats}
 
         def _embed(self, input_ids, kwargs):
             """Create embeddings from multimodal inputs.
@@ -359,7 +305,7 @@ def build_parallel_hf_class(model_hf_tag):
                     feat = self.adaptor[io_name](feat)
                     # NOTE(Jinchuan): Force the length to match
                     input_embeds[bidx, start : start + length] = feat
-
+            
             # (4) Add dummy forward to ensure all multimodal_io are always included
             # in the computation graph, even if not used in this batch.
             # This prevents gradient mismatch errors in DeepSpeed ZeRO.
@@ -389,50 +335,123 @@ def build_parallel_hf_class(model_hf_tag):
 
             return input_embeds
 
+        def _loss(self, hidden_states, input_ids, loss_mask, router_logits):
+            """Compute multimodal language modeling loss.
+
+            Uses full vocabulary softmax for first stream (text/special tokens)
+            and interval-based softmax for other streams (audio/discrete tokens)
+            to efficiently handle large vocabularies.
+
+            Args:
+                hidden_states: Model outputs [batch, seq_len, streams, hidden_dim]
+                input_ids: Target tokens [batch, seq_len, streams]
+                loss_mask: Loss weights per token [batch, seq_len, streams]
+
+            Returns:
+                Tuple of (loss tensor, stats dict with loss/accuracy metrics)
+            """
+            assert input_ids.size() == loss_mask.size()
+            assert hidden_states.size()[:3] == loss_mask.size()
+
+            # Shift for next-token prediction
+            hidden_states = hidden_states[:, :-1]
+            input_ids = input_ids[:, 1:]
+            loss_mask = loss_mask[:, 1:]
+
+            # Initialize loss and accuracy tensors
+            loss = torch.zeros_like(loss_mask)
+            acc = torch.zeros_like(loss_mask).bool()
+            stats = dict()
+
+            # Stream 0: Full vocabulary softmax
+            this_mask = torch.zeros_like(input_ids).bool()
+            this_mask[:, :, 0] = True
+
+            this_logits = hidden_states[this_mask]
+            this_logits = torch.matmul(this_logits, self.lm_head.weight.T)
+            this_targets = input_ids[this_mask]
+
+            this_loss = torch.nn.functional.cross_entropy(
+                this_logits,
+                this_targets,
+                reduction="none",
+                ignore_index=0,
+            )
+            loss.masked_scatter_(this_mask, this_loss)
+            if not self.training:
+                this_acc = this_logits.argmax(-1) == this_targets
+                acc.masked_scatter_(this_mask, this_acc)
+
+            # Streams 1+: Interval-based softmax for discrete modalities
+            # Process each vocabulary interval separately to avoid OOM
+            residual_ids = input_ids[:, :, 1:]
+            for start, end in self.loss_intervals:
+                # Find tokens in this interval
+                this_mask = torch.logical_and(residual_ids >= start, residual_ids < end)
+                if this_mask.int().sum() == 0:
+                    continue
+                # Compute loss only for vocabulary subset [start:end]
+                this_logits = hidden_states[:, :, 1:][this_mask]
+                this_logits = torch.matmul(
+                    this_logits, self.lm_head.weight[start:end].T
+                )
+                # Adjust targets to interval-relative indices
+                this_targets = residual_ids[this_mask] - start
+                this_loss = torch.nn.functional.cross_entropy(
+                    this_logits,
+                    this_targets,
+                    reduction="none",
+                )
+                loss[:, :, 1:].masked_scatter_(this_mask, this_loss)
+                if not self.training:
+                    this_acc = this_logits.argmax(-1) == this_targets
+                    acc[:, :, 1:].masked_scatter_(this_mask, this_acc)
+
+            # Apply loss masks and compute weighted average
+            loss = loss * loss_mask
+            count = (loss_mask != 0.0).float()
+            loss = loss.sum() / count[:, :, 0].sum()
+            stats["loss"] = loss.clone().detach()
+
+            # Compute accuracy statistics during evaluation
+            if not self.training:
+                acc = acc.float()
+                stats["acc"] = acc.sum() / count.sum()  # Overall accuracy
+                # Per-stream accuracy for debugging
+                for n in range(self.num_stream):
+                    this_count = count[:, :, n].sum()
+                    if this_count > 0:
+                        stats[f"acc_layer{n}"] = acc[:, :, n].sum() / this_count
+
+            # MoE load balance loss
+            if router_logits is not None and hasattr(self, "load_balancing_loss_func"):
+                moe_loss = self.load_balancing_loss_func(
+                    router_logits,
+                    self.num_experts,
+                    self.num_experts_per_tok,
+                )
+                loss += moe_loss * self.router_aux_loss_coef
+                stats["moe_loss"] = moe_loss
+
+            return loss, stats
+
         # Below are all inference logics
         @torch.no_grad()
         def inference(self, inference_config: dict, cache: list = None, **kwargs):
 
-            # (1) Prefill input_ids
-            input_ids = kwargs.get("seqs")
-            input_embeds = self._embed(input_ids, kwargs)
-
-            _, cache = self._step(
-                input_embeds=input_embeds,
-                past_key_values=cache,
-            )
-
             messages = []
-            num_msg = 0
-            enforce_modalities = inference_config.get("enforce_modality", [])
             while True:
-                # (2.1) Prefill assistant token
-                logits, cache = self._step(
-                    input_ids=self.assistant_token,
-                    past_key_values=cache,
-                    mask=self.modality_mask,
-                )
-
-                # (2.2) determine modality token and mask
-                try:
-                    modality = enforce_modalities[num_msg]
-                    modality_token = getattr(self, f"{modality}_token")
-                except Exception:
-                    modality_token = logits.argmax(3)
-                    modality = modality_token.flatten()[0].item()
-                    modality = self.vocab[modality].replace("<|", "").replace("|>", "")
-                modality_mask = getattr(self, f"{modality}_mask")
-
-                # (2.3) predict token sequence
-                decoded_sequences, cache, logits = self.inference_segment(
-                    config=inference_config[modality],
+                # (1) predict token sequence
+                decoded_sequences, cache = self.inference_segment(
+                    inference_config,
                     cache=cache,
-                    prev_token=modality_token,
-                    mask=modality_mask,
+                    enforce_modality=None,
+                    **kwargs,
                 )
 
-                # (2.4) detokenization
-                for seq in decoded_sequences:
+                # (2) detokenization
+                for seq, modality in decoded_sequences:
+
                     if (
                         seq[-1, 0] == self.eos_token_id
                         or seq[-1, 0] == self.eot_token_id
@@ -449,70 +468,90 @@ def build_parallel_hf_class(model_hf_tag):
                     msg = ["assistant", modality, content]
                     messages.append(msg)
 
-                # (2.5) Terminate when applicable
+                # (3) Terminate when applicable
                 if len(decoded_sequences) > 1:
                     break  # multi-segment decoding only supports batch size of 1
 
-                elif (
-                    decoded_sequences[0][-1, 0] != self.eot_token_id
-                    and num_msg >= len(enforce_modalities) - 1
-                ):
+                elif decoded_sequences[0][0][-1, 0] != self.eot_token_id:
                     break  # decode next segment only when ending with <|eot|>
-
-                num_msg += 1
 
             return messages, cache
 
         def inference_segment(
             self,
             config: dict,
-            cache: list,
-            prev_token: torch.Tensor,
-            mask: torch.Tensor,
+            cache: list = None,
+            enforce_modality: str = None,
+            **kwargs,
         ):
-            device = prev_token.device
 
-            # (1) preprocess for multi-hypothesis inference and CFG
+            # (1) Prefill, with assistant role token
+            input_ids = kwargs.get("seqs")
+            input_ids = torch.cat([input_ids, self.assistant_token], dim=1)
+            device = input_ids.device
+
+            input_embeds = self._embed(input_ids, kwargs)
+            logits, cache = self._step(
+                input_embeds=input_embeds,
+                past_key_values=cache,
+                mask=self.modality_mask,
+            )
+            logits = logits[:, -1:, :]
+
+            # (2) determine modality token and the corresponding mask
+            if enforce_modality is not None:
+                modality_token = getattr(self, f"{enforce_modality}_token")
+            else:
+                modality_token = logits.argmax(3)
+
+            modality = modality_token.flatten()[0].item()
+            modality = self.vocab[modality].replace("<|", "").replace("|>", "")
+            modality_mask = getattr(self, f"{modality}_mask")
+            if modality not in config:
+                raise ValueError(
+                    f"Try to predict {modality} modality "
+                    "But the corresponding inference config is missing."
+                )
+            this_config = config[modality]
+
+            # (3) preprocess for multi-hypothesis inference and CFG
             num_hypo = config.get("num_hypo", 1)
             if num_hypo > 1:
                 indices = torch.zeros(num_hypo).long().to(device)
                 cache.batch_select_indices(indices)
-                prev_token = prev_token.tile(num_hypo, 1, 1)
+                modality_token = modality_token.tile(num_hypo, 1, 1)
 
-            cfg = config.get("cfg", 1)
+            cfg = this_config.get("cfg", 1)
             if cfg > 1:
                 cache = self._prepare_cfg_cache(cache)
 
-            # (2) Inference loop
+            # (4) Inference loop
             hypos = list()
             finish_idx = torch.ones(num_hypo).long().to(device) * -1
-            for step in range(config["max_step"]):
-                # (2.1) Model inference
+            prev_token = modality_token
+            for step in range(this_config["max_step"]):
+                # (4.1) Model inference
                 if cfg > 1:
                     prev_token = prev_token.tile(2, 1, 1)
 
-                this_mask = mask.clone()
-                if step >= config.get("min_step", 1):
-                    this_mask[:, :, 0, self.eot_token_id] = False
-                    this_mask[:, :, 0, self.eos_token_id] = False
                 logits, cache = self._step(
-                    input_ids=prev_token, past_key_values=cache, mask=this_mask
+                    input_ids=prev_token, past_key_values=cache, mask=modality_mask
                 )
 
                 if cfg > 1:
                     logits, cfg_logits = logits.chunk(2)
                     logits = logits * cfg + cfg_logits * (1 - cfg)
-                    logits.masked_fill_(this_mask, float("-inf"))
+                    logits.masked_fill_(modality_mask, float("-inf"))
 
-                # (2.2) token prediction based on logits
+                # (4.2) token prediction based on logits
                 prev_token = self._logits_to_token(
                     logits,
-                    temperature=config["temperature"],
-                    topk=config["topk"],
+                    temperature=this_config["temperature"],
+                    topk=this_config["topk"],
                 )
                 hypos.append(prev_token)
 
-                # (2.3) Break when proper
+                # (4.3) Break when proper
                 finish_here = torch.logical_and(
                     torch.logical_or(
                         prev_token[:, 0, 0] == self.eot_token_id,
@@ -525,7 +564,7 @@ def build_parallel_hf_class(model_hf_tag):
                 if torch.all(finish_idx >= 0):
                     break
 
-            # (3) Finalize
+            # (5) Finalize
             finish_idx = torch.where(finish_idx == -1, step, finish_idx)
             hypos = torch.cat(hypos, dim=1)
 
@@ -536,17 +575,14 @@ def build_parallel_hf_class(model_hf_tag):
             # NOTE(Jinchuan): Prefill the last token. This is effective only for
             # multi-segment inference with batch size of 1
             prev_token[..., 1:] = 0
-            last_logits, cache = self._step(input_ids=prev_token, past_key_values=cache)
-
-            # TODO(Jinchuan): If this is for delay-interleaved audio, we should
-            # enforce it to have valid paddings here.
+            _, cache = self._step(input_ids=prev_token, past_key_values=cache)
 
             hypo_lst = list()
             for idx, hypo in zip(finish_idx, hypos):
                 hypo = hypo[: idx + 1]
-                hypo_lst.append(hypo)
+                hypo_lst.append((hypo, modality))
 
-            return hypo_lst, cache, last_logits
+            return hypo_lst, cache
 
         def prepare_inference(self):
             # (1) the special tokens for prefill
@@ -576,8 +612,8 @@ def build_parallel_hf_class(model_hf_tag):
                     mask[idx, start:end] = False
                 for idx in range(len(intervals), self.num_stream):
                     mask[idx, 0] = False  # unused stream: only allow paddings
-                # mask[0, self.eot_token_id] = False
-                # mask[0, self.eos_token_id] = False
+                mask[0, self.eot_token_id] = False
+                mask[0, self.eos_token_id] = False
 
                 io_name = "audio" if io_name == "discrete_audio" else io_name
                 mask = mask[None, None, :, :]
@@ -593,23 +629,16 @@ def build_parallel_hf_class(model_hf_tag):
 
             if input_ids is not None:
                 assert input_ids.size(2) == self.num_stream
-                input_embeds = self.model.embed_tokens(input_ids)
-                input_embeds[..., 1:, :] = torch.where(
-                    (input_ids[..., 1:] == 0).unsqueeze(-1),
-                    0.0,
-                    input_embeds[..., 1:, :],
-                )
-                input_embeds = input_embeds.sum(dim=2)
+                input_embeds = self.model.embed_tokens(input_ids).sum(dim=2)
 
             output = self.model(
                 inputs_embeds=input_embeds,
                 past_key_values=past_key_values,
                 use_cache=True,
             )
-
             past_key_values = output.past_key_values
             hidden_states = output.last_hidden_state.unsqueeze(2)
-            stream_emb = self.stream_emb.weight[None, None, :, :].clone()
+            stream_emb = self.stream_emb.weight.tile(1, 1, 1, 1)
             stream_emb[:, :, 0] = 0.0  # First stream uses base representation
             hidden_states = hidden_states + stream_emb
             logits = self.lm_head(hidden_states)

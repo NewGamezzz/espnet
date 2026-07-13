@@ -3,6 +3,7 @@
 
 """Audio I/O implementation for discrete and continuous representations"""
 
+import logging
 import math
 from pathlib import Path
 from typing import List, Optional, Tuple, Union
@@ -514,14 +515,7 @@ class DiscreteAudioIO(AbsIO):
         # Remove vocabulary offsets to get original token indices
         for stream_idx in range(self.codec_n_streams):
             global_stream_idx = self.ssl_n_streams + stream_idx
-            offset_start, offset_end = self._stream_intervals[global_stream_idx]
-
-            # NOTE(Jinchuan): Maybe need a warning if this triggers?
-            codec_codes[..., stream_idx] = torch.clip(
-                codec_codes[..., stream_idx],
-                min=offset_start + 1,
-                max=offset_end - 1,
-            )
+            offset_start, _ = self._stream_intervals[global_stream_idx]
 
             codec_codes[..., stream_idx] -= offset_start + 1
 
@@ -687,7 +681,7 @@ class DiscreteAudioIO(AbsIO):
         wav, sr = data
 
         assert wav.ndim == 2, "Audio array must be 2D: [num_channels, num_samples]"
-        wav = wav[:1]  # Use only first channel for tokenization
+        wav = wav[:1] # Use only first channel for tokenization
 
         # Resample if sample rate doesn't match
         if sr != self.sample_rate:
@@ -903,7 +897,7 @@ class ContinuousAudioIO(AbsIO):
 
             # Load full Qwen multimodal model
             full_model = model_class.from_pretrained(
-                self.encoder_hf_model_tag,
+                "./" + self.encoder_hf_model_tag.replace("/", "-"),
                 attn_implementation=self.attn_implementation,
                 torch_dtype=self.dtype,
             )
@@ -956,10 +950,11 @@ class ContinuousAudioIO(AbsIO):
             raise ValueError("Input audio must be 2D array [num_channels, num_samples]")
 
         if wav.shape[0] > wav.shape[1]:
-            raise ValueError(
-                "Audio shape seems incorrect, "
-                "please check num_channels and num_samples"
+            logging.warning(
+                f"Audio shape {wav.shape} seems incorrect (channels > samples), "
+                f"replacing with silence"
             )
+            wav = np.zeros((1, 16000), dtype=wav.dtype)
 
         if wav.shape[1] > self.n_samples:
             wav = wav[:, : self.n_samples]
@@ -1124,7 +1119,8 @@ class ContinuousAudioIO(AbsIO):
         dummy_frames = 4  # Minimal number of frames
         # Input format: [batch, time, n_mels] (spectrogram features)
         dummy_data = torch.zeros(
-            1, dummy_frames, n_mels, device=ref_tensor.device, dtype=ref_tensor.dtype
+            1, dummy_frames, n_mels,
+            device=ref_tensor.device, dtype=ref_tensor.dtype
         )
         dummy_length = torch.tensor(
             [dummy_frames], device=ref_tensor.device, dtype=torch.long

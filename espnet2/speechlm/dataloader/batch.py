@@ -5,7 +5,6 @@
 
 import logging
 import multiprocessing as mp
-import random
 from typing import Dict, List, TypeVar
 
 import torch
@@ -69,8 +68,7 @@ def batchfy_bucket(
 _NUM_WORKERS = 8  # Fixed for reproducibility
 _FINISH_RATIO = 0.995  # Batch is "complete" when >= 99% full
 _N_STRATA = 64  # Number of length strata for diverse packing
-_SEED = 42  # Random seed for shuffling in diverse packing
-
+_SEED = 42 # Random seed for shuffling in diverse packing
 
 def _bfd_worker(items: List[tuple], batch_token: int) -> List[List[tuple]]:
     """Worker: sort (length, key) items and run Best Fit Decreasing."""
@@ -93,7 +91,9 @@ def _bfd_worker(items: List[tuple], batch_token: int) -> List[List[tuple]]:
     return batches
 
 
-def _diverse_bfd_worker(items: List[tuple], batch_token: int) -> List[List[tuple]]:
+def _diverse_bfd_worker(
+    items: List[tuple], batch_token: int
+) -> List[List[tuple]]:
     """Stratified Best Fit: diversity + efficiency via interleaved packing.
 
     Items are divided into length strata, shuffled within each stratum,
@@ -101,6 +101,7 @@ def _diverse_bfd_worker(items: List[tuple], batch_token: int) -> List[List[tuple
     This ensures each batch contains items from diverse length ranges while
     maintaining high packing efficiency.
     """
+    import random
 
     if not items:
         return []
@@ -185,7 +186,9 @@ def batchfy_pack(
     chunks = [items[i::_NUM_WORKERS] for i in range(_NUM_WORKERS)]
 
     with mp.Pool(_NUM_WORKERS) as pool:
-        results = pool.starmap(_diverse_bfd_worker, [(c, batch_token) for c in chunks])
+        results = pool.starmap(
+            _diverse_bfd_worker, [(c, batch_token) for c in chunks]
+        )
 
     # Merge: keep complete batches, re-pack incomplete ones
     min_filled = int(_FINISH_RATIO * batch_token)
