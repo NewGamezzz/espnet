@@ -83,13 +83,94 @@ Both archives extract to a `dataset.json` per "app" (`intent_to_speech`, `multi_
 So there is no fixed delimiter token (no `<sep>`, no `[SPK1]`); the model is expected to infer turn boundaries from free-text description plus quotation marks, and produce one continuous audio/token stream for the whole exchange. This is a significant finding for the TAC branch-exchange design: there is no existing per-speaker channel boundary in the SFT text or audio to hook into - any TAC injection scheme needs to either (a) parse speaker spans out of the caption text itself, or (b) operate on the single combined stream without per-speaker separation at this data layer.
 
 ## Model code (Task 3)
-- job_type value:
-- model class + file:
-- decoder layers attribute path:
-- block return type (tuple or tensor):
-- streams 1-7 head module(s):
-- loss computation entry point:
-- espnet2/speechlm diff vs our branch (merge decision):
+
+Reference branch `whr/speechlm_inference` (remote `whr` = `https://github.com/whr-a/espnet.git`, tip `ae896993f "Add SpeechLM inference code and OpusLM v2 experiment configs"`, 2026-06-12) fetched and read via `git show whr/speechlm_inference:<path>`. `espnet2/speechlm` was then synced into the worktree (see item 5) so all line numbers below are citable directly in the local tree unless noted.
+
+**1. `job_type` value**
+
+`espnet2/speechlm/model/__init__.py:8`: `_all_job_types = {"speechlm": SpeechLMJobTemplate}` - this dict has exactly **one** entry, so any train config that goes through this code path has `job_type: speechlm`. No ambiguity to resolve in Task 4.
+
+Likewise `espnet2/speechlm/model/speechlm/speechlm_job.py:34`: `_lms = {"parallel": ParallelHFModel}` has exactly one entry, so `model.model_choice` must be `parallel`.
+
+Strong circumstantial confirmation (not the BagPiper checkpoint's actual config, but the closest match found in the reference branch - no `bagpiper` string appears anywhere in `whr/speechlm_inference`): `egs2/opuslm_v2/speechlm1/conf/train_stage1_qwen3.yaml` (`git show whr/speechlm_inference:egs2/opuslm_v2/speechlm1/conf/train_stage1_qwen3.yaml`) has:
+```yaml
+job_type: speechlm
+multimodal_io:
+    discrete_audio:
+        codec_choice: Xcodec
+        codec_hf_model_tag: hf-audio/xcodec-hubert-general
+        delay_interleave: true
+        stream_weights: [0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125, 0.125]
+model:
+    model_choice: parallel
+    model_hf_tag: Qwen/Qwen3-8B
+trainer:
+    freeze_param: [multimodal_io_dict.discrete_audio, multimodal_io_dict.continuous_audio, model.layers]
+```
+This matches the brief's "Qwen3-8B backbone, Xcodec codec, 8 parallel token streams per step" exactly (8-entry `stream_weights` = `codec_max_token_per_frame` default of 8, see item 4). **Candidate for the BagPiper checkpoint's train config, to be confirmed against the actual file in Task 4**, but given `_all_job_types`/`_lms` each have only one entry, `job_type: speechlm` / `model_choice: parallel` are correct regardless of which exact yaml BagPiper used.
+
+**2. Model class, file, and decoder-layers attribute path**
+
+`build_model()` in `espnet2/speechlm/model/speechlm/speechlm_job.py:129-152`:
+```python
+def build_model(self) -> torch.nn.Module:
+    model_config = self.config["model"]
+    model_class = _lms[model_config["model_choice"]]          # line 137: ParallelHFModel
+    model = model_class(
+        model_hf_tag=model_config["model_hf_tag"],
+        multimodal_io=self.multimodal_io,
+        vocab=self.vocab,
+        vocab_intervals=self.vocab_intervals,
+        **model_config["model_conf"],
+    )
+    ...
+    return model
+```
+`ParallelHFModel` (factory function, `espnet2/speechlm/model/speechlm/lm/parallel.py:14-27`) calls `build_parallel_hf_class(model_hf_tag)` which does (lines 30-44):
+```python
+config = AutoConfig.from_pretrained(model_hf_tag)
+architecture = config.architectures[0]              # "Qwen3ForCausalLM" for Qwen/Qwen3-8B
+architecture = getattr(transformers, architecture)
+class ParallelLLM(architecture):                     # dynamically subclasses transformers.Qwen3ForCausalLM
+    ...
+```
+`model = model_class.from_pretrained(model_hf_tag, **kwargs)` then returns a `ParallelLLM` instance, i.e. **the object `job.build_model()` returns IS a `transformers.Qwen3ForCausalLM` subclass instance directly - there is no wrapping module, no `.corelm` attribute anywhere in this codebase.** `bin/inference.py` confirms this is also the object `load_checkpoint()`/`load_state_dict()` operate on directly (`espnet2/speechlm/bin/inference.py:178-183`):
+```python
+job_template_class = _all_job_types[train_config["job_type"]]
+job_template = job_template_class(train_config, is_train=False)
+model = job_template.build_model()
+model = load_checkpoint(model, model_checkpoint_path)   # checkpoint["module"] -> model.load_state_dict(..., strict=True)
+```
+Standard `transformers==4.57.1` `Qwen3ForCausalLM.__init__` (installed at `.../envs/lib/python3.10/site-packages/transformers/models/qwen3/modeling_qwen3.py:436`): `self.model = Qwen3Model(config)`. `Qwen3Model.__init__` (`modeling_qwen3.py:343-345`): `self.layers = nn.ModuleList([Qwen3DecoderLayer(config, layer_idx) for layer_idx in range(config.num_hidden_layers)])`.
+
+**Exact attribute path from the built model object to the decoder-layers `nn.ModuleList`: `<built_model>.model.layers`** (i.e. `job.build_model().model.layers` after checkpoint loading - NOT `model.corelm.model.model.layers`, that path doesn't exist in this codebase). Confirmed independently by the codebase's own trainer: `deepspeed_trainer.py:73-77` freezes parameters by prefix-matching `model.named_parameters()` against strings from `trainer.freeze_param`, and the `train_stage1_qwen3.yaml` config above literally freezes `model.layers` (see item 1) - i.e. the actual training code already treats `model.layers` as the correct parameter-name prefix for the Qwen3 decoder stack. Also confirmed both training (`parallel.py:217`, `forward()`) and inference/generation (`parallel.py:634`, `_step()`) call `self.model(inputs_embeds=..., ...)` - i.e. `.model.layers` is exercised identically on both code paths, so an injection there affects training-loss computation and autoregressive decoding the same way.
+
+**3. Decoder-layer return type and regex-collision risk**
+
+Return type: `transformers.models.qwen3.modeling_qwen3.Qwen3DecoderLayer.forward` (installed 4.57.1, matching the pin in `espnet2/speechlm/requirement.txt: transformers==4.57.1`) is declared `-> torch.Tensor` and literally does `return hidden_states` (a bare tensor, not a tuple) - `modeling_qwen3.py:246-277`. This is the modern (post-refactor) transformers decoder-layer contract; older transformers versions returned `(hidden_states, attn_weights, present_key_value)` tuples, so any wrapper code written against an older transformers assumption will break here. `Qwen3Model.forward` (the caller) does not tuple-unpack the layer's return value either.
+
+Regex collision: **YES, the regex `(?:.*\.)?layers\.(\d+)` matches names outside the target Qwen3 decoder stack.** `named_modules()` on the full BagPiper model (`ParallelLLM` instance) contains at least these additional `...layers.<N>` matches, both verified against the installed `transformers==4.57.1` model classes referenced by the BagPiper-shaped config in item 1:
+- `multimodal_io_dict.discrete_audio.codec_model.semantic_model.encoder.layers.<N>` - the Xcodec codec (`codec_choice: Xcodec` -> `XcodecModel.from_pretrained("hf-audio/xcodec-hubert-general")`, `espnet2/speechlm/model/speechlm/multimodal_io/audio.py:192`) instantiates an internal Hubert-family "semantic" sub-model via `AutoModel.from_config(config.semantic_model_config)` (`transformers/models/xcodec/modeling_xcodec.py:409`; `semantic_model_config` defaults to `HubertConfig()`, `transformers/models/xcodec/configuration_xcodec.py:126-127`). `HubertEncoder.layers` is an `nn.ModuleList` (`transformers/models/hubert/modeling_hubert.py:424`, default 12 layers) - this exists regardless of the IO's own `ssl_choice` setting, since it's internal to the codec checkpoint, not the separate optional SSL tokenizer.
+- `multimodal_io_dict.continuous_audio.model.model.layers.<N>` - `ContinuousAudioIO` (used for `audio_input`, per item 1's `preprocessor.audio_input: continuous_audio`) sets `self.model = full_model.thinker` where `full_model` is loaded from `encoder_hf_model_tag: Qwen/Qwen3-Omni-30B-A3B-Instruct` (`espnet2/speechlm/model/speechlm/multimodal_io/audio.py:909`). `Qwen3OmniMoeThinkerForConditionalGeneration.__init__` sets `self.model = Qwen3OmniMoeThinkerTextModel(...)` (`modeling_qwen3_omni_moe.py:1853`), and `Qwen3OmniMoeThinkerTextModel.__init__` sets `self.layers = nn.ModuleList(...)` (`modeling_qwen3_omni_moe.py:1621`) - i.e. an **independent Qwen-family decoder stack with the exact same `model.model.layers.<N>` shape as the injection target**, just under a different top-level prefix. There is also a third, unrelated `layers` ModuleList inside the Omni audio tower (`Qwen3OmniMoeAudioEncoder.layers`, `modeling_qwen3_omni_moe.py:652`).
+
+**Consequence: the naive regex is not safe as specified.** It must be anchored to the specific top-level attribute path (e.g. match only `^model\.layers\.(\d+)$` against the built model's own module names, not a bare `layers\.(\d+)$` suffix match against the whole tree), or the injection registry must explicitly scope the `named_modules()` walk to `built_model.model` before applying the regex. This is a correctness risk that must be fixed in Task 9's injection code, not just noted.
+
+**4. Stream 1-7 heads, delay pattern, loss entry point**
+
+There are **no separate per-stream "head" modules** (module names like `stream1_head`, `aux_head_2`, etc do not exist). Instead:
+- A single shared `nn.Linear` `lm_head` (rebuilt over the full multimodal vocab, `parallel.py:97-98`, `126-127`) is reused for every stream. Stream 0 (text/special tokens) uses the full `lm_head.weight` (`parallel.py` `_loss`, full-vocab branch). Streams 1+ (audio codebooks) use **the same `lm_head.weight` matrix sliced by vocab interval** (`self.lm_head.weight[start:end].T`, inside `_loss`, streams-1+ branch) - the per-stream separation is achieved purely through non-overlapping vocabulary ranges (`model.loss_intervals`, built in `from_pretrained` around `parallel.py:158-176`), not through separate weight matrices.
+- A single `nn.Embedding` `model.stream_emb` of shape `[num_stream, hidden_size]` (`parallel.py:137-138`) is added to the shared transformer's `last_hidden_state` (broadcast per stream, stream 0 forced to zero) before the shared `lm_head` projection, both in `forward()` (`parallel.py:222-226`) and `_step()` (`parallel.py:640-644`). This is the only "per-stream" parameter besides the vocab-interval slicing.
+- `num_stream` (= 8 for the candidate BagPiper-shaped config: `codec_max_token_per_frame: int = 8` default, `multimodal_io/audio.py:78`) is computed from `DiscreteAudioIO.num_stream()` = `self.ssl_n_streams + self.codec_n_streams` (`multimodal_io/audio.py:701-705`).
+
+8-stream delay pattern: implemented entirely in the **data/IO layer**, not the model - `DiscreteAudioIO._apply_delay_interleave` / `_apply_delay_deinterleave` (`multimodal_io/audio.py:737-789`), gated by the `delay_interleave: bool` config flag (`audio.py:84`, `115`). Progressive per-stream delay: "Stream 0: no delay; Stream 1: delayed by 1 frame; Stream 2: delayed by 2 frames, etc." (docstring + implementation, `audio.py:737-761`); applied to the encoded codes tensor `[batch, time, n_streams]` before it enters the multi-stream token sequence (`encode_batch`, `audio.py:471-472`), and reversed on decode (`decode_batch`, `audio.py:506-508`).
+
+Loss computation entry point: `ParallelLLM._loss(self, hidden_states, input_ids, loss_mask, router_logits)` (`parallel.py:338` onward), called from `forward()` at `parallel.py:229-234`, right after the `self.model(...)` call (`parallel.py:217-220`) and stream-embedding addition (`parallel.py:222-226`). `forward()` itself (`parallel.py:194-234`) is the outer entry point invoked by the training loop (`model(**batch)` returns `{"loss": ..., "stats": ...}`, `parallel.py:234`).
+
+**5. `espnet2/speechlm` diff vs our branch, and sync decision**
+
+`git diff --stat HEAD whr/speechlm_inference -- espnet2/speechlm` (before syncing) showed 31 files changed, 1437 insertions(+), 3493 deletions(-), entirely confined to `espnet2/speechlm` (no other paths touched - the diff command was already scoped there). Investigation of branch history: `git merge-base HEAD whr/speechlm_inference` = `6ce825d` (2026-02-24, a `whr-a/ci_test` PR merge). Our branch's last commit touching `espnet2/speechlm` was `83702b8` (2026-06-15, "move `audio_tokenizer.py` to `espnet2/beats/`" - a housekeeping move, not speechlm development). `whr/speechlm_inference`'s tip, `ae896993f` (2026-06-12, "Add SpeechLM inference code and OpusLM v2 experiment configs"), is the commit that *introduced* the `job.build_model()` / clean-`ParallelHFModel` / `bin/inference.py` API this whole plan depends on. **Our worktree branch predates and lacks that inference-focused rewrite** - its own `lm/parallel.py` (669 lines, pre-sync) has a materially different `from_pretrained` signature (`vocab_meta` dict instead of separate `vocab`/`vocab_intervals` args, a `fused_cross_entropy_loss` import, flash-attention assertions, z-loss) and its `espnet2/speechlm` tree additionally carries pipeline-parallel/Titan-trainer machinery (`lm/parallel_pp.py`, `trainer/titan_trainer.py`, `trainer/titan_trainer_pp.py`, `parallel_utils/*`) that `whr/speechlm_inference` deleted entirely - i.e. our branch is a divergent, training/pipeline-parallel-oriented line, not simply an older copy of the same file.
+
+**Decision: synced.** Ran `git checkout whr/speechlm_inference -- espnet2/speechlm` (scoped exactly to `espnet2/speechlm`, no other paths touched). This updated 21 tracked files (`git diff --cached --stat`: 1437 insertions(+), 644 deletions(-)) and added 9 new files (`README.md`, `__init__.py`, `bin/modify_parquet.py`, `bin/prepare_audio_arkive.py`, `moe_utils/launch_test.sh`, `moe_utils/replace_moe_layer.py`, `requirement.txt`, `trainer/sample_deepspeed_config.json`, `utils/parquet_dump.py`). Verified post-sync: `git show whr/speechlm_inference:espnet2/speechlm/model/speechlm/lm/parallel.py | diff - espnet2/speechlm/model/speechlm/lm/parallel.py` is empty (identical). Files that exist only on our branch and were **not** touched by the scoped checkout (left in place deliberately, since removing them would break existing unit tests that still reference them - `test/espnet2/speechlm/model/test_parallel_utils.py`, `test/espnet2/speechlm/model/speechlm/lm/test_parallel_pp.py`, `test/espnet2/speechlm/model/speechlm/lm/test_loss.py`, `test/espnet2/speechlm/trainer/test_titan_trainer.py`, `test/espnet2/speechlm/trainer/test_titan_trainer_pp.py`): `lm/loss.py`, `lm/parallel_pp.py`, `parallel_utils/__init__.py`, `parallel_utils/grouped_moe.py`, `parallel_utils/parallel_dims.py`, `parallel_utils/pipeline.py`, `parallel_utils/qwen3.py`, `tokenizer/abs_tokenizer.py`, `trainer/titan_trainer.py`, `trainer/titan_trainer_pp.py` - these are now orphaned/unreferenced by the synced code path (confirmed `speechlm_job.py` imports only `from espnet2.speechlm.model.speechlm.lm.parallel import ParallelHFModel`, not `parallel_pp`) but harmless to leave since nothing in the synced path imports them.
 ## Checkpoint (Task 4)
 - tar contents inventory:
 - train config used:
