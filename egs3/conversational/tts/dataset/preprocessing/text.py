@@ -6,8 +6,12 @@ characters if the turn belongs to channel ``i``, else exactly one ``<OTHER>``
 token per character.  Turn markers carry no speaker identity, so no vocab
 token depends on the speaker count.
 
-This module is pure: no I/O, no torch, no config access.  ``turns`` arguments
-are duck-typed and only need ``channel`` and ``text`` attributes.
+This module is pure except for ``normalize_text``, which delegates to the
+pretrained checkpoint's own tokenizer (``espnet2.text.f5_pinyin``, backed by
+``rjieba``/``pypinyin``) so fine-tuning text matches the F5TTS_Base
+pretraining distribution by construction.  No torch, no config access.
+``turns`` arguments are duck-typed and only need ``channel`` and ``text``
+attributes.
 """
 
 from __future__ import annotations
@@ -67,13 +71,34 @@ def make_token2id(tokens: Sequence[str]) -> dict[str, int]:
 def normalize_text(text: str, charset: frozenset[str]) -> str:
     """Normalize a turn transcript against the vocab charset.
 
-    Per character: keep it if in ``charset``; else fall back to its lowercase
-    form if that is in ``charset`` (lowercase-only vocabs must not corrupt
-    words like "Can" -> "an"); else drop it, keeping whitespace as a word
-    boundary.  Whitespace runs collapse to a single space and the result is
-    stripped.  Runs once at build time so ``<OTHER>`` counts derived from the
-    stored text can never desync between branches.
+    The text first goes through the pretrained checkpoint's own tokenizer
+    (``convert_char_to_pinyin``: ``;`` -> ``,`` and typographic-quote
+    translations, plus jieba segmentation, which inserts a space after
+    multi-letter segments so pretraining saw ``Turn-taking`` as
+    ``Turn- taking``).  Feeding fine-tuning the same character distribution
+    F5TTS_Base was trained on is the point; do NOT "clean up" these quirks.
+    Every token that tokenizer returns must be a single character: a
+    multi-char (pinyin) token means CJK input, which the one-``<OTHER>``-per-
+    character budget cannot represent, so it fails loudly at build time.
+
+    Per character afterwards: keep it if in ``charset``; else fall back to its
+    lowercase form if that is in ``charset`` (lowercase-only vocabs must not
+    corrupt words like "Can" -> "an"); else drop it, keeping whitespace as a
+    word boundary.  Whitespace runs collapse to a single space and the result
+    is stripped.  Runs once at build time so ``<OTHER>`` counts derived from
+    the stored text can never desync between branches.
     """
+    from espnet2.text.f5_pinyin import convert_char_to_pinyin
+
+    tokens = convert_char_to_pinyin([text])
+    for token in tokens[0]:
+        if len(token) != 1:
+            raise ValueError(
+                f"F5 tokenizer produced non-character token {token!r} for "
+                f"{text!r}; the char-level masking scheme supports "
+                "English-only transcripts"
+            )
+    text = "".join(tokens[0])
     filtered = "".join(
         c if c in charset or c.isspace() else c.lower() if c.lower() in charset else ""
         for c in text

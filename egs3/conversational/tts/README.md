@@ -52,6 +52,7 @@ python -m egs3.conversational.tts.dataset.builder \
 ```
 
 `base_vocab_path` is required (one token per line, `char_tokens.txt` format); the builder fails loudly without it.
+Text normalization delegates to the F5 tokenizer, so the build environment needs `pip install rjieba pypinyin` (see the Pipeline section).
 The build prints a summary: windows per split, window duration distribution, turns and exchanges per window, windows and hours by active speaker count, mini-window count and hours, overlap ratio, speaker overlap across splits, dropped-audio statistics (oversized blocked spans, slivers, and tails, all reported separately), and the distribution of the all-channel gap at chosen cut points including how many fall below 0.2 s (boundaries the former all-channel-silence rule could not use).
 Single-speaker windows are NOT filtered at build time; the per-window speaker-activity fields exist so filtering or weighting can happen at training time without a rebuild.
 `SSSDBuilder` subclasses the espnet3 `DatasetBuilder`, so it also plugs into the stage machinery once a `run.py` exists.
@@ -67,7 +68,9 @@ The corpus directory is treated as strictly read-only; only `lhotse_manifests_48
 The pure algorithms live in the `dataset/preprocessing/` package; `dataset/builder.py` (build time), `dataset/dataset.py`, and `dataset/preprocessor.py` (training time) orchestrate them.
 
 1. **Turn construction** (`dataset/preprocessing/sssd.py`): per session, supervisions are sorted by start; consecutive same-channel utterances merge into one turn when the gap is below `merge_gap` (default 1.0 s); texts join with single spaces.
-2. **Text normalization** (`dataset/preprocessing/text.py`): turn texts are normalized ONCE at build time against the extended vocab charset (whitespace collapse, lowercase fallback, OOV drop), so `<OTHER>` counts can never desync between branches.
+2. **Text normalization** (`dataset/preprocessing/text.py`): turn texts are normalized ONCE at build time, so `<OTHER>` counts can never desync between branches.
+   `normalize_text` first runs the pretrained checkpoint's own tokenizer (`espnet2.text.f5_pinyin.convert_char_to_pinyin`, requires `rjieba` + `pypinyin`), so fine-tuning text matches the F5TTS_Base pretraining distribution by construction - including its `;` -> `,` translation and jieba's space after hyphen compounds (`Turn-taking` -> `Turn- taking`); a CJK character (multi-char pinyin token) fails the build loudly, since the char-level `<OTHER>` budget cannot represent it.
+   Charset filtering follows (whitespace collapse, lowercase fallback, OOV drop).
 3. **Windowing** (`dataset/preprocessing/windows.py`): sessions are cut into windows at eligible utterance boundaries, with target duration uniform in `[window_min, window_max]` (default 10-60 s).
    A time instant `t` is an eligible boundary iff every merged turn on every channel ends at least `boundary_guard` before `t` or starts at least `boundary_guard` after it; with the default `boundary_guard: 0.0` this means no turn strictly contains `t`, so zero-gap speaker exchanges are valid cut points and no utterance is ever truncated.
    The eligibility rule follows CoVoMix's Fisher segmentation ([arXiv:2404.06690](https://arxiv.org/abs/2404.06690)); `boundary_guard` exists because SSSD timestamps are Parakeet pseudo-labels rather than human alignments, so a positive guard rejects boundaries where a neighbor's alignment jitter could leak un-covered speech into the window.
@@ -251,7 +254,7 @@ pytest tests/test_pretrained_real.py tests/test_preprocessing_parity.py
 ```
 
 `tests/test_pretrained_real.py` covers vocab provenance, the surgery loader (every backbone tensor bit-exact, the checkpoint's `mel_spec.mel_stft.*` DSP buffers validated against a freshly built transform), zero gates after injection, a forward-loss sanity bound on real speech, and the gold check: with `counts=[1]` and zero gates the assembled model's `sample()` must match the baseline espnet2 `CFM` on identical inputs and seed.
-`tests/test_preprocessing_parity.py` pins id-level parity between the conversational char encoding and F5's own `text_to_pinyin_ids` on normalized English text, documents the two known divergences (F5 translates `;` to `,`, and jieba segmentation inserts a space after multi-letter hyphen compounds, e.g. `Turn-taking` was seen as `Turn- taking` in pretraining), and checks the `T_wav // hop + 1` frame convention plus padded-row frame stability.
+`tests/test_preprocessing_parity.py` pins id-level parity between the conversational pipeline (normalize + per-char encode) and F5's own `text_to_pinyin_ids` on raw English text - `normalize_text` delegates to F5's tokenizer, so the formerly documented divergences (`;` -> `,`, jieba's hyphen-compound space) are now reproduced rather than diverged from - plus normalization idempotency, the loud CJK guard, and the `T_wav // hop + 1` frame convention with padded-row frame stability.
 
 Listening artifacts need no SSSD data (unlike `local/generate_dev.py`):
 
