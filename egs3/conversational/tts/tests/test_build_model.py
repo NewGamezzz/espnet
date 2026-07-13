@@ -5,7 +5,7 @@ import json
 
 import pytest
 import torch
-from conftest import (
+from .conftest import (
     BASE_TOKENS,
     EXT_TOKENS,
     FEATS_KWARGS,

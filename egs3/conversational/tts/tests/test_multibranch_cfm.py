@@ -4,7 +4,7 @@ import copy
 
 import pytest
 import torch
-from conftest import (
+from .conftest import (
     CFM_KWARGS,
     MEL,
     T,

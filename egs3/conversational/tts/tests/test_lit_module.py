@@ -2,7 +2,7 @@
 
 import pytest
 import torch
-from conftest import REPO_ROOT  # noqa: F401  (sys.path setup)
+from .conftest import REPO_ROOT  # noqa: F401  (sys.path setup)
 
 from egs3.conversational.tts.src.lit_module import ConversationalLightningModule
 

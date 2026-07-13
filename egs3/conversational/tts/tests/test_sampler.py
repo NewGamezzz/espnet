@@ -3,7 +3,7 @@
 from types import SimpleNamespace
 
 import pytest
-from conftest import REPO_ROOT  # noqa: F401  (sys.path setup)
+from .conftest import REPO_ROOT  # noqa: F401  (sys.path setup)
 
 from egs3.conversational.tts.src.sampler import (
     ConversationBatchSampler,

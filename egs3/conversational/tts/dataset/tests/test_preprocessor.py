@@ -2,7 +2,7 @@
 
 import pytest
 import torch
-from conftest import FakeTurn
+from .conftest import FakeTurn
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
     NEW_TOKENS,

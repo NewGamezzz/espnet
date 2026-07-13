@@ -5,7 +5,7 @@ import json
 
 import pytest
 import torch
-from conftest import channel_tone_hz, write_flac
+from .conftest import channel_tone_hz, write_flac
 
 from egs3.conversational.tts.dataset.dataset import (
     ConversationDataset,

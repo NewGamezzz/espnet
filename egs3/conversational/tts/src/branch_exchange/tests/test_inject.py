@@ -26,7 +26,7 @@ from branch_exchange import (
     load_exchange_state_dict,
     remove_exchange,
 )
-from conftest import (
+from .conftest import (
     DEPTH,
     DIM,
     MEL,

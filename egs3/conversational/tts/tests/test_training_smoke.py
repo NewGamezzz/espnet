@@ -3,8 +3,8 @@
 import copy
 
 import torch
-from conftest import MEL, T, make_packed_mels, randomize_params
-from test_build_model import build_tiny  # noqa: F401  (fixture reuse)
+from .conftest import MEL, T, make_packed_mels, randomize_params
+from .test_build_model import build_tiny  # noqa: F401  (fixture reuse)
 
 from egs3.conversational.tts.src.branch_exchange import ExchangedBlock, get_context
 from egs3.conversational.tts.src.build_model import exchange_param_groups
