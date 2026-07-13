@@ -274,9 +274,24 @@ For a TTS-only teacher-forced gate it may be preferable to reconstruct the train
 
 **Train config used: none shipped.** Must be reconstructed; `config.json` above is the validation target for any reconstruction.
 ## Gate results (Tasks 5-7)
-- teacher-forced loss value: NOT MEASURED on this hardware - RAM-blocked (see Task 5 below). Everything except the numeric loss is verified.
-- single-channel generation reproduced (y/n + wav path + transcript):
-- GO / NO-GO espnet3:
+
+**CONDITIONAL GO** - espnet3 route confirmed viable on all software criteria; final sign-off pending the two PSC items below. Phase 1 (tiny-model work) proceeds; Phase 2+ (training) must not start until both PSC items pass.
+
+### Criteria PASSED locally
+
+1. **SFT schema documented** (Task 2): dataset.json/dialogues.jsonl structure, field semantics, and multi-talker one-stream layout fully inventoried and exemplified.
+2. **Decoder path + return type + collision analysis** (Task 3): `model.layers.<N>` identified as `Qwen3DecoderLayer` (bare-tensor return), regex-collision risk catalogued (Xcodec/Hubert and optional Continuous-Audio layers), fix specified (`^model\.layers\.(\d+)$` anchoring).
+3. **Checkpoint inventoried, config.json facts confirmed** (Task 4): 1,381 tensors total; 854 retained (continuous_audio excluded); vocab 160392, 8 streams, codec stride 1025, text offset 256, sample rate 16 kHz all validated. Synced whr/speechlm_inference code produces state-dict keys matching checkpoint names+shapes exactly (strict=True loading will succeed).
+4. **Reconstructed train config validated, strict two-way load coverage** (Task 5): config.json facts (vocab_size, num_stream, offsets) match rebuilt YAML; verification script confirmed 854 expected names+shapes == 854 retained checkpoint keys, 0 missing/mismatched/unexpected. Continuous_audio excluded by design (INPUT codec only, unused for TTS teacher-forcing).
+5. **Real preprocessor batch builds successfully** (Task 5): one dev_multi_talker sample hand-assembled, passed through `SpeechLMPreprocessor.collate_fn`, produced valid seqs (1, 2511, 8) int64 with delay-interleaved 8-stream layout and loss masks. Batch construction end-to-end verified.
+
+### Criteria DEFERRED to PSC (with exact commands)
+
+1. **Teacher-forced loss** (Task 5/6 combined): Run `python scripts/gate_teacher_forced.py` on a machine with >=24 GiB RAM (or any CUDA GPU). This machine's 16 GiB RAM is insufficient (retained model 16.88 GiB BF16 + intermediate allocations push peak to ~30 GiB). Expect finite low-single-digit cross-entropy loss if training converged correctly. Watch for bf16-codec-vs-float32-wav dtype clash in encode_batch; if it fires, cast the wav to the codec dtype in the gate script, not in espnet2/.
+
+2. **Single-channel generation** (Task 6, to be written): Create `scripts/gate_generate.py` using `model.prepare_inference()` / `model.inference()` per the reference `inference.py`. Audio generation parameters: temperature 0.8, topk 20, CFG 3.0, max_step 1024. Produce one wav file covering the full dialogue with all speaker turns in a single audio stream (as trained). Then run whisper-transcribe to validate speaker content against the original caption. This script does not exist yet; implement during the PSC session.
+
+**Loss value:** NOT MEASURED on this hardware (Task 5 amendment: RAM-blocked). All non-loss aspects of the gate verified above.
 
 ### Task 5: load helper + teacher-forced gate
 
