@@ -48,14 +48,18 @@ Both archives extract to a `dataset.json` per "app" (`intent_to_speech`, `multi_
 2. Intent-to-speech style (`advanced_tts/intent_to_speech`, `adv_intent_to_speech_001`):
    > "Help me express my disagreement at a parent‑teacher meeting, but do it in a hesitant, uncertain tone so it sounds respectful and careful."
 
-3. Role-play style (`advanced_tts/role_play`, `adv_role_play_001`):
-   > "Khariton Volkov, a battle-scarred Siberian veteran of the Great Game, now a railway foreman in 1880s St. Petersburg, recounts his harrowing escape from a Cossack ambush.\n\"I slipped through the snowdrifts as gunfire cracked, my heart pounding like the drums of war, and the frost bit my fingers as I vanished.\""
+3. Role-play style (`advanced_tts/role_play`, `adv_role_play_001`), byte-exact JSON-escaped form (note the two trailing spaces before `\n` - a markdown hard line break present in the source string):
+   ```text
+   "Khariton Volkov, a battle-scarred Siberian veteran of the Great Game, now a railway foreman in 1880s St. Petersburg, recounts his harrowing escape from a Cossack ambush.  \n\"I slipped through the snowdrifts as gunfire cracked, my heart pounding like the drums of war, and the frost bit my fingers as I vanished.\""
+   ```
 
 4. SVS style (`advanced_tts/svs`, `adv_svs_001`):
    > "Give me a rendition of a playful yodeling opera carol, bright and silly. \"Jingle bells on high, echo through the snowy hall, yodeling notes cascade, merry voices rise and fall.\""
 
-5. Real multi-talker training caption (`dev_multi_talker`, `multi_talker_tts_YOU1000000040_M0000001`):
-   > "Female host: bright, upbeat, and energetic with a higher pitch\nMale host: warm, deep, and enthusiastic with a resonant tone\nNarrator: calm, clear, and professional with a neutral delivery\n\nThe female host says: \"We're in Istanbul, Turkey.\"\nThe male host says: \"The food culture here will blow your mind. We're so excited to be filming a bunch of food videos.\"\nThe female host says: \"Let's get food hunting.\"\nThe narrator says: \"Istanbul has an exciting and vibrant food scene. This city's diverse heritage is reflected in its incredible food culture. In this five-part series, we're going to show you some delicious local Turkish food.\""
+5. Real multi-talker training caption (`dev_multi_talker`, `multi_talker_tts_YOU1000000040_M0000001`), byte-exact JSON-escaped form (each line ends with two trailing spaces before `\n` in the source):
+   ```text
+   "Female host: bright, upbeat, and energetic with a higher pitch  \nMale host: warm, deep, and enthusiastic with a resonant tone  \nNarrator: calm, clear, and professional with a neutral delivery  \n\nThe female host says: \"We're in Istanbul, Turkey.\"  \nThe male host says: \"The food culture here will blow your mind. We're so excited to be filming a bunch of food videos.\"  \nThe female host says: \"Let's get food hunting.\"  \nThe narrator says: \"Istanbul has an exciting and vibrant food scene. This city's diverse heritage is reflected in its incredible food culture. In this five-part series, we're going to show you some delicious local Turkish food.\""
+   ```
 
 **One complete multi-talker entry, verbatim** (`dev_multi_talker/stages/v1/stage5_dialogues/dialogues.jsonl`, line 1):
 ```json
