@@ -45,4 +45,13 @@ REGISTRY = {
         unpack=lambda o: o[0],
         repack=lambda o, h: (h,) + tuple(o[1:]),
     ),
+    # Dotted path, not a regex: on the real BagPiper model the regex target
+    # `(?:.*\.)?layers\.(\d+)` collides with codec-internal `layers.N` stacks
+    # (Xcodec's Hubert encoder and the Qwen3-Omni audio tower) - see
+    # docs/bagpiper-findings.md, Task 3 section.
+    "qwen3": BlockSpec(
+        target="model.layers",
+        unpack=lambda o: o[0] if isinstance(o, tuple) else o,
+        repack=lambda o, h: ((h,) + tuple(o[1:])) if isinstance(o, tuple) else h,
+    ),
 }

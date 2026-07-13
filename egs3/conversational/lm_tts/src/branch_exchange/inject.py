@@ -145,6 +145,27 @@ class ExchangedBlock(nn.Module):
         object.__setattr__(self, "spec", spec)
         object.__setattr__(self, "_fwd_snapshot", _NO_SNAPSHOT)
 
+    def __getattr__(self, name):
+        """Fall back to ``base_block`` for plain instance attributes the HF
+        model reads directly off a layer object (not via ``forward``), e.g.
+        Qwen3's per-layer ``attention_type`` used to pick the causal mask.
+        ``nn.Module.__getattr__`` only resolves registered params/buffers/
+        submodules, so unknown attributes land here; delegating makes the
+        wrapper transparent to such framework introspection.
+
+        Reaches into ``_modules`` directly (not ``self.base_block``) so that
+        during ``copy.deepcopy``/unpickling of a half-built instance (no
+        ``_modules`` yet), this raises the original ``AttributeError``
+        instead of recursing.
+        """
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            modules = self.__dict__.get("_modules")
+            if modules is not None and "base_block" in modules:
+                return getattr(modules["base_block"], name)
+            raise
+
     def _validate_recompute(self):
         snapshot = self._fwd_snapshot
         if snapshot is _NO_SNAPSHOT:
