@@ -226,11 +226,38 @@ python local/crosstalk_report.py --num-sessions 20 --out exp/crosstalk_report.ts
 ## Tests
 
 ```bash
-pytest egs3/conversational/tts/dataset/tests             # data pipeline
-pytest egs3/conversational/tts/src/branch_exchange/tests # exchange modules
-pytest egs3/conversational/tts/tests                     # trainer: CFM, assembly, sampler, smoke
+# All three suites in one run (the tests dirs are packages with relative conftest imports):
+pytest egs3/conversational/tts/src/branch_exchange/tests \
+       egs3/conversational/tts/tests \
+       egs3/conversational/tts/dataset/tests
 SSSD_ROOT=/path/to/corpus pytest egs3/conversational/tts/dataset/tests/test_integration_sssd.py
 ```
 
 All unit tests run on fabricated fixtures (synthetic FLAC files, hand-built manifests, random-init tiny DiT; CPU-only, no corpus or checkpoint needed); the integration test over the real corpus is skipped unless `SSSD_ROOT` is set.
-Run the three suites as separate pytest invocations: each has its own `conftest.py` helpers imported by basename, which pytest cannot disambiguate in a single combined run.
+
+## Verification against the pretrained checkpoint
+
+The unit suite proves invariants on tiny random-init models; two extra test files close the gap against the REAL `downloads/F5TTS_Base` assets and are skipped automatically when the download is absent (so CI stays green).
+
+```bash
+cd egs3/conversational/tts
+huggingface-cli download SWivid/F5-TTS F5TTS_Base/model_1200000.safetensors --local-dir downloads
+huggingface-cli download SWivid/F5-TTS F5TTS_Base/vocab.txt --local-dir downloads
+# Optional, enables the forward-loss sanity test and the listening script:
+curl -L -o downloads/ref/basic_ref_en.wav --create-dirs \
+    https://github.com/SWivid/F5-TTS/raw/main/src/f5_tts/infer/examples/basic/basic_ref_en.wav
+
+pytest tests/test_pretrained_real.py tests/test_preprocessing_parity.py
+```
+
+`tests/test_pretrained_real.py` covers vocab provenance, the surgery loader (every backbone tensor bit-exact, the checkpoint's `mel_spec.mel_stft.*` DSP buffers validated against a freshly built transform), zero gates after injection, a forward-loss sanity bound on real speech, and the gold check: with `counts=[1]` and zero gates the assembled model's `sample()` must match the baseline espnet2 `CFM` on identical inputs and seed.
+`tests/test_preprocessing_parity.py` pins id-level parity between the conversational char encoding and F5's own `text_to_pinyin_ids` on normalized English text, documents the two known divergences (F5 translates `;` to `,`, and jieba segmentation inserts a space after multi-letter hyphen compounds, e.g. `Turn-taking` was seen as `Turn- taking` in pretraining), and checks the `T_wav // hop + 1` frame convention plus padded-row frame stability.
+
+Listening artifacts need no SSSD data (unlike `local/generate_dev.py`):
+
+```bash
+python local/verify_pretrained_gen.py --steps 32 --two_channel --out_dir exp/verify
+```
+
+`single_multibranch.wav` must sound exactly like stock F5 (correct words in the reference voice); `single_baseline.wav` is the A/B render through the baseline `CFM` and the printed max mel diff must be ~0.
+The `twochannel_*` renders are the qualitative pre-finetuning baseline (`<turn>`/`<OTHER>` embeddings are warm-started but untrained), not a pass/fail gate.

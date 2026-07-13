@@ -11,7 +11,10 @@
    (``<turn>`` from the space character's row, ``<OTHER>`` from the filler
    row 0 - F5's internal padding token, the closest pretrained concept to
    "no text for me here" - each plus small Gaussian noise).  Everything
-   else must load exactly (strict load, zero missing/unexpected keys).
+   else must load exactly (strict load, zero missing/unexpected keys),
+   except the checkpoint's ``mel_spec.mel_stft.*`` DSP buffers, which the
+   ported functional MelSpec does not register and which are dropped after
+   verification-by-test (see ``load_pretrained_with_surgery``).
 3. ``inject_exchange`` with the configured schedule.  Gates are zero-init,
    so at this instant the model computes exactly N independent pretrained
    F5 passes.
@@ -155,7 +158,17 @@ def load_pretrained_with_surgery(
     state[_TEXT_EMBED_KEY] = extended_text_embedding(
         state[_TEXT_EMBED_KEY], tokens, noise_scale=noise_scale, generator=generator
     )
-    # strict: after the surgery every key must match exactly.
+    # The official checkpoint EMA-tracked the upstream MelSpec's torchaudio
+    # submodule buffers (mel_spec.mel_stft.*: hann window + mel filterbank).
+    # The ported MelSpec computes the mel functionally and registers no such
+    # buffers, so these keys have no destination.  They are DSP constants
+    # derived from the mel config, not weights (tests/test_pretrained_real.py
+    # verifies them against a freshly built transform), so drop exactly the
+    # mel_spec keys the model does not carry and keep everything else strict.
+    model_keys = set(cfm.state_dict())
+    for key in [k for k in state if k.startswith("mel_spec.") and k not in model_keys]:
+        del state[key]
+    # strict: after the surgery every remaining key must match exactly.
     cfm.load_state_dict(state, strict=True)
 
 
