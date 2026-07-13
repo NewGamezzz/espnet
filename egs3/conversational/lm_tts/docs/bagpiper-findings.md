@@ -274,6 +274,29 @@ For a TTS-only teacher-forced gate it may be preferable to reconstruct the train
 
 **Train config used: none shipped.** Must be reconstructed; `config.json` above is the validation target for any reconstruction.
 ## Gate results (Tasks 5-7)
-- teacher-forced loss value:
+- teacher-forced loss value: NOT MEASURED on this hardware - RAM-blocked (see Task 5 below). Everything except the numeric loss is verified.
 - single-channel generation reproduced (y/n + wav path + transcript):
 - GO / NO-GO espnet3:
+
+### Task 5: load helper + teacher-forced gate
+
+**Deliverables** (all committed; nothing under `downloads/`):
+- `conf/bagpiper_train_config.yaml` - reconstructed train config (no yaml shipped with the checkpoint).
+- `scripts/load_bagpiper.py` - `load_bagpiper(train_config_path, ckpt_path, device="cpu", dtype=torch.bfloat16)`, the Interfaces contract imported by Task 6 / Task 12. Loads the 4 BF16 safetensors shards (raw ESPnet keys, no `["module"]` wrapper), filters the excluded prefixes, asserts strict two-way coverage, then `load_state_dict(strict=True)`. `ckpt_path` is the shard DIRECTORY; a DeepSpeed `.pt` path (state dict under `"module"`) is also supported for future use.
+- `scripts/verify_key_coverage.py` - RAM-free proof of the strict-coverage contract (runnable here; see below).
+- `scripts/gate_teacher_forced.py` - the teacher-forced gate; `--build-only` builds the batch RAM-free.
+
+**Config reconstruction.** Started from `whr/speechlm_inference:egs2/opuslm_v2/speechlm1/conf/train_stage2_qwen3_base_v3.yaml` (the SFT-stage reference). Base-vs-Instruct resolved from the shipped `tokenizer_config.json` -> `base_tokenizer: "Qwen/Qwen3-8B-Base"`, so `model_hf_tag` / `tokenizer_name` = `Qwen/Qwen3-8B-Base` (matches that reference; the stage1/stage2 non-base configs use `Qwen/Qwen3-8B` and are wrong for this checkpoint). Adaptations vs the reference candidate:
+  - `continuous_audio` IO **removed** (see exclusion below); `preprocessor.audio_input: continuous_audio -> discrete_audio`.
+  - `attn_implementation: flash_attention_3 -> sdpa` (no flash on CPU/MPS).
+  - `activation_checkpointing: true -> false`, `audio_cfg: 0.05 -> 0.0` (deterministic gate).
+  - `trainer`/`deepspeed`/`freeze_param` dropped (not read by `build_model()`).
+Validated against `config.json`: built vocab = 256 special + 151936 text + 8*1025 codec = **160392** = `vocab_size`; text interval `[256, 152192)`, codec `[152192, 160392)` -> `codec_base_offset` 152192, `num_stream` 8, `codec_layer_size` 1025. All match.
+
+**Exclusion (continuous_audio).** `build_model()`'s IO dict is config-driven (`SpeechLMJobTemplate.__init__` builds `multimodal_io` from `config["multimodal_io"]`), so dropping the `continuous_audio` key cleanly prevents constructing `ContinuousAudioIO` - which otherwise pulls `Qwen/Qwen3-Omni-30B-A3B-Instruct` (~60 GB) and is audio-INPUT only, unused for TTS teacher-forcing. No `espnet2/` change needed. Consequence for loading: checkpoint tensors under `multimodal_io_dict.continuous_audio.*` (525) and `adaptor.continuous_audio.*` (2) are excluded. **Excluded = 527 tensors; retained = 854 of 1381.**
+
+**Strict-coverage verdict (verified RAM-free).** `scripts/verify_key_coverage.py` reconstructs the exact key set `build_model()` would produce - Qwen3ForCausalLM backbone via `torch.device("meta")` (vocab enlarged to 160392) + `stream_emb.weight` + the REAL small `DiscreteAudioIO` state-dict keys prefixed `multimodal_io_dict.discrete_audio.` + the REAL `HuggingFaceTextIO` (0 persistent keys) - and compares to the checkpoint index minus excluded prefixes. Result: **854 expected == 854 retained, 0 missing, 0 unexpected, both directions -> PASS.** So the whr-synced `parallel.py` parameter names match the BagPiper checkpoint exactly (the Task-3 sync risk is resolved), and Task 6 / Task 12 can import `load_bagpiper` and get correct, complete coverage on adequate RAM. (Breakdown: backbone 399 = embed_tokens + norm + lm_head + 36 layers x 11; stream_emb 1; discrete_audio 454; text 0.)
+
+**Batch construction (verified RAM-free, `--build-only`).** Per amendment 5, the gate drives the real synced ESPnet preprocessor (`SpeechLMJobTemplate.build_preprocessor()` + `SpeechLMPreprocessor.collate_fn`) rather than `DataIteratorFactory` (no registered datasets locally). One `dev_multi_talker` sample (`multi_talker_tts_YOU1000000035_M0000024`) is hand-assembled into the preprocessor's `{"dialogue": [[role, io_name, content], ...]}` form: SFT modality `text -> "text"`, `audio -> "discrete_audio"` (the stale wav path resolved by basename to the shipped `downloads/.../audio/.../*.wav`, loaded as `[channels, samples]`), `is_train=True` so the assistant turns get loss mask. The genuine preprocessor then tokenizes, lays out the 8 delay-interleaved streams, and builds the loss mask. Produced batch: `seqs (1, 2511, 8) int64`, `loss_masks (1, 2511, 8)`, `discrete_audio_indices (1, 3)`, `discrete_audio_feats (1, 409808, 1) float32` (~25.6 s wav; Xcodec-encoded inside the model's `_embed`), `discrete_audio_lengths (1,)`. Batch build succeeds end-to-end.
+
+**Loss value: BLOCKED on this hardware (RAM).** The retained model is **16.88 GB in bf16** (8.44 B params); this machine has **16 GiB (17.18 GB) physical RAM** with ~8-9 GB free. The final model alone exceeds physical RAM, and `ParallelLLM.from_pretrained` additionally loads the full Qwen3-8B-Base base weights (~15 GB, overwritten by the checkpoint) before the shard load, so peak is ~30 GB -> the machine would thrash/swap. Per amendment 4 this is reported rather than attempted (running it risks destabilizing the machine Claude Code itself runs on; `flash_attention` is also unavailable on CPU, and MPS shares the same 16 GiB pool with a working-set cap that rejects a 15.7 GiB allocation). The numeric loss must be produced on a box with >=~24 GB RAM (or any CUDA GPU); `python scripts/gate_teacher_forced.py` will then print it with the coverage assertion already baked into `load_bagpiper`. All non-loss aspects of Task 5 (config validity, strict coverage, batch pipeline) are verified above.
