@@ -1,14 +1,17 @@
 """Input-preprocessing parity with the pretrained F5TTS_Base conventions.
 
-The conversational pipeline assumes that (a) raw character ids against the
+The conversational pipeline assumes that (a) character ids against the
 Emilia vocab are exactly what the pretrained model saw in training, and
 (b) the mel front-end frame accounting matches what the sampling scripts
-assume.  These tests pin both assumptions:
+assume.  ``normalize_text`` delegates to F5's own tokenizer
+(``convert_char_to_pinyin``), so parity holds by construction; these tests
+pin it and the assumptions around it:
 
 * id-level parity between the conversational char encoding and F5's own
-  ``text_to_pinyin_ids`` tokenizer on normalized English text (needs the
+  ``text_to_pinyin_ids`` tokenizer on raw English text, including the
+  ``;`` -> ``,`` translation and jieba's hyphen-compound space (needs the
   downloaded base vocab + ``pypinyin``/``rjieba``),
-* the one known, deliberate divergence (F5's ``;`` -> ``,`` translation),
+* idempotency of ``normalize_text`` and the loud CJK guard,
 * masked-script invariants on a constructed two-channel window,
 * the ``T_wav // hop + 1`` frame-length convention and stability of a padded
   row's frames against its unpadded computation (the packed-collator case).
@@ -49,11 +52,13 @@ needs_vocab = pytest.mark.skipif(
 def test_char_ids_match_f5_pinyin_tokenizer():
     """Normalized text must encode to the exact ids the pretrained model saw.
 
-    The conversational pipeline encodes raw characters (id = vocab line
-    index); the pretrained F5TTS_Base was trained on ``convert_char_to_pinyin``
-    output, which is char-identity for English.  Any drift here would feed
-    the model well-formed but wrongly-mapped ids: it loads cleanly and
-    degrades silently.
+    ``normalize_text`` runs ``convert_char_to_pinyin`` itself, so on
+    in-vocab, single-spaced English text the full conversational pipeline
+    (normalize -> per-char ids) must equal F5's ``text_to_pinyin_ids`` on the
+    RAW sentence - including the ``;`` -> ``,`` translation and jieba's
+    hyphen-compound space, formerly documented divergences.  Any drift here
+    would feed the model well-formed but wrongly-mapped ids: it loads cleanly
+    and degrades silently.
     """
     pytest.importorskip("pypinyin")
     pytest.importorskip("rjieba")
@@ -64,58 +69,52 @@ def test_char_ids_match_f5_pinyin_tokenizer():
     charset = vocab_charset(base)
     char_map = load_vocab_char_map(str(BASE_VOCAB))
 
-    # Plain conversational text: no hyphenated compounds or semicolons (see
-    # the known-divergence tests below for those).
     sentences = [
         "Some call me nature, others call me mother nature.",
         "The quick brown fox jumps over the lazy dog!",
         "hello world, how are you today?",
         "I mean, yeah. You know what? That's right.",
+        "Turn-taking is hard; we should practice.",
+        "a-b testing beats state-of-the-art baselines; really.",
     ]
     for sentence in sentences:
         normalized = normalize_text(sentence, charset)
         assert normalized, sentence
         ours = encode_tokens(list(normalized), token2id)
-        f5 = text_to_pinyin_ids(normalized, char_map).tolist()
-        assert ours == f5, f"id divergence on {normalized!r}"
+        f5 = text_to_pinyin_ids(sentence, char_map).tolist()
+        assert ours == f5, f"id divergence on {sentence!r} -> {normalized!r}"
+        # The stored manifest text must survive re-normalization unchanged,
+        # so inference-time text (already normalized once) encodes the same.
+        assert normalize_text(normalized, charset) == normalized
 
 
 @needs_vocab
-def test_semicolon_translation_is_a_known_divergence():
-    """F5's tokenizer translates ``;`` to ``,`` before the id lookup; the
-    conversational ``normalize_text`` keeps ``;`` whenever the vocab carries
-    it.  This test documents the divergence: transcripts containing ``;``
-    reach the model with an id the pretrained model essentially never saw.
-    If SSSD transcripts contain semicolons, map them to commas at build time.
+def test_f5_tokenizer_translations_applied():
+    """The pretraining tokenizer's rewrites must reach the stored text:
+    ``;`` becomes ``,`` and a hyphenated compound gains jieba's space
+    (pretraining saw ``Turn- taking``); single-letter fragments (``a-b``)
+    are not affected.
     """
     pytest.importorskip("pypinyin")
     pytest.importorskip("rjieba")
-    from espnet2.text.f5_pinyin import load_vocab_char_map, text_to_pinyin_ids
 
     base = read_vocab(BASE_VOCAB)
-    char_map = load_vocab_char_map(str(BASE_VOCAB))
-    assert ";" in vocab_charset(base), "vocab dropped ';'; divergence moot"
-    f5 = text_to_pinyin_ids("a;b", char_map).tolist()
-    assert f5 == text_to_pinyin_ids("a,b", char_map).tolist()
-    ours = encode_tokens(list("a;b"), make_token2id(base))
-    assert ours != f5
+    charset = vocab_charset(base)
+    assert normalize_text("a;b", charset) == "a,b"
+    assert normalize_text("Turn-taking", charset) == "Turn- taking"
+    assert normalize_text("a-b", charset) == "a-b"
 
 
 @needs_vocab
-def test_hyphen_compound_space_is_a_known_divergence():
-    """F5's tokenizer segments text with jieba and inserts a space after a
-    multi-letter segment, so pretraining saw hyphenated compounds as
-    ``Turn- taking`` (extra space), while the conversational encoding keeps
-    ``Turn-taking`` verbatim.  Single-letter fragments (``a-b``) are NOT
-    affected.  Documented divergence: if SSSD transcripts are hyphen-heavy,
-    consider replacing ``-`` with a space at build time.
-    """
+def test_cjk_input_fails_loudly():
+    """A multi-char pinyin token would silently corrupt the one-<OTHER>-per-
+    character budget, so CJK input must raise at normalization time."""
     pytest.importorskip("pypinyin")
     pytest.importorskip("rjieba")
-    from espnet2.text.f5_pinyin import convert_char_to_pinyin
 
-    assert convert_char_to_pinyin(["Turn-taking"])[0] == list("Turn- taking")
-    assert convert_char_to_pinyin(["a-b"])[0] == list("a-b")
+    charset = vocab_charset(read_vocab(BASE_VOCAB))
+    with pytest.raises(ValueError, match="non-character token"):
+        normalize_text("hello 你好 world", charset)
 
 
 def test_masked_scripts_two_channel_window():
