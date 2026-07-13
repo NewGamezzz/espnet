@@ -176,8 +176,103 @@ Loss computation entry point: `ParallelLLM._loss(self, hidden_states, input_ids,
 
 **Risk this sync creates for Task 4 (flag, not yet resolved):** our pre-sync `lm/parallel.py` had a materially different `from_pretrained` signature and forward/loss internals (see divergence description above). Swapping to whr's version bets that the **parameter names** whr's `ParallelLLM.from_pretrained` produces match the state dict keys actually saved in the BagPiper DeepSpeed checkpoint - `bin/inference.py`'s `load_checkpoint()` calls `model.load_state_dict(state_dict, strict=True)` (`espnet2/speechlm/bin/inference.py:141`), which raises on any key mismatch. This bet is well-motivated (the plan's `job.build_model()` API was explicitly "confirmed from the reference inference script", i.e. this synced code), but it is unverified until Task 4 actually loads the checkpoint. If `strict=True` load fails on key mismatch, that reopens this sync decision (e.g. the checkpoint might have been trained against a parallel.py revision between our old branch and whr's tip) - it is not just a matter of picking the right train-config yaml.
 ## Checkpoint (Task 4)
-- tar contents inventory:
-- train config used:
+
+**Download.**
+Source: HF repo `wanghaor/transfer`, file `bagpiper_vLLM_all/bagpiper_vLLM_all.tar`, downloaded with `hf download` to `downloads/bagpiper_vLLM_all/bagpiper_vLLM_all.tar`.
+Local size 18,200,709,120 bytes, byte-exact match with the HF LFS metadata (`lfs.size: 18200709120`, `lfs.oid sha256: 4982810167de18e8e279951f95e6815b04e86557a2c881ee00a958a0abd3b2e0`).
+Extracted to `downloads/bagpiper/`.
+
+**Tar contents inventory (complete, 19 files).**
+
+| Path in tar | Size | What it is |
+|---|---|---|
+| `./convert_ckpt.py` | 7,921 B | ESPnet DeepSpeed `.pt` -> vLLM/HF safetensors converter (guidance goldmine, see below) |
+| `./env.md` | 608 B | Setup guide: vLLM fork install + pointers to the two scripts |
+| `./serve_cfg_1.sh` | 2,563 B | vLLM OpenAI-API server launch script (CFG-enabled) |
+| `./client_all.py` | 17,810 B | Stress-test client; documents request format and sampling flags |
+| `./speechlm-qwen3-8b/config.json` | 1,809 B | vLLM model config - **the token-layout ground truth** |
+| `./speechlm-qwen3-8b/model-0000{1..4}-of-00004.safetensors` | 5.36+5.30+4.55+2.98 GB | The model weights, 4 BF16 shards |
+| `./speechlm-qwen3-8b/model.safetensors.index.json` | 162,892 B | Shard index; full state-dict key list |
+| `./speechlm-qwen3-8b/{generation_config,added_tokens,special_tokens_map}.json` | small | HF tokenizer/generation config |
+| `./speechlm-qwen3-8b/{tokenizer.json,tokenizer_config.json,vocab.json,merges.txt}` | ~12 MB | Qwen2-family BPE tokenizer files |
+| `./speechlm-qwen3-8b/chat_template.jinja` | 1,003 B | Documents the exact ESPnet training prompt format |
+
+**Headline finding: the tar contains NO DeepSpeed `.pt` checkpoint and NO train config yaml.**
+It is a vLLM deployment bundle, not an ESPnet training checkpoint.
+The expected `train_stage2_qwen3_base_v3.yaml` (reference-launch naming) is absent; there is no yaml of any kind in the tar.
+A repo-wide search of all 11,838 files in `wanghaor/transfer` found no ESPnet train config either - the only yamls are dataset-registry files (`inference_data/sft.yaml`, `jctian_data/sft.yaml`, both just name->jsonl-path maps) and an unrelated olmo2 config under `siddhant_dump/`.
+**Concern: Task 5 cannot read the train config from disk; it must be reconstructed** (starting point: `egs2/opuslm_v2/speechlm1/conf/train_stage1_qwen3.yaml` from Task 3, validated against the `config.json` facts below).
+
+**But the safetensors ARE the raw ESPnet state dict.**
+`convert_ckpt.py` docstring (verbatim): "Convert an ESPnet SpeechLM DeepSpeed checkpoint to vLLM-compatible format. Takes the mp_rank_00_model_states.pt from an ESPnet training run and produces a complete HuggingFace-style checkpoint directory with sharded safetensors".
+Its `load_checkpoint()` does `ckpt = torch.load(input_path, ...)`; `state_dict = ckpt["module"]` ("Extracted 'module' key from DeepSpeed checkpoint.") and then shards that dict **without renaming a single key**.
+So the shard keys are exactly the keys `ParallelLLM.load_state_dict(..., strict=True)` expects, minus the `["module"]` wrapper.
+This also confirms the source checkpoint's top-level layout: a DeepSpeed dict whose `"module"` key holds the model state dict (per the script's own branch logic).
+
+**State-dict inventory** (from `model.safetensors.index.json` + safetensors headers; no torch load needed):
+- 1,381 tensors, 9,093,843,593 parameters total, every tensor BF16, `metadata.total_size` 18,187,687,186 bytes (16.94 GiB).
+- First 20 keys: `model.embed_tokens.weight`, then `model.layers.0.{self_attn.{q,k,v,o}_proj.weight, self_attn.{q,k}_norm.weight, mlp.{gate,up,down}_proj.weight, input_layernorm.weight, post_attention_layernorm.weight}`, then the same pattern for `model.layers.1.*`.
+- Weight groups (prefix: tensor count): `model.layers` 396 (= 36 decoder layers x 11), `model.embed_tokens` 1, `model.norm` 1, `lm_head.weight` 1, `stream_emb.weight` 1, `adaptor.continuous_audio` 2, `multimodal_io_dict.continuous_audio` 525, `multimodal_io_dict.discrete_audio` 454.
+- Shape spot-checks: `model.embed_tokens.weight` and `lm_head.weight` both `[160392, 4096]`; `stream_emb.weight` `[8, 4096]` (8 streams confirmed in the weights themselves); `adaptor.continuous_audio.weight` `[4096, 2048]` + bias `[4096]` (the 2048->4096 continuous-audio linear adaptor from `parallel.py:143-146`).
+- Keys use `model.layers.N`, not `model._orig_mod.layers.N`, so the checkpoint was saved with `compile_transformer_body: false` semantics (Task 3 caveat resolved).
+
+**Regex-collision question from Task 3, now settled against the real checkpoint.**
+`continuous_audio` IS present in BagPiper (525 tensors), but it contains **only** `multimodal_io_dict.continuous_audio.model.audio_tower.*` - no thinker text decoder.
+This matches `ContinuousAudioIO._init_encoder` (`espnet2/speechlm/model/speechlm/multimodal_io/audio.py`, "Remove unnecessary components, keep only audio tower": `del full_model.thinker.model`, `del full_model.thinker.visual`, `del full_model.thinker.lm_head`).
+The actual `.layers.<N>.` collisions in this checkpoint are exactly two: `multimodal_io_dict.continuous_audio.model.audio_tower.layers.<N>` (32 layers, Whisper-style encoder) and `multimodal_io_dict.discrete_audio.codec_model.semantic_model.encoder.layers.<N>` (Hubert).
+Task 3's hypothesized `continuous_audio.model.model.layers.<N>` collision does not exist; the anchored-regex fix (`^model\.layers\.(\d+)$`) remains required and sufficient.
+
+**Guidance facts from `config.json` (verbatim, the token-layout ground truth):**
+```json
+"num_stream": 8,
+"vocab_size": 160392,
+"codec_base_offset": 152192,
+"codec_layer_size": 1025,
+"text_token_offset": 256,
+"text_token_end": 152192,
+"xcodec_hf_model_tag": "hf-audio/xcodec-hubert-general",
+"xcodec_sample_rate": 16000,
+"pad_token_id": 0, "bos_token_id": 1, "eos_token_id": 2, "eot_token_id": 3,
+"system_token_id": 4, "user_token_id": 5, "assistant_token_id": 6,
+"text_token_id": 7, "audio_token_id": 8
+```
+This confirms the design doc's backbone facts exactly: 8 streams, audio-vocab offset 152192, per-stream stride 1025, and 152192 + 8 x 1025 = 160392 = vocab_size.
+Sample rate is 16 kHz (Xcodec).
+Text tokens occupy `[256, 152192)`; ids 0-8 are the special/control tokens listed above; sampling defaults baked into the config: `"audio_temperature": 0.8, "audio_topk": 20, "text_temperature": 0.6, "text_topk": 20`.
+Backbone dims (in `text_config`): `hidden_size 4096, num_hidden_layers 36, num_attention_heads 32, num_key_value_heads 8, head_dim 128, intermediate_size 12288, rope_theta 1000000.0` - Qwen3-8B, matching the 36 `model.layers` in the state dict.
+
+**Guidance facts from `chat_template.jinja` (verbatim comment):**
+"Prompt format (from ESPnet training): `<|bos|>[<|system|><|text|>sys<|eos|>]<|user|><|text|>text<|eos|><|assistant|>` / `<|bos|>[<|system|><|text|>sys<|eos|>]<|user|><|audio|><|eos|><|assistant|>`" - directly usable for Task 6's teacher-forced sequence construction.
+
+**Guidance facts on inference flags (`serve_cfg_1.sh` + `client_all.py`):**
+- Server: `--max-model-len 16384`, `--trust-remote-code`, `--limit-mm-per-prompt '{"audio": 1}'`; "CFG is triggered per-request when the client sends `"cfg": N` (N > 1) in vllm_xargs".
+- Audio-gen request: `vllm_xargs: {"mode": "text_audio", "phase": "text", "cfg": 3.0, "text_temperature": 0.6, "audio_temperature": 0.8, "audio_topk": 20}`, `max_tokens` up to 12000.
+- Text-only request: `"stop_token_ids": [3]` (stop on `eot_token_id` 3).
+- `env.md`: inference uses a **forked vLLM** (`git clone https://github.com/whr-a/vllm.git`, python 3.11, `VLLM_USE_PRECOMPILED=1 uv pip install --editable .`, `pip install vllm[audio]`) - not needed for our ESPnet-side gate, but it is the only supported serving path shipped with the tar.
+
+**Raw DeepSpeed `.pt` checkpoints DO exist elsewhere in the same HF repo** (not in the tar; found while searching for the train config):
+- `checkpoints/global_step267558/mp_rank_00_model_states.pt` (18,188,293,711 B)
+- `checkpoints/global_step299985/mp_rank_00_model_states.pt` (18,188,293,839 B)
+- `ckpt/step_275140/global_step275128/mp_rank_00_model_states.pt` (18,188,293,711 B)
+- plus optimizer-state-only dirs (`checkpoints/step_150000/`, `ckpt/v1/step_275000/`, `ckpt/v2/opuslm_v2_stage3_sft_qwen3_combine_v2_3node/step_272500/` - that last run name, and `convert_ckpt.py`'s example output `speechlm-qwen3-8b-step272500`, are the best available hints at the training run identity).
+It is not recorded which `.pt` the tar's safetensors were converted from.
+
+**Task 5 loader recipe implied by this inventory** (no `.pt` download needed):
+```python
+import glob
+from safetensors.torch import load_file
+sd = {}
+for shard in sorted(glob.glob("downloads/bagpiper/speechlm-qwen3-8b/model-*.safetensors")):
+    sd.update(load_file(shard))
+model = job_template.build_model()
+model.load_state_dict(sd, strict=True)
+```
+i.e. replace `bin/inference.py`'s `torch.load(...)["module"]` with a shard merge; everything downstream is unchanged because the keys are identical.
+Alternatively download one of the raw `.pt` files above (~18 GB more) to use `load_checkpoint()` verbatim.
+**Second Task 5 concern:** `build_model()` with a `continuous_audio` IO calls `ContinuousAudioIO._init_encoder`, which does `from_pretrained("./Qwen-Qwen3-Omni-30B-A3B-Instruct")` - a local directory holding the full ~30B Qwen3-Omni model (only the audio tower is kept, but the full model is loaded first).
+For a TTS-only teacher-forced gate it may be preferable to reconstruct the train config **without** `continuous_audio` and strict-load only the remaining keys (or load with a filtered state dict), rather than fetch ~60 GB of Omni weights; this is a decision for Task 5, flagged here.
+
+**Train config used: none shipped.** Must be reconstructed; `config.json` above is the validation target for any reconstruction.
 ## Gate results (Tasks 5-7)
 - teacher-forced loss value:
 - single-channel generation reproduced (y/n + wav path + transcript):
