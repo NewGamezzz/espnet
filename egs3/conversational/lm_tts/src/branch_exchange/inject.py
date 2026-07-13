@@ -10,6 +10,13 @@ The branch axis is folded into the batch dimension as a packed layout:
 with ``(M, T, d)`` hidden states where ``M = sum(n_i)`` stacks every
 conversation's branches with NO padding rows; each wrapper hands the packed
 hidden states plus per-row conversation ids to its exchange.
+
+Optionally, ``ctx.branches(counts=..., align_offsets=..., align_len=...)``
+restricts every exchange to a per-row aligned audio slab (each channel's text
+prefix has a different length, so its audio start offset differs too): row
+``i``'s exchange input is ``h[i, offsets[i] : offsets[i] + align_len]``, and
+positions outside that slab pass through untouched. See ``_apply_aligned``
+and ``BranchContext.segment_align_offsets``.
 """
 
 from __future__ import annotations
@@ -42,6 +49,8 @@ class BranchContext:
     def __init__(self):
         self.conv_id: torch.Tensor | None = None
         self.n_conv: int | None = None
+        self.align_offsets: torch.Tensor | None = None
+        self.align_len: int | None = None
         self._segment_cache: dict = {}
 
     @property
@@ -49,13 +58,22 @@ class BranchContext:
         return self.conv_id is not None
 
     @contextmanager
-    def branches(self, counts, device=None):
+    def branches(self, counts, device=None, align_offsets=None, align_len=None):
         """Activate exchanges for the enclosed forward/backward; exception-safe.
 
         ``counts`` lists each conversation's branch count; the model input
         stacks all branches as ``(sum(counts), T, d)`` with no padding.
         ``device`` places the derived per-row conversation ids (default CPU;
         they are moved and cached per device on first use).
+
+        ``align_offsets`` / ``align_len`` (optional, must be given together)
+        restrict every exchange to a per-row aligned slab instead of the full
+        sequence: row ``i``'s audio lives at ``[align_offsets[i],
+        align_offsets[i] + align_len)`` (its text prefix length differs per
+        channel, so the audio start offset does too); everything outside that
+        slab passes through untouched. ``align_offsets`` must have shape
+        ``(sum(counts),)`` - one offset per row, in the same row order as
+        ``counts`` unrolls. See ``_apply_aligned``.
 
         With activation checkpointing (``use_reentrant=False``), ``backward()``
         must also run inside this context: the recompute re-executes each
@@ -71,6 +89,18 @@ class BranchContext:
         counts_t = torch.as_tensor(counts, dtype=torch.long)
         if counts_t.ndim != 1 or counts_t.numel() == 0 or bool((counts_t < 1).any()):
             raise ValueError(f"counts must be a non-empty sequence of positive ints, got {counts!r}")
+        if (align_offsets is None) != (align_len is None):
+            raise ValueError("align_offsets and align_len must be given together")
+        if align_offsets is not None:
+            off = torch.as_tensor(align_offsets, dtype=torch.long)
+            if off.ndim != 1 or off.shape[0] != int(counts_t.sum()):
+                raise ValueError(
+                    f"align_offsets must have shape (sum(counts),), got {tuple(off.shape)}"
+                )
+            if int(align_len) < 1 or bool((off < 0).any()):
+                raise ValueError("align_len must be >= 1 and offsets non-negative")
+            self.align_offsets = off.to(device)
+            self.align_len = int(align_len)
         self.conv_id = torch.repeat_interleave(
             torch.arange(counts_t.numel(), dtype=torch.long), counts_t
         ).to(device)
@@ -80,6 +110,8 @@ class BranchContext:
         finally:
             self.conv_id = None
             self.n_conv = None
+            self.align_offsets = None
+            self.align_len = None
             self._segment_cache.clear()
 
     def segment_conv_id(self, m: int, device) -> tuple[torch.Tensor, int]:
@@ -109,6 +141,64 @@ class BranchContext:
             cached = (conv_id, segments * self.n_conv)
             self._segment_cache[key] = cached
         return cached
+
+    def segment_align_offsets(self, m: int, device) -> torch.Tensor:
+        """Per-row aligned-slab start offsets for a packed hidden batch of
+        ``m`` rows, mirroring ``segment_conv_id``'s CFG-segment tiling.
+
+        Unlike conversation ids (which get an ``n_conv`` offset per segment so
+        branches never mix), the audio slab of segment ``s``'s row ``i`` is at
+        the SAME relative offset as segment 0's row ``i`` - the CFG uncond
+        copy repeats the identical packed layout, text-prefix lengths and
+        all - so offsets simply TILE (``offsets.repeat(segments)``), not shift.
+        Results are cached per (segment count, device) under a distinct cache
+        key from ``segment_conv_id`` so the two caches never collide.
+        """
+        total = int(self.conv_id.shape[0])
+        if m % total != 0:
+            raise RuntimeError(
+                f"packed hidden batch has {m} rows, not a multiple of the "
+                f"context total {total} (= sum of counts); the model input "
+                "must stack whole copies of the packed layout"
+            )
+        segments = m // total
+        key = ("off", segments, device)
+        cached = self._segment_cache.get(key)
+        if cached is None:
+            offsets = self.align_offsets.to(device)
+            if segments > 1:
+                offsets = offsets.repeat(segments)
+            self._segment_cache[key] = offsets
+            cached = offsets
+        return cached
+
+
+def _apply_aligned(exchange: nn.Module, h: torch.Tensor, ctx: BranchContext) -> torch.Tensor:
+    """Apply ``exchange`` only to each row's aligned audio slab
+    ``[offset_i, offset_i + ctx.align_len)``; identity elsewhere.
+
+    Each channel's text prefix has a different length, so the audio start
+    offset differs per row; gathering each row's slab into a common
+    ``(M, align_len, d)`` tensor before calling ``exchange`` aligns audio
+    position ``t`` across every row of the conversation regardless of prefix
+    length, exactly like the plain (unaligned) path aligns position ``t``
+    when all rows share one length. CFG-style batches (see
+    ``segment_conv_id``) get their offsets tiled per segment by
+    ``ctx.segment_align_offsets`` - the uncond copy repeats the same packed
+    layout, so its slabs sit at the identical relative offsets, not shifted.
+    """
+    offsets = ctx.segment_align_offsets(h.shape[0], h.device)
+    length = ctx.align_len
+    if int(offsets.max()) + length > h.shape[1]:
+        raise RuntimeError(
+            f"aligned slab [max_offset+{length}] exceeds sequence length {h.shape[1]}"
+        )
+    conv_id, n_conv = ctx.segment_conv_id(h.shape[0], h.device)
+    idx = (offsets[:, None] + torch.arange(length, device=h.device))[..., None]
+    idx = idx.expand(-1, -1, h.shape[-1])
+    slab = h.gather(1, idx)
+    out_slab = exchange(slab, conv_id, n_conv=n_conv)
+    return h.scatter(1, idx, out_slab)
 
 
 class ExchangedBlock(nn.Module):
@@ -187,8 +277,16 @@ class ExchangedBlock(nn.Module):
         if not self.ctx.active:
             return out
         h = self.spec.unpack(out)  # (M, T, d)
-        conv_id, n_conv = self.ctx.segment_conv_id(h.shape[0], h.device)
-        return self.spec.repack(out, self.exchange(h, conv_id, n_conv=n_conv))
+        # h.shape[1] > 1 guard: keeps single-step decode (T == 1, e.g.
+        # autoregressive generation one frame at a time) on the plain path,
+        # where all rows are already at the same audio step and there is no
+        # per-row slab to align.
+        if self.ctx.align_offsets is not None and h.shape[1] > 1:
+            new_h = _apply_aligned(self.exchange, h, self.ctx)
+        else:
+            conv_id, n_conv = self.ctx.segment_conv_id(h.shape[0], h.device)
+            new_h = self.exchange(h, conv_id, n_conv=n_conv)
+        return self.spec.repack(out, new_h)
 
 
 def _is_attr_path(target: str) -> bool:
