@@ -73,6 +73,11 @@ class ConversationDataset(TorchDataset):
     systematic ch0/ch1 artifacts in the corpus and is applied consistently to
     audio rows and turn channels (turn markers carry no identity, so nothing
     else needs re-indexing).
+
+    ``min_active_speakers`` drops windows with fewer active speakers (the
+    manifests keep single-speaker windows; the POC trains with ``2`` so
+    gradient mass concentrates on actual interactions - a knob, not a
+    rebuild).
     """
 
     def __init__(
@@ -85,6 +90,7 @@ class ConversationDataset(TorchDataset):
         permute_channels: bool | None = None,
         seed: int = 0,
         inference: bool = False,
+        min_active_speakers: int = 1,
     ) -> None:
         self.split = split
         self.fs = int(fs if fs is not None else _DATASET_CFG["sample_rate"])
@@ -112,6 +118,15 @@ class ConversationDataset(TorchDataset):
                 "builder first (python -m egs3.conversational.tts.dataset.builder)."
             )
         self.records = read_window_manifest(manifest_path)
+        if min_active_speakers > 1:
+            self.records = [
+                r for r in self.records if r.num_active_speakers >= min_active_speakers
+            ]
+            if not self.records:
+                raise RuntimeError(
+                    f"no window in {manifest_path} has >= "
+                    f"{min_active_speakers} active speakers"
+                )
 
         # Test hook: a fixed permutation (sequence of ints) overrides the RNG.
         self._fixed_perm: Sequence[int] | None = None

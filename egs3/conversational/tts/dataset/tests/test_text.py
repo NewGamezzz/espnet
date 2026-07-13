@@ -1,7 +1,7 @@
 """Tests for the branch-text masking scheme and vocab extension (AC1, AC2, AC9)."""
 
 import pytest
-from conftest import FakeTurn
+from .conftest import FakeTurn
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
     NEW_TOKENS,

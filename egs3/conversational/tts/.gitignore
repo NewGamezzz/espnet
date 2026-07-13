@@ -1,0 +1,5 @@
+# The repo-root pattern `egs*/*/*/data*` (meant for recipe data dirs) also
+# matches this recipe's dataset/ PACKAGE, silently ignoring any new source
+# file under it.  Un-ignore the package; the run-time dirs (data/, downloads/,
+# exp/) stay covered by the root patterns.
+!dataset/
