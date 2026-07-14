@@ -124,7 +124,7 @@ def test_zero_init_parity_real_checkpoint():
     batch, _example_id = build_batch(train_config)
     batch = _duplicate_batch(batch, n=2)
 
-    torch.manual_seed(0)
+    torch.manual_seed(0)  # inert safety net: eval forward is deterministic; kept for future non-eval variants
     with torch.no_grad():
         base = _model_forward_hidden_states(model, batch)
 

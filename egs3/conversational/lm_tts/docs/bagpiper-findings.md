@@ -182,7 +182,7 @@ Source: HF repo `wanghaor/transfer`, file `bagpiper_vLLM_all/bagpiper_vLLM_all.t
 Local size 18,200,709,120 bytes, byte-exact match with the HF LFS metadata (`lfs.size: 18200709120`, `lfs.oid sha256: 4982810167de18e8e279951f95e6815b04e86557a2c881ee00a958a0abd3b2e0`).
 Extracted to `downloads/bagpiper/`.
 
-**Tar contents inventory (complete, 19 files).**
+**Tar contents inventory (complete, 18 files).**
 
 | Path in tar | Size | What it is |
 |---|---|---|
@@ -287,7 +287,7 @@ For a TTS-only teacher-forced gate it may be preferable to reconstruct the train
 
 ### Criteria DEFERRED to PSC (with exact commands)
 
-1. **Teacher-forced loss** (Task 5/6 combined): Run `python scripts/gate_teacher_forced.py` on a machine with >=24 GiB RAM (or any CUDA GPU). This machine's 16 GiB RAM is insufficient (retained model 16.88 GiB BF16 + intermediate allocations push peak to ~30 GiB). Expect finite low-single-digit cross-entropy loss if training converged correctly. Watch for bf16-codec-vs-float32-wav dtype clash in encode_batch; if it fires, cast the wav to the codec dtype in the gate script, not in espnet2/.
+1. **Teacher-forced loss** (Task 5/6 combined): Run `PYTHONPATH=<espnet_bagpiper worktree>:<this recipe dir> python scripts/gate_teacher_forced.py` on a machine with >=24 GiB RAM (or any CUDA GPU). This machine's 16 GiB RAM is insufficient (retained model 16.88 GiB BF16 + intermediate allocations push peak to ~30 GiB). Expect finite low-single-digit cross-entropy loss if training converged correctly. Watch for bf16-codec-vs-float32-wav dtype clash in encode_batch; if it fires, cast the wav to the codec dtype in the gate script, not in espnet2/.
 
 2. **Single-channel generation** (Task 6, to be written): Create `scripts/gate_generate.py` using `model.prepare_inference()` / `model.inference()` per the reference `inference.py`. Audio generation parameters: temperature 0.8, topk 20, CFG 3.0, max_step 1024. Produce one wav file covering the full dialogue with all speaker turns in a single audio stream (as trained). Then run whisper-transcribe to validate speaker content against the original caption. This script does not exist yet; implement during the PSC session.
 
