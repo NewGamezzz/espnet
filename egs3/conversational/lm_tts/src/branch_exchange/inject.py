@@ -173,6 +173,29 @@ class BranchContext:
         return cached
 
 
+def _call_exchange(
+    exchange: nn.Module, h: torch.Tensor, conv_id: torch.Tensor, n_conv: int
+) -> torch.Tensor:
+    """Run ``exchange`` in its own parameter dtype; return in ``h``'s dtype.
+
+    ``inject_exchange`` builds exchanges via the caller's ``factory``, which
+    constructs them in the default dtype (float32) regardless of the wrapped
+    backbone's dtype, so a bf16-loaded backbone would otherwise crash on the
+    first exchange ``Linear`` (``mat1 and mat2 must have the same dtype``).
+    Casting the activations here - never the parameters - keeps the wrapper
+    dtype-agnostic without mutating state at forward time (safe under DDP
+    bucketing, ``torch.compile``, and checkpoint recompute). The zero-init
+    identity stays bit-exact: bf16 -> float32 -> bf16 round-trips exactly,
+    and at ``g == 0`` the exchange returns its input unchanged. When the
+    dtypes already match (or the exchange has no parameters, e.g.
+    ``IdentityExchange``), this is a plain call with no casts.
+    """
+    p = next(exchange.parameters(), None)
+    if p is None or p.dtype == h.dtype:
+        return exchange(h, conv_id, n_conv=n_conv)
+    return exchange(h.to(p.dtype), conv_id, n_conv=n_conv).to(h.dtype)
+
+
 def _apply_aligned(exchange: nn.Module, h: torch.Tensor, ctx: BranchContext) -> torch.Tensor:
     """Apply ``exchange`` only to each row's aligned audio slab
     ``[offset_i, offset_i + ctx.align_len)``; identity elsewhere.
@@ -197,7 +220,7 @@ def _apply_aligned(exchange: nn.Module, h: torch.Tensor, ctx: BranchContext) -> 
     idx = (offsets[:, None] + torch.arange(length, device=h.device))[..., None]
     idx = idx.expand(-1, -1, h.shape[-1])
     slab = h.gather(1, idx)
-    out_slab = exchange(slab, conv_id, n_conv=n_conv)
+    out_slab = _call_exchange(exchange, slab, conv_id, n_conv)
     return h.scatter(1, idx, out_slab)
 
 
@@ -285,7 +308,7 @@ class ExchangedBlock(nn.Module):
             new_h = _apply_aligned(self.exchange, h, self.ctx)
         else:
             conv_id, n_conv = self.ctx.segment_conv_id(h.shape[0], h.device)
-            new_h = self.exchange(h, conv_id, n_conv=n_conv)
+            new_h = _call_exchange(self.exchange, h, conv_id, n_conv)
         return self.spec.repack(out, new_h)
 
 

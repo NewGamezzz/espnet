@@ -45,3 +45,45 @@ def test_permutation_equivariance(tiny_qwen3):
         out = tiny_qwen3(ids).logits
         out_perm = tiny_qwen3(ids[perm]).logits
     assert torch.allclose(out[perm], out_perm, atol=1e-5)
+
+
+def test_zero_init_identity_bf16_backbone(tiny_qwen3):
+    """A bf16 backbone with fp32 exchanges (the dtype `factory` produces) must
+    run and stay bit-exact at zero gate - the exact mixed-dtype configuration
+    that crashed the real-checkpoint parity run before `_call_exchange`
+    adapted activations to the exchange dtype (Delta gate, 2026-07-14)."""
+    model = tiny_qwen3.to(torch.bfloat16)
+    ids = torch.randint(0, 128, (4, 16))
+    with torch.no_grad():
+        base = model(ids).logits.clone()
+    ctx = _inject(model)
+    exchange_params = [
+        p for m in model.modules() if type(m).__name__ == "ExchangedBlock"
+        for p in m.exchange.parameters()
+    ]
+    assert exchange_params and all(p.dtype == torch.float32 for p in exchange_params)
+    with torch.no_grad():
+        with ctx.branches(counts=[2, 2]):
+            plain = model(ids).logits
+        with ctx.branches(counts=[2, 2], align_offsets=torch.tensor([3, 5, 2, 4]), align_len=8):
+            aligned = model(ids).logits
+    assert plain.dtype == torch.bfloat16 and aligned.dtype == torch.bfloat16
+    assert torch.equal(plain, base)
+    assert torch.equal(aligned, base)
+
+
+def test_gradient_flow_bf16_backbone(tiny_qwen3):
+    """Gradients must reach the fp32 exchange params through the bf16
+    backbone (the activation casts sit on the autograd path)."""
+    model = tiny_qwen3.to(torch.bfloat16)
+    ids = torch.randint(0, 128, (2, 16))
+    ctx = _inject(model)
+    with ctx.branches(counts=[2]):
+        loss = model(ids).logits.float().sum()
+    loss.backward()
+    gates = [
+        m.exchange.g for m in model.modules() if type(m).__name__ == "ExchangedBlock"
+    ]
+    assert gates
+    for g in gates:
+        assert g.grad is not None and torch.isfinite(g.grad).all()
