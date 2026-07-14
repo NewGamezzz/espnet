@@ -1,0 +1,34 @@
+##########################################################
+#           Conversational F5 - measure stage             #
+##########################################################
+# Quick usage (from the recipe dir):
+#   python run.py --stages measure --metrics_config conf/metrics.yaml
+#
+# Merged over egs3/TEMPLATE/tts/conf/metrics.yaml (recipe_dir, exp_tag,
+# exp_dir). `exp_tag`/`exp_dir` are normally inherited from training_config /
+# inference_config at run time
+# (espnet3.utils.run_utils.apply_training_experiment_context), which also
+# copies `inference_dir` from inference_config into this config so `measure`
+# scores whatever `infer` just wrote.
+#
+# That copy overwrites `inference_dir` outright unless the two configs'
+# RAW (pre-resolve) formulas already match byte-for-byte -- so `mode` must be
+# declared here too: conf/inference_conversational.yaml's `inference_dir` is
+# `${exp_dir}/infer_${mode}`, and metrics_config has no `mode` key of its own
+# unless we add one, which would make the copied formula fail to resolve
+# (InterpolationKeyError) on a standalone `--stages measure` run. Keep this
+# `mode` in lockstep with conf/inference_conversational.yaml's default so the
+# two configs agree even before any propagation happens; override both
+# together to score the `gt`/`resynth` anchor runs instead.
+mode: generate
+inference_dir: ${exp_dir}/infer_${mode}
+
+dataset:
+  test:
+    - name: valid
+
+# The four metric classes (ConversationASRMetric, SpeakerDynamicsMetric,
+# InteractionMetric, ChannelQualityMetric) land in later tasks; each entry
+# is `{metric: {...}, inputs: {meta: meta}}` iterating meta.scp only. Shipped
+# empty here so the config is valid/loadable ahead of those tasks.
+metrics: []

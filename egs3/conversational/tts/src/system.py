@@ -30,8 +30,11 @@ logger = logging.getLogger(__name__)
 
 
 class ConversationalTTSSystem(BaseSystem):
-    """System with ``create_dataset`` (inherited SSSD builder), ``train`` and a
-    recipe-local ``infer`` (multi-channel generate / gt / resynth)."""
+    """System with ``create_dataset`` (inherited SSSD builder), ``train``, a
+    recipe-local ``infer`` (multi-channel generate / gt / resynth), and
+    ``measure`` (inherited from ``BaseSystem`` unmodified: it just calls
+    ``espnet3.systems.base.metric.measure(self.metrics_config)`` over
+    whatever ``infer`` wrote, so no recipe-local override is needed here)."""
 
     def infer(self, *args, **kwargs):
         """Run the multi-channel infer stage (``src/inference.py``)."""
