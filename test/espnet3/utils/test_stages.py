@@ -92,6 +92,19 @@ def test_run_stages_typeerror_wrapped():
         run_stages(system, ["stage_a"])
 
 
+def test_run_stages_internal_typeerror_propagates(monkeypatch):
+    class InternalTypeErrorSystem(BaseSystem):
+        def stage_a(self):
+            raise TypeError("sampler doesn't subclass BatchSampler")
+
+    system = InternalTypeErrorSystem()
+    monkeypatch.setattr(stages_utils, "log_stage", lambda _: contextlib.nullcontext())
+    monkeypatch.setattr(stages_utils, "log_stage_metadata", lambda *_, **__: None)
+    monkeypatch.setattr(stages_utils, "set_stage_log_handler", lambda *_, **__: None)
+    with pytest.raises(TypeError, match="sampler doesn't subclass BatchSampler"):
+        run_stages(system, ["stage_a"])
+
+
 def test_run_stages_reraises_exception(monkeypatch):
     class CrashSystem(BaseSystem):
         def stage_a(self):
