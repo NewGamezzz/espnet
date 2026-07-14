@@ -310,6 +310,22 @@ The three deferred items were executed on NCSA Delta (A40/CPU compute nodes, int
 
 **Gate verdict update (2026-07-14): criteria 1-2 of the CONDITIONAL GO are now MET; generation moves from "deferred" to "open with diagnosis" (see item 3). Phase 2 data/trainer work is unblocked; the step-4 lockstep inference loop must resolve item 3 first.**
 
+### Generation fix + final verification (2026-07-14, second Delta pass)
+
+The two generation root causes were fixed on the branch (commit `55d55be82`, `espnet2/speechlm/model/speechlm/lm/parallel.py`):
+(1) `_step` skipped `_embed`'s stream>0 pad-embedding zeroing while the checkpoint's row-0 embedding is nonzero noise, corrupting every decode step's input (now shared via `_embed_and_sum_streams`);
+(2) continuation segments re-prefilled the whole prompt onto the accumulated KV cache (now they inject only the `<|assistant|>` token).
+Regression tests: `tests/test_parallel_inference.py` on a tiny ParallelLLM fixture reproducing the noisy-pad-row condition; both RED on pre-fix code.
+
+Delta verification (all under interactive partitions, logs in /work/nvme/bbjs/ttrachu/):
+1. Unit tests + full suite: 2 passed; 73 passed + 1 skipped.
+2. Teacher-forced loss re-check: **exactly 2.336375** - the `_embed` refactor changed no numerics.
+3. Generation: **the loop is repaired** - coherent 5144-char `<think>` plan ending in `<|eot|>`, audio segment decodes to 16.5 s / RMS 0.154 wav; whisper transcript's first ~5-6 s match the script ("Later that week I stopped by to meet a very special lady indeed. Sheila Reed...").
+4. **Residual open item - long-horizon audio drift:** intelligibility degrades after ~5-6 s into garble-with-repetition. cfg=1 control is WORSE (degrades at ~2 s), so CFG is exculpated and actually stabilizes decode. Sampling params match the author's vLLM client exactly (survey: espnet path was never used by the author; serving is 100% the vLLM fork; no generated samples exist on their disk to benchmark). A/B test through the author's vLLM path on the same prompt is the decisive discriminator (espnet-decode divergence vs model free-running limit) - results to be appended.
+5. Mixed-dtype parity re-run: **1 passed (bit-exact)** with exchanges deliberately fp32 on the bf16 backbone (no `model.to(bf16)` workaround) - the `_call_exchange` activation-casting path is confirmed on the real checkpoint.
+
+**Gate verdict (final for steps 0-1): GO.** All CONDITIONAL GO criteria are met; the generation machinery is verified working end-to-end. The long-horizon drift is tracked as its own open item above (relevant to the step-4 lockstep loop; per-turn spans in conversational windows are typically shorter than the drift onset, and the TAC fine-tune retrains the decode regime on our windows regardless).
+
 ### Task 5: load helper + teacher-forced gate
 
 **Deliverables** (all committed; nothing under `downloads/`):
