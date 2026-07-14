@@ -109,10 +109,17 @@ def main():
         return 0
 
     model = load_bagpiper(CONF, CKPT_DIR, device=args.device, dtype=torch.bfloat16)
-    batch = {
-        k: (v.to(args.device) if isinstance(v, torch.Tensor) else v)
-        for k, v in batch.items()
-    }
+    # Dtype landmines (docs/bagpiper-findings.md, Task 5 + Delta gate run):
+    # the model (incl. the Xcodec codec) is bf16, but the collated batch
+    # carries float32 wav (discrete_audio_feats) and float64 loss_masks --
+    # both clash inside the forward (codec conv, _loss masked_scatter_).
+    # The reference pipeline (espnet2/speechlm/bin/inference.py) solves this
+    # with to_device(..., dtype=...), which casts float tensors to the model
+    # dtype and leaves int tensors alone. Use the same utility here -- the
+    # fix lives in the gate script, never in espnet2/.
+    from espnet2.speechlm.utils.data import to_device
+
+    batch = to_device(batch, args.device, dtype=torch.bfloat16)
     with torch.no_grad():
         out = model(**batch)
     loss = out["loss"]

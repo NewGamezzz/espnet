@@ -297,6 +297,19 @@ For a TTS-only teacher-forced gate it may be preferable to reconstruct the train
 
 **Loss value:** NOT MEASURED on this hardware (Task 5 amendment: RAM-blocked). All non-loss aspects of the gate verified above.
 
+### Deferred criteria: RESULTS (Delta run, 2026-07-14)
+
+The three deferred items were executed on NCSA Delta (A40/CPU compute nodes, interactive partitions; full run log in the controller-side report `delta-gate-report.md`).
+
+1. **Teacher-forced loss: PASS.** `loss = 2.336375` on one real dev_multi_talker batch (A40, bf16) - finite low-single-digit CE with the expected texture (stream-0 text acc 0.43 >> audio-stream acc ~0.22-0.28).
+   Both predicted dtype landmines fired and are fixed IN THE GATE SCRIPT via the reference pipeline's own `to_device(batch, device, dtype=bf16)` (casts float tensors only): float32 wav vs bf16 codec conv, and float64 `loss_masks` vs bf16 CE in `_loss`'s `masked_scatter_`.
+2. **Zero-init TAC parity on the real checkpoint: PASS.** `1 passed` in 38 min (CPU, bf16): injecting `TACExchange` at depths 19-36 (zero gates) into the real 36-layer model changes not a single bit of the pre-`lm_head` hidden states.
+   The run first exposed a REAL package gap: `inject_exchange`'s factory-built exchanges are float32 and crashed the bf16 backbone (`mat1 and mat2 must have the same dtype`). Root cause fixed in `src/branch_exchange/inject.py::_call_exchange` (activations adapt to the exchange dtype at the block boundary; bit-exact at zero gate by construction) with bf16 tiny-model regression tests; the Delta PASS itself used the interim `model.to(bf16)` workaround, so re-run this test on Delta once to confirm the mixed-dtype path on the real checkpoint.
+3. **Single-channel generation: OPEN - degenerate output, checkpoint NOT impugned.** `scripts/gate_generate.py` (committed) runs the full pipeline (prompt `(1, 210, 8)`, `prepare_inference`, `model.inference`, wav writeout), but the espnet incremental-decode path emits a degenerate `<think>` text segment (repeated punctuation, no `<|eot|>`), so no audio segment is ever produced. Ruled out: prompt/input format, sampling (greedy reproduces it), CFG (text segment decodes with cfg=1), detokenization (control flow branches on raw ids). The failure is localized to the whr-synced generation machinery (`prepare_inference` + `inference_segment`/`_step` in `espnet2/.../lm/parallel.py`) - the one path the passing items never exercise - and the checkpoint's supported serving path is the forked vLLM, not this espnet script. Forward weights are proven good by items 1-2.
+   **Follow-up options:** (a) verify generation through the vLLM fork (the supported path), or (b) diff `prepare_inference`/`inference_segment` config faithfulness against this checkpoint's config.json before trusting the espnet decode path. Phase 2+ SFT does not depend on the espnet decode path (training is teacher-forced), but the POC's lockstep inference loop will need this resolved or routed around.
+
+**Gate verdict update (2026-07-14): criteria 1-2 of the CONDITIONAL GO are now MET; generation moves from "deferred" to "open with diagnosis" (see item 3). Phase 2 data/trainer work is unblocked; the step-4 lockstep inference loop must resolve item 3 first.**
+
 ### Task 5: load helper + teacher-forced gate
 
 **Deliverables** (all committed; nothing under `downloads/`):

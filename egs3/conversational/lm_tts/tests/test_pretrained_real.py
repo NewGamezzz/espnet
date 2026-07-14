@@ -123,6 +123,14 @@ def test_zero_init_parity_real_checkpoint():
         train_config = yaml.safe_load(f)
     batch, _example_id = build_batch(train_config)
     batch = _duplicate_batch(batch, n=2)
+    # Same dtype landmines as the teacher-forced gate (docs/
+    # bagpiper-findings.md): float32 wav + float64 loss_masks vs the bf16
+    # model. Resolved the same way the reference pipeline does -- to_device
+    # with an explicit dtype casts float tensors only. Fix lives in the test,
+    # never in espnet2/.
+    from espnet2.speechlm.utils.data import to_device
+
+    batch = to_device(batch, "cpu", dtype=torch.bfloat16)
 
     torch.manual_seed(0)  # inert safety net: eval forward is deterministic; kept for future non-eval variants
     with torch.no_grad():
@@ -133,8 +141,24 @@ def test_zero_init_parity_real_checkpoint():
         {"1-18": "P", "19-36": "P+TAC"}, depth=36, factory=lambda: TACExchange(4096)
     )
     inject_exchange(model, REGISTRY["qwen3"], schedule, ctx)
+    # The exchanges deliberately stay in their factory dtype (float32) on the
+    # bf16 backbone: _call_exchange adapts activations at the block boundary,
+    # so this test also guards the mixed-dtype path on the real checkpoint.
+    # (The first Delta parity PASS, 2026-07-14, ran with a model.to(bf16)
+    # workaround instead; re-run on Delta to confirm the mixed path.)
 
     with torch.no_grad(), ctx.branches(counts=[2]):
         injected = _model_forward_hidden_states(model, batch)
 
+    # Failure-mode diagnostics (inert on pass; pytest suppresses stdout for a
+    # passing test). On any parity regression they immediately separate
+    # nan/inf from float-reassociation without a 37-minute rerun.
+    _d = (base.float() - injected.float()).abs()
+    print("PARITY DIAG base:", "nan=", torch.isnan(base).any().item(),
+          "inf=", torch.isinf(base).any().item(), flush=True)
+    print("PARITY DIAG inj :", "nan=", torch.isnan(injected).any().item(),
+          "inf=", torch.isinf(injected).any().item(), flush=True)
+    print("PARITY DIAG diff: max_abs=", _d.max().item(),
+          "n_diff=", int((_d > 0).sum().item()), "/", _d.numel(),
+          "equal=", torch.equal(base, injected), flush=True)
     assert torch.equal(base, injected)  # zero gate => bit-exact
