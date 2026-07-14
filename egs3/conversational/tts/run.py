@@ -6,8 +6,11 @@ Stages:
     builder (``dataset/``), driven by ``training_config.dataset`` entries.
   - ``train``: fine-tune the injected multi-branch F5 model
     (``conf/training_poc.yaml``).
+  - ``infer``: batch-generate multi-channel conversations (generate / gt /
+    resynth) from manifest windows into the measure-stage output contract
+    (``src/inference.py``, ``conf/inference_conversational.yaml``).
 
-Sanity generation is a script, not a stage: ``local/generate_dev.py``.
+``local/generate_dev.py`` remains a standalone single-window listening tool.
 """
 
 import argparse
@@ -35,12 +38,13 @@ from espnet3.utils.stages_utils import (  # noqa: E402
     run_stages,
 )
 
-DEFAULT_STAGES = ["create_dataset", "train"]
+DEFAULT_STAGES = ["create_dataset", "train", "infer"]
 ALL_STAGES = DEFAULT_STAGES
 # Name of the near-empty shared default under egs3/TEMPLATE/tts/conf that
 # the recipe config is merged over (see the libritts run.py for why configs
 # are merged over the TEMPLATE, not over each other).
 DEFAULT_TRAINING_CONFIG = "training.yaml"
+DEFAULT_INFERENCE_CONFIG = "inference.yaml"
 
 
 def build_parser(stages: Sequence[str]) -> argparse.ArgumentParser:
@@ -57,6 +61,12 @@ def build_parser(stages: Sequence[str]) -> argparse.ArgumentParser:
         default=Path("conf/training_poc.yaml"),
         type=Path,
         help="Hydra config for training-time stages.",
+    )
+    parser.add_argument(
+        "--inference_config",
+        default=None,
+        type=Path,
+        help="Hydra config for the infer stage.",
     )
     parser.add_argument(
         "--dry_run",
@@ -79,28 +89,45 @@ def main(args) -> None:
         config_name=DEFAULT_TRAINING_CONFIG,
         resolve=False,
     )
+    inference_config = load_and_merge_config(
+        args.inference_config,
+        config_name=DEFAULT_INFERENCE_CONFIG,
+        resolve=False,
+    )
     logger = configure_logging()
     apply_training_experiment_context(
         training_config=training_config,
-        inference_config=None,
+        inference_config=inference_config,
         metrics_config=None,
         publication_config=None,
         log=logger,
     )
     validate_experiment_context(
         training_config=training_config,
-        inference_config=None,
+        inference_config=inference_config,
         metrics_config=None,
         stages_to_run=stages_to_run,
     )
-    resolve_loaded_configs(training_config, None)
+    resolve_loaded_configs(training_config, inference_config)
 
-    if training_config is None:
+    # The training-time stages need the training config; ``infer`` needs the
+    # inference config (which self-references its own training config).
+    training_stages = {"create_dataset", "train"}
+    if training_config is None and training_stages.intersection(stages_to_run):
         raise ValueError(
-            f"Config not provided for stage(s): {', '.join(stages_to_run)}. "
+            "Training config not provided for stage(s): "
+            f"{', '.join(sorted(training_stages.intersection(stages_to_run)))}. "
             "Use --training_config."
         )
-    system = ConversationalTTSSystem(training_config=training_config)
+    if "infer" in stages_to_run and inference_config is None:
+        raise ValueError(
+            "Inference config not provided for the 'infer' stage. "
+            "Use --inference_config."
+        )
+    system = ConversationalTTSSystem(
+        training_config=training_config,
+        inference_config=inference_config,
+    )
 
     run_stages(system=system, stages_to_run=stages_to_run, args=args, log=logger)
 
