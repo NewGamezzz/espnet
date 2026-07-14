@@ -130,9 +130,10 @@ dataloader:
     # Packed row budget in sample-rows: N x T_24k summed over the batch,
     # padded to the longest window. A 60 s N=2 window costs 2.88M
     # (~11,250 transformer rows at ~94 frames/s) - size batch_bins and OOM
-    # headroom for that ceiling. 6M ~= two such windows per batch; tune per
-    # GPU.
-    batch_bins: 6000000
+    # headroom for that ceiling. 3M ~= one such window per batch: 6M OOMs an
+    # A100-40G in fp32; the effective batch is kept via
+    # accumulate_grad_batches (halve one, double the other to retune).
+    batch_bins: 3000000
     min_batch_size: 1      # conversations, not rows
     shuffle: true
     num_workers: 4
@@ -148,11 +149,18 @@ trainer:
   accelerator: auto
   devices: ${num_device}
   num_nodes: ${num_nodes}
-  accumulate_grad_batches: 1
+  accumulate_grad_batches: 2
+  # fp32 cannot fit a single 60 s N=2 window's forward activations (~32 GB)
+  # on an A100-40G, and min_batch_size=1 makes that window the memory floor;
+  # bf16-mixed halves activations while keeping fp32 master weights.
+  precision: bf16-mixed
   check_val_every_n_epoch: 1
   log_every_n_steps: 50
   max_epochs: 1000
   gradient_clip_val: 1.0
+  # Rebuild dataloaders each epoch so ConversationBatchSampler sees the
+  # current epoch for its seeded batch reshuffle (src/lit_module.py).
+  reload_dataloaders_every_n_epochs: 1
   strategy: auto
   callbacks:
     - _target_: espnet3.components.callbacks.ema.EMACallback

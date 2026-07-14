@@ -2,6 +2,8 @@
 
 import pytest
 import torch
+from omegaconf import OmegaConf
+
 from .conftest import REPO_ROOT  # noqa: F401  (sys.path setup)
 
 from egs3.conversational.tts.src.lit_module import ConversationalLightningModule
@@ -51,3 +53,31 @@ def test_log_stats_without_per_channel_keys():
     module, recorder = _bare_module()
     module._log_stats("valid", {"loss": torch.tensor(1.0)}, weight=None)
     assert len(recorder.calls) == 1  # no second (unsynced) call
+
+
+class _StubOrganizer:
+    """Minimal DataOrganizer stand-in for constructing the module."""
+
+    def __init__(self):
+        self.train = ["window"]
+        self.valid = ["window"]
+
+    def log_summary(self, logger):
+        pass
+
+
+def test_init_marks_sampler_as_self_sharding():
+    """ConversationBatchSampler strides batches by rank itself, so the module
+    must set is_espnet_sampler so the espnet3 trainer hands Lightning
+    use_distributed_sampler=False (otherwise DDP crashes trying to inject a
+    DistributedSampler into the non-BatchSampler batch sampler)."""
+    config = OmegaConf.create(
+        {
+            "dataset": {
+                "_target_": f"{_StubOrganizer.__module__}._StubOrganizer",
+            },
+            "dataloader": {"train": {}, "valid": {}},
+        }
+    )
+    module = ConversationalLightningModule(torch.nn.Linear(1, 1), config)
+    assert module.is_espnet_sampler is True

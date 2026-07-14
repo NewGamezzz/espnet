@@ -186,7 +186,7 @@ The recipe LightningModule instead builds a standard `DataLoader` around the sam
 | `model.init_noise_scale` | `0.02` | Gaussian noise on the two warm-started embedding rows |
 | `optim.lr_exchange` / `optim.lr_backbone` | `1e-4` / `1e-5` | the two param groups of the single AdamW |
 | `dataset.*.data_src_args.min_active_speakers` | `2` | drop windows with fewer active speakers (knob, not a rebuild; relax if per-channel quality drifts) |
-| `dataloader.train.batch_bins` | `6000000` | packed row budget in sample-rows (N x T_24k, padded); a 60 s N=2 window costs 2.88M |
+| `dataloader.train.batch_bins` | `3000000` | packed row budget in sample-rows (N x T_24k, padded); a 60 s N=2 window costs 2.88M and must fit alone (`min_batch_size: 1`), so this is effectively the floor; effective batch is scaled via `trainer.accumulate_grad_batches` |
 | `dataloader.train.min_batch_size` | `1` | counts conversations, not rows |
 
 ### Running the smoke training
