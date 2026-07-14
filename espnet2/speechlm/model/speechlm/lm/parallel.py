@@ -275,13 +275,7 @@ def build_parallel_hf_class(model_hf_tag):
                     input_ids[bidx, start : start + length] = code[:length]
 
             # (2) Convert tokens to embeddings and sum across streams
-            # NOTE(Jinchuan): Padding tokens in stream > 0 are zeroed out.
-            # Cannot do the same for stream 0 in Qwen3 for numerical stability.
-            input_embeds = self.model.embed_tokens(input_ids)
-            input_embeds[..., 1:, :] = torch.where(
-                (input_ids[..., 1:] == 0).unsqueeze(-1), 0.0, input_embeds[..., 1:, :]
-            )
-            input_embeds = input_embeds.sum(dim=2)
+            input_embeds = self._embed_and_sum_streams(input_ids)
 
             # (3) Process continuous modalities: encode and project features
             for io_name in self.multimodal_io_dict:
@@ -440,14 +434,17 @@ def build_parallel_hf_class(model_hf_tag):
         def inference(self, inference_config: dict, cache: list = None, **kwargs):
 
             messages = []
+            first_segment = True
             while True:
                 # (1) predict token sequence
                 decoded_sequences, cache = self.inference_segment(
                     inference_config,
                     cache=cache,
                     enforce_modality=None,
+                    first_segment=first_segment,
                     **kwargs,
                 )
+                first_segment = False
 
                 # (2) detokenization
                 for seq, modality in decoded_sequences:
@@ -482,20 +479,42 @@ def build_parallel_hf_class(model_hf_tag):
             config: dict,
             cache: list = None,
             enforce_modality: str = None,
+            first_segment: bool = True,
             **kwargs,
         ):
 
             # (1) Prefill, with assistant role token
-            input_ids = kwargs.get("seqs")
-            input_ids = torch.cat([input_ids, self.assistant_token], dim=1)
-            device = input_ids.device
+            device = self.assistant_token.device
+            if first_segment:
+                # First segment: prefill the full prompt plus the assistant
+                # role token (onto `cache`, which may be None or a prior
+                # conversation's cache).
+                input_ids = kwargs.get("seqs")
+                input_ids = torch.cat([input_ids, self.assistant_token], dim=1)
 
-            input_embeds = self._embed(input_ids, kwargs)
-            logits, cache = self._step(
-                input_embeds=input_embeds,
-                past_key_values=cache,
-                mask=self.modality_mask,
-            )
+                input_embeds = self._embed(input_ids, kwargs)
+                logits, cache = self._step(
+                    input_embeds=input_embeds,
+                    past_key_values=cache,
+                    mask=self.modality_mask,
+                )
+            else:
+                # Continuation segment: the previous segment's terminal token
+                # is already in the cache (prefilled at step (5) below), so
+                # inject ONLY the assistant role token and keep decoding on
+                # the existing cache. Re-prefilling the prompt here would
+                # append a second copy of it at wrong positions on top of the
+                # accumulated cache. Reachability invariants: continuations
+                # only happen for num_hypo == 1 (multi-hypo breaks the outer
+                # inference loop), and the continuation IS the CFG-active
+                # audio segment in TTS, so this path must coexist with the
+                # CFG cache doubling below (it does: CFG doubling happens
+                # after this step, per segment).
+                logits, cache = self._step(
+                    input_ids=self.assistant_token,
+                    past_key_values=cache,
+                    mask=self.modality_mask,
+                )
             logits = logits[:, -1:, :]
 
             # (2) determine modality token and the corresponding mask
@@ -619,6 +638,31 @@ def build_parallel_hf_class(model_hf_tag):
                 mask = mask[None, None, :, :]
                 self.register_buffer(f"{io_name}_mask", mask)
 
+        def _embed_and_sum_streams(self, input_ids):
+            """Embed multi-stream tokens and sum across the stream axis.
+
+            NOTE(Jinchuan, precedent from _embed): padding tokens (id 0) in
+            streams > 0 are zeroed before the sum. from_pretrained rebuilds
+            embed_tokens with nn.init.normal_, which overwrites row 0
+            (padding_idx only zeroes its gradient), so row 0 is nonzero noise
+            in trained checkpoints; without this zeroing, a token like
+            [text_id, 0, ..., 0] would embed to embed(text_id) plus
+            (num_stream - 1) copies of that noise. Stream 0's padding is
+            deliberately left un-zeroed for Qwen3 numerical stability.
+            The working vLLM port applies the same zeroing
+            (stream_embeds.masked_fill(stream_tokens == 0, 0.0)).
+            Shared by _embed (training/prefill) and _step (incremental
+            decode) so the two paths cannot diverge again: _step previously
+            skipped the zeroing, which corrupted every decode step's input
+            and degenerated autoregressive generation while teacher-forced
+            forwards stayed healthy.
+            """
+            input_embeds = self.model.embed_tokens(input_ids)
+            input_embeds[..., 1:, :] = torch.where(
+                (input_ids[..., 1:] == 0).unsqueeze(-1), 0.0, input_embeds[..., 1:, :]
+            )
+            return input_embeds.sum(dim=2)
+
         def _step(
             self, input_ids=None, input_embeds=None, past_key_values=None, mask=None
         ):
@@ -629,7 +673,7 @@ def build_parallel_hf_class(model_hf_tag):
 
             if input_ids is not None:
                 assert input_ids.size(2) == self.num_stream
-                input_embeds = self.model.embed_tokens(input_ids).sum(dim=2)
+                input_embeds = self._embed_and_sum_streams(input_ids)
 
             output = self.model(
                 inputs_embeds=input_embeds,
