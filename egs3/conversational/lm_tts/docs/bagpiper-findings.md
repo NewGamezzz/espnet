@@ -326,6 +326,15 @@ Delta verification (all under interactive partitions, logs in /work/nvme/bbjs/tt
 
 **Gate verdict (final for steps 0-1): GO.** All CONDITIONAL GO criteria are met; the generation machinery is verified working end-to-end. The long-horizon drift is tracked as its own open item above (relevant to the step-4 lockstep loop; per-turn spans in conversational windows are typically shorter than the drift onset, and the TAC fine-tune retrains the decode regime on our windows regardless).
 
+### A/B drift test: verdict B - model free-running limit, NOT an espnet-decode bug (2026-07-14)
+
+The same sample was generated through the author's supported vLLM path (their SIF + checkpoint, verbatim client payload; prompt-token parity confirmed: 211 vs our (1,210,8)).
+Result: identical drift shape - intelligible ~3-6 s, then garble; both independent decoders even converge on the SAME "if there was..." phrase-loop attractor (likely latching onto the plan's last line).
+Both vLLM draws ended on natural `<|eos|>` (30.0 s and 23.5 s, `finish_reason=stop`), so the horizon is not a length-cap artifact.
+Conclusion: the espnet decode path (with the two fixes) matches the author's shipping path; do NOT chase decode-parity bugs.
+Productive levers are model/data-level: shorter target segments, sampling/guidance changes, or fine-tuning - which the POC's SSSD fine-tune does anyway, and conversational per-turn spans are mostly below the ~6 s onset.
+Full writeup: controller-side `vllm-ab-test.md`; outputs under /work/nvme/bbjs/ttrachu/ab_test/.
+
 ### Task 5: load helper + teacher-forced gate
 
 **Deliverables** (all committed; nothing under `downloads/`):
