@@ -149,7 +149,11 @@ trainer:
   accelerator: auto
   devices: ${num_device}
   num_nodes: ${num_nodes}
-  accumulate_grad_batches: 2
+  # 4 GPUs * 7 accum * ~11,719 padded row-frames (batch_bins/256) ~= 328k
+  # row-frames/update, matching the single-channel baseline's 307,200-frame
+  # effective batch (its 960k-bin/8-accum V100 config). batch_bins cannot
+  # move instead: the largest 60 s N=2 window pins it at ~3M.
+  accumulate_grad_batches: 7
   # fp32 cannot fit a single 60 s N=2 window's forward activations (~32 GB)
   # on an A100-40G, and min_batch_size=1 makes that window the memory floor;
   # bf16-mixed halves activations while keeping fp32 master weights.
