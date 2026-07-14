@@ -64,7 +64,7 @@ def build_parser(stages: Sequence[str]) -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--inference_config",
-        default=None,
+        default=Path("conf/inference_conversational.yaml"),
         type=Path,
         help="Hydra config for the infer stage.",
     )
@@ -79,6 +79,28 @@ def build_parser(stages: Sequence[str]) -> argparse.ArgumentParser:
         help="Write requirements.txt alongside each stage log.",
     )
     return parser
+
+
+def check_required_configs(stages_to_run, training_config, inference_config) -> None:
+    """Fail fast when a requested stage's config is missing.
+
+    The training-time stages need the training config; ``infer`` needs the
+    inference config (which self-references its own training config).  Both
+    parser defaults point at real recipe configs, so this only fires when a
+    flag is explicitly overridden to a missing value.
+    """
+    training_stages = {"create_dataset", "train"}
+    if training_config is None and training_stages.intersection(stages_to_run):
+        raise ValueError(
+            "Training config not provided for stage(s): "
+            f"{', '.join(sorted(training_stages.intersection(stages_to_run)))}. "
+            "Use --training_config."
+        )
+    if "infer" in stages_to_run and inference_config is None:
+        raise ValueError(
+            "Inference config not provided for the 'infer' stage. "
+            "Use --inference_config."
+        )
 
 
 def main(args) -> None:
@@ -110,20 +132,7 @@ def main(args) -> None:
     )
     resolve_loaded_configs(training_config, inference_config)
 
-    # The training-time stages need the training config; ``infer`` needs the
-    # inference config (which self-references its own training config).
-    training_stages = {"create_dataset", "train"}
-    if training_config is None and training_stages.intersection(stages_to_run):
-        raise ValueError(
-            "Training config not provided for stage(s): "
-            f"{', '.join(sorted(training_stages.intersection(stages_to_run)))}. "
-            "Use --training_config."
-        )
-    if "infer" in stages_to_run and inference_config is None:
-        raise ValueError(
-            "Inference config not provided for the 'infer' stage. "
-            "Use --inference_config."
-        )
+    check_required_configs(stages_to_run, training_config, inference_config)
     system = ConversationalTTSSystem(
         training_config=training_config,
         inference_config=inference_config,
