@@ -483,6 +483,57 @@ class TestCallRoundTrip:
         assert summary["wer_ch_mean"] == pytest.approx(0.125)
 
 
+class TestCallRoundTripOutOfOrderDetection:
+    """The headline capability -- detecting a CROSS-CHANNEL turn-order
+    violation -- exercised through the real ``__call__``/``_score_window``
+    scatter, not the ``_pooled_realized_time`` test helper. This is the
+    same pooling code path production runs, so a scatter bug (e.g. an
+    off-by-one in ``channel_positions``) would show up here even though the
+    pure-function tests in ``TestScriptFollowingPooling`` already prove the
+    aggregation math itself is correct.
+    """
+
+    def test_channel_speaking_out_of_script_order_lowers_turn_order_acc(
+        self, tmp_path
+    ):
+        inference_dir = tmp_path / "infer"
+        test_dir = inference_dir / "valid"
+        # Script order (per _write_window): ch0's turn @ boundary=5.0, then
+        # ch1's turn @ 6.5 -- ch1 is scripted to speak SECOND.
+        _write_window(test_dir, "sess_w00000", "hello world", "foo bar")
+        _write_meta_scp(test_dir, ["sess_w00000"])
+
+        # But channel 1 actually speaks FIRST (negative local time, well
+        # before channel 0's realized time) -- a real interleaving
+        # violation between speakers, exactly the failure mode PLAN-step4.md
+        # calls out ("script order violated").
+        transcriber = _QueueTranscriber(
+            [
+                [Word("hello", 5.0, 5.0), Word("world", 5.5, 5.5)],  # ch0
+                [Word("foo", -1.0, -1.0), Word("bar", -0.5, -0.5)],  # ch1
+            ]
+        )
+        metric = ConversationASRMetric(
+            transcriber=transcriber,
+            normalizer=_trivial_normalizer,
+            vad=_ListVAD([(0.0, 0.5)]),
+            pad=0.0,
+        )
+        data = {"meta": test_dir / "meta.scp"}
+
+        summary = metric(data, "valid", inference_dir)
+
+        # 2 realized turns, actual time order reversed vs script order ->
+        # 0/2 positions match, and the single pair is discordant.
+        assert summary["turn_order_acc"] == pytest.approx(0.0)
+        assert summary["kendall_tau"] == pytest.approx(-1.0)
+        assert summary["turn_count_ratio"] == pytest.approx(1.0)
+        # WER/cpWER are unaffected by ordering -- both channels still
+        # transcribed exactly, sanity-checking the two behaviors are
+        # independent in the shipped code.
+        assert summary["wer_ch_mean"] == pytest.approx(0.0)
+
+
 # --------------------------------------------------------------------------- #
 # asset-gated real-backend smoke: skipped unless faster-whisper AND
 # openai-whisper are actually installed (neither is available locally per
