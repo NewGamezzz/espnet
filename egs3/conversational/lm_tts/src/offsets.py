@@ -147,6 +147,9 @@ def compute_audio_offsets_from_batch(batch: dict) -> torch.LongTensor:
     starts = torch.full((num_rows,), -1, dtype=torch.long, device=dai.device)
     for row in dai.tolist():
         bidx, start, _length = row
+        # Min-per-row aggregation: real BagPiper data emits exactly one audio
+        # segment per row, so the "earliest start wins" tie-break below is
+        # intentional-but-untested against real (only hand-built) data.
         if starts[bidx] == -1 or start < starts[bidx]:
             starts[bidx] = start
 

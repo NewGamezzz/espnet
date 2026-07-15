@@ -414,10 +414,33 @@ class TestRealPreprocessorParity:
         COUNTS (speechlm_job.py `preprocessing`, step 3.4's `accum_length`),
         independent of the (not-yet-tokenized) audio content itself - see
         the previous test for why token-value scanning (compute_audio_offsets)
-        cannot do this pre-forward. Also re-verifies the identity-region
-        guarantee independently of compute_audio_offsets_from_batch's own
-        internal logic: no stream, at any position before the offset,
-        already carries a token id landing in a discrete_audio interval."""
+        cannot do this pre-forward.
+
+        The first block below (offsets_by_row / expected) is intentionally
+        circular - it reads the same discrete_audio_indices tensor the
+        helper itself reads, so it only proves compute_audio_offsets_from_batch
+        doesn't lose information in transit, not that the number it returns
+        is actually where the model's audio starts. The SECOND block fixes
+        that: it independently locates each row's assistant-audio modality
+        token via a vocab.index("<|audio|>") stream-0 scan (the same
+        technique test_collate_succeeds_and_message_order_preserved uses for
+        asst_audio_modality_pos) and asserts the offset equals
+        asst_audio_modality_pos + 1. Trace: speechlm_job.py's
+        `preprocessing` records discrete_audio_indices' start immediately
+        after the modality token is appended (conti_feats/accum_length
+        bookkeeping), and parallel.py's ParallelHFModel._embed later writes
+        codec ids into seqs at exactly that start:start+length span - so
+        this pins the offset to the model's actual first-audio position, via
+        a path that does not touch discrete_audio_indices at all. A future
+        upstream accum_length bookkeeping regression (e.g. off-by-one at the
+        modality boundary) would fail this assertion loudly even though the
+        circular block above it would not catch it.
+
+        The trailing identity-region loop (no discrete_audio-interval token
+        anywhere before the offset) is trivially true pre-forward, since the
+        entire audio region is still the <|pad|> placeholder at this stage
+        (see test_stream0_scan_finds_no_audio_on_raw_collate_output) - it is
+        kept as a cheap sanity check, not as the regression pin."""
         job, batch = self._build_batch(tmp_path)
         seqs = batch["seqs"]
         B, T, _n_stream = seqs.shape
@@ -430,6 +453,38 @@ class TestRealPreprocessorParity:
         assert offsets.dtype == torch.long
         expected = torch.tensor([offsets_by_row[row] for row in range(B)], dtype=torch.long)
         assert torch.equal(offsets, expected)
+
+        # Non-circular pin (see docstring): locate each row's assistant-audio
+        # modality token independently of discrete_audio_indices, for BOTH
+        # the tac record row and the mono record row.
+        vocab = job.vocab
+        sys_id = vocab.index("<|system|>")
+        user_id = vocab.index("<|user|>")
+        assistant_id = vocab.index("<|assistant|>")
+        text_id = vocab.index("<|text|>")
+        audio_id = vocab.index("<|audio|>")
+
+        def first_idx(row, token_id, after=0):
+            positions = (seqs[row, :, 0] == token_id).nonzero(as_tuple=True)[0]
+            positions = positions[positions >= after]
+            assert len(positions) > 0, f"token {token_id} not found in row {row} after {after}"
+            return int(positions[0])
+
+        for row in range(B):
+            sys_pos = first_idx(row, sys_id)
+            user_pos = first_idx(row, user_id, after=sys_pos + 1)
+            asst_text_pos = first_idx(row, assistant_id, after=user_pos + 1)
+            asst_text_modality_pos = first_idx(row, text_id, after=asst_text_pos + 1)
+            # the audio modality marker is the SECOND assistant turn.
+            asst_audio_pos = first_idx(row, assistant_id, after=asst_text_modality_pos + 1)
+            asst_audio_modality_pos = first_idx(row, audio_id, after=asst_audio_pos + 1)
+
+            assert int(offsets[row]) == asst_audio_modality_pos + 1, (
+                f"row {row}: compute_audio_offsets_from_batch returned "
+                f"{int(offsets[row])}, expected asst_audio_modality_pos + 1 = "
+                f"{asst_audio_modality_pos + 1} (independently located via the "
+                "<|audio|> modality-token scan, not via discrete_audio_indices)"
+            )
 
         intervals = job.vocab_intervals["discrete_audio"]
         for row in range(B):
