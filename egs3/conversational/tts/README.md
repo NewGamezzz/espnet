@@ -242,14 +242,18 @@ python local/eval_report.py \
 
 `mode: generate | gt | resynth` selects what `infer` writes for the SAME window selection and prompt-boundary logic: `generate` runs the model; `gt` copies the ground-truth generated-region audio unchanged; `resynth` round-trips that same ground truth through the F5 mel front-end and Vocos, with no model involved.
 `gt` and `resynth` are anchors, not skipped conditions: they flow through the identical `infer` output contract and the identical `measure` stage as `generate`, with zero metric-side special-casing, so a `generate`-mode score is only meaningful read AGAINST them (a mediocre WER/SIM/UTMOS next to an equally mediocre `resynth` anchor points at the vocoder/front-end, not the model).
-`mode` has no CLI override flag (this recipe's stage configs are plain YAML, not hydra dotlist overrides), so scoring the anchors means pointing `--inference_config`/`--metrics_config` at copies of the two shipped files with `mode:` changed - keep the two copies' `mode:` in lockstep (`conf/metrics.yaml`'s `inference_dir: ${exp_dir}/infer_${mode}` formula needs its own `mode:` to match whatever `infer` actually wrote, see that file's header comment):
+`mode` has no CLI override flag (this recipe's stage configs are plain YAML, not hydra dotlist overrides), so scoring the anchors means pointing `--inference_config`/`--metrics_config` at copies of the two shipped files with `mode:` changed - keep the two copies' `mode:` in lockstep (`conf/metrics.yaml`'s `inference_dir: ${exp_dir}/infer_${mode}` formula needs its own `mode:` to match whatever `infer` actually wrote, see that file's header comment).
+CRITICAL: the `measure` invocation must ALSO pass the mode-edited `--inference_config`, even though the measure stage never runs inference.
+`run.py` always loads an inference config (defaulting to the shipped generate-mode file), and the runner's context propagation copies `inference_dir` from inference_config into metrics_config whenever the two resolved values DIFFER (overwrite-on-differ, with only a logged warning) - so a `measure` run that omits the flag silently scores `infer_generate` instead of the anchor directory.
+This exact scenario is pinned by `tests/test_run.py::TestAnchorModePropagation`.
 
 ```bash
 for m in gt resynth; do
   sed "s/^mode: generate/mode: $m/" conf/inference_conversational.yaml > conf/inference_$m.yaml
   sed "s/^mode: generate/mode: $m/" conf/metrics.yaml               > conf/metrics_$m.yaml
   python run.py --stages infer   --inference_config conf/inference_$m.yaml
-  python run.py --stages measure --metrics_config   conf/metrics_$m.yaml
+  python run.py --stages measure --inference_config conf/inference_$m.yaml \
+                                 --metrics_config   conf/metrics_$m.yaml
 done
 
 python local/eval_report.py \

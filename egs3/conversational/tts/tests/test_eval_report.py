@@ -13,6 +13,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pytest
+
 from egs3.conversational.tts.local.eval_report import (
     build_sections,
     load_metrics_json,
@@ -62,6 +64,13 @@ class TestLoadMetricsJson:
 
     def test_missing_file_returns_empty_dict_not_an_exception(self, tmp_path):
         assert load_metrics_json(tmp_path / "does_not_exist") == {}
+
+    def test_malformed_json_raises_rather_than_reporting_garbage(self, tmp_path):
+        # Missing data is tolerated (renders as "-"); a CORRUPT metrics.json
+        # is a genuine error the module docstring promises to raise on.
+        (tmp_path / "metrics.json").write_text("{not json", encoding="utf-8")
+        with pytest.raises(json.JSONDecodeError):
+            load_metrics_json(tmp_path)
 
 
 # --------------------------------------------------------------------------- #

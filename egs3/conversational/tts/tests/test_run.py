@@ -115,3 +115,99 @@ class TestMeasureStageWiring:
         parser = run.build_parser(run.DEFAULT_STAGES)
         args = parser.parse_args([])
         assert args.metrics_config == Path("conf/metrics.yaml")
+
+
+class TestAnchorModePropagation:
+    """Context propagation when inference_config.mode != metrics_config.mode.
+
+    ``_copy_config_context`` OVERWRITES a differing target value with the
+    source's (resolved) value, logging only a warning -- it does not skip on
+    conflict. Since ``run.py`` always loads an inference config (defaulting
+    to the shipped generate-mode file), a ``--stages measure`` run given only
+    a mode-edited metrics config would get its ``inference_dir`` silently
+    replaced by ``infer_generate``. These tests pin BOTH sides of that
+    behavior against the real shipped configs: the corrected anchor
+    invocation (matching mode-edited ``--inference_config`` passed too)
+    scores the anchor dir, and the flag-omitting invocation demonstrably
+    does not -- which is exactly why README.md's anchor loop passes
+    ``--inference_config`` to the measure line.
+    """
+
+    def _load_and_propagate(self, monkeypatch, tmp_path, inference_mode):
+        """main()'s load/apply/resolve sequence with mode-edited config
+        copies (the sed loop from README.md's anchor recipe): metrics is
+        always the gt copy; ``inference_mode`` picks the inference config."""
+        monkeypatch.chdir(RECIPE_DIR)
+
+        def _mode_copy(src_name: str, out_name: str, mode: str) -> Path:
+            src = RECIPE_DIR / "conf" / src_name
+            out = tmp_path / out_name
+            out.write_text(
+                src.read_text(encoding="utf-8").replace(
+                    "mode: generate", f"mode: {mode}"
+                ),
+                encoding="utf-8",
+            )
+            return out
+
+        metrics_path = _mode_copy("metrics.yaml", "metrics_gt.yaml", "gt")
+        if inference_mode == "generate":
+            inference_path = RECIPE_DIR / "conf" / "inference_conversational.yaml"
+        else:
+            inference_path = _mode_copy(
+                "inference_conversational.yaml",
+                f"inference_{inference_mode}.yaml",
+                inference_mode,
+            )
+
+        training_config = load_and_merge_config(
+            Path("conf/training_poc.yaml"),
+            config_name=run.DEFAULT_TRAINING_CONFIG,
+            resolve=False,
+        )
+        # tmp_path copies sit outside egs3/, so the TEMPLATE package cannot
+        # be inferred from the path and is passed explicitly.
+        inference_config = load_and_merge_config(
+            inference_path,
+            config_name=run.DEFAULT_INFERENCE_CONFIG,
+            resolve=False,
+            default_package="egs3.TEMPLATE.tts",
+        )
+        metrics_config = load_and_merge_config(
+            metrics_path,
+            config_name=run.DEFAULT_METRICS_CONFIG,
+            resolve=False,
+            default_package="egs3.TEMPLATE.tts",
+        )
+        logger = run.configure_logging()
+        apply_training_experiment_context(
+            training_config=training_config,
+            inference_config=inference_config,
+            metrics_config=metrics_config,
+            publication_config=None,
+            log=logger,
+        )
+        resolve_loaded_configs(training_config, inference_config, metrics_config)
+        return inference_config, metrics_config
+
+    def test_matching_mode_configs_keep_the_anchor_inference_dir(
+        self, monkeypatch, tmp_path
+    ):
+        # The corrected README loop: measure passes BOTH mode-edited configs.
+        inference_config, metrics_config = self._load_and_propagate(
+            monkeypatch, tmp_path, inference_mode="gt"
+        )
+        assert str(metrics_config.inference_dir).endswith("infer_gt")
+        assert metrics_config.inference_dir == inference_config.inference_dir
+
+    def test_omitting_the_inference_config_flag_scores_the_wrong_condition(
+        self, monkeypatch, tmp_path
+    ):
+        # The documented failure mode: metrics says gt, but the DEFAULT
+        # (generate-mode) inference config wins the overwrite-on-differ
+        # propagation, so measure would silently score infer_generate.
+        inference_config, metrics_config = self._load_and_propagate(
+            monkeypatch, tmp_path, inference_mode="generate"
+        )
+        assert str(metrics_config.inference_dir).endswith("infer_generate")
+        assert metrics_config.inference_dir == inference_config.inference_dir
