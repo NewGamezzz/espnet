@@ -83,12 +83,15 @@ class TestBareInvocationDefaults:
         """End-to-end config-resolution path: after context propagation and
         resolution, metrics_config.inference_dir must land on the SAME
         directory the infer stage actually writes to (not merely "a valid
-        string"). This is the regression the naive
-        ``inference_dir: ${exp_dir}/infer_generate`` formula fails: it gets
-        silently overwritten by ``apply_training_experiment_context`` with
-        the (unresolvable, since metrics_config has no ``mode`` key)
-        inference_config formula, unless metrics_config already carries its
-        own ``mode`` so the two formulas match and the copy is a no-op."""
+        string"). The propagation helper reads values with OmegaConf
+        ``.get()``, which eagerly resolves interpolations in each config's
+        own namespace, so the trap this test guards against is target-side:
+        a metrics.yaml ``inference_dir`` formula referencing a key the file
+        does not define locally (e.g. ``${mode}`` without a ``mode:`` key)
+        raises InterpolationKeyError the moment the propagation compare (or
+        final resolution) touches it. conf/metrics.yaml therefore declares
+        ``mode`` locally, and this test pins the resulting directory equality
+        against the real default configs."""
         stages, training_config, inference_config, metrics_config = (
             self._default_configs(monkeypatch)
         )

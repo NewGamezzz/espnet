@@ -32,6 +32,9 @@ from pathlib import Path
 from typing import Callable, Optional, Sequence
 
 import numpy as np
+import soundfile as sf
+import torch
+import torchaudio
 
 from egs3.conversational.tts.local.crosstalk_report import (
     Interval,
@@ -67,9 +70,6 @@ def resample_wav(wav: np.ndarray, orig_sr: int, target_sr: int) -> np.ndarray:
     this recipe's dataset/inference pipeline; not a metrics-only import)."""
     if orig_sr == target_sr:
         return wav
-    import torch
-    import torchaudio
-
     wav_t = torch.as_tensor(wav, dtype=torch.float32)
     resampled = torchaudio.functional.resample(wav_t, orig_sr, target_sr)
     return resampled.numpy()
@@ -89,8 +89,6 @@ def load_wav(path: Path, target_sr: Optional[int] = None) -> tuple[np.ndarray, i
     Returns:
         ``(samples, sample_rate)``.
     """
-    import soundfile as sf
-
     data, sr = sf.read(str(path), dtype="float32", always_2d=False)
     if data.ndim > 1:
         data = data.mean(axis=1).astype(np.float32)
@@ -119,8 +117,7 @@ class SileroVADBackend:
     def _load(self) -> None:
         if self._model is not None:
             return
-        import torch  # local: this is the network-touching load, kept lazy
-
+        # torch.hub.load is the network-touching step, deferred to here.
         model, utils = torch.hub.load(
             repo_or_dir="snakers4/silero-vad",
             model="silero_vad",
@@ -135,8 +132,6 @@ class SileroVADBackend:
                 f"SileroVADBackend expects {self.sample_rate} Hz audio, got {sr}"
             )
         self._load()
-        import torch
-
         wav_t = torch.as_tensor(wav, dtype=torch.float32)
         timestamps = self._get_speech_timestamps(
             wav_t, self._model, threshold=self.threshold, sampling_rate=sr

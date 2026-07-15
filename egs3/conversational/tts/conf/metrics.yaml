@@ -11,14 +11,19 @@
 # copies `inference_dir` from inference_config into this config so `measure`
 # scores whatever `infer` just wrote.
 #
-# That copy overwrites `inference_dir` outright unless the two configs'
-# RAW (pre-resolve) formulas already match byte-for-byte -- so `mode` must be
-# declared here too: conf/inference_conversational.yaml's `inference_dir` is
-# `${exp_dir}/infer_${mode}`, and metrics_config has no `mode` key of its own
-# unless we add one, which would make the copied formula fail to resolve
-# (InterpolationKeyError) on a standalone `--stages measure` run. Keep this
-# `mode` in lockstep with conf/inference_conversational.yaml's default so the
-# two configs agree even before any propagation happens; override both
+# How that copy actually behaves (espnet3.utils.run_utils
+# _copy_config_context): it reads values with OmegaConf `.get()`, which
+# eagerly RESOLVES interpolations in each config's own namespace. So the
+# value copied from inference_config is always a concrete resolved path
+# (never a raw `${...}` formula), and the "same value -> skip overwrite"
+# comparison likewise compares resolved strings. The one real trap is on the
+# TARGET side: if this file's own `inference_dir` formula referenced a key
+# this file does not define (e.g. `${mode}` without a local `mode:`), the
+# very first `.get()` on it -- inside the propagation compare, or at final
+# resolve -- raises InterpolationKeyError. Hence `mode` is declared locally
+# below, which also lets a standalone `--stages measure` run (no infer in
+# the same invocation) resolve `inference_dir` on its own. Keep `mode` in
+# lockstep with conf/inference_conversational.yaml's default; override both
 # together to score the `gt`/`resynth` anchor runs instead.
 mode: generate
 inference_dir: ${exp_dir}/infer_${mode}
