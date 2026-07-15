@@ -41,9 +41,15 @@ dataset:
 # uses its real (lazy) defaults: WavLM-SV x-vector embedding
 # (microsoft/wavlm-base-plus-sv -- an accessible default, not necessarily the
 # checkpoint pinned for the first Delta run, see src/metrics/speaker.py's
-# module docstring) and silero VAD. Task 6 updates these to the debug-run
-# configuration; the remaining metric classes are still `[]`-shaped ahead of
-# task 5.
+# module docstring) and silero VAD. InteractionMetric (task 5) uses its real
+# (lazy) silero VAD default, laughter detection left disabled (no
+# `laughter_detector` -- see src/metrics/interaction.py's module docstring).
+# ChannelQualityMetric (task 5) uses its real (lazy) UTMOS22-strong default
+# (torch.hub-based, NOT the PyPI `speechmos` package -- see
+# src/metrics/quality.py's module docstring for the verified deviation from
+# this file's earlier comment/the plan's wording) with DNSMOS left off
+# (`enable_dnsmos: false`). Task 6 updates all of these to the debug-run
+# configuration.
 metrics:
   - metric:
       _target_: egs3.conversational.tts.src.metrics.asr.ConversationASRMetric
@@ -51,5 +57,13 @@ metrics:
       meta: meta
   - metric:
       _target_: egs3.conversational.tts.src.metrics.speaker.SpeakerDynamicsMetric
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.interaction.InteractionMetric
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.quality.ChannelQualityMetric
     inputs:
       meta: meta
