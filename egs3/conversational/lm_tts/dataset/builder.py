@@ -225,10 +225,13 @@ def build(
         )
         measure_source[speaker_id] = source
 
-    # Frozen per-speaker voice description text, kept for the stats block
-    # only (see dataset.emit module docstring: this must NOT be threaded
-    # back into emit_tac_records/emit_mono_record's `descriptions` override,
-    # which expects pre-formatted paraphrase text, not raw template output).
+    # Frozen per-speaker voice descriptions: each speaker is measured exactly
+    # once, so voice_description(attrs) - a pure function of that single
+    # SpeakerAttrs - renders identically in every window's caption. Rendered
+    # here only for the stats block (see the dataset.emit module docstring:
+    # this text must NOT be threaded back into emit_tac_records /
+    # emit_mono_record's `descriptions` override, which expects pre-formatted
+    # paraphrase text, not raw template output).
     frozen_descriptions = {
         sid: voice_description(attrs) for sid, attrs in attrs_by_speaker.items()
     }
@@ -243,9 +246,10 @@ def build(
             window_audio = cut_window_wavs(
                 window, root, audio_out_dir, target_sr=target_sr
             )
-            tac_records = emit_tac_records(window, attrs_by_speaker, window_audio)
-            if tac_records:
-                tac_by_split[split].extend(tac_records)
+            if is_tac_eligible(window):
+                tac_by_split[split].extend(
+                    emit_tac_records(window, attrs_by_speaker, window_audio)
+                )
             else:
                 tac_dropped[split] += 1
             mono_by_split[split].append(
@@ -266,6 +270,7 @@ def build(
         tac_dropped=tac_dropped,
         attrs_by_speaker=attrs_by_speaker,
         measure_source=measure_source,
+        frozen_descriptions=frozen_descriptions,
         tac_by_split=tac_by_split,
         mono_by_split=mono_by_split,
     )
@@ -282,6 +287,7 @@ def _print_stats(
     tac_dropped,
     attrs_by_speaker,
     measure_source,
+    frozen_descriptions,
     tac_by_split,
     mono_by_split,
 ) -> None:
@@ -309,6 +315,7 @@ def _print_stats(
             f"rate={a.rate_band} gender={a.gender} gender_source={a.gender_source} "
             f"measure_source={src}"
         )
+        print(f"      description: {frozen_descriptions[speaker_id]}")
     for variant, by_split in (("tac", tac_by_split), ("mono", mono_by_split)):
         lengths = [
             len(r["messages"][1][2].split())
