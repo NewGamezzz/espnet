@@ -350,44 +350,42 @@ def _write_wav(path: Path, duration_s: float = 0.5, sr: int = 24000) -> None:
 def _write_window(
     test_dir: Path,
     window_id: str,
-    ch0_ref: str,
-    ch1_ref: str,
+    *refs: str,
     boundary: float = 5.0,
 ) -> None:
-    for ch in (0, 1):
+    """One fabricated window in the infer-stage meta contract, one channel
+    per positional ``refs`` entry; channel ``k``'s single scripted turn sits
+    at ``boundary + 1.5*k`` so cross-channel script order equals channel
+    order (the historical two-channel spacing, generalized)."""
+    for ch in range(len(refs)):
         _write_wav(test_dir / "wav" / f"{window_id}_ch{ch}.wav")
     meta = {
         "window_id": window_id,
         "session_id": "sess",
         "mode": "generate",
         "sample_rate": 24000,
-        "num_channels": 2,
+        "num_channels": len(refs),
         "prompt_boundary_sec": boundary,
         "prompt_boundary_frames": 469,
         "window_duration_sec": 12.0,
         "rtf": 0.5,
         "channels": [
             {
-                "gen_wav": f"wav/{window_id}_ch0.wav",
-                "prompt_wav": f"prompt/{window_id}_ch0.wav",
-                "gt_wav": f"gt/{window_id}_ch0.wav",
-                "ref_text": ch0_ref,
-            },
-            {
-                "gen_wav": f"wav/{window_id}_ch1.wav",
-                "prompt_wav": f"prompt/{window_id}_ch1.wav",
-                "gt_wav": f"gt/{window_id}_ch1.wav",
-                "ref_text": ch1_ref,
-            },
+                "gen_wav": f"wav/{window_id}_ch{ch}.wav",
+                "prompt_wav": f"prompt/{window_id}_ch{ch}.wav",
+                "gt_wav": f"gt/{window_id}_ch{ch}.wav",
+                "ref_text": ref,
+            }
+            for ch, ref in enumerate(refs)
         ],
         "turns": [
-            {"channel": 0, "text": ch0_ref, "start": boundary, "end": boundary + 1.0},
             {
-                "channel": 1,
-                "text": ch1_ref,
-                "start": boundary + 1.5,
-                "end": boundary + 2.5,
-            },
+                "channel": ch,
+                "text": ref,
+                "start": boundary + 1.5 * ch,
+                "end": boundary + 1.5 * ch + 1.0,
+            }
+            for ch, ref in enumerate(refs)
         ],
     }
     (test_dir / "meta").mkdir(parents=True, exist_ok=True)
@@ -483,6 +481,82 @@ class TestCallRoundTrip:
         assert summary["wer_ch_mean"] == pytest.approx(0.125)
 
 
+class TestCallRoundTripEdgeCases:
+    """``__call__``-level coverage for two shapes previously verified only by
+    library probing (a REPL/unit check of the underlying primitive, never
+    through the full metric): a single-channel window (``_cpwer``'s ``n=1``
+    identity path, exercised here through ``_score_window``/``__call__``
+    rather than only via ``TestCpwer.test_single_channel_is_trivially_identity``'s
+    direct call), and a window with an empty reference text on one channel
+    (``jiwer.wer("", hyp)`` probed directly at the library level, never
+    through this metric's normalizer -> jiwer plumbing).
+    """
+
+    def test_single_channel_window_does_not_crash_and_has_identity_assignment(
+        self, tmp_path
+    ):
+        inference_dir = tmp_path / "infer"
+        test_dir = inference_dir / "valid"
+        # _write_window generalizes over channel count: ONE ref = ONE channel.
+        _write_window(test_dir, "sess_w00000", "hello world")
+        _write_meta_scp(test_dir, ["sess_w00000"])
+
+        transcriber = _QueueTranscriber(
+            [[Word("hello", 0.0, 0.0), Word("world", 0.1, 0.1)]]
+        )
+        metric = ConversationASRMetric(
+            transcriber=transcriber,
+            normalizer=_trivial_normalizer,
+            vad=_ListVAD([(0.0, 0.5)]),
+            pad=0.0,
+        )
+        data = {"meta": test_dir / "meta.scp"}
+
+        summary = metric(data, "valid", inference_dir)
+
+        assert summary["wer_ch_mean"] == pytest.approx(0.0)
+        assert summary["cpwer"] == pytest.approx(0.0)
+        assert summary["swap_rate"] == pytest.approx(0.0)  # n=1 is trivially identity
+        assert set(summary) == {
+            "wer_ch_mean",
+            "wer_ch_worst",
+            "cpwer",
+            "swap_rate",
+            "turn_order_acc",
+            "kendall_tau",
+            "turn_count_ratio",
+        }
+
+    def test_empty_reference_text_channel_does_not_crash(self, tmp_path):
+        inference_dir = tmp_path / "infer"
+        test_dir = inference_dir / "valid"
+        # ch0 has no scripted reference text at all (e.g. an entirely-silent
+        # generated-region channel); ch1 has a normal reference.
+        _write_window(test_dir, "sess_w00000", "", "gamma delta")
+        _write_meta_scp(test_dir, ["sess_w00000"])
+
+        transcriber = _QueueTranscriber(
+            [
+                [],  # ch0: nothing transcribed
+                [Word("gamma", 1.0, 1.0), Word("delta", 1.1, 1.1)],  # ch1: exact
+            ]
+        )
+        metric = ConversationASRMetric(
+            transcriber=transcriber,
+            normalizer=_trivial_normalizer,
+            vad=_ListVAD([(0.0, 0.5)]),
+            pad=0.0,
+        )
+        data = {"meta": test_dir / "meta.scp"}
+
+        summary = metric(data, "valid", inference_dir)
+
+        # ch0: ref="" hyp="" -> 0 error (jiwer.wer("", "") == 0); ch1: exact.
+        assert summary["wer_ch_mean"] == pytest.approx(0.0)
+        assert summary["cpwer"] == pytest.approx(0.0)
+        assert all(isinstance(v, (float, int)) for v in summary.values())
+
+
 class TestCallRoundTripOutOfOrderDetection:
     """The headline capability -- detecting a CROSS-CHANNEL turn-order
     violation -- exercised through the real ``__call__``/``_score_window``
@@ -532,6 +606,63 @@ class TestCallRoundTripOutOfOrderDetection:
         # transcribed exactly, sanity-checking the two behaviors are
         # independent in the shipped code.
         assert summary["wer_ch_mean"] == pytest.approx(0.0)
+
+
+# --------------------------------------------------------------------------- #
+# conf/metrics.yaml wiring: the binding constraint that the shipped config
+# instantiates every metric offline with its real (lazy) defaults, i.e.
+# constructing ConversationASRMetric() from the config never downloads.
+# Mirrors the equivalent test in test_speaker_metric.py / test_quality_metric.py
+# / test_interaction_metric.py, closing the previously-deferred gap that only
+# those three metrics' own entries were individually guarded (see
+# .superpowers/sdd/progress.md, Task 3 note).
+# --------------------------------------------------------------------------- #
+class TestMetricsConfigInstantiatesOffline:
+    def test_conversation_asr_metric_entry_instantiates_without_network(
+        self, monkeypatch
+    ):
+        from hydra.utils import instantiate
+
+        from egs3.conversational.tts import run
+        from espnet3.utils.config_utils import load_and_merge_config
+
+        recipe_dir = Path(run.__file__).resolve().parent
+        monkeypatch.chdir(recipe_dir)
+        metrics_config = load_and_merge_config(
+            Path("conf/metrics.yaml"),
+            config_name=run.DEFAULT_METRICS_CONFIG,
+            resolve=False,
+        )
+
+        real_import = builtins.__import__
+
+        def guard(name, *args, **kwargs):
+            if name in ("faster_whisper", "whisper") or name.startswith(
+                ("faster_whisper.", "whisper.")
+            ):
+                raise AssertionError(f"{name} imported while instantiating config")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", guard)
+
+        entries = [
+            entry
+            for entry in metrics_config.metrics
+            if entry.metric._target_.endswith("ConversationASRMetric")
+        ]
+        assert len(entries) == 1
+        metric = instantiate(entries[0].metric)
+        assert isinstance(metric, ConversationASRMetric)
+        assert isinstance(metric.transcriber, FasterWhisperTranscriber)
+        assert metric.transcriber._model is None
+        assert isinstance(metric.normalizer, WhisperEnglishNormalizer)
+        assert metric.normalizer._normalizer is None
+        assert metric.vad.backend._model is None
+
+    # The all-four-entries-instantiate-together check already lives in
+    # tests/test_speaker_metric.py's TestMetricsConfigInstantiatesOffline
+    # (test_every_configured_metric_instantiates_without_network); no need
+    # to duplicate that loop here.
 
 
 # --------------------------------------------------------------------------- #
