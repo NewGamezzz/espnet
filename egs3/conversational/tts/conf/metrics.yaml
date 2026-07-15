@@ -33,7 +33,15 @@ dataset:
     - name: valid
 
 # The four metric classes (ConversationASRMetric, SpeakerDynamicsMetric,
-# InteractionMetric, ChannelQualityMetric) land in later tasks; each entry
-# is `{metric: {...}, inputs: {meta: meta}}` iterating meta.scp only. Shipped
-# empty here so the config is valid/loadable ahead of those tasks.
-metrics: []
+# InteractionMetric, ChannelQualityMetric) land across tasks 3-5; each entry
+# is `{metric: {...}, inputs: {meta: meta}}` iterating meta.scp only.
+# ConversationASRMetric (task 3) uses its real (lazy) defaults here: whisper
+# large-v3 transcription, whisper's EnglishTextNormalizer, silero VAD, and
+# segments.py's dGSLM IPU defaults. Task 6 updates these to the debug-run
+# configuration; the remaining metric classes are still `[]`-shaped ahead of
+# tasks 4/5.
+metrics:
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.asr.ConversationASRMetric
+    inputs:
+      meta: meta
