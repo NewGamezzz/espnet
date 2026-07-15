@@ -100,6 +100,11 @@ def _select_measurement_turns(
     """
     selected: dict[str, tuple[list[tuple[str, Turn]], str]] = {}
     for speaker_id, entries in turns_by_speaker.items():
+        if not entries:
+            raise ValueError(
+                f"no turns found for speaker {speaker_id!r}; cannot select "
+                "measurement turns"
+            )
         train_entries = [e for e in entries if split_by_session[e[0]] == "train"]
         if train_entries:
             pool, source = train_entries, "train"
@@ -118,15 +123,96 @@ def _select_measurement_turns(
     return selected
 
 
-def _distribution(values: Sequence[float]) -> str:
+def _distribution_stats(values: Sequence[float]) -> dict[str, float] | None:
+    """Numeric min/p25/median/p75/max/mean summary of ``values``, or
+    ``None`` if ``values`` is empty (e.g. an empty split)."""
     if not values:
-        return "n=0"
+        return None
     vals = sorted(values)
     q = statistics.quantiles(vals, n=4) if len(vals) >= 2 else [vals[0]] * 3
+    return {
+        "n": len(vals),
+        "min": vals[0],
+        "p25": q[0],
+        "median": q[1],
+        "p75": q[2],
+        "max": vals[-1],
+        "mean": statistics.fmean(vals),
+    }
+
+
+def _distribution(values: Sequence[float]) -> str:
+    stats = _distribution_stats(values)
+    if stats is None:
+        return "n=0"
     return (
-        f"n={len(vals)} min={vals[0]:.1f} p25={q[0]:.1f} median={q[1]:.1f} "
-        f"p75={q[2]:.1f} max={vals[-1]:.1f} mean={statistics.fmean(vals):.1f}"
+        f"n={stats['n']} min={stats['min']:.1f} p25={stats['p25']:.1f} "
+        f"median={stats['median']:.1f} p75={stats['p75']:.1f} "
+        f"max={stats['max']:.1f} mean={stats['mean']:.1f}"
     )
+
+
+def _build_stats(
+    *,
+    seed: int,
+    root: Path,
+    session_ids: list[str],
+    splits: dict[str, list[str]],
+    windows_by_split: dict[str, list],
+    tac_dropped: dict[str, int],
+    tac_by_split: dict[str, list[dict]],
+    mono_by_split: dict[str, list[dict]],
+    attrs_by_speaker: dict,
+    measure_source: dict[str, str],
+    frozen_descriptions: dict[str, str],
+) -> dict:
+    """Assemble the machine-readable build summary written to
+    ``build_stats.json``. Purely a re-packaging of values already computed
+    in ``build()`` - does not change what the human stdout block prints."""
+    split_stats = {
+        split: {
+            "sessions": len(splits[split]),
+            "windows": len(windows_by_split[split]),
+            "tac_dropped": tac_dropped[split],
+            "tac_records": len(tac_by_split[split]),
+            "mono_records": len(mono_by_split[split]),
+        }
+        for split in SPLITS
+    }
+    speakers = [
+        {
+            "speaker_id": speaker_id,
+            "pitch_band": attrs_by_speaker[speaker_id].pitch_band,
+            "variability_band": attrs_by_speaker[speaker_id].variability_band,
+            "rate_band": attrs_by_speaker[speaker_id].rate_band,
+            "gender": attrs_by_speaker[speaker_id].gender,
+            "gender_source": attrs_by_speaker[speaker_id].gender_source,
+            "measure_source": measure_source[speaker_id],
+            "voice_description": frozen_descriptions[speaker_id],
+        }
+        for speaker_id in sorted(attrs_by_speaker)
+    ]
+    caption_word_length: dict = {
+        "_note": (
+            "word counts are whitespace-split word counts (str.split()), "
+            "not tokenizer token counts"
+        ),
+    }
+    for variant, by_split in (("tac", tac_by_split), ("mono", mono_by_split)):
+        caption_word_length[variant] = {
+            split: _distribution_stats(
+                [len(r["messages"][1][2].split()) for r in by_split[split]]
+            )
+            for split in SPLITS
+        }
+    return {
+        "seed": seed,
+        "root": str(root),
+        "sessions": len(session_ids),
+        "splits": split_stats,
+        "speakers": speakers,
+        "caption_word_length": caption_word_length,
+    }
 
 
 def _write_variant_split(
@@ -259,6 +345,23 @@ def build(
     for split in SPLITS:
         _write_variant_split(out_dir, "tac", split, tac_by_split[split])
         _write_variant_split(out_dir, "mono", split, mono_by_split[split])
+
+    build_stats = _build_stats(
+        seed=seed,
+        root=root,
+        session_ids=session_ids,
+        splits=splits,
+        windows_by_split=windows_by_split,
+        tac_dropped=tac_dropped,
+        tac_by_split=tac_by_split,
+        mono_by_split=mono_by_split,
+        attrs_by_speaker=attrs_by_speaker,
+        measure_source=measure_source,
+        frozen_descriptions=frozen_descriptions,
+    )
+    (out_dir / "build_stats.json").write_text(
+        json.dumps(build_stats, indent=2) + "\n", encoding="utf-8"
+    )
 
     _print_stats(
         seed=seed,

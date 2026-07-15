@@ -14,12 +14,14 @@ from pathlib import Path
 import pytest
 import yaml
 from dataset.builder import (
+    _select_measurement_turns,
     build,
     load_config,
     main,
     resolve_dataset_root,
     split_sessions,
 )
+from dataset.preprocessing.sssd import Turn
 
 VARIANTS = ("tac", "mono")
 SPLITS = ("train", "valid", "test")
@@ -156,6 +158,191 @@ class TestBuildEndToEnd:
         out2 = capsys.readouterr().out
         assert "gender_source=metadata" not in out2
         assert "gender_source=pitch_heuristic" in out2
+
+
+class TestSelectMeasurementTurns:
+    """Direct unit tests of the private turn-selection helper: which pool a
+    speaker's measurement turns come from (train vs fallback), and the
+    earliest-first cumulative cap_sec truncation within that pool."""
+
+    def _turn(self, start, end, speaker="spk0", channel=0, text="hi"):
+        return Turn(channel=channel, speaker=speaker, text=text, start=start, end=end)
+
+    def test_speaker_with_train_turns_uses_only_train(self):
+        train_turn = self._turn(0.0, 1.0)
+        other_turn = self._turn(0.0, 1.0)
+        turns_by_speaker = {
+            "spk0": [("sessB", other_turn), ("sessA", train_turn)],
+        }
+        split_by_session = {"sessA": "train", "sessB": "valid"}
+
+        selection = _select_measurement_turns(
+            turns_by_speaker, split_by_session, cap_sec=120.0
+        )
+
+        picked, source = selection["spk0"]
+        assert source == "train"
+        assert picked == [("sessA", train_turn)]
+
+    def test_speaker_with_no_train_turns_falls_back_to_any_split(self):
+        valid_turn = self._turn(0.0, 1.0)
+        test_turn = self._turn(0.0, 1.0)
+        turns_by_speaker = {
+            "spk1": [("sessC", test_turn), ("sessB", valid_turn)],
+        }
+        split_by_session = {"sessB": "valid", "sessC": "test"}
+
+        selection = _select_measurement_turns(
+            turns_by_speaker, split_by_session, cap_sec=120.0
+        )
+
+        picked, source = selection["spk1"]
+        assert source == "fallback_any_split"
+        # Earliest-first by (session_id, start): sessB before sessC.
+        assert [sid for sid, _ in picked] == ["sessB", "sessC"]
+
+    def test_cap_boundary_truncates_after_the_turn_that_reaches_the_cap(self):
+        """Two 60s turns land exactly at the 120s cap_sec and are both kept;
+        a third 60s turn pushes past the cap and is dropped. The cap check
+        runs before appending the *next* candidate, not before appending the
+        one that reaches it, so the turn that lands on the boundary is kept."""
+        t1 = self._turn(0.0, 60.0)
+        t2 = self._turn(60.0, 120.0)
+        t3 = self._turn(120.0, 180.0)
+        turns_by_speaker = {"spk0": [("sessA", t1), ("sessA", t2), ("sessA", t3)]}
+        split_by_session = {"sessA": "train"}
+
+        selection = _select_measurement_turns(
+            turns_by_speaker, split_by_session, cap_sec=120.0
+        )
+
+        picked, source = selection["spk0"]
+        assert source == "train"
+        assert [t.start for _, t in picked] == [0.0, 60.0]
+
+    def test_cap_boundary_a_single_oversized_turn_is_still_picked(self):
+        """A speaker whose very first turn alone exceeds cap_sec still gets
+        that one turn (the picked-so-far guard prevents an empty selection),
+        but nothing after it."""
+        oversized = self._turn(0.0, 200.0)
+        following = self._turn(200.0, 210.0)
+        turns_by_speaker = {"spk0": [("sessA", oversized), ("sessA", following)]}
+        split_by_session = {"sessA": "train"}
+
+        selection = _select_measurement_turns(
+            turns_by_speaker, split_by_session, cap_sec=120.0
+        )
+
+        picked, source = selection["spk0"]
+        assert picked == [("sessA", oversized)]
+        assert source == "train"
+
+    def test_speaker_with_no_turns_anywhere_raises_value_error(self):
+        """Contract: a speaker key with an empty turn list is a caller bug
+        (turns_by_speaker is normally only populated from observed turns),
+        so this raises loudly rather than silently selecting nothing and
+        letting a confusing failure surface later inside measure_speaker."""
+        turns_by_speaker = {"spk0": []}
+        split_by_session: dict[str, str] = {}
+
+        with pytest.raises(ValueError, match="spk0"):
+            _select_measurement_turns(turns_by_speaker, split_by_session, cap_sec=120.0)
+
+
+class TestBuildStatsJson:
+    """build() must also persist a machine-readable summary alongside the
+    human stdout block, for downstream tooling (e.g. the Delta training
+    launch) that shouldn't have to scrape printed text."""
+
+    def test_build_stats_json_matches_stdout_table(
+        self, bagpiper_corpus, tiny_builder_cfg, tmp_path, capsys
+    ):
+        out_dir = tmp_path / "out"
+        build(bagpiper_corpus["root"], out_dir, tiny_builder_cfg, seed=0)
+        stdout = capsys.readouterr().out
+
+        stats_path = out_dir / "build_stats.json"
+        assert stats_path.is_file()
+        stats = json.loads(stats_path.read_text())
+
+        assert stats["seed"] == 0
+        assert set(stats.keys()) >= {
+            "seed",
+            "root",
+            "sessions",
+            "splits",
+            "speakers",
+            "caption_word_length",
+        }
+
+        for split in SPLITS:
+            entry = stats["splits"][split]
+            assert set(entry.keys()) >= {
+                "sessions",
+                "windows",
+                "tac_dropped",
+                "tac_records",
+                "mono_records",
+            }
+
+        train_mono, _ = _load_variant_split(out_dir, "mono", "train")
+        train_tac, _ = _load_variant_split(out_dir, "tac", "train")
+        assert stats["splits"]["train"]["mono_records"] == len(train_mono)
+        assert stats["splits"]["train"]["tac_records"] == len(train_tac)
+        assert stats["splits"]["valid"]["windows"] == 0
+        assert stats["splits"]["test"]["windows"] == 0
+
+        speaker_ids = {s["speaker_id"] for s in stats["speakers"]}
+        assert speaker_ids == {"sessA_spk0", "sessA_spk1", "sessB_spk0", "sessB_spk1"}
+        for entry in stats["speakers"]:
+            assert set(entry.keys()) >= {
+                "speaker_id",
+                "pitch_band",
+                "variability_band",
+                "rate_band",
+                "gender",
+                "gender_source",
+                "measure_source",
+                "voice_description",
+            }
+            # Cross-check against the printed stats table (same build run).
+            assert f"{entry['speaker_id']}:" in stdout
+            assert f"measure_source={entry['measure_source']}" in stdout
+            assert entry["voice_description"] in stdout
+
+        cwl = stats["caption_word_length"]
+        assert "_note" in cwl and "token" in cwl["_note"]
+        for variant in VARIANTS:
+            for split in SPLITS:
+                assert split in cwl[variant]
+        # Fixture's 2 sessions both land in train -> valid/test are empty.
+        assert cwl["tac"]["valid"] is None
+        assert cwl["mono"]["test"] is None
+
+        train_dist = cwl["mono"]["train"]
+        assert set(train_dist.keys()) == {
+            "n",
+            "min",
+            "p25",
+            "median",
+            "p75",
+            "max",
+            "mean",
+        }
+        assert train_dist["n"] == len(train_mono)
+
+    def test_human_stdout_stats_block_unchanged(
+        self, bagpiper_corpus, tiny_builder_cfg, tmp_path, capsys
+    ):
+        """Fix 2 must not alter the existing human-readable stdout block."""
+        out_dir = tmp_path / "out"
+        build(bagpiper_corpus["root"], out_dir, tiny_builder_cfg, seed=0)
+        out = capsys.readouterr().out
+        assert "BagPiper lm_tts dataset build" in out
+        assert "windows" in out
+        assert "tac-dropped" in out
+        assert "gender_source" in out
+        assert "caption length" in out
 
 
 class TestSplitSessions:
