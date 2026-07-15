@@ -21,18 +21,24 @@ Two tiers, in one file, following this recipe's existing test layout
    --build-only`` completes in seconds on this 16 GB dev machine).
 
    KEY FINDING (see ``TestRealPreprocessorParity`` docstrings below): on the
-   REAL collate_fn output, ``compute_audio_offsets``'s stream-0 vocab-interval
-   scan (the literally-specified algorithm) finds NOTHING and raises
-   ``ValueError`` on every row, because BagPiper's preprocessor defers audio
-   tokenization to the model forward pass - the collated ``seqs`` tensor's
-   audio region is the ``<|pad|>`` placeholder (id 0) until
-   ``ParallelHFModel._embed`` mutates it in place using
+   REAL collate_fn output, ``compute_audio_offsets``'s stream-0
+   vocab-interval scan (the literally-specified token-scanning algorithm)
+   finds NOTHING and raises ``ValueError`` on every row, because BagPiper's
+   preprocessor defers audio tokenization to the model forward pass - the
+   collated ``seqs`` tensor's audio region is the ``<|pad|>`` placeholder
+   (id 0) until ``ParallelHFModel._embed`` mutates it in place using
    ``discrete_audio_indices`` (see ``espnet2/speechlm/model/speechlm/lm/
-   parallel.py``). The real pre-forward offset ground truth is
-   ``batch["discrete_audio_indices"][:, 1]``. This is exactly the class of
-   bug this task exists to catch (same class as the earlier F5
-   tokenizer-parity issue): a helper that is correct by its literal spec but
-   silently useless against the real pipeline's actual behavior.
+   parallel.py``). This is exactly the class of bug this task exists to
+   catch (same class as the earlier F5 tokenizer-parity issue): a helper
+   that is correct by its literal spec but would be silently useless
+   against the real pipeline's actual behavior. ``src/offsets.py`` resolves
+   this with two functions: ``compute_audio_offsets`` stays the literal
+   token-scanning primitive (correct for tensors that already carry real
+   codec ids), while ``compute_audio_offsets_from_batch`` - the function
+   step-3 training actually calls - reads
+   ``batch["discrete_audio_indices"][:, 1]`` directly, which IS available
+   pre-forward and IS what this test class proves matches the real
+   preprocessor's own structural offsets.
 
 How to run locally (tier 1 always, tier 2 skips without assets):
     PYTHONPATH=<espnet_bagpiper worktree>:<this recipe dir> \\
@@ -164,18 +170,67 @@ class TestComputeAudioOffsets:
 
 
 class TestComputeAudioOffsetsFromBatch:
-    def test_unwraps_seqs_key(self, tiny_parallel_llm):
-        vi = tiny_parallel_llm.vocab_intervals
-        audio_start = vi["discrete_audio"][0][0]
-        seqs = torch.tensor([[[1, 0, 0, 0], [audio_start, 0, 0, 0]]])
-        batch = {"seqs": seqs, "loss_masks": torch.zeros_like(seqs, dtype=torch.float64)}
-        offsets = compute_audio_offsets_from_batch(batch, vi)
-        assert offsets.tolist() == [1]
+    """Unlike compute_audio_offsets, this reads discrete_audio_indices (the
+    preprocessor's structural start-position record), not token values in
+    seqs - so seqs can be all-zero placeholder here, exactly like a real
+    pre-forward collate_fn batch (see src/offsets.py's module docstring and
+    TestRealPreprocessorParity below)."""
 
-    def test_missing_seqs_key_raises(self, tiny_parallel_llm):
-        vi = tiny_parallel_llm.vocab_intervals
+    def test_single_row(self):
+        seqs = torch.zeros(1, 5, 4, dtype=torch.long)
+        batch = {"seqs": seqs, "discrete_audio_indices": torch.tensor([[0, 2, 3]])}
+        offsets = compute_audio_offsets_from_batch(batch)
+        assert offsets.shape == (1,)
+        assert offsets.dtype == torch.long
+        assert offsets.tolist() == [2]
+
+    def test_batch_with_different_offsets(self):
+        seqs = torch.zeros(2, 6, 4, dtype=torch.long)
+        batch = {
+            "seqs": seqs,
+            "discrete_audio_indices": torch.tensor([[0, 1, 2], [1, 3, 2]]),
+        }
+        offsets = compute_audio_offsets_from_batch(batch)
+        assert offsets.tolist() == [1, 3]
+
+    def test_row_with_no_indices_entry_raises_naming_the_row(self):
+        seqs = torch.zeros(2, 6, 4, dtype=torch.long)
+        batch = {"seqs": seqs, "discrete_audio_indices": torch.tensor([[0, 1, 2]])}
+        with pytest.raises(ValueError, match=r"\[1\]"):
+            compute_audio_offsets_from_batch(batch)
+
+    def test_takes_min_start_for_duplicate_row_index(self):
+        """General-infrastructure correctness: if a row somehow has more
+        than one discrete_audio_indices entry, the offset is the earliest
+        (minimum) start, not the last one seen. BagPiper's real records
+        emit exactly one audio segment per row, so this is inert on real
+        data today but the helper is meant to be general."""
+        seqs = torch.zeros(1, 10, 4, dtype=torch.long)
+        batch = {
+            "seqs": seqs,
+            "discrete_audio_indices": torch.tensor([[0, 5, 2], [0, 2, 2]]),
+        }
+        offsets = compute_audio_offsets_from_batch(batch)
+        assert offsets.tolist() == [2]
+
+    def test_missing_discrete_audio_indices_key_raises_keyerror(self):
         with pytest.raises(KeyError):
-            compute_audio_offsets_from_batch({}, vi)
+            compute_audio_offsets_from_batch({"seqs": torch.zeros(1, 3, 4)})
+
+    def test_missing_seqs_key_raises_keyerror(self):
+        with pytest.raises(KeyError):
+            compute_audio_offsets_from_batch(
+                {"discrete_audio_indices": torch.tensor([[0, 1, 1]])}
+            )
+
+    def test_device_preserved_cpu(self):
+        seqs = torch.zeros(1, 5, 4, dtype=torch.long, device="cpu")
+        batch = {
+            "seqs": seqs,
+            "discrete_audio_indices": torch.tensor([[0, 2, 3]], device="cpu"),
+        }
+        offsets = compute_audio_offsets_from_batch(batch)
+        assert offsets.device == seqs.device
 
 
 # ---------------------------------------------------------------------------
@@ -350,28 +405,35 @@ class TestRealPreprocessorParity:
                 "placeholder hypothesis above is wrong"
             )
 
-    def test_discrete_audio_indices_gives_correct_pre_forward_offset(self, tmp_path):
-        """The REAL pre-forward offset ground truth: discrete_audio_indices'
-        start column (col 1), which the preprocessor computes structurally
-        from role/modality/content token COUNTS (speechlm_job.py
-        `preprocessing`, step 3.4's `accum_length`), independent of the
-        (not-yet-tokenized) audio content itself. step-3 training must read
-        align_offsets from here for real batches, not from
-        compute_audio_offsets on the raw collated batch (see the previous
-        test). Also re-verifies the identity-region guarantee independently
-        of compute_audio_offsets's own internal logic: no stream, at any
-        position before the offset, already carries a token id landing in a
-        discrete_audio interval."""
+    def test_compute_audio_offsets_from_batch_matches_indices_ground_truth(self, tmp_path):
+        """compute_audio_offsets_from_batch(batch) IS the real pre-forward
+        offset helper (task-6-brief.md line 3: "audio_start ... equals the
+        value our offset helper compute_audio_offsets(batch) returns"). It
+        reads discrete_audio_indices' start column (col 1), which the
+        preprocessor computes structurally from role/modality/content token
+        COUNTS (speechlm_job.py `preprocessing`, step 3.4's `accum_length`),
+        independent of the (not-yet-tokenized) audio content itself - see
+        the previous test for why token-value scanning (compute_audio_offsets)
+        cannot do this pre-forward. Also re-verifies the identity-region
+        guarantee independently of compute_audio_offsets_from_batch's own
+        internal logic: no stream, at any position before the offset,
+        already carries a token id landing in a discrete_audio interval."""
         job, batch = self._build_batch(tmp_path)
         seqs = batch["seqs"]
         B, T, _n_stream = seqs.shape
         dai = batch["discrete_audio_indices"]
         offsets_by_row = {int(b): int(s) for b, s, _l in dai.tolist()}
-
         assert set(offsets_by_row) == set(range(B))
+
+        offsets = compute_audio_offsets_from_batch(batch)
+        assert offsets.shape == (B,)
+        assert offsets.dtype == torch.long
+        expected = torch.tensor([offsets_by_row[row] for row in range(B)], dtype=torch.long)
+        assert torch.equal(offsets, expected)
+
         intervals = job.vocab_intervals["discrete_audio"]
         for row in range(B):
-            offset = offsets_by_row[row]
+            offset = int(offsets[row])
             assert 0 < offset < T
             prefix = seqs[row, :offset]  # (offset, n_stream) - ALL streams
             for start, end in intervals:

@@ -1,35 +1,46 @@
 """Per-row audio-offset extraction for a collated SpeechLM batch (Task 6).
 
-``compute_audio_offsets`` is what step-3 training hands to the branch-exchange
-context's ``ctx.branches(align_offsets=...)`` (see
+Two functions, two different data sources, on purpose - see the Task 6
+finding below for why one cannot simply delegate to the other.
+
+``compute_audio_offsets_from_batch`` is what step-3 training actually hands
+to the branch-exchange context's ``ctx.branches(align_offsets=...)`` (see
 ``src/branch_exchange/inject.py``): TAC must be exactly identity on every
 pre-audio position, and ``ctx.branches`` needs, per row, the index where that
-row's audio region starts.
+row's audio region starts - computed BEFORE the forward pass, since it has
+to be ready to build the ``ctx.branches(...)`` context that wraps the model
+call.
 
-IMPORTANT (Task 6 finding, see ``tests/test_preprocessing_parity.py``'s
-``TestRealPreprocessorParity`` for the reproduction): on BagPiper's real
-``SpeechLMPreprocessor.collate_fn`` output, the "stream-0 token in a
-``discrete_audio`` vocab interval" test below correctly finds NOTHING and
-raises ``ValueError`` on every real training row. That is not a bug in this
-module - it reflects how the pipeline actually works.
-``espnet2/speechlm/model/speechlm/lm/parallel.py``'s ``ParallelHFModel._embed``
-encodes the raw waveform (``discrete_audio_feats``) and writes the resulting
-codec ids into ``seqs`` IN PLACE, keyed by ``discrete_audio_indices``, only
-during the model forward pass; before that, the audio region of a freshly
-collated ``seqs`` is the ``<|pad|>`` (id 0) placeholder, indistinguishable
-from ordinary padding. So this helper's stream-0 scan only ever finds a real
-audio offset on a batch whose audio region already carries real per-stream
-codec ids - e.g. hand-built tensors (see the local tests), or a ``seqs``
-tensor captured AFTER ``_embed`` has run. It is NOT usable directly on the
-raw ``collate_fn`` output. For that case, the correct pre-forward offset is
-``batch["discrete_audio_indices"][:, 1]`` (the preprocessor's own structural
-start-position record - see ``speechlm_job.py``'s ``preprocessing`` step 3.4);
-step-3 training must source ``align_offsets`` from there for real batches,
-not from this helper. This module still implements the literally-specified
-stream-0 scan (rather than silently switching to ``discrete_audio_indices``)
-because it is a legitimate, simpler, self-contained utility for any batch
-that DOES carry real per-stream codes, and switching its semantics without
-flagging would hide the real finding instead of surfacing it.
+``compute_audio_offsets`` is the lower-level primitive: given a token
+tensor, find the first stream-0 position whose value falls in a
+``discrete_audio`` vocab interval. That only works when the tensor already
+carries real per-stream codec ids in its audio region (hand-built tensors,
+or a ``seqs`` snapshot captured AFTER the model's ``_embed`` step runs - see
+below). It does NOT work on a fresh ``SpeechLMPreprocessor.collate_fn``
+batch.
+
+IMPORTANT (Task 6 finding, reproduced in
+``tests/test_preprocessing_parity.py``'s ``TestRealPreprocessorParity``): on
+BagPiper's real ``collate_fn`` output, ``compute_audio_offsets``'s stream-0
+scan correctly finds NOTHING and raises ``ValueError`` on every real
+training row. That is not a bug in the scan - it reflects how the pipeline
+actually works. ``espnet2/speechlm/model/speechlm/lm/parallel.py``'s
+``ParallelHFModel._embed`` encodes the raw waveform
+(``discrete_audio_feats``) and writes the resulting codec ids into ``seqs``
+IN PLACE, keyed by ``discrete_audio_indices``, only during the model forward
+pass; before that, the audio region of a freshly collated ``seqs`` is the
+``<|pad|>`` (id 0) placeholder, indistinguishable BY VALUE from ordinary
+padding. There is no token-value signal pre-forward for a scan to find.
+
+There IS a structural signal pre-forward, though: ``discrete_audio_indices``
+(rows of ``(batch_idx, start, length)``), which the preprocessor computes
+from role/modality/content token COUNTS (``speechlm_job.py``'s
+``preprocessing``, step 3.4's ``accum_length``) - entirely independent of
+the (not-yet-tokenized) audio content. That is the real pre-forward ground
+truth, and it is what ``compute_audio_offsets_from_batch`` reads. This is
+also why it takes only ``batch`` (matching the task's specified
+single-argument signature) and never needs ``vocab_intervals``: it never
+inspects token values at all.
 """
 
 from __future__ import annotations
@@ -40,6 +51,12 @@ import torch
 def compute_audio_offsets(seqs: torch.Tensor, vocab_intervals: dict) -> torch.LongTensor:
     """Per-row index of the FIRST position whose stream-0 token falls in any
     ``vocab_intervals["discrete_audio"]`` interval.
+
+    See the module docstring: this only finds a real offset on a tensor
+    whose audio region already carries real per-stream codec ids (hand-built
+    tensors, or a post-``_embed`` snapshot) - NOT on a fresh
+    ``collate_fn`` batch, where it correctly raises. Use
+    ``compute_audio_offsets_from_batch`` for the pre-forward training case.
 
     Args:
         seqs: Collated token sequence, shape ``(B, T, n_stream)`` (the
@@ -96,18 +113,47 @@ def compute_audio_offsets(seqs: torch.Tensor, vocab_intervals: dict) -> torch.Lo
     return offsets.long()
 
 
-def compute_audio_offsets_from_batch(batch: dict, vocab_intervals: dict) -> torch.LongTensor:
-    """Convenience wrapper unwrapping a ``collate_fn`` output dict.
+def compute_audio_offsets_from_batch(batch: dict) -> torch.LongTensor:
+    """Per-row first audio-token position, read from a collated batch.
 
-    ``batch["seqs"]`` is the key ``SpeechLMPreprocessor.collate_fn`` uses for
-    the collated token sequence (see ``scripts/gate_teacher_forced.py``'s
-    printed batch keys: ``seqs``, ``loss_masks``, ``discrete_audio_indices``,
-    ``discrete_audio_feats``, ``discrete_audio_lengths``). ``vocab_intervals``
-    is not itself part of the collated batch dict (it lives on the
-    ``SpeechLMJobTemplate``/model instead), so it must be passed separately.
+    This is the function step-3 training actually calls to build
+    ``ctx.branches(align_offsets=...)``: unlike ``compute_audio_offsets``, it
+    reads the preprocessor's own structural ``discrete_audio_indices``
+    record (rows of ``(batch_idx, start, length)`` - see
+    ``scripts/gate_teacher_forced.py``'s printed batch keys) instead of
+    scanning token values, so it works on a real, pre-forward
+    ``SpeechLMPreprocessor.collate_fn`` batch where the audio region is
+    still the ``<|pad|>`` placeholder (see the module docstring's Task 6
+    finding). If a row has more than one ``discrete_audio_indices`` entry,
+    the offset is the MINIMUM (earliest) start recorded for that row.
 
-    See the module docstring: on a raw (pre-forward) real ``collate_fn``
-    batch, this raises ``ValueError`` - use
-    ``batch["discrete_audio_indices"][:, 1]`` instead in that case.
+    Args:
+        batch: A ``collate_fn`` output dict. Must contain ``"seqs"`` (used
+            only for its batch dimension) and ``"discrete_audio_indices"``.
+
+    Returns:
+        ``torch.LongTensor`` of shape ``(B,)``, one offset per row, on the
+        same device as ``batch["discrete_audio_indices"]``.
+
+    Raises:
+        KeyError: ``batch`` is missing ``"seqs"`` or ``"discrete_audio_indices"``.
+        ValueError: any row has no ``discrete_audio_indices`` entry (a
+            training row must have audio).
     """
-    return compute_audio_offsets(batch["seqs"], vocab_intervals)
+    seqs = batch["seqs"]
+    dai = batch["discrete_audio_indices"]
+
+    num_rows = seqs.shape[0]
+    starts = torch.full((num_rows,), -1, dtype=torch.long, device=dai.device)
+    for row in dai.tolist():
+        bidx, start, _length = row
+        if starts[bidx] == -1 or start < starts[bidx]:
+            starts[bidx] = start
+
+    missing = (starts == -1).nonzero(as_tuple=True)[0].tolist()
+    if missing:
+        raise ValueError(
+            f"row(s) {missing} have no discrete_audio_indices entry; every "
+            "training row must have audio"
+        )
+    return starts
