@@ -15,6 +15,11 @@ uses curly quotes around the same ``"<speaker> says:"`` pattern). Every
 template in this module standardizes on the plain straight double-quote
 character for the quoted script/turn text.
 
+Literal double quotes inside a script/turn (e.g. a speaker quoting someone
+else: ``She said "hello" to me.``) pass through into the wrapping quotes
+unescaped. This is deliberate: verbatim speech is never mangled or
+re-escaped by this module.
+
 DESIGN-CRITICAL (project decision 14): a capability probe showed the
 checkpoint's audio decoder degenerates on persona/character-framed captions
 ("play the role of...", "embody the character of...") while narration-style
@@ -65,9 +70,20 @@ RATE_PHRASE = {
 
 # Persona/character-framing regression guard (decision 14). Word-boundary
 # anchored so substrings inside ordinary words ("personality",
-# "characteristic") are not false positives.
+# "characteristic") are not false positives. Covers common inflections
+# (roles/characters/personas, embody/embodies/embodied/embodying/embodiment,
+# portray/portrays/portrayed/portraying/portrayal, pretend/pretends/
+# pretended/pretending, role-play/roleplay/role-plays/roleplaying/
+# role-played) while staying word-boundary anchored.
 PERSONA_MARKERS = re.compile(
-    r"\b(role|character|persona|embody|portray|pretend)\b", re.IGNORECASE
+    r"\b("
+    r"roles?|characters?|personas?"
+    r"|embod(?:y|ies|ied|ying|iment)"
+    r"|portray(?:s|ed|ing|al)?"
+    r"|pretend(?:s|ed|ing)?"
+    r"|role-?play(?:s|ing|ed)?"
+    r")\b",
+    re.IGNORECASE,
 )
 
 
@@ -127,18 +143,33 @@ def setting_sentence() -> str:
     )
 
 
-def tac_caption(attrs: SpeakerAttrs, script: str) -> str:
+def tac_caption(
+    attrs: SpeakerAttrs, script: str, description: str | None = None
+) -> str:
     """TAC (single-channel) caption: voice description, blank line, setting
     sentence, blank line, the quoted script.
 
     ``script`` is the channel's own turns already joined in time order (the
     caller's responsibility, not this function's); it is inserted verbatim
-    and is not scanned by ``assert_no_persona`` (see module docstring).
+    and is not scanned by ``assert_no_persona`` (see module docstring). A
+    literal double quote inside ``script`` passes through unescaped (see
+    module docstring).
+
+    ``description``, if given, overrides the template ``voice_description``
+    output (e.g. an ``apply_paraphrase_overlay`` result) and is used
+    verbatim. It is still checked with ``assert_no_persona`` here, in
+    addition to any validation the overlay already performed, as defense in
+    depth. Raises ``ValueError`` if ``script`` is empty or whitespace-only.
     """
+    if not script.strip():
+        raise ValueError("tac_caption: script must not be empty or whitespace-only")
+    if description is not None:
+        assert_no_persona(description)
+        voice_text = description
+    else:
+        voice_text = voice_description(attrs)
     return (
-        f"{voice_description(attrs)}\n\n"
-        f"{setting_sentence()}\n\n"
-        f'The speaker says: "{script}"'
+        f"{voice_text}\n\n" f"{setting_sentence()}\n\n" f'The speaker says: "{script}"'
     )
 
 
@@ -161,7 +192,9 @@ def _assign_speaker_labels(
 
 
 def mono_caption(
-    attrs_by_label: dict[str, SpeakerAttrs], ordered_turns: Sequence[Turn]
+    attrs_by_label: dict[str, SpeakerAttrs],
+    ordered_turns: Sequence[Turn],
+    descriptions: dict[str, str] | None = None,
 ) -> str:
     """Native multi-talker (mono, single combined stream) caption.
 
@@ -170,12 +203,45 @@ def mono_caption(
     first-appearance order in true temporal order). Layout: one
     "Speaker N: <description>" line per speaker (first-appearance order),
     blank line, then "Speaker N says: "<text>"" lines in true temporal
-    (start-time) order, one line per turn.
+    (start-time) order, one line per turn. A literal double quote inside a
+    turn's text passes through unescaped (see module docstring).
+
+    ``descriptions``, if given, is keyed by the same speaker id/key as
+    ``attrs_by_label`` (e.g. an ``apply_paraphrase_overlay`` result) and
+    overrides the template ``voice_description`` for that speaker, used
+    verbatim (no leading-article stripping, unlike the template path). A
+    speaker id absent from ``descriptions`` falls back to the template.
+    Every description used (override or template) is checked with
+    ``assert_no_persona`` here, in addition to any validation the overlay
+    already performed, as defense in depth.
+
+    Raises ``ValueError`` if ``ordered_turns`` is empty, if
+    ``attrs_by_label`` is empty, or if any turn's text is empty or
+    whitespace-only.
     """
+    if not ordered_turns:
+        raise ValueError("mono_caption: ordered_turns must not be empty")
+    if not attrs_by_label:
+        raise ValueError("mono_caption: attrs_by_label must not be empty")
+    for turn in ordered_turns:
+        if not turn.text.strip():
+            raise ValueError(
+                f"mono_caption: turn for speaker {turn.speaker!r} has empty "
+                "or whitespace-only text"
+            )
+
     labels, sorted_turns = _assign_speaker_labels(ordered_turns)
+    descriptions = descriptions or {}
+
+    def _description_for(sid: str) -> str:
+        if sid in descriptions:
+            override = descriptions[sid]
+            assert_no_persona(override)
+            return override
+        return _strip_leading_article(voice_description(attrs_by_label[sid]))
+
     voice_lines = "\n".join(
-        f"{label}: {_strip_leading_article(voice_description(attrs_by_label[sid]))}"
-        for sid, label in labels.items()
+        f"{label}: {_description_for(sid)}" for sid, label in labels.items()
     )
     turn_lines = "\n".join(
         f'{labels[turn.speaker]} says: "{turn.text}"' for turn in sorted_turns

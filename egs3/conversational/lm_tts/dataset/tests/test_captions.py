@@ -280,6 +280,203 @@ class TestPersonaGuard:
             assert_no_persona(cot_block("tac", attrs=a))
 
 
+class TestTacCaptionInputGuards:
+    """Fix 1: degenerate input must raise loudly, not silently produce
+    near-empty training data."""
+
+    def test_empty_script_raises(self):
+        with pytest.raises(ValueError):
+            tac_caption(ATTRS_FEMALE_HIGH_EXPRESSIVE_BRISK, "")
+
+    def test_whitespace_only_script_raises(self):
+        with pytest.raises(ValueError):
+            tac_caption(ATTRS_FEMALE_HIGH_EXPRESSIVE_BRISK, "   \n\t  ")
+
+
+class TestMonoCaptionInputGuards:
+    """Fix 1: degenerate input must raise loudly, not silently produce
+    near-empty training data."""
+
+    def test_empty_turns_raises(self):
+        with pytest.raises(ValueError):
+            mono_caption({"spk_f": ATTRS_FEMALE_HIGH_EXPRESSIVE_BRISK}, [])
+
+    def test_empty_attrs_by_label_raises(self):
+        turns = [Turn(channel=0, speaker="spk_f", text="Hi.", start=0.0, end=1.0)]
+        with pytest.raises(ValueError):
+            mono_caption({}, turns)
+
+    def test_empty_turn_text_raises(self):
+        attrs_by_label = {
+            "spk_f": ATTRS_FEMALE_HIGH_EXPRESSIVE_BRISK,
+            "spk_m": ATTRS_MALE_LOW_FLAT_MEASURED,
+        }
+        turns = [
+            Turn(channel=0, speaker="spk_f", text="Hi.", start=0.0, end=1.0),
+            Turn(channel=1, speaker="spk_m", text="   ", start=1.0, end=2.0),
+        ]
+        with pytest.raises(ValueError):
+            mono_caption(attrs_by_label, turns)
+
+
+class TestTacCaptionDescriptionOverride:
+    """Fix 2: apply_paraphrase_overlay output must be able to reach the
+    assembled caption, not just live in a disconnected dict."""
+
+    def test_override_used_verbatim(self):
+        caption = tac_caption(
+            ATTRS_FEMALE_HIGH_EXPRESSIVE_BRISK,
+            "We're in Istanbul, Turkey.",
+            description="A bright, energetic young woman's voice.",
+        )
+        assert caption == (
+            "A bright, energetic young woman's voice.\n\n"
+            "The following is one side of a natural two-person conversation; "
+            "the speaker responds in their own turns.\n\n"
+            'The speaker says: "We\'re in Istanbul, Turkey."'
+        )
+
+    def test_no_override_falls_back_to_template(self):
+        caption = tac_caption(
+            ATTRS_FEMALE_HIGH_EXPRESSIVE_BRISK, "We're in Istanbul, Turkey."
+        )
+        assert caption.startswith(voice_description(ATTRS_FEMALE_HIGH_EXPRESSIVE_BRISK))
+
+    def test_persona_override_raises_at_assembly(self):
+        with pytest.raises(ValueError):
+            tac_caption(
+                ATTRS_FEMALE_HIGH_EXPRESSIVE_BRISK,
+                "We're in Istanbul, Turkey.",
+                description="Embody the character of a queen.",
+            )
+
+
+class TestMonoCaptionDescriptionOverride:
+    """Fix 2: same override wiring for the multi-speaker template, keyed by
+    the same speaker label/key as attrs_by_label."""
+
+    def _turns(self):
+        return [
+            Turn(
+                channel=0,
+                speaker="spk_f",
+                text="We're in Istanbul, Turkey.",
+                start=0.0,
+                end=2.0,
+            ),
+            Turn(
+                channel=1,
+                speaker="spk_m",
+                text="The food culture here will blow your mind.",
+                start=2.0,
+                end=5.0,
+            ),
+        ]
+
+    def test_override_used_verbatim_missing_key_falls_back(self):
+        attrs_by_label = {
+            "spk_f": ATTRS_FEMALE_HIGH_EXPRESSIVE_BRISK,
+            "spk_m": ATTRS_MALE_LOW_FLAT_MEASURED,
+        }
+        descriptions = {"spk_f": "A bright, energetic young woman's voice."}
+        caption = mono_caption(attrs_by_label, self._turns(), descriptions=descriptions)
+        assert caption == (
+            "Speaker 1: A bright, energetic young woman's voice.\n"
+            "Speaker 2: male speaker with a deep-pitched, calm, even voice, "
+            "speaking at an unhurried pace in a clean close-microphone "
+            "recording.\n\n"
+            'Speaker 1 says: "We\'re in Istanbul, Turkey."\n'
+            'Speaker 2 says: "The food culture here will blow your mind."'
+        )
+
+    def test_persona_override_raises_at_assembly(self):
+        attrs_by_label = {
+            "spk_f": ATTRS_FEMALE_HIGH_EXPRESSIVE_BRISK,
+            "spk_m": ATTRS_MALE_LOW_FLAT_MEASURED,
+        }
+        descriptions = {"spk_f": "Embody the character of a queen."}
+        with pytest.raises(ValueError):
+            mono_caption(attrs_by_label, self._turns(), descriptions=descriptions)
+
+
+class TestQuotePassthrough:
+    """Fix 3: literal double quotes inside verbatim speech pass through
+    unescaped. This documents the chosen behavior, not a bug."""
+
+    def test_tac_caption_literal_quotes_pass_through_unescaped(self):
+        caption = tac_caption(ATTRS_MALE_LOW_FLAT_MEASURED, 'She said "hello" to me.')
+        assert 'The speaker says: "She said "hello" to me."' in caption
+
+    def test_mono_caption_literal_quotes_pass_through_unescaped(self):
+        attrs_by_label = {"spk_f": ATTRS_FEMALE_HIGH_EXPRESSIVE_BRISK}
+        turns = [
+            Turn(
+                channel=0,
+                speaker="spk_f",
+                text='She said "hello" to me.',
+                start=0.0,
+                end=2.0,
+            )
+        ]
+        caption = mono_caption(attrs_by_label, turns)
+        assert 'Speaker 1 says: "She said "hello" to me."' in caption
+
+
+class TestPersonaMarkersInflections:
+    """Fix 4: PERSONA_MARKERS must catch common inflections while staying
+    word-boundary anchored."""
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "She has multiple roles in this play.",
+            "The characters in this scene argue.",
+            "Multiple personas emerge in the recording.",
+            "She embodies the mentor archetype.",
+            "He embodied the veteran perfectly.",
+            "The actor is embodying a new role.",
+            "That is quite the embodiment of grit.",
+            "She portrays a weary detective.",
+            "He portrayed a nervous student.",
+            "The actor is portraying a queen.",
+            "The portrayal was convincing.",
+            "She pretends to be calm.",
+            "He pretended not to notice.",
+            "They are pretending everything is fine.",
+            "The kids love to roleplay adventures.",
+            "The kids love to role-play adventures.",
+            "She is roleplaying a detective.",
+            "They role-played the whole scenario.",
+        ],
+    )
+    def test_inflections_are_matched(self, text):
+        with pytest.raises(ValueError):
+            assert_no_persona(text)
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "Her personality comes through in a lively voice.",
+            "A characteristic warmth colors her delivery.",
+            "The story was told in a characterful way.",
+            "The rug was unrolled across the floor.",
+            "His tone felt impersonal and flat.",
+        ],
+    )
+    def test_no_false_positives_on_lookalike_words(self, text):
+        assert_no_persona(text)
+
+    def test_no_false_positives_on_template_vocabulary(self):
+        for a in (
+            ATTRS_FEMALE_HIGH_EXPRESSIVE_BRISK,
+            ATTRS_MALE_LOW_FLAT_MEASURED,
+            ATTRS_FEMALE_MEDIUM_FLAT_MODERATE,
+        ):
+            assert_no_persona(voice_description(a))
+            assert_no_persona(cot_block("tac", attrs=a))
+        assert_no_persona(setting_sentence())
+
+
 class TestApplyParaphraseOverlay:
     def test_overlay_replaces_present_speaker_keeps_missing_as_template(self, tmp_path):
         captions = {
