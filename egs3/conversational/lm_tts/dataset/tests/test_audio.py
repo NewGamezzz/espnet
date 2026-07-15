@@ -76,6 +76,35 @@ class TestLoadWindowChannel:
         with pytest.raises(ValueError):
             load_window_channel(audio_path, 0.5, 1.5, channel=2, target_sr=TARGET_SR)
 
+    def test_t1_well_past_eof_raises(self, tmp_path):
+        """A window whose stop is far past the source file's actual frame
+        count must fail loudly, not silently truncate. This is the
+        corruption scenario: an upstream manifest can drift from the actual
+        file duration, and a silent truncation would understate the
+        returned window without any signal."""
+        audio_path = _make_source(tmp_path, duration=2.0)
+        with pytest.raises(ValueError, match=r"sess1_mixed\.wav"):
+            load_window_channel(audio_path, 0.5, 5.0, channel=0, target_sr=TARGET_SR)
+
+    def test_t1_within_slack_clamps_quietly(self, tmp_path):
+        """A stop that lands within 2 source-rate samples of EOF (float
+        rounding at a manifest boundary) should clamp silently rather than
+        raise."""
+        audio_path = _make_source(tmp_path, duration=2.0)
+        # Request a stop exactly 1 source sample past the true end: within
+        # the documented 2-sample slack.
+        t1 = 2.0 + (1.0 / SOURCE_SR)
+        arr = load_window_channel(audio_path, 1.5, t1, channel=0, target_sr=TARGET_SR)
+        assert arr.dtype == np.float32
+        assert len(arr) > 0
+
+    def test_t0_past_eof_raises(self, tmp_path):
+        """A start at or past EOF must fail loudly instead of silently
+        returning a zero-length array."""
+        audio_path = _make_source(tmp_path, duration=2.0)
+        with pytest.raises(ValueError, match=r"sess1_mixed\.wav"):
+            load_window_channel(audio_path, 3.0, 3.5, channel=0, target_sr=TARGET_SR)
+
 
 class TestMixMono:
     """Sum + clip-guard scaling by max(1.0, peak)."""
@@ -176,13 +205,19 @@ class TestCutWindowWavs:
     def test_mix_equals_sum_of_exact_written_channel_arrays(self, tmp_path):
         """DESIGN-CRITICAL (decision 12): the mix must be built from the same
         float32 arrays that get quantized into the channel wavs, not from a
-        second independent resample. We compare against load_window_channel
-        called directly (the same function cut_window_wavs uses internally)
-        rather than re-reading the quantized channel wavs, since PCM16
-        round-tripping two channels separately and then summing would not
-        equal quantizing the already-summed mix. The mix wav is itself a
-        PCM16 quantization of that exact sum, so we allow a 1-LSB tolerance
-        (2/32768) when comparing against the file read back from disk.
+        second independent resample or from summing the already-quantized
+        (re-read) channel wavs. Both would slip past a tolerance-based check:
+        empirically, an implementation that builds the mix by re-reading the
+        already-written PCM16 channel wavs and summing those differs from
+        the correct one by up to 5.99e-5, which is inside a naive "1-LSB"
+        tolerance of 2/32768 (6.10e-5) - so that kind of check would pass on
+        exactly the violation it exists to catch.
+
+        Instead we build a reference mix through the *same* one-quantization
+        path (float32 sum -> single PCM16 encode) and compare file bytes
+        directly, with zero tolerance. A correct cut_window_wavs must
+        produce byte-identical output to this reference, since both go
+        through exactly one quantization of the exact same float32 sum.
         """
         dataset_root = tmp_path / "root"
         audio_path = _make_source(dataset_root)
@@ -191,12 +226,13 @@ class TestCutWindowWavs:
         ch0 = load_window_channel(audio_path, record.t0, record.t1, 0, TARGET_SR)
         ch1 = load_window_channel(audio_path, record.t0, record.t1, 1, TARGET_SR)
         expected_mix = mix_mono([ch0, ch1])
+        expected_path = tmp_path / "expected_mix.wav"
+        sf.write(str(expected_path), expected_mix, TARGET_SR, subtype="PCM_16")
 
         out_dir = tmp_path / "out"
         result = cut_window_wavs(record, dataset_root, out_dir)
-        mix_data, _ = sf.read(str(result.mix_path), dtype="float32")
 
-        np.testing.assert_allclose(mix_data, expected_mix, atol=2 / 32768)
+        assert result.mix_path.read_bytes() == expected_path.read_bytes()
 
     def test_mix_is_not_a_separate_resample_call(self, tmp_path):
         """Exactly one soxr.resample call per channel, none extra for the
@@ -213,3 +249,26 @@ class TestCutWindowWavs:
             cut_window_wavs(record, dataset_root, out_dir)
 
         assert spy.call_count == record.num_channels
+
+    def test_three_channel_source_writes_three_channel_wavs_and_a_mix(self, tmp_path):
+        """cut_window_wavs is already channel-count generic; lock that in
+        with a 3-channel source."""
+        dataset_root = tmp_path / "root"
+        _make_source(dataset_root, freqs=(220.0, 440.0, 660.0))
+        out_dir = tmp_path / "out"
+        record = _make_record(num_channels=3)
+
+        result = cut_window_wavs(record, dataset_root, out_dir)
+
+        assert len(result.channel_paths) == 3
+        expected_names = {f"{record.window_id}_ch{i}.wav" for i in range(3)}
+        expected_names.add(f"{record.window_id}_mix.wav")
+        assert {p.name for p in result.channel_paths} | {
+            result.mix_path.name
+        } == expected_names
+        for path in list(result.channel_paths) + [result.mix_path]:
+            assert path.exists()
+            info = sf.info(str(path))
+            assert info.samplerate == TARGET_SR
+            assert info.channels == 1
+            assert info.subtype == "PCM_16"

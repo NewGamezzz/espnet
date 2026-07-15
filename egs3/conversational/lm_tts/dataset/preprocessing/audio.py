@@ -24,6 +24,14 @@ import soxr
 
 from .windows import WindowRecord
 
+# Slack (in source-rate samples) tolerated when a requested window's stop
+# lands past the source file's actual frame count. Upstream windowing
+# derives t1 from a manifest-recorded duration in seconds; converting that
+# back to samples at the source rate can round up by a fraction of a
+# sample at the exact end-of-file boundary. Two samples comfortably covers
+# that float rounding without masking real manifest/file drift.
+_EOF_SLACK_SAMPLES = 2
+
 
 def load_window_channel(
     audio_path: str | Path,
@@ -38,11 +46,35 @@ def load_window_channel(
     (never loads the whole session file) and resamples with ``soxr`` at
     ``HQ`` quality - the single resample path shared by every caller in this
     module, including the mix built by ``mix_mono``.
+
+    Fails loudly (``ValueError``) if the requested window runs past the
+    source file's actual frame count by more than ``_EOF_SLACK_SAMPLES``
+    samples (at the source rate), or if ``t0`` is at or past EOF. Upstream
+    windowing clamps ``t1`` to the manifest-recorded duration, but the
+    manifest can drift from the actual file on disk; silently truncating
+    here would understate durations without any signal, which is a
+    corruption risk. A small slack is still tolerated so float rounding at
+    a manifest boundary (e.g. ``t1`` landing a fraction of a sample past the
+    true end) does not spuriously raise.
     """
     info = sf.info(str(audio_path))
     sr = info.samplerate
     start = int(round(t0 * sr))
-    stop = min(int(round(t1 * sr)), info.frames)
+    stop = int(round(t1 * sr))
+    if start >= info.frames:
+        raise ValueError(
+            f"requested window start t0={t0!r} (sample {start}) is at or "
+            f"past end of file {audio_path} ({info.frames} frames, "
+            f"{info.frames / sr:.6f}s)"
+        )
+    if stop - info.frames > _EOF_SLACK_SAMPLES:
+        raise ValueError(
+            f"requested window [t0={t0!r}, t1={t1!r}) (samples "
+            f"[{start}, {stop})) extends past end of file {audio_path} "
+            f"({info.frames} frames, {info.frames / sr:.6f}s); this likely "
+            f"means the manifest duration has drifted from the actual file"
+        )
+    stop = min(stop, info.frames)
     data, read_sr = sf.read(
         str(audio_path), start=start, stop=stop, dtype="float32", always_2d=True
     )
