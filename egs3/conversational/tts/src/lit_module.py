@@ -55,6 +55,14 @@ class ConversationalLightningModule(ESPnetLightningModule):
     """ESPnetLightningModule with exchange/backbone param groups and the
     conversation batch sampler (see module docstring)."""
 
+    def __init__(self, model, config):
+        super().__init__(model, config)
+        # ConversationBatchSampler strides batches by rank itself (and is not
+        # a torch BatchSampler subclass), so the espnet3 trainer must pass
+        # use_distributed_sampler=False to Lightning; it keys that off this
+        # flag, which the parent only sets for iter_factory configs.
+        self.is_espnet_sampler = True
+
     def _log_stats(self, mode, stats, weight, extra_stats=None):
         """Route per-channel loss means around the ``sync_dist`` path.
 

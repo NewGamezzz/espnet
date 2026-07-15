@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import inspect
 import logging
 import os
 import time
@@ -139,6 +140,20 @@ def run_stages(
         fn = getattr(system, stage, None)
         if fn is None:
             raise AttributeError(f"System has no stage method: {stage}")
+        if any(
+            p.default is inspect.Parameter.empty
+            and p.kind
+            in (
+                inspect.Parameter.POSITIONAL_ONLY,
+                inspect.Parameter.POSITIONAL_OR_KEYWORD,
+                inspect.Parameter.KEYWORD_ONLY,
+            )
+            for p in inspect.signature(fn).parameters.values()
+        ):
+            raise TypeError(
+                f"Stage '{stage}' does not accept CLI arguments; "
+                "put all settings in the YAML config."
+            )
 
         with log_stage(stage):
             if dry_run:
@@ -182,12 +197,6 @@ def run_stages(
             log.info("=== [START] stage: %s ===", stage)
             try:
                 fn()
-            except TypeError as e:
-                log.exception("Stage '%s' failed (bad arguments)", stage)
-                raise TypeError(
-                    f"Stage '{stage}' does not accept CLI arguments; "
-                    "put all settings in the YAML config."
-                ) from e
             except Exception:
                 elapsed = time.perf_counter() - start
                 log.exception("Stage '%s' failed after %.2fs", stage, elapsed)
