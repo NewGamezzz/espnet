@@ -229,6 +229,12 @@ class ChannelQualityMetric(BaseMetric):
         enable_dnsmos: bool = False,
         dnsmos_backend: Optional[MOSBackend] = None,
     ) -> None:
+        if dnsmos_backend is not None and not enable_dnsmos:
+            raise ValueError(
+                "dnsmos_backend was provided but enable_dnsmos=False; the "
+                "backend would be silently discarded. Pass enable_dnsmos=True "
+                "to use it, or drop dnsmos_backend."
+            )
         self.mos_backend = (
             mos_backend if mos_backend is not None else TorchHubUTMOSBackend()
         )

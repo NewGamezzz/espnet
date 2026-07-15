@@ -250,12 +250,19 @@ CRITICAL: the `measure` invocation must ALSO pass the mode-edited `--inference_c
 This exact scenario is pinned by `tests/test_run.py::TestAnchorModePropagation`.
 
 ```bash
+# conf/generated/ is gitignored, so the sed output below can never be
+# accidentally committed the way a stray conf/inference_gt.yaml could be.
+# It still lives under conf/ (not exp/) because espnet3's config loader
+# infers the recipe's default package from a `.../egs3/<corpus>/<system>/conf/...`
+# path segment; a copy outside conf/ would fail to load without an explicit
+# --default_package flag, which run.py's CLI does not expose.
+mkdir -p conf/generated
 for m in gt resynth; do
-  sed "s/^mode: generate/mode: $m/" conf/inference_conversational.yaml > conf/inference_$m.yaml
-  sed "s/^mode: generate/mode: $m/" conf/metrics.yaml               > conf/metrics_$m.yaml
-  python run.py --stages infer   --inference_config conf/inference_$m.yaml
-  python run.py --stages measure --inference_config conf/inference_$m.yaml \
-                                 --metrics_config   conf/metrics_$m.yaml
+  sed "s/^mode: generate/mode: $m/" conf/inference_conversational.yaml > conf/generated/inference_$m.yaml
+  sed "s/^mode: generate/mode: $m/" conf/metrics.yaml               > conf/generated/metrics_$m.yaml
+  python run.py --stages infer   --inference_config conf/generated/inference_$m.yaml
+  python run.py --stages measure --inference_config conf/generated/inference_$m.yaml \
+                                 --metrics_config   conf/generated/metrics_$m.yaml
 done
 
 python local/eval_report.py \

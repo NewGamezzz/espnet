@@ -40,38 +40,7 @@ from egs3.conversational.tts.src.metrics.interaction import (
     _w1,
 )
 from egs3.conversational.tts.src.metrics.segments import VAD, SileroVADBackend
-
-
-# --------------------------------------------------------------------------- #
-# test-only fakes
-# --------------------------------------------------------------------------- #
-class _FrameEnergyVAD:
-    """Frame-wise energy-threshold VAD (mirrors ``test_speaker_metric.py``'s
-    fake of the same name): splits on true silence gaps so a constructed
-    amplitude envelope with several speech blocks yields one raw segment per
-    block."""
-
-    def __init__(self, frame_sec: float = 0.01, threshold: float = 1e-6):
-        self.frame_sec = frame_sec
-        self.threshold = threshold
-
-    def __call__(self, wav, sr):
-        frame = max(1, int(round(self.frame_sec * sr)))
-        out = []
-        in_speech = False
-        start = 0
-        n = len(wav)
-        for i in range(0, n, frame):
-            block = wav[i : i + frame]
-            active = bool(np.max(np.abs(block)) > self.threshold)
-            if active and not in_speech:
-                start, in_speech = i, True
-            elif not active and in_speech:
-                out.append((start / sr, i / sr))
-                in_speech = False
-        if in_speech:
-            out.append((start / sr, n / sr))
-        return out
+from egs3.conversational.tts.tests.conftest import _FrameEnergyVAD
 
 
 def _write_wav_exact(path: Path, data: np.ndarray, sr: int) -> None:

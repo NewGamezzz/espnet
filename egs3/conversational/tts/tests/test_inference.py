@@ -244,7 +244,11 @@ class TestGtContract:
         assert scp == ["sess_w00000 meta/sess_w00000.json"]
 
         meta = json.loads((test_dir / "meta/sess_w00000.json").read_text("utf-8"))
-        prompt_frames = round(3.0 * FS) // HOP
+        # Hardcoded, not `round(3.0 * FS) // HOP`: the golden value must not
+        # be derived with the same arithmetic the code under test uses, or a
+        # shared bug in that formula would pass both sides silently.
+        # FS=24000, HOP=256 -> round(3.0 * 24000) // 256 == 72000 // 256 == 281.
+        prompt_frames = 281
         expected = {
             "window_id": "sess_w00000",
             "session_id": "sess",

@@ -382,6 +382,13 @@ class InteractionMetric(BaseMetric):
         window_id = meta["window_id"]
         channels_meta = meta["channels"]
         n = len(channels_meta)
+        # Nominal region duration, not the frame-exact cut src/inference.py
+        # documents (prompt_boundary_frames * hop) -- same sub-hop
+        # (well under one hop, ~10ms) tradeoff SpeakerDynamicsMetric accepts
+        # for the same reason (see speaker.py's turn-clipping docstring):
+        # this feeds only the per-minute rate normalization and the
+        # build_ipus total_duration clamp below, both multi-second
+        # quantities a sub-hop error never visibly perturbs.
         region_duration = float(meta["window_duration_sec"]) - float(
             meta["prompt_boundary_sec"]
         )

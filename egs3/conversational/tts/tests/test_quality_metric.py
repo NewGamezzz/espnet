@@ -35,6 +35,7 @@ from egs3.conversational.tts.src.metrics.quality import (
     _weighted_channel_score,
 )
 from egs3.conversational.tts.src.metrics.segments import VAD, SileroVADBackend
+from egs3.conversational.tts.tests.conftest import _FrameEnergyVAD
 
 try:
     import speechmos  # noqa: F401
@@ -47,33 +48,6 @@ except ImportError:
 # --------------------------------------------------------------------------- #
 # test-only fakes
 # --------------------------------------------------------------------------- #
-class _FrameEnergyVAD:
-    """Frame-wise energy-threshold VAD (see ``test_speaker_metric.py`` /
-    ``test_interaction_metric.py`` for the same fake)."""
-
-    def __init__(self, frame_sec: float = 0.01, threshold: float = 1e-6):
-        self.frame_sec = frame_sec
-        self.threshold = threshold
-
-    def __call__(self, wav, sr):
-        frame = max(1, int(round(self.frame_sec * sr)))
-        out = []
-        in_speech = False
-        start = 0
-        n = len(wav)
-        for i in range(0, n, frame):
-            block = wav[i : i + frame]
-            active = bool(np.max(np.abs(block)) > self.threshold)
-            if active and not in_speech:
-                start, in_speech = i, True
-            elif not active and in_speech:
-                out.append((start / sr, i / sr))
-                in_speech = False
-        if in_speech:
-            out.append((start / sr, n / sr))
-        return out
-
-
 class KeyedFakeMOSBackend:
     """Deterministic fake MOS backend: looks up a score by the EXACT sample
     content it's called with (mirrors ``test_speaker_metric.py``'s
@@ -247,6 +221,13 @@ class TestBackendLaziness:
         metric = ChannelQualityMetric()
         assert metric.enable_dnsmos is False
         assert metric.dnsmos_backend is None
+
+    def test_injecting_dnsmos_backend_without_enabling_it_raises(self):
+        # Previously the injected backend was silently discarded (never
+        # constructed, never used) when enable_dnsmos stayed False -- a
+        # caller who wired one up would get no error and no DNSMOS scoring.
+        with pytest.raises(ValueError, match="enable_dnsmos"):
+            ChannelQualityMetric(dnsmos_backend=SpeechMOSDNSMOSBackend())
 
     def test_dnsmos_enabled_constructs_the_default_backend(self):
         metric = ChannelQualityMetric(enable_dnsmos=True)

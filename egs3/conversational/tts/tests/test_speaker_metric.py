@@ -47,6 +47,7 @@ from egs3.conversational.tts.src.metrics.speaker import (
     _region_sumsq,
     _sim_o,
 )
+from egs3.conversational.tts.tests.conftest import _FrameEnergyVAD
 
 try:
     import transformers  # noqa: F401
@@ -79,36 +80,6 @@ class _EnergyVAD:
         if np.max(np.abs(wav)) > self.threshold:
             return [(0.0, len(wav) / sr)]
         return []
-
-
-class _FrameEnergyVAD:
-    """Frame-wise energy-threshold VAD (mirrors ``test_segments.py``'s
-    ``EnergyVADBackend``): unlike ``_EnergyVAD`` this actually splits on
-    silence gaps, so a wav with multiple speech blocks separated by true
-    silence yields multiple raw segments -- needed to drive ``build_ipus``
-    into producing more than one IPU per channel."""
-
-    def __init__(self, frame_sec: float = 0.01, threshold: float = 1e-6):
-        self.frame_sec = frame_sec
-        self.threshold = threshold
-
-    def __call__(self, wav, sr):
-        frame = max(1, int(round(self.frame_sec * sr)))
-        out = []
-        in_speech = False
-        start = 0
-        n = len(wav)
-        for i in range(0, n, frame):
-            block = wav[i : i + frame]
-            active = bool(np.max(np.abs(block)) > self.threshold)
-            if active and not in_speech:
-                start, in_speech = i, True
-            elif not active and in_speech:
-                out.append((start / sr, i / sr))
-                in_speech = False
-        if in_speech:
-            out.append((start / sr, n / sr))
-        return out
 
 
 class KeyedFakeEmbedder:

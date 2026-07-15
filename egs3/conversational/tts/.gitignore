@@ -3,3 +3,10 @@
 # file under it.  Un-ignore the package; the run-time dirs (data/, downloads/,
 # exp/) stay covered by the root patterns.
 !dataset/
+
+# README.md's anchor-mode recipe (gt/resynth) sed-generates mode-edited
+# copies of conf/inference_conversational.yaml and conf/metrics.yaml here.
+# They must stay under conf/ (espnet3's config loader infers the recipe's
+# default package from a .../conf/... path segment), but must never be
+# committed -- this directory holds only that generated, disposable output.
+conf/generated/

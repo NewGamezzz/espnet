@@ -232,6 +232,10 @@ class TestVadWithSyntheticAudio:
 # --------------------------------------------------------------------------- #
 class TestSileroVadIsLazy:
     def test_construction_does_not_touch_torch_hub(self, monkeypatch):
+        # Also covers module-import-time laziness: `segments` was already
+        # imported at the top of this test module, so if that import had
+        # touched the network, collection would have failed before any test
+        # ran -- there is no separate attribute to assert on for that.
         import torch
 
         def _boom(*args, **kwargs):
@@ -241,9 +245,3 @@ class TestSileroVadIsLazy:
 
         backend = segments.SileroVADBackend()
         assert backend._model is None
-
-    def test_module_import_does_not_require_torch_hub(self):
-        # Import already happened at module load time above; if it had
-        # touched the network this test module would already have failed
-        # to collect. This assertion documents the invariant explicitly.
-        assert not hasattr(segments, "_silero_model")
