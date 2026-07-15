@@ -173,6 +173,49 @@ class TestManifestParsing:
         assert sups[1].end == pytest.approx(10.0)  # clamped to duration
         assert session_speakers(sups) == {"a" * 64, "b" * 64}
 
+    def test_duration_derived_from_num_samples_not_rounded_field(self, tmp_path):
+        """Real-corpus regression (SSSD 241012_210051_UAKR_UAQ0_gvk): lhotse
+        rounds the manifest ``duration`` field to the millisecond, which can
+        round UP past the actual end of file (82368504 frames @48k =
+        1716.0105s, recorded as 1716.011). Windowing then places t1 24
+        samples past EOF and ``load_window_channel`` correctly raises.
+        ``num_samples`` in the same manifest entry is exact, so duration must
+        be derived from it when present."""
+        rec_path = tmp_path / "recordings.jsonl.gz"
+        recording = {
+            "id": "drift",
+            "sources": [
+                {
+                    "type": "file",
+                    "channels": [0, 1],
+                    "source": "/x/drift_mixed.flac",
+                }
+            ],
+            "sampling_rate": 48000,
+            "num_samples": 82368504,
+            "duration": 1716.011,  # ms-rounded UP from 1716.0105
+            "channel_ids": [0, 1],
+        }
+        with gzip.open(rec_path, "wt", encoding="utf-8") as f:
+            f.write(json.dumps(recording) + "\n")
+        recordings = load_recordings(rec_path)
+        assert recordings["drift"].duration == 82368504 / 48000
+
+    def test_duration_field_used_when_num_samples_absent(self, tmp_path):
+        rec_path = tmp_path / "recordings.jsonl.gz"
+        recording = {
+            "id": "nons",
+            "sources": [
+                {"type": "file", "channels": [0, 1], "source": "/x/n_mixed.flac"}
+            ],
+            "sampling_rate": 48000,
+            "duration": 5.0,
+            "channel_ids": [0, 1],
+        }
+        with gzip.open(rec_path, "wt", encoding="utf-8") as f:
+            f.write(json.dumps(recording) + "\n")
+        assert load_recordings(rec_path)["nons"].duration == 5.0
+
     def test_multi_source_recording_raises(self, tmp_path):
         rec_path = tmp_path / "recordings.jsonl.gz"
         recording = {

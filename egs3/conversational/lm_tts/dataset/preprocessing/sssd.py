@@ -75,12 +75,22 @@ def load_recordings(
                 "ambiguous otherwise)"
             )
         channel_ids = rec.get("channel_ids") or sources[0]["channels"]
+        # lhotse rounds the manifest ``duration`` field to the millisecond,
+        # which can round UP past the actual end of file (real-corpus case:
+        # SSSD 241012_210051_UAKR_UAQ0_gvk, 82368504 frames @48k = 1716.0105s
+        # recorded as 1716.011; 76/1587 SSSD manifests round up like this).
+        # ``num_samples`` is exact (verified == soundfile frames for all 1587
+        # SSSD files), so prefer it; windowing then never places t1 past EOF.
+        if rec.get("num_samples"):
+            duration = int(rec["num_samples"]) / int(rec["sampling_rate"])
+        else:
+            duration = float(rec["duration"])
         recordings[rec["id"]] = Recording(
             id=rec["id"],
             audio_relpath=f"{audio_subdir}/{Path(sources[0]['source']).name}",
             sample_rate=int(rec["sampling_rate"]),
             num_channels=len(channel_ids),
-            duration=float(rec["duration"]),
+            duration=duration,
         )
     return recordings
 
