@@ -1,5 +1,7 @@
 """Tests for per-speaker voice-attribute measurement (pitch/rate/gender bands)."""
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -10,8 +12,12 @@ from dataset.preprocessing.attributes import (
     RATE_MODERATE_BRISK_WPS,
     VARIABILITY_FLAT_EXPRESSIVE_HZ,
     SpeakerAttrs,
+    audit_gender_metadata,
     measure_speaker,
+    pitch_band,
+    rate_band,
     resolve_gender,
+    variability_band,
 )
 
 SR = 16000
@@ -231,3 +237,115 @@ class TestMeasureSpeakerGenderIntegration:
         attrs = measure_speaker([tone(220.0)], SR, ["hello there"], "spk0")
         assert attrs.gender == "female"
         assert attrs.gender_source == "pitch_heuristic"
+
+
+class TestPitchBandBoundaries:
+    """Direct boundary tests on the public pitch_band helper. Convention:
+    the boundary value belongs to the UPPER band (low < 145 <= medium <
+    200 <= high). A regression flipping < to <= would silently pass the
+    tone-based tests above but must fail these exact-value tests."""
+
+    def test_just_below_low_medium_boundary_is_low(self):
+        assert pitch_band(144.999) == "low"
+
+    def test_low_medium_boundary_is_medium(self):
+        assert pitch_band(145.0) == "medium"
+
+    def test_just_below_medium_high_boundary_is_medium(self):
+        assert pitch_band(199.999) == "medium"
+
+    def test_medium_high_boundary_is_high(self):
+        assert pitch_band(200.0) == "high"
+
+
+class TestVariabilityBandBoundaries:
+    """Direct boundary tests on the public variability_band helper.
+    Convention: flat < 40 <= expressive."""
+
+    def test_just_below_boundary_is_flat(self):
+        assert variability_band(39.999) == "flat"
+
+    def test_boundary_is_expressive(self):
+        assert variability_band(40.0) == "expressive"
+
+
+class TestRateBandBoundaries:
+    """Direct boundary tests on the public rate_band helper (previously
+    only reachable indirectly via words/duration arithmetic in
+    measure_speaker). Convention: measured < 2.5 <= moderate < 3.5 <=
+    brisk."""
+
+    def test_just_below_moderate_boundary_is_measured(self):
+        assert rate_band(2.499) == "measured"
+
+    def test_moderate_boundary_is_moderate(self):
+        assert rate_band(2.5) == "moderate"
+
+    def test_just_below_brisk_boundary_is_moderate(self):
+        assert rate_band(3.499) == "moderate"
+
+    def test_brisk_boundary_is_brisk(self):
+        assert rate_band(3.5) == "brisk"
+
+
+class TestAuditGenderMetadata:
+    """audit_gender_metadata flags systematic metadata-shape mismatches
+    (e.g. flat {"spk0": "female"} instead of the documented nested
+    {"spk0": {"gender": "female"}}) so a shape bug doesn't silently make
+    every speaker fall back to the pitch heuristic."""
+
+    def test_correct_nested_shape_resolves_and_warns_nothing(self):
+        metadata = {
+            "spk0": {"gender": "female"},
+            "spk1": {"sex": "male"},
+        }
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            count = audit_gender_metadata(metadata, ["spk0", "spk1"])
+        assert count == 2
+
+    def test_flat_wrong_shape_returns_zero_and_warns(self):
+        metadata = {"spk0": "female", "spk1": "male"}
+        with pytest.warns(UserWarning, match="shape"):
+            count = audit_gender_metadata(metadata, ["spk0", "spk1"])
+        assert count == 0
+
+    def test_metadata_none_returns_zero_and_warns_nothing(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            count = audit_gender_metadata(None, ["spk0", "spk1"])
+        assert count == 0
+
+    def test_empty_speaker_ids_returns_zero_and_warns_nothing(self):
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            count = audit_gender_metadata({"spk0": {"gender": "female"}}, [])
+        assert count == 0
+
+    def test_partial_resolution_no_warning(self):
+        # Some speakers resolve via metadata, some don't - not a systemic
+        # shape mismatch, so no warning should fire.
+        metadata = {"spk0": {"gender": "female"}}
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            count = audit_gender_metadata(metadata, ["spk0", "spk1"])
+        assert count == 1
+
+
+class TestMeasureSpeakerLoudInputGuards:
+    """measure_speaker raises ValueError naming the speaker for malformed
+    inputs on the text/duration side, matching the module's existing loud-
+    failure convention for the audio (no-voiced-frames) side."""
+
+    def test_zero_total_words_raises_value_error_naming_speaker(self):
+        with pytest.raises(ValueError, match="spk_noword"):
+            measure_speaker([tone(150.0)], SR, [""], "spk_noword")
+
+    def test_mismatched_turn_wavs_and_texts_length_raises(self):
+        with pytest.raises(ValueError, match="spk_mismatch"):
+            measure_speaker(
+                [tone(150.0), tone(150.0)],
+                SR,
+                ["only one text"],
+                "spk_mismatch",
+            )

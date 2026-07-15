@@ -13,7 +13,9 @@ this module's job stops at measurement + quantization, not text.
 
 from __future__ import annotations
 
+import warnings
 from dataclasses import dataclass
+from typing import Sequence
 
 import librosa
 import numpy as np
@@ -61,7 +63,14 @@ class SpeakerAttrs:
     gender_source: str
 
 
-def _pitch_band(median_f0: float) -> str:
+def pitch_band(median_f0: float) -> str:
+    """Quantize ``median_f0`` (Hz) into low/medium/high.
+
+    Boundary convention: the boundary value belongs to the UPPER band -
+    ``low < 145 <= medium < 200 <= high``. Task 4's caption templates key
+    off these exact split points; do not change without updating the
+    caption band vocabulary.
+    """
     if median_f0 < PITCH_LOW_MEDIUM_HZ:
         return "low"
     if median_f0 < PITCH_MEDIUM_HIGH_HZ:
@@ -69,13 +78,23 @@ def _pitch_band(median_f0: float) -> str:
     return "high"
 
 
-def _variability_band(f0_iqr: float) -> str:
+def variability_band(f0_iqr: float) -> str:
+    """Quantize ``f0_iqr`` (Hz) into flat/expressive.
+
+    Boundary convention: the boundary value belongs to the UPPER band -
+    ``flat < 40 <= expressive``.
+    """
     if f0_iqr < VARIABILITY_FLAT_EXPRESSIVE_HZ:
         return "flat"
     return "expressive"
 
 
-def _rate_band(words_per_sec: float) -> str:
+def rate_band(words_per_sec: float) -> str:
+    """Quantize ``words_per_sec`` into measured/moderate/brisk.
+
+    Boundary convention: the boundary value belongs to the UPPER band -
+    ``measured < 2.5 <= moderate < 3.5 <= brisk``.
+    """
     if words_per_sec < RATE_MEASURED_MODERATE_WPS:
         return "measured"
     if words_per_sec < RATE_MODERATE_BRISK_WPS:
@@ -116,6 +135,53 @@ def resolve_gender(
 
     gender = "female" if median_f0 >= GENDER_HEURISTIC_F0_HZ else "male"
     return gender, "pitch_heuristic"
+
+
+def audit_gender_metadata(metadata: dict | None, speaker_ids: Sequence[str]) -> int:
+    """Count how many ``speaker_ids`` resolve gender via ``metadata``.
+
+    Corpus builders MUST call this once per corpus, before measuring any
+    speakers, to catch a systematic metadata-shape mismatch early. The
+    documented shape is a ``dict`` keyed by speaker id, mapping to a
+    per-speaker ``dict`` that carries a ``"gender"`` or ``"sex"`` key (see
+    ``resolve_gender``) - e.g. ``{"spk0": {"gender": "female"}}``. A
+    plausible but wrong shape, e.g. a flat mapping straight to a string
+    (``{"spk0": "female"}``), causes every speaker to silently fall back to
+    the pitch heuristic instead of raising - ``resolve_gender`` is
+    deliberately permissive per-speaker, so nothing else in this module
+    surfaces that failure.
+
+    Returns the number of ``speaker_ids`` whose ``resolve_gender`` call
+    would report source ``"metadata"`` (probed with a neutral
+    ``median_f0`` that cannot itself satisfy the metadata branch). If
+    ``metadata is not None`` and ``speaker_ids`` is non-empty but the
+    count is zero, issues a ``warnings.warn`` (``UserWarning``) naming the
+    likely shape mismatch and the documented shape above. Returns 0
+    without warning when ``metadata is None`` or ``speaker_ids`` is empty,
+    since there is nothing to audit in either case.
+    """
+    if metadata is None or len(speaker_ids) == 0:
+        return 0
+
+    count = 0
+    for speaker_id in speaker_ids:
+        _, source = resolve_gender(speaker_id, metadata, median_f0=0.0)
+        if source == "metadata":
+            count += 1
+
+    if count == 0:
+        warnings.warn(
+            "audit_gender_metadata: none of the given speaker_ids resolved "
+            "gender via metadata; this looks like a metadata-shape "
+            "mismatch. Expected metadata keyed by speaker id mapping to a "
+            "per-speaker dict with a 'gender' or 'sex' key, e.g. "
+            '{"spk0": {"gender": "female"}} - not a flat mapping like '
+            '{"spk0": "female"}.',
+            UserWarning,
+            stacklevel=2,
+        )
+
+    return count
 
 
 def _pooled_voiced_f0(turn_wavs: list[np.ndarray], sr: int) -> np.ndarray:
@@ -168,10 +234,29 @@ def measure_speaker(
 
     Speaking rate: total whitespace-split word count of ``texts`` divided
     by total speech seconds, i.e. ``sum(len(wav) / sr for wav in
-    turn_wavs)`` - the wav durations, not the voiced-frame duration.
+    turn_wavs)`` - the wav durations, not the voiced-frame duration. Raises
+    ``ValueError`` naming ``speaker_id`` if ``turn_wavs`` and ``texts``
+    have different lengths (a caller-side alignment bug) or if the total
+    word count is 0 (nothing to divide the rate by, and a rate of 0.0
+    would be indistinguishable from a real "measured" band value) -
+    matching this module's loud-failure convention for the audio side.
 
     Gender: delegates to ``resolve_gender(speaker_id, metadata, median_f0)``.
     """
+    if len(turn_wavs) != len(texts):
+        raise ValueError(
+            f"turn_wavs and texts length mismatch for speaker "
+            f"{speaker_id!r}: {len(turn_wavs)} turn wav(s) vs "
+            f"{len(texts)} text(s); caller must pass one text per turn wav"
+        )
+
+    total_words = sum(len(text.split()) for text in texts)
+    if total_words == 0:
+        raise ValueError(
+            f"total word count is 0 for speaker {speaker_id!r} across "
+            f"{len(texts)} text(s); cannot measure speaking rate"
+        )
+
     voiced_f0 = _pooled_voiced_f0(turn_wavs, sr)
     if voiced_f0.size == 0:
         raise ValueError(
@@ -182,7 +267,6 @@ def measure_speaker(
     median_f0 = float(np.median(voiced_f0))
     f0_iqr = float(np.percentile(voiced_f0, 75) - np.percentile(voiced_f0, 25))
 
-    total_words = sum(len(text.split()) for text in texts)
     total_seconds = sum(len(wav) / sr for wav in turn_wavs)
     words_per_sec = total_words / total_seconds if total_seconds > 0 else 0.0
 
@@ -192,9 +276,9 @@ def measure_speaker(
         median_f0=median_f0,
         f0_iqr=f0_iqr,
         words_per_sec=words_per_sec,
-        pitch_band=_pitch_band(median_f0),
-        variability_band=_variability_band(f0_iqr),
-        rate_band=_rate_band(words_per_sec),
+        pitch_band=pitch_band(median_f0),
+        variability_band=variability_band(f0_iqr),
+        rate_band=rate_band(words_per_sec),
         gender=gender,
         gender_source=gender_source,
     )
