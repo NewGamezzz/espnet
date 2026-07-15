@@ -64,9 +64,10 @@ event-DURATION lists (each list's raw per-event durations, unweighted point
 masses -- scipy's default). Convention when either side has zero events for
 that type in that window: the window is SKIPPED for that w1 key (not
 fabricated as 0), and the summary key is a mean over the windows that DID
-have both sides populated, following the general house convention
-(``_mean_skip_none`` / ``_fallback_zero``, same as ``ConversationASRMetric``
-and ``SpeakerDynamicsMetric``). This makes ``w1_*`` a per-window scalar
+have both sides populated, using the shared aggregation helpers in
+``_common.py`` (``mean_skip_none`` / ``summary_value``, same as
+``ConversationASRMetric`` and ``SpeakerDynamicsMetric``). This makes
+``w1_*`` a per-window scalar
 meaned over windows -- UNLIKE ``SpeakerDynamicsMetric``'s ``bleed_db_p50/90``,
 which pools raw pairs across the whole run; there is no cross-window pooling
 here because the plan's "Per window: ... Wasserstein-1 distance ..." framing
@@ -86,8 +87,10 @@ Summary keys (13 floats, or 15 when laughter is enabled): ``ipu_per_min``,
 ``w1_ipu``, ``w1_pause``, ``w1_gap``, ``w1_overlap``, ``backchannel_per_min``
 (+ ``laughter_per_min``, ``laughter_mean_dur`` when a laughter detector is
 injected). Each is a mean over windows of the per-window value; a summary
-key with zero defined values anywhere falls back to 0.0 with a logged
-warning (same convention as the other metric classes).
+key with zero defined values anywhere is left ``None`` (serializes as JSON
+``null``, rendered as ``-`` by ``local/eval_report.py``) with a logged
+warning, rather than a fabricated 0.0 (same convention as the other metric
+classes; see ``_common.py``).
 
 Laughter (plan: optional, timeboxed, gated) is OFF by default
 (``laughter_detector=None``): when disabled, no laughter keys appear
@@ -120,7 +123,6 @@ Nothing here is imported by the training path.
 from __future__ import annotations
 
 import json
-import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
@@ -130,38 +132,12 @@ from scipy.stats import wasserstein_distance
 
 from espnet3.components.metrics.base_metric import BaseMetric
 
+from ._common import mean, mean_skip_none, summary_value
 from .segments import VAD, Interval, build_ipus, load_wav
-
-logger = logging.getLogger(__name__)
 
 _EPS = 1e-6
 
 LaughterBackend = Callable[[np.ndarray, int], Sequence[Interval]]
-
-
-# --------------------------------------------------------------------------- #
-# small helpers (deliberately local, not shared with asr.py/speaker.py --
-# same house convention: each metric module owns its own copies)
-# --------------------------------------------------------------------------- #
-def _mean(values: Sequence[float]) -> Optional[float]:
-    values = list(values)
-    return sum(values) / len(values) if values else None
-
-
-def _mean_skip_none(values) -> Optional[float]:
-    vals = [v for v in values if v is not None]
-    return sum(vals) / len(vals) if vals else None
-
-
-def _fallback_zero(value: Optional[float], key: str) -> float:
-    if value is None:
-        logger.warning(
-            "InteractionMetric: no window produced a defined value for "
-            "'%s'; defaulting the run summary to 0.0",
-            key,
-        )
-        return 0.0
-    return float(value)
 
 
 # --------------------------------------------------------------------------- #
@@ -370,7 +346,7 @@ class InteractionMetric(BaseMetric):
     # -- BaseMetric entrypoint ------------------------------------------- #
     def __call__(
         self, data: Dict[str, Path], test_name: str, output_dir: Path
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Optional[float]]:
         test_dir = Path(data["meta"]).parent
         out_dir = Path(output_dir) / test_name / "scoring" / "interaction"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -468,35 +444,40 @@ class InteractionMetric(BaseMetric):
                 if duration_minutes > _EPS
                 else None
             )
-            record["laughter_mean_dur"] = _mean(laughter_durations)
+            record["laughter_mean_dur"] = mean(laughter_durations)
 
         return record
 
-    def _summarize(self, per_window: Sequence[Dict[str, Any]]) -> Dict[str, float]:
+    def _summarize(
+        self, per_window: Sequence[Dict[str, Any]]
+    ) -> Dict[str, Optional[float]]:
         def agg(key: str) -> Optional[float]:
-            return _mean_skip_none(w[key] for w in per_window)
+            return mean_skip_none(w[key] for w in per_window)
 
-        summary: Dict[str, float] = {}
+        name = type(self).__name__
+        summary: Dict[str, Optional[float]] = {}
         for event_type in _EVENT_TYPES:
-            summary[f"{event_type}_per_min"] = _fallback_zero(
-                agg(f"{event_type}_per_min"), f"{event_type}_per_min"
+            summary[f"{event_type}_per_min"] = summary_value(
+                agg(f"{event_type}_per_min"), f"{event_type}_per_min", metric_name=name
             )
-            summary[f"{event_type}_dur_per_min"] = _fallback_zero(
-                agg(f"{event_type}_dur_per_min"), f"{event_type}_dur_per_min"
+            summary[f"{event_type}_dur_per_min"] = summary_value(
+                agg(f"{event_type}_dur_per_min"),
+                f"{event_type}_dur_per_min",
+                metric_name=name,
             )
-            summary[f"w1_{event_type}"] = _fallback_zero(
-                agg(f"w1_{event_type}"), f"w1_{event_type}"
+            summary[f"w1_{event_type}"] = summary_value(
+                agg(f"w1_{event_type}"), f"w1_{event_type}", metric_name=name
             )
-        summary["backchannel_per_min"] = _fallback_zero(
-            agg("backchannel_per_min"), "backchannel_per_min"
+        summary["backchannel_per_min"] = summary_value(
+            agg("backchannel_per_min"), "backchannel_per_min", metric_name=name
         )
 
         if self.laughter_detector is not None:
-            summary["laughter_per_min"] = _fallback_zero(
-                agg("laughter_per_min"), "laughter_per_min"
+            summary["laughter_per_min"] = summary_value(
+                agg("laughter_per_min"), "laughter_per_min", metric_name=name
             )
-            summary["laughter_mean_dur"] = _fallback_zero(
-                agg("laughter_mean_dur"), "laughter_mean_dur"
+            summary["laughter_mean_dur"] = summary_value(
+                agg("laughter_mean_dur"), "laughter_mean_dur", metric_name=name
             )
 
         return summary

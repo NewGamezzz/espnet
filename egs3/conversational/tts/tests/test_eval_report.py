@@ -72,6 +72,18 @@ class TestLoadMetricsJson:
         with pytest.raises(json.JSONDecodeError):
             load_metrics_json(tmp_path)
 
+    def test_undefined_summary_value_round_trips_as_json_null(self, tmp_path):
+        # Mirrors what espnet3.systems.base.metric.measure's real writer
+        # does (json.dump on the metric's returned dict): a summary key a
+        # metric left undefined (see src/metrics/_common.py's
+        # summary_value) is Python None going in, and must be JSON null on
+        # disk and None coming back out -- not a string, not a dropped key.
+        _write_metrics_json(tmp_path, _asr_payload(wer_ch_mean=None))
+        raw = (tmp_path / "metrics.json").read_text("utf-8")
+        assert '"wer_ch_mean": null' in raw
+        loaded = load_metrics_json(tmp_path)
+        assert loaded[_ASR_CLASS]["valid"]["wer_ch_mean"] is None
+
 
 # --------------------------------------------------------------------------- #
 # build_sections: the condition x metric-class x summary-key pivot
@@ -150,6 +162,19 @@ class TestRenderMarkdown:
         lines = [ln for ln in md.splitlines() if ln.startswith("| utmos_mean")]
         assert len(lines) == 1
         assert "-" in [cell.strip() for cell in lines[0].split("|")]
+
+    def test_undefined_summary_value_renders_as_dash_not_none_or_null(self):
+        # Distinct from the missing-condition case above: here the key IS
+        # present in the payload (as a real metric module always writes it,
+        # per _common.py's summary_value), but its value is JSON null
+        # (Python None), not simply absent from the dict.
+        conditions = [("gt", _asr_payload(wer_ch_mean=None))]
+        sections = build_sections(conditions, test_name="valid")
+        md = render_markdown(["gt"], sections, test_name="valid")
+        lines = [ln for ln in md.splitlines() if ln.startswith("| wer_ch_mean")]
+        assert len(lines) == 1
+        assert "-" in [cell.strip() for cell in lines[0].split("|")]
+        assert "None" not in lines[0] and "null" not in lines[0]
 
     def test_conditions_are_columns_in_the_given_order(self):
         conditions = [("pretrained", _asr_payload()), ("finetuned", _asr_payload())]

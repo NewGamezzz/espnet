@@ -620,8 +620,11 @@ class TestBleedViaFullWindow:
         data = {"meta": test_dir / "meta.scp"}
         summary = metric(data, "valid", inference_dir)
 
-        assert summary["bleed_db_p50"] == pytest.approx(0.0)
-        assert summary["bleed_db_p90"] == pytest.approx(0.0)
+        # No scored pair anywhere in the run -> undefined, not a fabricated
+        # 0 dB (which would misleadingly read as "bleed as loud as the
+        # speaker itself").
+        assert summary["bleed_db_p50"] is None
+        assert summary["bleed_db_p90"] is None
 
         scoring_dir = inference_dir / "valid" / "scoring" / "speaker_dynamics"
         record = json.loads(
@@ -736,7 +739,9 @@ class TestCallRoundTrip:
             "bleed_db_p50",
             "bleed_db_p90",
         }
-        assert all(isinstance(v, float) for v in summary.values())
+        # An empty VAD (no IPUs anywhere) leaves every key undefined: None,
+        # not a fabricated 0.0 -- see _common.py's summary_value.
+        assert all(v is None for v in summary.values())
 
         scoring_dir = inference_dir / "valid" / "scoring" / "speaker_dynamics"
         lines = (scoring_dir / "windows.jsonl").read_text("utf-8").splitlines()
@@ -744,8 +749,13 @@ class TestCallRoundTrip:
         record = json.loads(lines[0])
         assert record["window_id"] == "sess_w00000"
 
-        on_disk_summary = json.loads((scoring_dir / "summary.json").read_text("utf-8"))
+        summary_text = (scoring_dir / "summary.json").read_text("utf-8")
+        on_disk_summary = json.loads(summary_text)
         assert on_disk_summary == summary
+        # Reaches disk as JSON null (json.dump's serialization of None),
+        # which local/eval_report.py's _format_cell renders as "-".
+        assert on_disk_summary["sim_o_mean"] is None
+        assert '"sim_o_mean": null' in summary_text
 
     def test_meta_relative_paths_resolve_against_the_test_dir(self, tmp_path):
         inference_dir = tmp_path / "infer"

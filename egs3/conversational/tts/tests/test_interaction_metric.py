@@ -395,7 +395,10 @@ class TestCallRoundTrip:
             "w1_overlap",
             "backchannel_per_min",
         }
-        assert all(isinstance(v, float) for v in summary.values())
+        # w1_* keys legitimately go undefined (None, not a fabricated 0.0)
+        # when an event type has zero events on either side in the run's
+        # only window -- see _common.py's summary_value.
+        assert all(isinstance(v, float) or v is None for v in summary.values())
 
         scoring_dir = inference_dir / "valid" / "scoring" / "interaction"
         lines = (scoring_dir / "windows.jsonl").read_text("utf-8").splitlines()
@@ -404,8 +407,16 @@ class TestCallRoundTrip:
         assert record["window_id"] == "sess_w00000"
         assert "laughter_per_min" not in record
 
-        on_disk_summary = json.loads((scoring_dir / "summary.json").read_text("utf-8"))
+        summary_text = (scoring_dir / "summary.json").read_text("utf-8")
+        on_disk_summary = json.loads(summary_text)
         assert on_disk_summary == summary
+        # Any undefined key above reaches disk as JSON null and would
+        # render as "-" in local/eval_report.py; pin that for whichever
+        # key(s) are actually undefined in this fixture.
+        undefined_keys = [k for k, v in summary.items() if v is None]
+        assert undefined_keys, "fixture no longer exercises an undefined key"
+        for key in undefined_keys:
+            assert f'"{key}": null' in summary_text
 
     def test_meta_relative_paths_resolve_and_gap_is_detected_end_to_end(
         self, tmp_path

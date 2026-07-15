@@ -270,6 +270,7 @@ python local/eval_report.py \
 ### Metric glossary (summary keys in `metrics.json`)
 
 Every key below is a MEAN OVER WINDOWS of a per-window (or per-channel-then-window) scalar unless stated otherwise; full per-window detail lives alongside `metrics.json` under `<inference_dir>/<test_name>/scoring/<metric_name>/windows.jsonl`.
+A key with zero defined values anywhere in the run (no window/channel/pair ever produced one) is written as `null`, never a fabricated `0.0` - a `bleed_db_p50` of exactly `0` would misleadingly read as "bleed as loud as the speaker itself" instead of "no data". `local/eval_report.py` renders any such `null` as `-`, the same as a metric/key that never ran at all.
 
 **`ConversationASRMetric`** (faster-whisper, transcribed per IPU, not per whole channel, to avoid whisper's silence-hallucination failure mode on long quiet stretches):
 

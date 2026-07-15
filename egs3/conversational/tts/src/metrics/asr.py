@@ -103,7 +103,6 @@ from __future__ import annotations
 
 import itertools
 import json
-import logging
 import math
 import re
 from dataclasses import dataclass
@@ -116,9 +115,8 @@ from scipy.stats import kendalltau
 
 from espnet3.components.metrics.base_metric import BaseMetric
 
+from ._common import mean, mean_skip_none, summary_value
 from .segments import VAD, Interval, build_ipus, load_wav
-
-logger = logging.getLogger(__name__)
 
 _TURN_EPS = 1e-6
 
@@ -227,30 +225,6 @@ class WhisperEnglishNormalizer:
         return self._normalizer(text)
 
 
-# --------------------------------------------------------------------------- #
-# small helpers
-# --------------------------------------------------------------------------- #
-def _mean(values: Sequence[float]) -> Optional[float]:
-    values = list(values)
-    return sum(values) / len(values) if values else None
-
-
-def _mean_skip_none(values) -> Optional[float]:
-    vals = [v for v in values if v is not None]
-    return sum(vals) / len(vals) if vals else None
-
-
-def _fallback_zero(value: Optional[float], key: str) -> float:
-    if value is None:
-        logger.warning(
-            "ConversationASRMetric: no window produced a defined value for "
-            "'%s'; defaulting the run summary to 0.0",
-            key,
-        )
-        return 0.0
-    return float(value)
-
-
 _WORD_STRIP_RE = re.compile(r"^[^\w']+|[^\w']+$")
 
 
@@ -294,7 +268,7 @@ class ConversationASRMetric(BaseMetric):
     # -- BaseMetric entrypoint ------------------------------------------- #
     def __call__(
         self, data: Dict[str, Path], test_name: str, output_dir: Path
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Optional[float]]:
         test_dir = Path(data["meta"]).parent
         out_dir = Path(output_dir) / test_name / "scoring" / "conversation_asr"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -363,7 +337,7 @@ class ConversationASRMetric(BaseMetric):
         return {
             "window_id": window_id,
             "num_channels": n,
-            "wer_ch_mean": _mean(channel_wer),
+            "wer_ch_mean": mean(channel_wer),
             "wer_ch_worst": max(channel_wer) if channel_wer else None,
             "cpwer": cpwer,
             "swap": swap,
@@ -389,20 +363,31 @@ class ConversationASRMetric(BaseMetric):
             },
         }
 
-    def _summarize(self, per_window: Sequence[Dict[str, Any]]) -> Dict[str, float]:
+    def _summarize(
+        self, per_window: Sequence[Dict[str, Any]]
+    ) -> Dict[str, Optional[float]]:
         def agg(key: str) -> Optional[float]:
-            return _mean_skip_none(w[key] for w in per_window)
+            return mean_skip_none(w[key] for w in per_window)
 
-        swap_rate = _mean_skip_none(1.0 if w["swap"] else 0.0 for w in per_window)
+        name = type(self).__name__
+        swap_rate = mean_skip_none(1.0 if w["swap"] else 0.0 for w in per_window)
         return {
-            "wer_ch_mean": _fallback_zero(agg("wer_ch_mean"), "wer_ch_mean"),
-            "wer_ch_worst": _fallback_zero(agg("wer_ch_worst"), "wer_ch_worst"),
-            "cpwer": _fallback_zero(agg("cpwer"), "cpwer"),
-            "swap_rate": _fallback_zero(swap_rate, "swap_rate"),
-            "turn_order_acc": _fallback_zero(agg("turn_order_acc"), "turn_order_acc"),
-            "kendall_tau": _fallback_zero(agg("kendall_tau"), "kendall_tau"),
-            "turn_count_ratio": _fallback_zero(
-                agg("turn_count_ratio"), "turn_count_ratio"
+            "wer_ch_mean": summary_value(
+                agg("wer_ch_mean"), "wer_ch_mean", metric_name=name
+            ),
+            "wer_ch_worst": summary_value(
+                agg("wer_ch_worst"), "wer_ch_worst", metric_name=name
+            ),
+            "cpwer": summary_value(agg("cpwer"), "cpwer", metric_name=name),
+            "swap_rate": summary_value(swap_rate, "swap_rate", metric_name=name),
+            "turn_order_acc": summary_value(
+                agg("turn_order_acc"), "turn_order_acc", metric_name=name
+            ),
+            "kendall_tau": summary_value(
+                agg("kendall_tau"), "kendall_tau", metric_name=name
+            ),
+            "turn_count_ratio": summary_value(
+                agg("turn_count_ratio"), "turn_count_ratio", metric_name=name
             ),
         }
 
@@ -506,7 +491,7 @@ class ConversationASRMetric(BaseMetric):
                     _, word_obj = hyp_pairs[h_i]
                     turn_times[turn_idx].append((word_obj.start + word_obj.end) / 2.0)
 
-        return [_mean(times) if times else None for times in turn_times]
+        return [mean(times) if times else None for times in turn_times]
 
     @staticmethod
     def _script_order_stats(

@@ -118,7 +118,6 @@ from __future__ import annotations
 
 import itertools
 import json
-import logging
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -129,9 +128,8 @@ import torch
 
 from espnet3.components.metrics.base_metric import BaseMetric
 
+from ._common import mean, mean_skip_none, summary_value
 from .segments import Interval, VAD, build_ipus, load_wav, merge_intervals, solo_regions
-
-logger = logging.getLogger(__name__)
 
 _POWER_EPS = 1e-12
 
@@ -212,27 +210,6 @@ def _percentile(values: Sequence[float], q: float) -> Optional[float]:
     return float(np.percentile(np.asarray(values, dtype=np.float64), q))
 
 
-def _mean(values: Sequence[float]) -> Optional[float]:
-    values = list(values)
-    return sum(values) / len(values) if values else None
-
-
-def _mean_skip_none(values) -> Optional[float]:
-    vals = [v for v in values if v is not None]
-    return sum(vals) / len(vals) if vals else None
-
-
-def _fallback_zero(value: Optional[float], key: str) -> float:
-    if value is None:
-        logger.warning(
-            "SpeakerDynamicsMetric: no window produced a defined value for "
-            "'%s'; defaulting the run summary to 0.0",
-            key,
-        )
-        return 0.0
-    return float(value)
-
-
 def _sec_to_sample(t: float, sr: int) -> int:
     return int(round(t * sr))
 
@@ -265,7 +242,7 @@ def _consistency(features: ChannelFeatures) -> Optional[float]:
     if len(embeddings) < 2:
         return None
     sims = [_cosine(a, b) for a, b in itertools.combinations(embeddings, 2)]
-    return _mean(sims)
+    return mean(sims)
 
 
 def _drift(features: ChannelFeatures) -> Tuple[List[Optional[float]], Optional[float]]:
@@ -432,7 +409,7 @@ class SpeakerDynamicsMetric(BaseMetric):
     # -- BaseMetric entrypoint ------------------------------------------- #
     def __call__(
         self, data: Dict[str, Path], test_name: str, output_dir: Path
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Optional[float]]:
         test_dir = Path(data["meta"]).parent
         out_dir = Path(output_dir) / test_name / "scoring" / "speaker_dynamics"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -488,39 +465,46 @@ class SpeakerDynamicsMetric(BaseMetric):
             "window_id": window_id,
             "num_channels": n,
             "sim_o": sim_o,
-            "sim_o_mean": _mean_skip_none(sim_o),
+            "sim_o_mean": mean_skip_none(sim_o),
             "consistency": consistency,
-            "sim_consistency": _mean_skip_none(consistency),
+            "sim_consistency": mean_skip_none(consistency),
             "drift_curve": drift_curves,
             "drift_slope": drift_slopes,
-            "sim_drift_slope": _mean_skip_none(drift_slopes),
+            "sim_drift_slope": mean_skip_none(drift_slopes),
             "confusion_pairs": confusion_pairs,
-            "confusion_mean": _mean([p["cosine"] for p in confusion_pairs]),
+            "confusion_mean": mean([p["cosine"] for p in confusion_pairs]),
             "bleed_pairs": bleed_pairs,
             "bleed_skipped_pairs": [list(p) for p in bleed_skipped],
         }
 
-    def _summarize(self, per_window: Sequence[Dict[str, Any]]) -> Dict[str, float]:
+    def _summarize(
+        self, per_window: Sequence[Dict[str, Any]]
+    ) -> Dict[str, Optional[float]]:
         def agg(key: str) -> Optional[float]:
-            return _mean_skip_none(w[key] for w in per_window)
+            return mean_skip_none(w[key] for w in per_window)
 
+        name = type(self).__name__
         all_bleed_db = [
             pair["bleed_db"] for w in per_window for pair in w["bleed_pairs"]
         ]
         return {
-            "sim_o_mean": _fallback_zero(agg("sim_o_mean"), "sim_o_mean"),
-            "sim_consistency": _fallback_zero(
-                agg("sim_consistency"), "sim_consistency"
+            "sim_o_mean": summary_value(
+                agg("sim_o_mean"), "sim_o_mean", metric_name=name
             ),
-            "sim_drift_slope": _fallback_zero(
-                agg("sim_drift_slope"), "sim_drift_slope"
+            "sim_consistency": summary_value(
+                agg("sim_consistency"), "sim_consistency", metric_name=name
             ),
-            "confusion_mean": _fallback_zero(agg("confusion_mean"), "confusion_mean"),
-            "bleed_db_p50": _fallback_zero(
-                _percentile(all_bleed_db, 50), "bleed_db_p50"
+            "sim_drift_slope": summary_value(
+                agg("sim_drift_slope"), "sim_drift_slope", metric_name=name
             ),
-            "bleed_db_p90": _fallback_zero(
-                _percentile(all_bleed_db, 90), "bleed_db_p90"
+            "confusion_mean": summary_value(
+                agg("confusion_mean"), "confusion_mean", metric_name=name
+            ),
+            "bleed_db_p50": summary_value(
+                _percentile(all_bleed_db, 50), "bleed_db_p50", metric_name=name
+            ),
+            "bleed_db_p90": summary_value(
+                _percentile(all_bleed_db, 90), "bleed_db_p90", metric_name=name
             ),
         }
 

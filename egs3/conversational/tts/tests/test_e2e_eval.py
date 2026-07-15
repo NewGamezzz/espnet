@@ -201,7 +201,10 @@ def _assert_all_summary_keys_present(results: dict) -> None:
         summary = results[matches[0]]["valid"]
         missing = expected - set(summary)
         assert not missing, f"{suffix} summary missing keys: {missing}"
-        assert all(isinstance(v, float) for v in summary.values())
+        # A key can legitimately be undefined (None, not a fabricated
+        # number) when this fixture's fakes never produced data for it --
+        # see src/metrics/_common.py's summary_value.
+        assert all(isinstance(v, float) or v is None for v in summary.values())
 
 
 # --------------------------------------------------------------------------- #

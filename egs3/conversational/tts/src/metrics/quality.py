@@ -24,8 +24,9 @@ contributes ``None`` (excluded from the window mean, not a fabricated
 score); a window with zero scoreable channels likewise contributes ``None``
 to the run summary. Undefined values are always excluded from their mean,
 never treated as 0 (same convention as every other metric in this package);
-a summary key with zero defined values anywhere falls back to 0.0 with a
-logged warning.
+a summary key with zero defined values anywhere is left ``None`` (serializes
+as JSON ``null``, rendered as ``-`` by ``local/eval_report.py``) with a
+logged warning, never a fabricated 0.0 (see ``_common.py``).
 
 IPU snippets are scored at ``quality_sample_rate`` (default 16000, the same
 rate used for VAD/IPU segmentation) rather than at the recipe's native
@@ -97,7 +98,6 @@ Nothing here is imported by the training path.
 from __future__ import annotations
 
 import json
-import logging
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Sequence
 
@@ -106,9 +106,8 @@ import torch
 
 from espnet3.components.metrics.base_metric import BaseMetric
 
+from ._common import mean_skip_none, summary_value
 from .segments import VAD, Interval, build_ipus, load_wav
-
-logger = logging.getLogger(__name__)
 
 MOSBackend = Callable[[np.ndarray, int], float]
 
@@ -196,24 +195,8 @@ class SpeechMOSDNSMOSBackend:
 
 
 # --------------------------------------------------------------------------- #
-# small helpers (local copies -- house convention, see interaction.py)
+# small helpers
 # --------------------------------------------------------------------------- #
-def _mean_skip_none(values) -> Optional[float]:
-    vals = [v for v in values if v is not None]
-    return sum(vals) / len(vals) if vals else None
-
-
-def _fallback_zero(value: Optional[float], key: str) -> float:
-    if value is None:
-        logger.warning(
-            "ChannelQualityMetric: no window produced a defined value for "
-            "'%s'; defaulting the run summary to 0.0",
-            key,
-        )
-        return 0.0
-    return float(value)
-
-
 def _weighted_channel_score(ipu_scores: Sequence[Dict[str, float]]) -> Optional[float]:
     """Speech-duration-weighted mean over a channel's per-IPU MOS records
     (each a ``{"duration": ..., "score": ...}`` dict); ``None`` when there
@@ -267,7 +250,7 @@ class ChannelQualityMetric(BaseMetric):
     # -- BaseMetric entrypoint ------------------------------------------- #
     def __call__(
         self, data: Dict[str, Path], test_name: str, output_dir: Path
-    ) -> Dict[str, float]:
+    ) -> Dict[str, Optional[float]]:
         test_dir = Path(data["meta"]).parent
         out_dir = Path(output_dir) / test_name / "scoring" / "channel_quality"
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -337,23 +320,28 @@ class ChannelQualityMetric(BaseMetric):
             "window_id": window_id,
             "num_channels": len(channels_meta),
             "channels": channel_records,
-            "utmos_window_mean": _mean_skip_none(channel_scores),
+            "utmos_window_mean": mean_skip_none(channel_scores),
         }
         if self.enable_dnsmos:
             dnsmos_vals = [c.get("dnsmos") for c in channel_records]
-            record["dnsmos_window_mean"] = _mean_skip_none(dnsmos_vals)
+            record["dnsmos_window_mean"] = mean_skip_none(dnsmos_vals)
         return record
 
-    def _summarize(self, per_window: Sequence[Dict[str, Any]]) -> Dict[str, float]:
-        summary: Dict[str, float] = {
-            "utmos_mean": _fallback_zero(
-                _mean_skip_none(w["utmos_window_mean"] for w in per_window),
+    def _summarize(
+        self, per_window: Sequence[Dict[str, Any]]
+    ) -> Dict[str, Optional[float]]:
+        name = type(self).__name__
+        summary: Dict[str, Optional[float]] = {
+            "utmos_mean": summary_value(
+                mean_skip_none(w["utmos_window_mean"] for w in per_window),
                 "utmos_mean",
+                metric_name=name,
             ),
         }
         if self.enable_dnsmos:
-            summary["dnsmos_mean"] = _fallback_zero(
-                _mean_skip_none(w.get("dnsmos_window_mean") for w in per_window),
+            summary["dnsmos_mean"] = summary_value(
+                mean_skip_none(w.get("dnsmos_window_mean") for w in per_window),
                 "dnsmos_mean",
+                metric_name=name,
             )
         return summary

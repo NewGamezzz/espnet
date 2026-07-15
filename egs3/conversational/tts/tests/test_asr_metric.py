@@ -554,7 +554,9 @@ class TestCallRoundTripEdgeCases:
         # ch0: ref="" hyp="" -> 0 error (jiwer.wer("", "") == 0); ch1: exact.
         assert summary["wer_ch_mean"] == pytest.approx(0.0)
         assert summary["cpwer"] == pytest.approx(0.0)
-        assert all(isinstance(v, (float, int)) for v in summary.values())
+        # A key can legitimately be undefined (None, not a fabricated
+        # number) when no window produced data for it -- see _common.py.
+        assert all(isinstance(v, (float, int)) or v is None for v in summary.values())
 
 
 class TestCallRoundTripOutOfOrderDetection:
