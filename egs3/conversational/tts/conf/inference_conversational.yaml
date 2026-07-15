@@ -14,6 +14,14 @@
 # loads its --training_config.
 training_config: conf/training_poc.yaml
 
+# Dead in the default run.py path: run.py always loads a training config,
+# and espnet3.utils.run_utils.apply_training_experiment_context overwrites a
+# DIFFERING exp_tag/exp_dir with the training config's values (warning-only
+# log), so outputs land under exp/train_poc_multibranch_f5/, not
+# exp/eval_pretrained/. This value only takes effect for a standalone
+# stage runner that loads no training config (none exists in this recipe
+# today); kept for that documented house pattern, see the README's
+# "Running the battery" note.
 exp_tag: eval_pretrained
 
 # generate = run the model (zero-init gates unless --ckpt); gt = copy the

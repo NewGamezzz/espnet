@@ -228,7 +228,7 @@ cd egs3/conversational/tts
 
 # infer: batch-generate from the valid split (mode: generate is the shipped
 # default, i.e. the assembled model, zero-init gates unless --ckpt is wired
-# into conf/training_poc.yaml); writes exp/eval_pretrained/infer_generate/valid/
+# into conf/training_poc.yaml); writes exp/train_poc_multibranch_f5/infer_generate/valid/
 python run.py --stages infer --inference_config conf/inference_conversational.yaml
 
 # measure: score whatever infer just wrote; writes metrics.json next to it
@@ -236,9 +236,11 @@ python run.py --stages measure --metrics_config conf/metrics.yaml
 
 # report: one Markdown table, conditions as columns
 python local/eval_report.py \
-    --label pretrained exp/eval_pretrained/infer_generate \
-    -o exp/eval_pretrained/report.md
+    --label pretrained exp/train_poc_multibranch_f5/infer_generate \
+    -o exp/train_poc_multibranch_f5/report.md
 ```
+
+Output paths land under `exp/train_poc_multibranch_f5/` (the TRAINING config's `exp_tag`), not the inference config's own `exp_tag: eval_pretrained`: `run.py` always loads `conf/training_poc.yaml`, and the runner propagates its `exp_tag`/`exp_dir` into the inference and metrics configs with the same overwrite-on-differ rule described below, so the inference yaml's `exp_tag` never takes effect in the default invocation.
 
 `mode: generate | gt | resynth` selects what `infer` writes for the SAME window selection and prompt-boundary logic: `generate` runs the model; `gt` copies the ground-truth generated-region audio unchanged; `resynth` round-trips that same ground truth through the F5 mel front-end and Vocos, with no model involved.
 `gt` and `resynth` are anchors, not skipped conditions: they flow through the identical `infer` output contract and the identical `measure` stage as `generate`, with zero metric-side special-casing, so a `generate`-mode score is only meaningful read AGAINST them (a mediocre WER/SIM/UTMOS next to an equally mediocre `resynth` anchor points at the vocoder/front-end, not the model).
@@ -257,10 +259,10 @@ for m in gt resynth; do
 done
 
 python local/eval_report.py \
-    --label gt         exp/eval_pretrained/infer_gt \
-    --label resynth    exp/eval_pretrained/infer_resynth \
-    --label pretrained exp/eval_pretrained/infer_generate \
-    -o exp/eval_pretrained/report.md
+    --label gt         exp/train_poc_multibranch_f5/infer_gt \
+    --label resynth    exp/train_poc_multibranch_f5/infer_resynth \
+    --label pretrained exp/train_poc_multibranch_f5/infer_generate \
+    -o exp/train_poc_multibranch_f5/report.md
 ```
 
 `--label NAME INFERENCE_DIR` may be repeated for any number of conditions (add a fine-tuned checkpoint's `infer_generate` dir the same way once one exists); columns appear in the given order and a condition with no `metrics.json` yet (or missing a particular metric/key) renders as `-` rather than failing the report.

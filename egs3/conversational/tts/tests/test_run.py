@@ -8,6 +8,7 @@ the required-config guard without raising.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 import pytest
@@ -140,11 +141,17 @@ class TestAnchorModePropagation:
         monkeypatch.chdir(RECIPE_DIR)
 
         def _mode_copy(src_name: str, out_name: str, mode: str) -> Path:
+            # Line-anchored, exactly like the README's
+            # `sed "s/^mode: generate/mode: $m/"` (a bare replace would also
+            # rewrite the phrase inside metrics.yaml's header comment).
             src = RECIPE_DIR / "conf" / src_name
             out = tmp_path / out_name
             out.write_text(
-                src.read_text(encoding="utf-8").replace(
-                    "mode: generate", f"mode: {mode}"
+                re.sub(
+                    r"^mode: generate",
+                    f"mode: {mode}",
+                    src.read_text(encoding="utf-8"),
+                    flags=re.MULTILINE,
                 ),
                 encoding="utf-8",
             )
