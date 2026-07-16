@@ -283,6 +283,77 @@ class TestEvaluateRecordSetAGenerated:
         assert row["cpwer_mapping"] == {"A": "spk2", "B": "spk1"}
         assert row["mapping_disagrees"] is True
 
+    def test_mapping_disagrees_ignores_clusters_sim_could_not_embed(self, tmp_path):
+        # Three speakers/clusters: A and B are normal (>= min_sec, so both
+        # cpWER and sim map them); C is a 0.3s sliver - assign_words still
+        # attributes text to it (assign_words has no duration floor), so
+        # cpWER maps it too, but segment_similarities' min_sec=1.0 default
+        # excludes it from embedding entirely, so sim.assignment omits it.
+        # cpWER and sim AGREE on the two clusters they both cover (A, B) -
+        # the extra "C" key that only cpWER has must not, by itself, count
+        # as a disagreement.
+        wav_dir = tmp_path / "wavs"
+        wav_dir.mkdir()
+        refs_dir = tmp_path / "refs"
+
+        seg_a = np.full(2 * _SR, 0.1, dtype=np.float32)
+        seg_b = np.full(2 * _SR, -0.1, dtype=np.float32)
+        seg_c = np.full(int(0.3 * _SR), 0.1, dtype=np.float32)
+        gen_wav = wav_dir / "ex_c.wav"
+        sf.write(str(gen_wav), np.concatenate([seg_a, seg_b, seg_c]), _SR)
+        gen_wav = str(gen_wav)
+
+        ref_spk1 = _write_two_tone_wav(refs_dir / "spk1.wav", 0.1, 0.1)
+        ref_spk2 = _write_two_tone_wav(refs_dir / "spk2.wav", -0.1, -0.1)
+        # spk3's turn spans [4.0, 4.3) - needs a ref wav that actually
+        # covers that span, unlike the 4s two-tone helper.
+        refs_dir.mkdir(parents=True, exist_ok=True)
+        ref_spk3 = str(refs_dir / "spk3.wav")
+        sf.write(ref_spk3, np.full(5 * _SR, 0.1, dtype=np.float32), _SR)
+
+        entry = {
+            "example_id": "ex_c",
+            "set": "sssd",
+            "system": "sys",
+            "caption": "cap",
+            "gt_wav": gen_wav,
+            "turns": [
+                {"speaker": "spk1", "start": 0.0, "end": 2.0, "text": "hello there"},
+                {"speaker": "spk2", "start": 2.0, "end": 4.0, "text": "good morning"},
+                {"speaker": "spk3", "start": 4.0, "end": 4.3, "text": "nice day"},
+            ],
+            "speakers": ["spk1", "spk2", "spk3"],
+            "ref_wavs": {"spk1": ref_spk1, "spk2": ref_spk2, "spk3": ref_spk3},
+        }
+
+        segments = [
+            DiarSegment(0.0, 2.0, "A"),
+            DiarSegment(2.0, 4.0, "B"),
+            DiarSegment(4.0, 4.3, "C"),
+        ]
+        words = [
+            Word("hello", 0.0, 0.5),
+            Word("there", 0.5, 1.0),
+            Word("good", 2.0, 2.5),
+            Word("morning", 2.5, 3.0),
+            Word("nice", 4.0, 4.1),
+            Word("day", 4.1, 4.2),
+        ]
+        deps = EvalDeps(
+            diarize_fn=lambda wav: segments,
+            transcribe_fn=lambda wav: ("hello there good morning nice day", words),
+            embed_fn=_fake_embed_fn(),
+            utmos_fn=lambda wav: 3.0,
+        )
+
+        row = evaluate_record(entry, gen_wav, deps)
+
+        assert row["error"] is None
+        assert row["cpwer_mapping"] == {"A": "spk1", "B": "spk2", "C": "spk3"}
+        # sim never saw a >= min_sec segment for "C", so its assignment
+        # only covers A/B - and on those two, sim and cpWER agree.
+        assert row["mapping_disagrees"] is False
+
 
 # ---------------------------------------------------------------------------
 # evaluate_record: Set A, anchor mode
@@ -391,6 +462,36 @@ class TestRunBattery:
 
         assert by_id["ex_b"]["error"] is None
         assert by_id["ex_b"]["sim_cross_gt"] == pytest.approx(1.0)
+
+    def test_malformed_marker_json_captured_as_row_error_others_survive(
+        self, battery_fixture
+    ):
+        # A marker that is present but not valid JSON - e.g. a process
+        # killed mid-write, before the real generator's atomic
+        # write-then-os.replace - must not raise past this record and
+        # abort the whole run.
+        (battery_fixture["wav_dir"] / "ex_b.json").write_text(
+            "{not valid json", encoding="utf-8"
+        )
+
+        rows = run_battery(
+            battery_fixture["entries"],
+            battery_fixture["wav_dir"],
+            battery_fixture["deps"],
+            mode="generated",
+        )
+
+        by_id = {r["example_id"]: r for r in rows}
+        assert set(by_id) == {"ex_a", "ex_b", "ex_err"}
+
+        # the malformed-marker record is captured as an errored row...
+        assert by_id["ex_b"]["error"] is not None
+
+        # ...but the run completes and every other row is untouched.
+        assert by_id["ex_a"]["error"] is None
+        assert by_id["ex_a"]["cpwer_mapping"] == {"A": "spk1", "B": "spk2"}
+        assert by_id["ex_err"]["error"] is not None
+        assert "boom" in by_id["ex_err"]["error"]
 
         # error record: json marker already carried "error" - run_battery
         # must not crash, and must propagate that error onto the row

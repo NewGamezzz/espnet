@@ -162,6 +162,13 @@ def evaluate_record(
     ``gt_wav`` against itself in anchor mode would be a trivial, meaningless
     self-comparison.
 
+    ``mapping_disagrees`` (Set A only) compares the cpWER-optimal
+    cluster->speaker mapping against the similarity-optimal one, but only
+    over clusters BOTH sides actually cover - a cluster sim never embedded
+    (no segment long enough) is not scored as a disagreement just because
+    cpWER still named it. It is ``None`` (not ``False``) when the two sides
+    share no cluster to compare.
+
     Any stage failing (missing/corrupt wav, zero diarization segments -
     ``eval.asr.assign_words`` raises via ``min()`` on an empty segment
     list, guarded here explicitly - etc.) is caught and recorded in
@@ -205,15 +212,29 @@ def evaluate_record(
             row["sim_margin_mean"] = sim.margin_mean
 
             # cpwer.mapping names every cluster, mapping unmatched ones to
-            # None; sim.assignment simply omits clusters it never matched.
-            # Drop the None entries before comparing so "no mapping" reads
-            # the same way on both sides.
+            # None; sim.assignment simply omits clusters it never matched -
+            # both clusters segment_similarities never embedded (no segment
+            # >= its min_sec floor) and clusters its brute-force assignment
+            # left unmatched. Drop the None entries so "no mapping" reads
+            # the same way on both sides, then compare only over clusters
+            # BOTH sides actually cover: a cluster cpWER maps but sim could
+            # never embed is not evidence of disagreement, just of sim
+            # having less to go on. mapping_disagrees is None (not False)
+            # when the two sides share no cluster to compare at all.
             cpwer_mapped = {
                 cluster: speaker
                 for cluster, speaker in cp.mapping.items()
                 if speaker is not None
             }
-            row["mapping_disagrees"] = cpwer_mapped != sim.assignment
+            common_clusters = set(cpwer_mapped) & set(sim.assignment)
+            row["mapping_disagrees"] = (
+                any(
+                    cpwer_mapped[cluster] != sim.assignment[cluster]
+                    for cluster in common_clusters
+                )
+                if common_clusters
+                else None
+            )
 
             if mode == "anchor":
                 row["purity_gt"] = purity(segments, entry["turns"])
@@ -237,7 +258,9 @@ def run_battery(
     never consults ``wav_dir`` or a generation marker, since ground-truth
     audio always exists and was never "generated". ``mode == "generated"``
     scores ``wav_dir/<example_id>.wav``, gated by the Task 6/7
-    ``<example_id>.json`` marker contract: a missing marker, a marker
+    ``<example_id>.json`` marker contract: a missing marker, a marker that
+    fails to parse as JSON (e.g. truncated by a process killed mid-write,
+    before the generator's atomic write-then-``os.replace``), a marker
     carrying an ``"error"``, or ``"has_audio": false`` all short-circuit to
     an errored row without ever touching ``evaluate_record`` (the wav may
     not even exist) - one bad record never aborts the run.
@@ -255,7 +278,17 @@ def run_battery(
                     _blank_row(example_id, f"missing generation marker: {marker_path}")
                 )
                 continue
-            marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            try:
+                marker = json.loads(marker_path.read_text(encoding="utf-8"))
+            except Exception as exc:  # noqa: BLE001 - one bad marker must not abort the run
+                rows.append(
+                    _blank_row(
+                        example_id,
+                        f"unreadable generation marker {marker_path}: "
+                        f"{type(exc).__name__}: {exc}",
+                    )
+                )
+                continue
             if marker.get("error"):
                 rows.append(_blank_row(example_id, marker["error"]))
                 continue
