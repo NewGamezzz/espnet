@@ -263,3 +263,23 @@ class TestEmitMonoRecord:
         for spk, path in md["channel_wavs"].items():
             assert spk in md["speakers"]
             assert path.endswith(".wav")
+            assert Path(path).is_absolute()
+
+    def test_mono_metadata_turns_window_relative_with_nonzero_t0(self, tmp_path):
+        """Verify turn times are window-relative by using nonzero t0."""
+        win = window(TWO_SPEAKER_TURNS, t0=1.5, t1=11.5)
+        wa = window_audio(win, tmp_path)
+        attrs_by_speaker = {
+            "spk0": attrs(gender="male"),
+            "spk1": attrs(gender="female"),
+        }
+        rec = emit_mono_record(win, attrs_by_speaker, wa)
+        md = rec["metadata"]
+        turns = md["turns"]
+        # All turn times should be shifted by -1.5 (window.t0)
+        for i, original_turn in enumerate(sorted(win.turns, key=lambda t: (t.start, t.channel))):
+            computed = turns[i]
+            assert computed["start"] == round(original_turn.start - 1.5, 3)
+            assert computed["end"] == round(original_turn.end - 1.5, 3)
+            assert computed["text"] == original_turn.text
+            assert computed["speaker"] == original_turn.speaker
