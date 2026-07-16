@@ -14,9 +14,9 @@ urllib call are exercised only on Delta, per the Task 6 brief.
 from __future__ import annotations
 
 import base64
-import importlib
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 
@@ -447,17 +447,39 @@ class TestAtomicJsonWrite:
 
 
 def test_importing_eval_generate_vllm_does_not_load_heavy_deps():
-    stale = [
-        name
-        for name in sys.modules
-        if name == "eval.generate_vllm" or name.split(".")[0] in ("torch", "numpy")
-    ]
-    for name in stale:
-        del sys.modules[name]
+    """Runs the import check in a FRESH subprocess rather than mutating this
+    process's ``sys.modules``.
 
-    importlib.import_module("eval.generate_vllm")
+    An earlier version of this test deleted ``torch``/``numpy`` from
+    ``sys.modules`` in-process before re-importing. Task 7's implementer hit
+    a real segfault with that exact pattern in ``eval/generate_espnet.py``'s
+    equivalent hygiene test: deleting an already-loaded native extension
+    module out from under a live process and then letting anything
+    re-import it corrupts the process. It is also order-dependent even made
+    non-destructive (a before/after ``sys.modules`` diff) - pytest imports
+    every test module during collection before any test body runs, so torch
+    may already be in ``sys.modules`` by the time this test runs in the full
+    suite, and a diff would find nothing new regardless of what
+    ``generate_vllm`` itself imports.
 
-    loaded_heavy = [
-        name for name in sys.modules if name.split(".")[0] in ("torch", "numpy")
-    ]
-    assert not loaded_heavy, f"heavy deps loaded on import: {loaded_heavy}"
+    A subprocess sidesteps both problems: it starts with a clean
+    ``sys.modules``, so the check is meaningful regardless of what already
+    ran in this process, and there is nothing to corrupt when it exits.
+    """
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "import sys, eval.generate_vllm; "
+            "heavy = [m for m in sys.modules "
+            "if m.split('.')[0] in ('torch', 'numpy')]; "
+            "assert not heavy, heavy",
+        ],
+        env=os.environ.copy(),
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, (
+        f"import eval.generate_vllm pulled in heavy deps "
+        f"(stdout={result.stdout!r}, stderr={result.stderr!r})"
+    )
