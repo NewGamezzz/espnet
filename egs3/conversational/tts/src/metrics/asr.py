@@ -1,146 +1,108 @@
-"""``ConversationASRMetric``: the ASR leg of the measure-stage metric battery.
+"""``ConversationASRMetric``: corpus-level WER, the ASR leg of the lean
+measure-stage metric battery (see PLAN-step4.md's 2026-07-15 revision).
 
-Per window (iterating ``meta.scp``), for every generated channel:
+Per window (iterating ``meta.scp``), two WER variants are computed, BOTH
+corpus-level (pooled substitution/deletion/insertion/hit counts across every
+utterance in the run, then ``WER = (S + D + I) / (S + D + H)`` computed ONCE
+at summary time). Per-utterance WERs are never averaged -- a mean-of-WERs
+would let a run full of tiny reference utterances (a channel with one short
+turn) dominate the summary just as much as a run of long ones, whereas
+pooling weights every reference WORD equally, the standard corpus-WER
+convention.
 
-1. Segment the channel's generated-region wav into IPUs (``segments.py``,
-   dGSLM 200 ms rule) and transcribe EACH IPU separately (rather than the
-   whole channel in one call) -- this is what avoids whisper's well-known
-   silence-hallucination failure mode on long quiet stretches. Word
-   timestamps returned by the transcriber are IPU-local; this module offsets
-   them by the IPU's start so all of a channel's words share one timeline
-   (seconds from the start of its generated region). The channel hypothesis
-   text is the space-joined concatenation of its IPU transcripts, in IPU
-   order (IPUs are already time-sorted by ``build_ipus``).
-2. Per-channel WER: the channel hypothesis vs. that channel's ``ref_text``
-   from the meta JSON (identity channel<->speaker pairing, since this
-   recipe's channels ARE speakers), with the injected ``normalizer`` applied
-   to both sides.
-3. cpWER: the same per-channel hypotheses vs. the per-channel references,
-   minimized over every channel<->speaker assignment (``N <= 4`` in this
-   recipe, so brute-force permutation is cheap); ``swap`` is flagged when
-   the minimizing assignment is not the identity. Ties prefer the identity
-   assignment (documented convention, see ``_cpwer``).
-4. Script following: EACH channel's hypothesis WORDS are aligned (per
-   channel, via jiwer's edit-distance alignment) to THAT channel's scripted
-   turn texts (generated-region turns only, i.e. turns with
-   ``start >= prompt_boundary_sec``, in script order); a turn's "realized
-   time" is the mean midpoint timestamp of the hypothesis words the
-   alignment attributes to it. The per-channel realized times are then
-   scattered back into ONE pooled, cross-channel timeline in the window's
-   original script order (``meta["turns"]`` is already chronological across
-   ALL channels, and every channel's generated region starts at the SAME
-   ``prompt_boundary_sec`` instant, so per-channel realized times share one
-   clock and are directly comparable). Turn-order accuracy, Kendall tau, and
-   turn-count ratio are computed ONCE per window over this pooled,
-   cross-channel sequence -- this is what actually measures conversational
-   turn-taking order (whether speaker A's and B's turns interleaved
-   correctly), not merely whether each speaker's own turns stayed in order
-   (which they trivially do, since a single speaker's turns never overlap
-   themselves).
+1. **Per-channel WER** (``wer_channel``): one channel of one window is one
+   utterance. Hypothesis = a single whole-file transcription of
+   ``channels[ch].gen_wav`` (the ENTIRE generated channel, per the reworked
+   infer stage -- there is no more prompt/generated split within the wav).
+   Reference = ``channels[ch].ref_text`` (all of that channel's window-turn
+   texts, already space-joined by the infer stage). Counts are pooled over
+   every channel of every window.
+2. **Mixed-channel WER** (``wer_mix``): one whole window is one utterance.
+   Hypothesis = a single whole-file transcription of the window's
+   ``mix_wav``. Reference = ALL of the window's turns (``meta["turns"]``,
+   across every channel) joined in START-TIME order (ties keep the list's
+   existing order -- a stable sort, never re-decided per key collision).
+   Counts are pooled over windows.
 
-Summary keys (each is a MEAN OVER WINDOWS of a per-window scalar):
+Transcription is ONE backend call per file (``vad_filter=True`` on the real
+faster-whisper backend), not the old per-IPU-segment loop: channels and even
+the mixdown contain long silences (a channel's own silence during other
+speakers' turns; the mixdown's silence during conversational gaps), and
+faster-whisper's own internal VAD filtering is what now guards against
+whisper's well-known silence-hallucination failure mode, replacing the
+manual VAD/IPU segmentation this recipe used to do by hand.
 
-* ``wer_ch_mean``   -- per-window mean of per-channel WER, then mean over windows.
-* ``wer_ch_worst``  -- per-window max of per-channel WER, then mean over windows.
-* ``cpwer``         -- per-window cpWER (already a single global number per
-  window, computed over ALL channels jointly), meaned over windows.
-* ``swap_rate``     -- fraction of windows whose cpWER-minimizing assignment
-  was not the identity.
-* ``turn_order_acc``, ``kendall_tau``, ``turn_count_ratio`` -- the pooled,
-  cross-channel per-window scalar described above, meaned over windows that
-  had at least one generated-region turn (``turn_order_acc``/``kendall_tau``
-  further require at least one / two REALIZED turns respectively; windows
-  without a defined value are skipped, not counted as 0).
+The injected ``normalizer`` (default: whisper's ``EnglishTextNormalizer``)
+is applied to BOTH the hypothesis and reference text of every utterance
+(channel or mix) before counting -- normalization must be symmetric, or the
+counts would silently penalize formatting differences ("25" vs "twenty
+five") that have nothing to do with transcription accuracy.
 
-Two DISTINCT normalization steps are used, deliberately not shared:
+Summary keys (exactly two, both pooled per the corpus convention above, both
+``summary_value``-guarded: a run with zero utterances -- or, degenerately, a
+zero-word pooled reference -- leaves the key ``None``, never a fabricated
+0.0):
 
-* The injected ``normalizer`` (default: whisper's ``EnglishTextNormalizer``)
-  runs on whole reference/hypothesis STRINGS for WER/cpWER (item 2/3 above).
-  It may merge or split tokens (e.g. "twenty five" -> "25"), which is fine
-  for a scalar error rate but would silently break the word<->timestamp
-  mapping script-following depends on.
-* Script-following (item 4) instead normalizes each WORD independently
-  (lowercase, strip surrounding punctuation, see ``_normalize_word``) so
-  every hypothesis word keeps exactly its own transcriber timestamp.
+* ``wer_channel`` -- pooled per-channel WER.
+* ``wer_mix``     -- pooled mixed-channel WER.
 
-Missing-turn convention (documented per the task's explicit ask): a scripted
-turn with zero aligned hypothesis words is "missing". Missing turns count
-against ``turn_count_ratio`` (realized / scripted) but are EXCLUDED from
-``turn_order_acc`` and ``kendall_tau``, which are computed over the realized
-turns only (in their original script order) -- there is no realized time to
-rank a missing turn by. ``turn_order_acc`` is the fraction of realized
-turns (in the pooled, cross-channel sequence) whose rank-by-realized-time
-matches their rank-by-script-order among the OTHER realized turns of that
-window (i.e. does time-sorting the realized turns recover the identity
-permutation); ``kendall_tau`` is the Kendall rank-correlation (scipy)
-between script order and realized-time order over the same set, requiring
-at least 2 realized turns.
+Per-window JSONL rows carry the per-channel and mix hypotheses plus their
+raw count 4-tuples and a per-window (NOT corpus-pooled) WER for each --
+debug-only detail; the run summary always comes from the pooled counts
+above, never from averaging these per-window numbers.
 
-Backends are constructor-injectable; real defaults are lazy so importing
+Deferred to a later PR (see README.md's "Deferred to the next PR" list):
+cpWER channel-permutation search, the ``swap`` flag, and script-following
+(turn-order accuracy / Kendall tau / turn-count ratio, and the word-timestamp
+machinery that fed it) -- all cut in the 2026-07-15 PR #10 review to keep
+this battery lean and easy to review.
+
+Backends are constructor-injectable; the real default is lazy so importing
 this module (or constructing the metric) never touches the network or loads
 a model:
 
 * ``transcriber``: default :class:`FasterWhisperTranscriber` (faster-whisper
-  large-v3); the underlying package is imported inside the first call, never
-  at module scope or in ``__init__``.
+  large-v3, ``vad_filter=True``); the underlying package is imported inside
+  the first call, never at module scope or in ``__init__``.
 * ``normalizer``: default :class:`WhisperEnglishNormalizer`, soft-importing
   ``whisper.normalizers.EnglishTextNormalizer`` on first call. If
   ``openai-whisper`` is not installed at real-runtime, it RAISES with an
   install hint rather than silently falling back to a weaker normalizer --
   a silent fallback would corrupt cross-run WER comparability.
-* ``vad``: default ``segments.VAD()`` (lazy silero), per the shared Task-2
-  utility.
 
-``jiwer`` (word alignment / WER) and ``scipy`` (Kendall tau) are imported at
-module scope: unlike the transcriber/normalizer these are lightweight,
-model-free, network-free pure-Python/numeric libraries already present in
-the eval environment, so there is nothing to defer.
+``jiwer`` (word alignment / WER counts) is imported at module scope: unlike
+the transcriber/normalizer this is a lightweight, model-free, network-free
+pure-Python/numeric library already present in the eval environment, so
+there is nothing to defer.
 
 Nothing here is imported by the training path.
 """
 
 from __future__ import annotations
 
-import itertools
 import json
-import math
-import re
-from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 import jiwer
 import numpy as np
-from scipy.stats import kendalltau
 
 from espnet3.components.metrics.base_metric import BaseMetric
 
-from ._common import mean, mean_skip_none, summary_value
-from .segments import VAD, Interval, build_ipus, load_wav
+from ._common import load_wav, summary_value
 
-_TURN_EPS = 1e-6
-
-
-# --------------------------------------------------------------------------- #
-# word type + backends
-# --------------------------------------------------------------------------- #
-@dataclass(frozen=True)
-class Word:
-    """One transcribed word. ``start``/``end`` are seconds, relative to
-    whatever audio snippet the transcriber was called on (IPU-local until
-    :meth:`ConversationASRMetric._transcribe_channel` offsets them)."""
-
-    text: str
-    start: float
-    end: float
-
-
-Transcriber = Callable[[np.ndarray, int], Sequence[Word]]
+Transcriber = Callable[[np.ndarray, int], str]
 Normalizer = Callable[[str], str]
 
 
+# --------------------------------------------------------------------------- #
+# backends
+# --------------------------------------------------------------------------- #
 class FasterWhisperTranscriber:
-    """Real default transcriber: faster-whisper ``large-v3``.
+    """Real default transcriber: faster-whisper ``large-v3``, transcribed in
+    ONE call per file with ``vad_filter=True`` (faster-whisper's own internal
+    VAD filtering -- the anti-silence-hallucination defense for this lean
+    battery, replacing the old manual per-IPU segmentation).
 
     ``faster_whisper`` is imported inside :meth:`_load`, invoked from the
     first :meth:`__call__`, never at module scope or in ``__init__`` --
@@ -175,20 +137,14 @@ class FasterWhisperTranscriber:
             **self.model_kwargs,
         )
 
-    def __call__(self, wav: np.ndarray, sr: int) -> List[Word]:
+    def __call__(self, wav: np.ndarray, sr: int) -> str:
         self._load()
         segments_iter, _info = self._model.transcribe(
-            wav, language=self.language, word_timestamps=True
+            wav, language=self.language, vad_filter=True
         )
-        words: List[Word] = []
-        for segment in segments_iter:
-            for w in segment.words or []:
-                text = w.word.strip()
-                if text:
-                    words.append(
-                        Word(text=text, start=float(w.start), end=float(w.end))
-                    )
-        return words
+        return " ".join(
+            seg.text.strip() for seg in segments_iter if seg.text.strip()
+        )
 
 
 class WhisperEnglishNormalizer:
@@ -225,33 +181,63 @@ class WhisperEnglishNormalizer:
         return self._normalizer(text)
 
 
-_WORD_STRIP_RE = re.compile(r"^[^\w']+|[^\w']+$")
+# --------------------------------------------------------------------------- #
+# corpus-level (pooled) WER counting
+# --------------------------------------------------------------------------- #
+def _counts(ref: str, hyp: str) -> Dict[str, int]:
+    """One utterance's substitution/deletion/insertion/hit counts."""
+    out = jiwer.process_words(ref, hyp)
+    return {
+        "substitutions": int(out.substitutions),
+        "deletions": int(out.deletions),
+        "insertions": int(out.insertions),
+        "hits": int(out.hits),
+    }
 
 
-def _normalize_word(text: str) -> str:
-    """Lowercase + strip surrounding punctuation for ONE word.
+def _wer_from_counts(counts: Dict[str, int]) -> Optional[float]:
+    """``(S + D + I) / (S + D + H)``; ``None`` (never a fabricated 0.0) when
+    the denominator (total reference words) is zero."""
+    denom = counts["substitutions"] + counts["deletions"] + counts["hits"]
+    if denom == 0:
+        return None
+    numer = counts["substitutions"] + counts["deletions"] + counts["insertions"]
+    return numer / denom
 
-    Used only for script-following alignment (see module docstring for why
-    this is separate from the injected sentence-level ``normalizer``).
-    """
-    return _WORD_STRIP_RE.sub("", text.lower())
+
+def _pool_wer(counts_list: Sequence[Dict[str, int]]) -> Optional[float]:
+    """Pool a sequence of per-utterance count dicts into ONE corpus-level
+    WER -- the core "never average per-utterance WERs" primitive, kept as a
+    pure function so it is directly unit-testable independent of any audio
+    I/O or file fixture."""
+    pooled = {
+        "substitutions": sum(c["substitutions"] for c in counts_list),
+        "deletions": sum(c["deletions"] for c in counts_list),
+        "insertions": sum(c["insertions"] for c in counts_list),
+        "hits": sum(c["hits"] for c in counts_list),
+    }
+    return _wer_from_counts(pooled)
+
+
+def _mix_reference(turns: Sequence[Dict[str, Any]]) -> str:
+    """All of a window's turns, joined in START-TIME order (a stable sort,
+    so turns that tie on ``start`` keep their existing list order)."""
+    ordered = sorted(turns, key=lambda t: t["start"])
+    return " ".join(t["text"] for t in ordered)
 
 
 # --------------------------------------------------------------------------- #
 # metric
 # --------------------------------------------------------------------------- #
 class ConversationASRMetric(BaseMetric):
-    """ASR leg of the measure-stage battery: WER, cpWER, script following."""
+    """ASR leg of the lean measure-stage battery: corpus-level per-channel
+    and mixed-channel WER. See module docstring."""
 
     def __init__(
         self,
         transcriber: Optional[Transcriber] = None,
         normalizer: Optional[Normalizer] = None,
-        vad: Optional[Callable[[np.ndarray, int], Sequence[Interval]]] = None,
         asr_sample_rate: int = 16000,
-        min_silence: float = 0.2,
-        min_speech: float = 0.0,
-        pad: float = 0.1,
     ) -> None:
         self.transcriber = (
             transcriber if transcriber is not None else FasterWhisperTranscriber()
@@ -259,11 +245,7 @@ class ConversationASRMetric(BaseMetric):
         self.normalizer = (
             normalizer if normalizer is not None else WhisperEnglishNormalizer()
         )
-        self.vad = vad if vad is not None else VAD()
         self.asr_sample_rate = asr_sample_rate
-        self.min_silence = min_silence
-        self.min_speech = min_speech
-        self.pad = pad
 
     # -- BaseMetric entrypoint ------------------------------------------- #
     def __call__(
@@ -290,260 +272,59 @@ class ConversationASRMetric(BaseMetric):
     # -- per-window scoring ------------------------------------------------ #
     def _score_window(self, meta: Dict[str, Any], test_dir: Path) -> Dict[str, Any]:
         window_id = meta["window_id"]
-        boundary_sec = float(meta["prompt_boundary_sec"])
         channels_meta = meta["channels"]
         turns = meta.get("turns", [])
-        n = len(channels_meta)
 
-        hyp_words: List[List[Word]] = []
-        hyp_texts: List[str] = []
-        ref_texts: List[str] = [ch.get("ref_text", "") for ch in channels_meta]
-
+        channel_records = []
         for ch in channels_meta:
-            words = self._transcribe_channel(test_dir / ch["gen_wav"])
-            hyp_words.append(words)
-            hyp_texts.append(" ".join(w.text for w in words))
-
-        ref_norm = [self.normalizer(t) for t in ref_texts]
-        hyp_norm = [self.normalizer(t) for t in hyp_texts]
-
-        channel_wer = [float(jiwer.wer(r, h)) for r, h in zip(ref_norm, hyp_norm)]
-        cpwer, swap, assignment = self._cpwer(ref_norm, hyp_norm)
-
-        # Pooled, cross-channel script following: per-channel alignment
-        # produces a realized time per turn, but the order/tau/ratio stats
-        # are computed ONCE over the window's whole chronological turn
-        # sequence (see module docstring for why -- this is what actually
-        # measures conversational turn-taking order across speakers).
-        gen_turns = [t for t in turns if t["start"] >= boundary_sec - _TURN_EPS]
-        channel_positions: List[List[int]] = [[] for _ in range(n)]
-        for gi, t in enumerate(gen_turns):
-            channel_positions[t["channel"]].append(gi)
-
-        global_realized_time: List[Optional[float]] = [None] * len(gen_turns)
-        channel_debug: List[Dict[str, Any]] = []
-        for k in range(n):
-            positions = channel_positions[k]
-            local_texts = [gen_turns[gi]["text"] for gi in positions]
-            local_times = self._align_words_to_turns(local_texts, hyp_words[k])
-            for local_idx, gi in enumerate(positions):
-                global_realized_time[gi] = local_times[local_idx]
-            channel_debug.append(
-                {"scripted_turns": local_texts, "realized_times": local_times}
+            hyp_raw = self._transcribe(test_dir / ch["gen_wav"])
+            ref_raw = ch.get("ref_text", "")
+            hyp_norm = self.normalizer(hyp_raw)
+            ref_norm = self.normalizer(ref_raw)
+            counts = _counts(ref_norm, hyp_norm)
+            channel_records.append(
+                {
+                    "hyp_text": hyp_raw,
+                    "ref_text": ref_raw,
+                    "counts": counts,
+                    "wer": _wer_from_counts(counts),
+                }
             )
 
-        script_stats = self._script_order_stats(global_realized_time)
+        mix_hyp_raw = self._transcribe(test_dir / meta["mix_wav"])
+        mix_ref_raw = _mix_reference(turns)
+        mix_hyp_norm = self.normalizer(mix_hyp_raw)
+        mix_ref_norm = self.normalizer(mix_ref_raw)
+        mix_counts = _counts(mix_ref_norm, mix_hyp_norm)
 
         return {
             "window_id": window_id,
-            "num_channels": n,
-            "wer_ch_mean": mean(channel_wer),
-            "wer_ch_worst": max(channel_wer) if channel_wer else None,
-            "cpwer": cpwer,
-            "swap": swap,
-            "cpwer_assignment": list(assignment),
-            "turn_order_acc": script_stats["turn_order_acc"],
-            "kendall_tau": script_stats["kendall_tau"],
-            "turn_count_ratio": script_stats["turn_count_ratio"],
-            "channels": [
-                {
-                    "hyp_text": hyp_texts[k],
-                    "ref_text": ref_texts[k],
-                    "wer": channel_wer[k],
-                    **channel_debug[k],
-                }
-                for k in range(n)
-            ],
-            "script_following": {
-                "turn_channels": [t["channel"] for t in gen_turns],
-                "realized_times": global_realized_time,
-                "missing_turns": script_stats["missing_turns"],
-                "num_scripted_turns": script_stats["num_scripted_turns"],
-                "num_realized_turns": script_stats["num_realized_turns"],
+            "num_channels": len(channels_meta),
+            "channels": channel_records,
+            "mix": {
+                "hyp_text": mix_hyp_raw,
+                "ref_text": mix_ref_raw,
+                "counts": mix_counts,
+                "wer": _wer_from_counts(mix_counts),
             },
         }
 
     def _summarize(
         self, per_window: Sequence[Dict[str, Any]]
     ) -> Dict[str, Optional[float]]:
-        def agg(key: str) -> Optional[float]:
-            return mean_skip_none(w[key] for w in per_window)
-
         name = type(self).__name__
-        swap_rate = mean_skip_none(1.0 if w["swap"] else 0.0 for w in per_window)
+        channel_counts = [c["counts"] for w in per_window for c in w["channels"]]
+        mix_counts = [w["mix"]["counts"] for w in per_window]
         return {
-            "wer_ch_mean": summary_value(
-                agg("wer_ch_mean"), "wer_ch_mean", metric_name=name
+            "wer_channel": summary_value(
+                _pool_wer(channel_counts), "wer_channel", metric_name=name
             ),
-            "wer_ch_worst": summary_value(
-                agg("wer_ch_worst"), "wer_ch_worst", metric_name=name
-            ),
-            "cpwer": summary_value(agg("cpwer"), "cpwer", metric_name=name),
-            "swap_rate": summary_value(swap_rate, "swap_rate", metric_name=name),
-            "turn_order_acc": summary_value(
-                agg("turn_order_acc"), "turn_order_acc", metric_name=name
-            ),
-            "kendall_tau": summary_value(
-                agg("kendall_tau"), "kendall_tau", metric_name=name
-            ),
-            "turn_count_ratio": summary_value(
-                agg("turn_count_ratio"), "turn_count_ratio", metric_name=name
+            "wer_mix": summary_value(
+                _pool_wer(mix_counts), "wer_mix", metric_name=name
             ),
         }
 
     # -- transcription ------------------------------------------------------ #
-    def _transcribe_channel(self, wav_path: Path) -> List[Word]:
+    def _transcribe(self, wav_path: Path) -> str:
         wav, sr = load_wav(wav_path, target_sr=self.asr_sample_rate)
-        raw_segments = self.vad(wav, sr)
-        ipus = build_ipus(
-            raw_segments,
-            min_silence=self.min_silence,
-            min_speech=self.min_speech,
-            pad=self.pad,
-            total_duration=len(wav) / sr if sr else None,
-        )
-        words: List[Word] = []
-        for start, end in ipus:
-            s_samp = max(0, int(round(start * sr)))
-            e_samp = min(len(wav), int(round(end * sr)))
-            if e_samp <= s_samp:
-                continue
-            snippet = wav[s_samp:e_samp]
-            for w in self.transcriber(snippet, sr):
-                words.append(
-                    Word(text=w.text, start=w.start + start, end=w.end + start)
-                )
-        return words
-
-    # -- WER / cpWER ---------------------------------------------------- #
-    @staticmethod
-    def _cpwer(
-        ref_norm: Sequence[str], hyp_norm: Sequence[str]
-    ) -> Tuple[float, bool, Tuple[int, ...]]:
-        """Min-WER channel<->speaker assignment (brute force; N <= 4 here).
-
-        Ties prefer the identity assignment: ``itertools.permutations`` on
-        ``range(n)`` yields the identity tuple first, and ``min`` keeps the
-        first minimizer it sees, so a tie never spuriously flags ``swap``.
-        """
-        n = len(ref_norm)
-        identity = tuple(range(n))
-        if n == 0:
-            return 0.0, False, identity
-
-        best_perm, best_wer = identity, None
-        for perm in itertools.permutations(range(n)):
-            refs = [ref_norm[j] for j in perm]
-            out = jiwer.process_words(refs, list(hyp_norm))
-            if best_wer is None or out.wer < best_wer:
-                best_wer, best_perm = out.wer, perm
-        return float(best_wer), best_perm != identity, best_perm
-
-    # -- script following ------------------------------------------------ #
-    @staticmethod
-    def _align_words_to_turns(
-        scripted_texts: Sequence[str], words: Sequence[Word]
-    ) -> List[Optional[float]]:
-        """Per-CHANNEL alignment core: one realized time per scripted turn.
-
-        Aligns this channel's hypothesis words to this channel's own
-        scripted turn texts (edit-distance, jiwer) and returns, per turn,
-        the mean midpoint timestamp of the hypothesis words attributed to
-        it (``None`` when no word aligned -- a "missing" turn). Pure
-        per-channel bookkeeping; cross-channel order/tau/ratio stats are
-        computed separately by :meth:`_script_order_stats` over the POOLED
-        sequence (see module docstring).
-        """
-        num_scripted = len(scripted_texts)
-        if num_scripted == 0:
-            return []
-
-        ref_words: List[str] = []
-        turn_of_word: List[int] = []
-        for turn_idx, text in enumerate(scripted_texts):
-            for tok in text.split():
-                nw = _normalize_word(tok)
-                if nw:
-                    ref_words.append(nw)
-                    turn_of_word.append(turn_idx)
-
-        hyp_pairs: List[Tuple[str, Word]] = []
-        for w in words:
-            nw = _normalize_word(w.text)
-            if nw:
-                hyp_pairs.append((nw, w))
-
-        turn_times: List[List[float]] = [[] for _ in range(num_scripted)]
-        if ref_words and hyp_pairs:
-            out = jiwer.process_words(
-                " ".join(ref_words), " ".join(p[0] for p in hyp_pairs)
-            )
-            for chunk in out.alignments[0]:
-                if chunk.type not in ("equal", "substitute"):
-                    continue
-                ref_idxs = range(chunk.ref_start_idx, chunk.ref_end_idx)
-                hyp_idxs = range(chunk.hyp_start_idx, chunk.hyp_end_idx)
-                # Substitute blocks are not guaranteed equal-length on both
-                # sides; pair up positionally and leave any excess
-                # unattributed (same spirit as an insertion/deletion).
-                for r_i, h_i in zip(ref_idxs, hyp_idxs):
-                    turn_idx = turn_of_word[r_i]
-                    _, word_obj = hyp_pairs[h_i]
-                    turn_times[turn_idx].append((word_obj.start + word_obj.end) / 2.0)
-
-        return [mean(times) if times else None for times in turn_times]
-
-    @staticmethod
-    def _script_order_stats(
-        realized_time: Sequence[Optional[float]],
-    ) -> Dict[str, Any]:
-        """Window-level, cross-channel order/tau/ratio stats.
-
-        ``realized_time`` is indexed by POOLED script order (chronological
-        across all channels, per ``meta["turns"]``); see module docstring
-        for the missing-turn convention and the exact ``turn_order_acc`` /
-        ``kendall_tau`` definitions.
-        """
-        num_scripted = len(realized_time)
-        if num_scripted == 0:
-            return {
-                "num_scripted_turns": 0,
-                "num_realized_turns": 0,
-                "missing_turns": [],
-                "turn_order_acc": None,
-                "kendall_tau": None,
-                "turn_count_ratio": None,
-            }
-
-        realized_indices = [
-            i for i in range(num_scripted) if realized_time[i] is not None
-        ]
-        missing = [i for i in range(num_scripted) if realized_time[i] is None]
-
-        if realized_indices:
-            actual_order = sorted(realized_indices, key=lambda i: realized_time[i])
-            matches = sum(
-                1
-                for expected, actual in zip(realized_indices, actual_order)
-                if expected == actual
-            )
-            turn_order_acc = matches / len(realized_indices)
-        else:
-            turn_order_acc = None
-
-        if len(realized_indices) >= 2:
-            x = list(range(len(realized_indices)))
-            y = [realized_time[i] for i in realized_indices]
-            tau = kendalltau(x, y).statistic
-            kendall_tau = None if (tau is None or math.isnan(tau)) else float(tau)
-        else:
-            kendall_tau = None
-
-        return {
-            "num_scripted_turns": num_scripted,
-            "num_realized_turns": len(realized_indices),
-            "missing_turns": missing,
-            "turn_order_acc": turn_order_acc,
-            "kendall_tau": kendall_tau,
-            "turn_count_ratio": len(realized_indices) / num_scripted,
-        }
+        return self.transcriber(wav, sr)

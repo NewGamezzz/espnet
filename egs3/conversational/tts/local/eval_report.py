@@ -9,7 +9,7 @@ the exact shape) is ``{class_path: {test_name: {summary_key: value}}}``.
 This script does not import or instantiate anything from ``src/metrics/``;
 it only reads the JSON already written to disk, so it never touches a
 model/backend and never needs the eval-only dependencies (faster-whisper,
-WavLM-SV, UTMOS, silero-vad, ...).
+WavLM-SV, UTMOS, ...).
 
 A condition missing ``metrics.json`` entirely, or missing a particular
 metric class, or missing the requested ``test_name``, or missing an
@@ -38,16 +38,21 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Sequence, Tuple
 
-# Declared order the four metric classes are documented in (PLAN-step4.md /
+# Declared order the three metric classes are documented in (PLAN-step4.md /
 # conf/metrics.yaml); any additional/unknown metric class found in a
 # metrics.json is appended afterward, alphabetically, so the report never
 # silently drops a class it doesn't recognize.
 _CANONICAL_ORDER = [
     "ConversationASRMetric",
-    "SpeakerDynamicsMetric",
-    "InteractionMetric",
-    "ChannelQualityMetric",
+    "SpeakerSimilarityMetric",
+    "QualityMetric",
 ]
+
+# Declared order of the lean battery's summary keys (README.md's Metric
+# glossary); a row for a key not in this list (e.g. from a future metric) is
+# appended afterward in first-seen order, the same fallback _section_order
+# uses for an unrecognized metric class.
+_CANONICAL_KEY_ORDER = ["wer_channel", "wer_mix", "sim_o_mean", "utmos_mean"]
 
 Condition = Tuple[str, Dict[str, Any]]
 
@@ -76,8 +81,9 @@ def build_sections(
     class: ``{short_class_name: {"keys": [...], "values": {label: {key: v}}}}``.
 
     ``keys`` is the union of summary keys across every condition that
-    defined this metric class, in first-seen order (condition order, then
-    key order within each condition's summary dict) so the row order is
+    defined this metric class, reordered per ``_CANONICAL_KEY_ORDER`` (any
+    key not in that list falls back to first-seen order, condition order
+    then key order within each condition's summary dict) so the row order is
     deterministic and stable as new conditions are appended.  A condition
     that never produced this metric class (missing file, metric not run, or
     the requested ``test_name`` absent) is simply absent from ``values``;
@@ -95,12 +101,20 @@ def build_sections(
                 if key not in section["keys"]:
                     section["keys"].append(key)
             section["values"][label] = summary
+    for section in sections.values():
+        section["keys"] = _key_order(section["keys"])
     return sections
 
 
 def _section_order(names) -> List[str]:
     known = [n for n in _CANONICAL_ORDER if n in names]
     unknown = sorted(n for n in names if n not in _CANONICAL_ORDER)
+    return known + unknown
+
+
+def _key_order(keys: Sequence[str]) -> List[str]:
+    known = [k for k in _CANONICAL_KEY_ORDER if k in keys]
+    unknown = [k for k in keys if k not in _CANONICAL_KEY_ORDER]
     return known + unknown
 
 
