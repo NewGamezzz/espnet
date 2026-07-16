@@ -5,33 +5,79 @@ modes that share ONE output layout so the later ``measure`` stage needs zero
 metric-side special-casing:
 
 * ``generate`` - run the assembled model (zero-init gates by default);
-* ``gt``       - copy the ground-truth generated-region audio;
+* ``gt``       - copy the ground-truth window audio;
 * ``resynth``  - round-trip the ground truth through mel + Vocos.
 
-Per window the stage snaps a prompt boundary to an eligible turn boundary,
-keeps every channel's audio before it as the acoustic prompt, and infills the
-remainder.  Windows with no eligible boundary in the ``[prompt_min,
-prompt_max]`` band are skipped and counted; selection is seeded and logged.
+Per window the stage builds an acoustic + text PROMPT by sampling one turn
+per channel from ELSEWHERE in the same conversation (never from inside the
+evaluated window - target leakage is never allowed), concatenating those
+turns' audio non-overlapping at the start of the conditioning speech, then
+masking a region equal to the FULL ground-truth window.  The model therefore
+generates the entire dialog, and every channel is guaranteed a voice
+reference in the prompt (a hard project rule: every speaker must have a
+prompt reference).
+
+Turn-pool construction (once per manifest, not per window): for a window's
+``session_id``, the pool is the union of ``turns`` across every record in the
+manifest sharing that ``session_id``, deduplicated by
+``(channel, start, end, text)``.
+
+Per-channel candidate selection uses a relaxation ladder (first non-empty
+tier wins), picked uniformly with ``random.Random(f"{seed}:{window_id}:{k}")``
+so the choice is identical across modes and reruns:
+
+1. non-window AND solo AND duration in ``[prompt.turn_min_sec,
+   prompt.turn_max_sec]``;
+2. non-window AND solo (duration band dropped);
+3. non-window (solo dropped too).
+
+"Non-window" (the turn's span does not overlap the evaluated window's
+``[t0, t1)``) is NEVER relaxed.  "Solo" means the turn's span does not
+overlap any pool turn of a DIFFERENT channel.  If even tier 3 is empty for
+any channel, the window is skipped and counted.
+
+Audio assembly: for each channel ``k`` in ascending order, the FULL
+multichannel block of the session file is seek-read over the chosen turn's
+``[start, end)`` (same read/resample path as the dataset's window loader,
+factored into ``generation.read_audio_span``) and the blocks are
+concatenated along time in channel order - so during channel ``k``'s block,
+channel ``k`` carries its real speech and every other channel carries its
+own real (near-silent, solo-turn) audio, which is maximally training-like
+conditioning.  The concatenated prompt is trimmed to a whole number of hops
+(remainder dropped from the END) so the prompt/generated boundary is
+frame-exact; conditioning speech is ``concat(prompt, window_speech)``.
+
+Text assembly: ``sample["turns"] = [prompt_turn_ch0, prompt_turn_ch1, ...] +
+window_turns`` (window turns keep their existing order), then the existing
+per-branch preprocessor runs unchanged - prompt turns keep their own
+``channel``, and inference uses the identity channel permutation, so no
+remapping is needed.
 
 Output contract, under ``inference_dir/<test_name>/`` (ALL paths in
-``meta.scp`` and in the meta JSONs are relative to THIS directory, so the whole
-tree is relocatable):
+``meta.scp`` and in the meta JSONs are relative to THIS directory, so the
+whole tree is relocatable):
 
 * ``meta.scp``               - ``<window_id> meta/<window_id>.json``; the
   PRIMARY input every metric iterates.
-* ``meta/<window_id>.json``  - prompt boundary (sec + frames), window duration,
-  sample rate, per-channel relative paths (generated / prompt / ground-truth
-  generated-region wav) and reference text for the generated region, the
-  ground-truth turn spans shifted to window time, and RTF (generate mode only).
+* ``meta/<window_id>.json``  - window duration, sample rate, per-channel
+  relative paths (generated / prompt / ground-truth wav) and reference text
+  (ALL window turns of that channel), the ground-truth turn spans shifted to
+  window time (the generated region now starts at window time 0), the
+  prompt's total duration/frames and the concatenated prompt turns
+  (session-absolute spans, concatenation order), the mixdown wav path, and
+  RTF (generate mode only).
 * convenience SCPs (NOT consumed by metrics): channel-level ``wav.scp`` /
   ``prompt.scp`` / ``text.scp`` (``<window_id>_ch<k>`` rows) and window-level
   ``mix.scp``.
 
-``prompt_boundary_sec`` is the nominal snapped instant; ``prompt_boundary_frames``
-is that instant floored to a hop, so the two are quantization-inconsistent by
-under one frame.  Metrics that need the exact audio cut (where ``prompt_wav``
-ends and ``gt_wav``/``gen_wav`` begin) MUST use ``prompt_boundary_frames * hop``,
-not ``prompt_boundary_sec``.
+``channels[ch].prompt_wav`` is channel ``ch``'s OWN turn block's channel-``ch``
+row only (its solo speech, one turn long) - the speaker-similarity reference
+- NOT the whole concatenated prompt region.
+
+Prompt selection and writing happen in ALL THREE modes (the speaker metric
+needs prompt references for the gt/resynth anchor runs too); ``gt`` mode
+still needs no model/vocoder (pure audio slicing + concatenation), and ``gt``
+/ ``resynth`` do not run the text preprocessor.
 
 Nothing here is imported by the training path.
 """
@@ -47,10 +93,6 @@ from typing import Any, Sequence
 import torch
 from omegaconf import OmegaConf
 
-from egs3.conversational.tts.dataset.preprocessing.windows import (
-    blocked_intervals,
-    is_eligible_boundary,
-)
 from egs3.conversational.tts.src.generation import (
     build_dataset,
     build_preprocessor,
@@ -58,6 +100,7 @@ from egs3.conversational.tts.src.generation import (
     load_model,
     load_vocoder,
     pad_branch_text,
+    read_audio_span,
     resynth_region,
     write_wav,
 )
@@ -68,38 +111,69 @@ _EPS = 1e-6
 _MODES = ("generate", "gt", "resynth")
 
 
-def snap_prompt_boundary(
-    turns: Sequence[Any],
-    t0: float,
-    *,
-    target_sec: float,
-    prompt_min: float,
-    prompt_max: float,
-    boundary_guard: float = 0.0,
-) -> float | None:
-    """Snap the prompt boundary to an eligible turn boundary near ``target_sec``.
+def _overlaps(a_start: float, a_end: float, b_start: float, b_end: float) -> bool:
+    """True iff the half-open spans ``[a_start, a_end)``/``[b_start, b_end)`` overlap."""
+    return a_start < b_end and b_start < a_end
 
-    ``turns`` carry absolute-second ``start``/``end`` (session time); ``t0`` is
-    the window's absolute start, so a window-relative instant ``rel`` maps to
-    absolute ``t0 + rel``.  Candidates are the turns' own endpoints; a candidate
-    is eligible iff no turn strictly contains it (the windowing rule, reused via
-    ``blocked_intervals`` / ``is_eligible_boundary``).  Among eligible endpoints
-    whose window-relative time lies in ``[prompt_min, prompt_max]``, return the
-    one closest to ``target_sec`` (ties toward the earlier instant).  Returns
-    ``None`` when the band holds no eligible boundary.
+
+def _build_turn_pools(records) -> dict[str, list[Any]]:
+    """Per-session turn pools: union of ``turns`` across records sharing a
+    ``session_id``, deduplicated by ``(channel, start, end, text)``, in
+    first-seen order (deterministic regardless of hash randomization since
+    membership uses a set but output order only ever follows record/turn
+    iteration order).  Built once for the whole manifest, not per window.
     """
-    blocked = blocked_intervals(turns, boundary_guard)
-    candidates: set[float] = set()
-    for turn in turns:
-        for edge in (turn.start, turn.end):
-            rel = round(edge - t0, 6)
-            if prompt_min - _EPS <= rel <= prompt_max + _EPS and is_eligible_boundary(
-                blocked, edge
-            ):
-                candidates.add(rel)
-    if not candidates:
+    pools: dict[str, list[Any]] = {}
+    seen: dict[str, set[tuple]] = {}
+    for record in records:
+        pool = pools.setdefault(record.session_id, [])
+        seen_keys = seen.setdefault(record.session_id, set())
+        for turn in record.turns:
+            key = (turn.channel, turn.start, turn.end, turn.text)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                pool.append(turn)
+    return pools
+
+
+def _select_prompt_turn(
+    pool_turns: Sequence[Any],
+    channel: int,
+    t0: float,
+    t1: float,
+    turn_min: float,
+    turn_max: float,
+    seed: Any,
+    window_id: str,
+):
+    """Pick one prompt turn for ``channel`` via the relaxation ladder (module
+    docstring).  Returns ``None`` iff even the loosest tier (non-window) is
+    empty - target leakage is never allowed, so that tier is never relaxed.
+    """
+    non_window = [
+        t
+        for t in pool_turns
+        if t.channel == channel and not _overlaps(t.start, t.end, t0, t1)
+    ]
+    if not non_window:
         return None
-    return min(candidates, key=lambda rel: (abs(rel - target_sec), rel))
+
+    def _is_solo(turn) -> bool:
+        return not any(
+            _overlaps(turn.start, turn.end, other.start, other.end)
+            for other in pool_turns
+            if other.channel != channel
+        )
+
+    solo = [t for t in non_window if _is_solo(t)]
+    banded = [
+        t for t in solo if turn_min - _EPS <= (t.end - t.start) <= turn_max + _EPS
+    ]
+    for tier in (banded, solo, non_window):
+        if tier:
+            rng = random.Random(f"{seed}:{window_id}:{channel}")
+            return rng.choice(tier)
+    return None  # unreachable: non_window already checked non-empty
 
 
 def _in_duration_band(duration: float, min_duration, max_duration) -> bool:
@@ -130,13 +204,12 @@ def _select_indices(records, selection) -> list[int]:
     return eligible
 
 
-def _reference_texts(turns, num_channels: int, boundary_rel: float, t0: float):
-    """Per-channel generated-region reference text (turns with start >= boundary)."""
+def _reference_texts(turns, num_channels: int) -> list[str]:
+    """Per-channel reference text: all of that channel's turn texts,
+    space-joined in window order (the whole window is generated now)."""
     per_channel: list[list[str]] = [[] for _ in range(num_channels)]
     for turn in turns:
-        rel_start = round(turn.start - t0, 6)
-        if rel_start >= boundary_rel - _EPS:
-            per_channel[turn.channel].append(turn.text)
+        per_channel[turn.channel].append(turn.text)
     return [" ".join(parts) for parts in per_channel]
 
 
@@ -150,6 +223,21 @@ def _turn_spans(turns, t0: float) -> list[dict[str, Any]]:
             "end": round(turn.end - t0, 6),
         }
         for turn in turns
+    ]
+
+
+def _prompt_turn_meta(turns) -> list[dict[str, Any]]:
+    """Meta entries for the concatenated prompt turns, session-absolute spans,
+    in concatenation (channel-ascending) order."""
+    return [
+        {
+            "channel": int(t.channel),
+            "text": t.text,
+            "start": round(t.start, 6),
+            "end": round(t.end, 6),
+            "duration_sec": round(t.end - t.start, 6),
+        }
+        for t in turns
     ]
 
 
@@ -190,6 +278,7 @@ def run_inference(
         manifest_path=cfg.dataset.get("manifest_path"),
         dataset_root=cfg.dataset.get("dataset_root"),
     )
+    pools = _build_turn_pools(dataset.records)
     indices = _select_indices(dataset.records, cfg.selection)
     logger.info(
         "infer selection: %d/%d windows (split=%s, mode=%s, seed=%s)",
@@ -226,40 +315,65 @@ def run_inference(
     n_skipped = 0
 
     prompt_cfg = cfg.prompt
+    turn_min = float(prompt_cfg.get("turn_min_sec", 2.0))
+    turn_max = float(prompt_cfg.get("turn_max_sec", 10.0))
+    prompt_seed = prompt_cfg.get("seed", 0)
     samp = cfg.sampling
     for idx in indices:
         record = dataset.records[idx]
-        boundary_rel = snap_prompt_boundary(
-            record.turns,
-            record.t0,
-            target_sec=float(prompt_cfg.target_sec),
-            prompt_min=float(prompt_cfg.min_sec),
-            prompt_max=float(prompt_cfg.max_sec),
-            boundary_guard=float(prompt_cfg.get("boundary_guard", 0.0)),
-        )
-        if boundary_rel is None:
+        pool_turns = pools.get(record.session_id, [])
+
+        selected: list[Any] = []
+        skip_channel: int | None = None
+        for ch in range(record.num_channels):
+            turn = _select_prompt_turn(
+                pool_turns,
+                ch,
+                record.t0,
+                record.t1,
+                turn_min,
+                turn_max,
+                prompt_seed,
+                record.window_id,
+            )
+            if turn is None:
+                skip_channel = ch
+                break
+            selected.append(turn)
+        if skip_channel is not None:
             n_skipped += 1
-            logger.info("skip %s: no eligible boundary in band", record.window_id)
+            logger.info(
+                "skip %s: channel %d has no non-window prompt turn in the pool "
+                "(target leakage only)",
+                record.window_id,
+                skip_channel,
+            )
             continue
 
         sample = dataset[idx]
         n = sample["num_channels"]
-        speech = sample["speech"].to(device)  # (N, T_wav)
-        prompt_frames = round(boundary_rel * fs) // hop
-        prompt_samples = prompt_frames * hop
-        total_frames = speech.shape[1] // hop
-        if prompt_frames >= total_frames:
-            n_skipped += 1
-            logger.info("skip %s: prompt covers the whole window", record.window_id)
-            continue
+        window_speech = sample["speech"]  # (N, T_window), CPU
 
-        gt_region = speech[:, prompt_samples:]  # (N, T_gt)
+        audio_path = dataset.dataset_root / record.audio_relpath
+        blocks = [
+            read_audio_span(audio_path, record.sample_rate, t.start, t.end, fs)
+            for t in selected
+        ]
+        prompt_raw = torch.cat(blocks, dim=1)  # (N, P), CPU
+        prompt_frames = prompt_raw.shape[1] // hop
+        prompt_samples = prompt_frames * hop
+        prompt_trimmed = prompt_raw[:, :prompt_samples]  # drop remainder from the end
+
+        speech = torch.cat([prompt_trimmed, window_speech], dim=1).to(device)
+        total_frames = speech.shape[1] // hop
+
         rtf = None
         if mode == "gt":
-            gen_wavs = gt_region.cpu()
+            gen_wavs = window_speech.cpu()
         elif mode == "resynth":
-            gen_wavs = resynth_region(model, vocoder, gt_region)
+            gen_wavs = resynth_region(model, vocoder, window_speech.to(device))
         else:  # generate
+            sample["turns"] = list(selected) + list(sample["turns"])
             sample = preprocessor(str(idx), sample)
             text = pad_branch_text(sample, device)
             gen_wavs, elapsed = generate_region(
@@ -278,15 +392,15 @@ def run_inference(
             rtf = float(elapsed / gen_seconds) if gen_seconds > 0 else None
 
         wid = record.window_id
-        ref_texts = _reference_texts(record.turns, n, boundary_rel, record.t0)
+        ref_texts = _reference_texts(record.turns, n)
         channels = []
         for ch in range(n):
             gen_rel = f"wav/{wid}_ch{ch}.wav"
             prompt_rel = f"prompt/{wid}_ch{ch}.wav"
             gt_rel = f"gt/{wid}_ch{ch}.wav"
             write_wav(test_dir / gen_rel, gen_wavs[ch], fs)
-            write_wav(test_dir / prompt_rel, speech[ch, :prompt_samples].cpu(), fs)
-            write_wav(test_dir / gt_rel, gt_region[ch].cpu(), fs)
+            write_wav(test_dir / prompt_rel, blocks[ch][ch], fs)
+            write_wav(test_dir / gt_rel, window_speech[ch].cpu(), fs)
             channels.append(
                 {
                     "gen_wav": gen_rel,
@@ -309,10 +423,14 @@ def run_inference(
             "mode": mode,
             "sample_rate": fs,
             "num_channels": n,
-            "prompt_boundary_sec": boundary_rel,
-            "prompt_boundary_frames": prompt_frames,
             "window_duration_sec": round(record.t1 - record.t0, 6),
             "rtf": rtf,
+            "mix_wav": mix_rel,
+            "prompt": {
+                "total_sec": round(prompt_samples / fs, 6),
+                "total_frames": prompt_frames,
+                "turns": _prompt_turn_meta(selected),
+            },
             "channels": channels,
             "turns": _turn_spans(record.turns, record.t0),
         }

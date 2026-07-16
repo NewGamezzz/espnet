@@ -51,13 +51,17 @@ selection:
   num_windows: 50
   seed: 0
 
-# Prompt-boundary snapping: closest eligible turn boundary to target_sec within
-# [min_sec, max_sec]; windows with none in-band are skipped and counted.
+# Prompt turn selection: one turn per channel, sampled from elsewhere in the
+# same conversation (never from inside the evaluated window - leakage is
+# never allowed) and concatenated as the acoustic + text prompt.  A
+# relaxation ladder prefers non-window+solo+in-band turns, then drops the
+# duration band, then drops the solo requirement; windows where even a
+# leakage-free pick doesn't exist are skipped and counted.  See
+# src/inference.py's module docstring for the full scheme.
 prompt:
-  target_sec: 3.0
-  min_sec: 2.0
-  max_sec: 10.0
-  boundary_guard: 0.0
+  turn_min_sec: 2.0
+  turn_max_sec: 10.0
+  seed: 0
 
 # Multi-branch ODE sampling (as generate_dev.py / the F5 inference path).
 sampling:

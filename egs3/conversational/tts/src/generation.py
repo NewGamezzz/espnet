@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import Any
 
 import torch
+import torchaudio
+
+from espnet2.fileio.sound_scp import soundfile_read
 
 
 def load_model(config, ckpt_path: Path | None, use_ema: bool, device: torch.device):
@@ -80,6 +83,38 @@ def build_dataset(
         dataset_root=dataset_root,
         min_active_speakers=min_active_speakers,
     )
+
+
+def read_audio_span(
+    audio_path: str | Path,
+    source_sample_rate: int,
+    t0: float,
+    t1: float,
+    target_fs: int,
+) -> torch.Tensor:
+    """Seek-read a multichannel ``[t0, t1)`` span of a session file and resample.
+
+    Mirrors ``ConversationDataset._load_speech``'s read/resample path exactly
+    (seek in source-rate samples, ``soundfile_read`` with ``always_2d=True``,
+    resample only if the target rate differs) so prompt-turn audio is
+    processed identically to window audio.  Returns ``(N, T)`` at
+    ``target_fs``.
+    """
+    start = round(t0 * source_sample_rate)
+    stop = round(t1 * source_sample_rate)
+    array, rate = soundfile_read(
+        str(audio_path), dtype="float32", start=start, end=stop, always_2d=True
+    )
+    if rate != source_sample_rate:
+        raise RuntimeError(
+            f"{audio_path}: sample rate {rate} != expected {source_sample_rate}"
+        )
+    speech = torch.from_numpy(array.T.copy())  # (N, T_src)
+    if target_fs != source_sample_rate:
+        speech = torchaudio.functional.resample(
+            speech, orig_freq=source_sample_rate, new_freq=target_fs
+        )
+    return speech
 
 
 def build_preprocessor(config):

@@ -1,10 +1,17 @@
-"""Infer-stage tests: prompt-boundary snapping, the meta/SCP output contract,
-and generate/gt/resynth layout parity.
+"""Infer-stage tests: turn-pool construction, the prompt relaxation ladder,
+the meta/SCP output contract, and generate/gt/resynth layout parity.
 
-Fixture-based and CPU-only: a fabricated two-channel FLAC + a hand-built window
-manifest, the tiny random-init DiT from the trainer suite, and a fake Vocos
-whose ``decode`` maps a mel ``(N, n_mel, T)`` to a wave ``(N, T*hop)``.  ``gt``
-mode needs neither model nor vocoder (pure audio slicing), so its meta JSON is
+Fixture-based and CPU-only: a fabricated two-channel FLAC + a hand-built
+TWO-WINDOW manifest on one session, the tiny random-init DiT from the trainer
+suite, and a fake Vocos whose ``decode`` maps a mel ``(N, n_mel, T)`` to a
+wave ``(N, T*hop)``.  Two windows per session are load-bearing: the new
+scheme forbids drawing a channel's prompt turn from inside the evaluated
+window (leakage), so a session with only one window has an empty candidate
+pool for every channel and every window is skipped - the happy-path fixture
+below gives each window's channels exactly one non-window candidate (the
+other window's turns), so picks are forced and deterministic without
+depending on ``random.Random`` internals.  ``gt`` mode needs neither model
+nor vocoder (pure audio slicing + concatenation), so its meta JSON is
 compared byte-for-byte against a golden dict.
 """
 
@@ -17,94 +24,126 @@ from pathlib import Path
 import pytest
 import torch
 from omegaconf import OmegaConf
+
 from .conftest import EXT_TOKENS
 from .test_build_model import build_tiny  # noqa: F401  (fixture reuse)
 
 from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
+from egs3.conversational.tts.dataset.preprocessing.text import (
+    build_branch_texts,
+    encode_tokens,
+    make_token2id,
+)
 from egs3.conversational.tts.dataset.preprocessing.windows import (
     WindowRecord,
     to_json,
 )
+from egs3.conversational.tts.src import inference as inference_mod
 from egs3.conversational.tts.src.inference import (
+    _build_turn_pools,
+    _select_prompt_turn,
     run_inference,
-    snap_prompt_boundary,
 )
 
 FS = 24000
 SRC_SR = 48000
 HOP = 256
 
-FakeTurn = namedtuple("FakeTurn", ["channel", "speaker", "text", "start", "end"])
+_RecordStub = namedtuple("_RecordStub", ["session_id", "turns"])
+_TextTurn = namedtuple("_TextTurn", ["channel", "text"])
 
 
 # --------------------------------------------------------------------------- #
-# Prompt-boundary snapping (pure function)
+# Turn-pool construction (pure function)
 # --------------------------------------------------------------------------- #
-class TestSnapping:
-    def _turns(self):
-        # window-relative endpoints (t0 subtracted) are stated in comments.
-        return [
-            FakeTurn(0, "a", "abc def", 5.5, 8.0),  # rel 0.5 - 3.0
-            FakeTurn(1, "b", "bead cab", 8.4, 10.5),  # rel 3.4 - 5.5
-            FakeTurn(0, "a", "fade dad", 11.0, 13.5),  # rel 6.0 - 8.5
-            FakeTurn(1, "b", "bag", 14.0, 15.0),  # rel 9.0 - 10.0
+class TestTurnPools:
+    def test_union_across_records_deduped(self):
+        shared = Turn(0, "a", "abc", 1.0, 2.0)
+        shared_dup = Turn(0, "a", "abc", 1.0, 2.0)  # same fields -> deduped
+        other_ch1 = Turn(1, "b", "bead", 3.0, 4.0)
+        unique = Turn(0, "a", "cab", 5.0, 6.0)
+        records = [
+            _RecordStub("sess", (shared, other_ch1)),
+            _RecordStub("sess", (shared_dup, unique)),
         ]
+        pools = _build_turn_pools(records)
+        assert pools["sess"] == [shared, other_ch1, unique]
 
-    def test_closest_eligible_boundary_in_band(self):
-        b = snap_prompt_boundary(
-            self._turns(), t0=5.0, target_sec=3.0, prompt_min=2.0, prompt_max=10.0
-        )
-        assert b == pytest.approx(3.0)  # ch0 turn-1 end, exactly on target
+    def test_sessions_kept_separate(self):
+        ta = Turn(0, "a", "abc", 1.0, 2.0)
+        tb = Turn(0, "a", "abc", 1.0, 2.0)  # same fields, different session
+        records = [_RecordStub("sess1", (ta,)), _RecordStub("sess2", (tb,))]
+        pools = _build_turn_pools(records)
+        assert pools["sess1"] == [ta]
+        assert pools["sess2"] == [tb]
 
-    def test_no_turn_strictly_contains_the_cut(self):
-        turns = self._turns()
-        b = snap_prompt_boundary(
-            turns, t0=5.0, target_sec=4.5, prompt_min=2.0, prompt_max=10.0
-        )
-        cut_abs = 5.0 + b
-        for t in turns:
-            assert not (t.start < cut_abs < t.end)
+    def test_empty_records_give_empty_pools_dict(self):
+        assert _build_turn_pools([]) == {}
 
-    def test_target_in_silence_snaps_to_a_turn_endpoint(self):
-        # target 4.2 (abs 9.2) sits in the silence between ch1-turn1 (ends 5.5)
-        # and ch0-turn2 (starts 6.0); nearest endpoints are 3.4 and 5.5.
-        turns = self._turns()
-        b = snap_prompt_boundary(
-            turns, t0=5.0, target_sec=4.2, prompt_min=2.0, prompt_max=10.0
-        )
-        endpoints = {round(e - 5.0, 6) for t in turns for e in (t.start, t.end)}
-        assert b in endpoints
 
-    def test_cross_channel_overlap_makes_endpoint_ineligible(self):
-        # ch0 turn ends at 3.0; a ch1 turn spans (2.5, 4.0) so the instant 3.0
-        # is strictly inside it -> ineligible.  Only 4.0 (abs) survives.
-        turns = [
-            FakeTurn(0, "a", "abc", 0.5, 3.0),  # rel 3.0 endpoint, blocked
-            FakeTurn(1, "b", "bead", 2.5, 4.0),  # rel 4.0 endpoint, eligible
-        ]
-        b = snap_prompt_boundary(
-            turns, t0=0.0, target_sec=3.0, prompt_min=2.0, prompt_max=6.0
+# --------------------------------------------------------------------------- #
+# Relaxation ladder (pure function)
+# --------------------------------------------------------------------------- #
+class TestPromptTurnLadder:
+    def test_leakage_exclusion_is_absolute(self):
+        # The channel's only turn lies inside the evaluated window -> None
+        # regardless of every relaxation tier.
+        turns = [Turn(0, "a", "x", 1.0, 3.0)]
+        result = _select_prompt_turn(
+            turns, 0, t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0,
+            seed=0, window_id="w",
         )
-        assert b == pytest.approx(4.0)
+        assert result is None
 
-    def test_no_eligible_boundary_in_band_returns_none(self):
-        turns = self._turns()
-        # band above every endpoint -> nothing eligible in [10.5, 12.0]
-        b = snap_prompt_boundary(
-            turns, t0=5.0, target_sec=11.0, prompt_min=10.5, prompt_max=12.0
+    def test_solo_preferred_over_overlapped(self):
+        overlapped = Turn(0, "a", "x", 10.0, 13.0)
+        overlap_partner = Turn(1, "b", "y", 11.0, 14.0)  # collides w/ overlapped
+        solo = Turn(0, "a", "z", 20.0, 23.0)
+        pool = [overlapped, overlap_partner, solo]
+        result = _select_prompt_turn(
+            pool, 0, t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0,
+            seed=0, window_id="w",
         )
-        assert b is None
+        assert result is solo
 
-    def test_tie_breaks_toward_earlier(self):
-        turns = [
-            FakeTurn(0, "a", "abc", 0.0, 2.0),  # rel 2.0
-            FakeTurn(1, "b", "bea", 4.0, 6.0),  # rel 4.0
-        ]
-        # target 3.0 is equidistant from 2.0 and 4.0 -> earlier (2.0) wins.
-        b = snap_prompt_boundary(
-            turns, t0=0.0, target_sec=3.0, prompt_min=1.0, prompt_max=7.0
+    def test_band_preferred_over_out_of_band(self):
+        too_short = Turn(0, "a", "x", 10.0, 11.0)  # 1.0s, below turn_min
+        in_band = Turn(0, "a", "y", 20.0, 23.0)  # 3.0s
+        pool = [too_short, in_band]
+        result = _select_prompt_turn(
+            pool, 0, t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0,
+            seed=0, window_id="w",
         )
-        assert b == pytest.approx(2.0)
+        assert result is in_band
+
+    def test_relaxes_to_solo_when_band_is_empty(self):
+        # Only candidate is solo but out of band -> tier 2 still returns it.
+        too_short = Turn(0, "a", "x", 10.0, 11.0)
+        result = _select_prompt_turn(
+            [too_short], 0, t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0,
+            seed=0, window_id="w",
+        )
+        assert result is too_short
+
+    def test_relaxes_to_non_window_when_no_solo_candidate_exists(self):
+        overlapped = Turn(0, "a", "x", 10.0, 13.0)
+        overlap_partner = Turn(1, "b", "y", 11.0, 14.0)
+        result = _select_prompt_turn(
+            [overlapped, overlap_partner], 0, t0=0.0, t1=5.0,
+            turn_min=2.0, turn_max=10.0, seed=0, window_id="w",
+        )
+        assert result is overlapped
+
+    def test_deterministic_pick_given_seed(self):
+        a = Turn(0, "a", "x", 10.0, 13.0)
+        b = Turn(0, "a", "y", 20.0, 23.0)
+        pool = [a, b]  # both solo, both in band -> tier 1 has 2 candidates
+        kwargs = dict(
+            t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0, seed=0, window_id="w",
+        )
+        first = _select_prompt_turn(pool, 0, **kwargs)
+        second = _select_prompt_turn(pool, 0, **kwargs)
+        assert first is second
 
 
 # --------------------------------------------------------------------------- #
@@ -124,7 +163,7 @@ def _write_flac(path: Path, num_channels: int, duration_s: float, sr: int) -> No
     sf.write(str(path), data, sr, subtype="PCM_16", format="FLAC")
 
 
-def _window():
+def _window_a() -> WindowRecord:
     return WindowRecord(
         window_id="sess_w00000",
         session_id="sess",
@@ -132,22 +171,37 @@ def _window():
         num_channels=2,
         sample_rate=SRC_SR,
         t0=5.0,
-        t1=17.0,
+        t1=13.0,
         turns=(
-            Turn(0, "spk_a", "abc def", 5.5, 8.0),
-            Turn(1, "spk_b", "bead cab", 8.4, 10.5),
-            Turn(0, "spk_a", "fade dad", 11.0, 13.5),
-            Turn(1, "spk_b", "bag", 14.0, 15.0),
+            Turn(0, "spk_a", "abc def", 5.5, 8.0),  # 2.5s, rel 0.5-3.0
+            Turn(1, "spk_b", "bead cab", 8.5, 11.0),  # 2.5s, rel 3.5-6.0
         ),
     )
 
 
-@pytest.fixture
-def fixture(tmp_path):
+def _window_b() -> WindowRecord:
+    return WindowRecord(
+        window_id="sess_w00001",
+        session_id="sess",
+        audio_relpath="original/sess_mixed.flac",
+        num_channels=2,
+        sample_rate=SRC_SR,
+        t0=25.0,
+        t1=33.0,
+        turns=(
+            Turn(0, "spk_a", "cage jade", 25.5, 28.0),  # 2.5s
+            Turn(1, "spk_b", "badge fig", 28.5, 31.0),  # 2.5s
+        ),
+    )
+
+
+def _write_fixture_files(tmp_path, windows, flac_duration_s: float) -> dict:
     root = tmp_path / "data"
-    _write_flac(root / "original" / "sess_mixed.flac", 2, 20.0, SRC_SR)
+    _write_flac(root / "original" / "sess_mixed.flac", 2, flac_duration_s, SRC_SR)
     manifest = root / "valid.jsonl"
-    manifest.write_text(json.dumps(to_json(_window())) + "\n", encoding="utf-8")
+    manifest.write_text(
+        "".join(json.dumps(to_json(w)) + "\n" for w in windows), encoding="utf-8"
+    )
     vocab = tmp_path / "vocab.txt"
     vocab.write_text("\n".join(EXT_TOKENS) + "\n", encoding="utf-8")
     training_config = OmegaConf.create(
@@ -165,6 +219,21 @@ def fixture(tmp_path):
         "vocab": vocab,
         "training_config": training_config,
     }
+
+
+@pytest.fixture
+def fixture(tmp_path):
+    """Two windows on one session: each window's channels draw their prompt
+    turn from the OTHER window (the only non-window candidate), so every
+    ladder pick is forced to a single element regardless of the seed."""
+    return _write_fixture_files(tmp_path, [_window_a(), _window_b()], 40.0)
+
+
+@pytest.fixture
+def solo_window_fixture(tmp_path):
+    """One window, one session: every channel's only pool turns are its own
+    (in-window) turns, so the non-window tier is always empty."""
+    return _write_fixture_files(tmp_path, [_window_a()], 20.0)
 
 
 def _infer_config(fixture, mode, inference_dir):
@@ -189,10 +258,9 @@ def _infer_config(fixture, mode, inference_dir):
                 "seed": 0,
             },
             "prompt": {
-                "target_sec": 3.0,
-                "min_sec": 2.0,
-                "max_sec": 10.0,
-                "boundary_guard": 0.0,
+                "turn_min_sec": 2.0,
+                "turn_max_sec": 10.0,
+                "seed": 0,
             },
             "sampling": {
                 "steps": 2,
@@ -237,47 +305,69 @@ class TestGtContract:
 
     def test_meta_scp_and_golden_json(self, fixture):
         test_dir, stats = self._run(fixture)
-        assert stats["n_selected"] == 1
+        assert stats["n_selected"] == 2
         assert stats["n_skipped"] == 0
 
         scp = (test_dir / "meta.scp").read_text(encoding="utf-8").splitlines()
-        assert scp == ["sess_w00000 meta/sess_w00000.json"]
+        assert scp == [
+            "sess_w00000 meta/sess_w00000.json",
+            "sess_w00001 meta/sess_w00001.json",
+        ]
 
         meta = json.loads((test_dir / "meta/sess_w00000.json").read_text("utf-8"))
-        # Hardcoded, not `round(3.0 * FS) // HOP`: the golden value must not
-        # be derived with the same arithmetic the code under test uses, or a
-        # shared bug in that formula would pass both sides silently.
-        # FS=24000, HOP=256 -> round(3.0 * 24000) // 256 == 72000 // 256 == 281.
-        prompt_frames = 281
+        # Hardcoded, not derived with the same arithmetic the code under test
+        # uses, so a shared bug in that formula would not pass both sides.
+        # Prompt = window B's ch0 turn (2.5s) + ch1 turn (2.5s) = 120000
+        # samples at FS=24000; 120000 // HOP(256) == 468 (remainder 192
+        # dropped from the end). 468 * 256 == 119808 samples == 4.992s.
+        prompt_frames = 468
+        prompt_sec = 4.992
         expected = {
             "window_id": "sess_w00000",
             "session_id": "sess",
             "mode": "gt",
             "sample_rate": FS,
             "num_channels": 2,
-            "prompt_boundary_sec": 3.0,
-            "prompt_boundary_frames": prompt_frames,
-            "window_duration_sec": 12.0,
+            "window_duration_sec": 8.0,
             "rtf": None,
+            "mix_wav": "mix/sess_w00000.wav",
+            "prompt": {
+                "total_sec": prompt_sec,
+                "total_frames": prompt_frames,
+                "turns": [
+                    {
+                        "channel": 0,
+                        "text": "cage jade",
+                        "start": 25.5,
+                        "end": 28.0,
+                        "duration_sec": 2.5,
+                    },
+                    {
+                        "channel": 1,
+                        "text": "badge fig",
+                        "start": 28.5,
+                        "end": 31.0,
+                        "duration_sec": 2.5,
+                    },
+                ],
+            },
             "channels": [
                 {
                     "gen_wav": "wav/sess_w00000_ch0.wav",
                     "prompt_wav": "prompt/sess_w00000_ch0.wav",
                     "gt_wav": "gt/sess_w00000_ch0.wav",
-                    "ref_text": "fade dad",
+                    "ref_text": "abc def",
                 },
                 {
                     "gen_wav": "wav/sess_w00000_ch1.wav",
                     "prompt_wav": "prompt/sess_w00000_ch1.wav",
                     "gt_wav": "gt/sess_w00000_ch1.wav",
-                    "ref_text": "bead cab bag",
+                    "ref_text": "bead cab",
                 },
             ],
             "turns": [
                 {"channel": 0, "text": "abc def", "start": 0.5, "end": 3.0},
-                {"channel": 1, "text": "bead cab", "start": 3.4, "end": 5.5},
-                {"channel": 0, "text": "fade dad", "start": 6.0, "end": 8.5},
-                {"channel": 1, "text": "bag", "start": 9.0, "end": 10.0},
+                {"channel": 1, "text": "bead cab", "start": 3.5, "end": 6.0},
             ],
         }
         assert meta == expected
@@ -285,6 +375,10 @@ class TestGtContract:
     def test_relative_paths_resolve_and_open(self, fixture):
         test_dir, _ = self._run(fixture)
         meta = json.loads((test_dir / "meta/sess_w00000.json").read_text("utf-8"))
+        for key in ("mix_wav",):
+            data, sr = _read_wav(test_dir / meta[key])
+            assert sr == FS
+            assert data.size > 0
         for ch in meta["channels"]:
             for key in ("gen_wav", "prompt_wav", "gt_wav"):
                 data, sr = _read_wav(test_dir / ch[key])
@@ -292,21 +386,14 @@ class TestGtContract:
                 assert data.size > 0
 
     def test_gt_generated_equals_gt_reference(self, fixture):
-        # In gt mode the "generated" wav IS the ground-truth region.
+        # In gt mode the "generated" wav IS the whole ground-truth window.
         test_dir, _ = self._run(fixture)
         meta = json.loads((test_dir / "meta/sess_w00000.json").read_text("utf-8"))
         ch = meta["channels"][0]
         gen, _ = _read_wav(test_dir / ch["gen_wav"])
         gt, _ = _read_wav(test_dir / ch["gt_wav"])
         assert (gen == gt).all()
-
-    def test_prompt_and_generated_lengths(self, fixture):
-        test_dir, _ = self._run(fixture)
-        meta = json.loads((test_dir / "meta/sess_w00000.json").read_text("utf-8"))
-        prompt_samples = meta["prompt_boundary_frames"] * HOP
-        ch = meta["channels"][0]
-        prompt, _ = _read_wav(test_dir / ch["prompt_wav"])
-        assert prompt.shape[0] == prompt_samples
+        assert gen.shape[0] == round(8.0 * FS)  # the FULL window now
 
     def test_convenience_scps(self, fixture):
         test_dir, _ = self._run(fixture)
@@ -317,18 +404,134 @@ class TestGtContract:
         assert [ln.split(maxsplit=1)[0] for ln in wav] == [
             "sess_w00000_ch0",
             "sess_w00000_ch1",
+            "sess_w00001_ch0",
+            "sess_w00001_ch1",
         ]
         assert [ln.split(maxsplit=1)[0] for ln in prompt] == [
             "sess_w00000_ch0",
             "sess_w00000_ch1",
+            "sess_w00001_ch0",
+            "sess_w00001_ch1",
         ]
-        assert text[0] == "sess_w00000_ch0 fade dad"
-        assert text[1] == "sess_w00000_ch1 bead cab bag"
-        assert mix == ["sess_w00000 mix/sess_w00000.wav"]
+        assert text[0] == "sess_w00000_ch0 abc def"
+        assert text[1] == "sess_w00000_ch1 bead cab"
+        assert mix == [
+            "sess_w00000 mix/sess_w00000.wav",
+            "sess_w00001 mix/sess_w00001.wav",
+        ]
 
 
 # --------------------------------------------------------------------------- #
-# generate / gt / resynth layout parity
+# Audio assembly: block layout, frame-exact trim, prompt.scp sample counts
+# --------------------------------------------------------------------------- #
+class TestAudioAssembly:
+    def test_prompt_wav_is_the_owning_channels_solo_block(self, fixture):
+        inf_dir = fixture["tmp_path"] / "infer_audio"
+        cfg = _infer_config(fixture, "gt", inf_dir)
+        run_inference(cfg, training_config=fixture["training_config"])
+        test_dir = inf_dir / "valid"
+
+        # Window A's prompt turns are window B's ch0/ch1 turns, both 2.5s ->
+        # 2.5 * FS samples per channel's own (untrimmed) turn block.
+        for ch in (0, 1):
+            data, sr = _read_wav(test_dir / f"prompt/sess_w00000_ch{ch}.wav")
+            assert sr == FS
+            assert data.shape[0] == round(2.5 * FS)
+
+    def test_prompt_frame_exact_trim_reconstructed_from_channel_blocks(
+        self, fixture
+    ):
+        inf_dir = fixture["tmp_path"] / "infer_trim"
+        cfg = _infer_config(fixture, "gt", inf_dir)
+        run_inference(cfg, training_config=fixture["training_config"])
+        test_dir = inf_dir / "valid"
+        meta = json.loads((test_dir / "meta/sess_w00000.json").read_text("utf-8"))
+
+        # The concatenated prompt itself isn't written to disk, but its
+        # length is the sum of the per-channel block lengths (ch0's turn
+        # block, then ch1's), and meta["prompt"] must match a frame-exact
+        # floor-trim of that sum.
+        total_samples = sum(
+            _read_wav(test_dir / f"prompt/sess_w00000_ch{ch}.wav")[0].shape[0]
+            for ch in (0, 1)
+        )
+        expected_frames = total_samples // HOP
+        assert meta["prompt"]["total_frames"] == expected_frames
+        assert meta["prompt"]["total_sec"] == round(
+            (expected_frames * HOP) / FS, 6
+        )
+
+    def test_generated_region_covers_the_whole_window(self, fixture, ext_vocab_file):
+        inf_dir = fixture["tmp_path"] / "infer_gen_len"
+        cfg = _infer_config(fixture, "generate", inf_dir)
+        model = build_tiny(ext_vocab_file).eval()
+        vocoder = FakeVocoder()
+        run_inference(
+            cfg, training_config=fixture["training_config"], model=model,
+            vocoder=vocoder,
+        )
+        test_dir = inf_dir / "valid"
+        data, _ = _read_wav(test_dir / "wav/sess_w00000_ch0.wav")
+        # prompt_frames=468, total_frames=1218 (both computed from
+        # hop-exact fixture durations) -> generated frames = 750 -> 750*HOP
+        # samples, exactly the window's own duration (8.0s @ FS).
+        assert data.shape[0] == 750 * HOP == round(8.0 * FS)
+
+
+# --------------------------------------------------------------------------- #
+# Text assembly: model text == build_branch_texts(prompt turns + window turns)
+# --------------------------------------------------------------------------- #
+class TestTextAssembly:
+    def test_model_text_matches_prompt_plus_window_turns(
+        self, fixture, ext_vocab_file, monkeypatch
+    ):
+        # Both fixture windows run through generate mode, so capture every
+        # call's text and match window A (sess_w00000) up by call order:
+        # `_select_indices` is sorted ascending and window A is the first
+        # manifest record, so it is generated first.
+        captured: list = []
+        orig = inference_mod.generate_region
+
+        def spy(model, vocoder, speech, text, prompt_frames, total_frames, **kw):
+            captured.append(text.clone())
+            return orig(model, vocoder, speech, text, prompt_frames, total_frames, **kw)
+
+        monkeypatch.setattr(inference_mod, "generate_region", spy)
+
+        inf_dir = fixture["tmp_path"] / "infer_text"
+        cfg = _infer_config(fixture, "generate", inf_dir)
+        model = build_tiny(ext_vocab_file).eval()
+        vocoder = FakeVocoder()
+        run_inference(
+            cfg, training_config=fixture["training_config"], model=model,
+            vocoder=vocoder,
+        )
+
+        meta = json.loads(
+            (inf_dir / "valid" / "meta/sess_w00000.json").read_text("utf-8")
+        )
+        prompt_turns = [
+            _TextTurn(p["channel"], p["text"]) for p in meta["prompt"]["turns"]
+        ]
+        window_turns = [
+            _TextTurn(t["channel"], t["text"]) for t in meta["turns"]
+        ]
+        expected_branches = build_branch_texts(prompt_turns + window_turns, 2)
+        token2id = make_token2id(EXT_TOKENS)
+        expected_ids = [encode_tokens(b, token2id) for b in expected_branches]
+
+        assert len(captured) == 2  # both fixture windows go through generate mode
+        text = captured[0]  # window A, generated first (sorted index order)
+        assert text.shape[0] == 2
+        for ch, expected in enumerate(expected_ids):
+            row = text[ch].tolist()
+            body, pad = row[: len(expected)], row[len(expected) :]
+            assert body == expected
+            assert all(v == -1 for v in pad)
+
+
+# --------------------------------------------------------------------------- #
+# Determinism across modes + generate/gt/resynth layout parity
 # --------------------------------------------------------------------------- #
 class TestModeParity:
     def _run_mode(self, fixture, mode, ext_vocab_file):
@@ -361,7 +564,9 @@ class TestModeParity:
         res_dir = self._run_mode(fixture, "resynth", ext_vocab_file)
         assert self._layout(gt_dir) == self._layout(gen_dir) == self._layout(res_dir)
 
-    def test_meta_keys_identical_across_modes(self, fixture, ext_vocab_file):
+    def test_meta_keys_and_prompt_identical_across_modes(self, fixture, ext_vocab_file):
+        # This is the determinism-across-modes contract: the SAME prompt
+        # turns must be picked for generate and gt on the same seed.
         gt_dir = self._run_mode(fixture, "gt", ext_vocab_file)
         gen_dir = self._run_mode(fixture, "generate", ext_vocab_file)
         gt_meta = json.loads((gt_dir / "meta/sess_w00000.json").read_text("utf-8"))
@@ -370,8 +575,9 @@ class TestModeParity:
         assert [set(c) for c in gt_meta["channels"]] == [
             set(c) for c in gen_meta["channels"]
         ]
-        # Boundary/text/turns are mode-invariant; only rtf and audio differ.
-        for key in ("prompt_boundary_sec", "prompt_boundary_frames", "turns"):
+        # Prompt selection and window turns are mode-invariant; only rtf and
+        # audio differ.
+        for key in ("prompt", "turns", "window_duration_sec"):
             assert gt_meta[key] == gen_meta[key]
 
     def test_generate_reports_positive_rtf(self, fixture, ext_vocab_file):
@@ -413,26 +619,30 @@ class TestSystemDispatch:
 
         system = ConversationalTTSSystem(inference_config=cfg)
         stats = system.infer()
-        assert stats == {"n_selected": 1, "n_skipped": 0}
+        assert stats == {"n_selected": 2, "n_skipped": 0}
 
         test_dir = inf_dir / "valid"
         scp = (test_dir / "meta.scp").read_text("utf-8").splitlines()
-        assert scp == ["sess_w00000 meta/sess_w00000.json"]
+        assert scp == [
+            "sess_w00000 meta/sess_w00000.json",
+            "sess_w00001 meta/sess_w00001.json",
+        ]
         meta = json.loads((test_dir / "meta/sess_w00000.json").read_text("utf-8"))
         assert meta["mode"] == "gt"
-        assert meta["prompt_boundary_sec"] == 3.0
-        assert meta["channels"][1]["ref_text"] == "bead cab bag"
+        assert meta["prompt"]["total_frames"] == 468
+        assert meta["channels"][1]["ref_text"] == "bead cab"
 
 
 class TestSelection:
-    def test_window_with_no_eligible_boundary_is_skipped(self, fixture):
-        inf_dir = fixture["tmp_path"] / "infer_skip"
-        cfg = _infer_config(fixture, "gt", inf_dir)
-        # Band above every turn endpoint -> nothing eligible -> skip + count.
-        cfg.prompt.min_sec = 11.0
-        cfg.prompt.max_sec = 12.0
-        cfg.prompt.target_sec = 11.5
-        stats = run_inference(cfg, training_config=fixture["training_config"])
+    def test_window_with_only_in_window_turns_is_skipped(self, solo_window_fixture):
+        # Single window on its session: every channel's only pool turns are
+        # its own in-window turns, so the non-window tier is empty for every
+        # channel -> the window is skipped and counted, never relaxed.
+        inf_dir = solo_window_fixture["tmp_path"] / "infer_skip"
+        cfg = _infer_config(solo_window_fixture, "gt", inf_dir)
+        stats = run_inference(
+            cfg, training_config=solo_window_fixture["training_config"]
+        )
         assert stats["n_selected"] == 0
         assert stats["n_skipped"] == 1
         assert not (inf_dir / "valid" / "meta.scp").exists() or (
