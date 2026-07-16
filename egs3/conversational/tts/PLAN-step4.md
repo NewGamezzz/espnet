@@ -87,4 +87,35 @@ Acceptance for the whole step: `python run.py --stages infer --inference_config 
 2. `infer` with the assembled pretrained model (no `--ckpt`, zero gates).
 3. `measure` on all three dirs; `local/eval_report.py` table.
 4. Expected signature: WER/SIM/UTMOS near resynth anchor, interaction metrics collapsed (heavy unstructured overlap, script order violated); investigate as a code bug only if A/B metrics are also broken.
+
+## Revision (2026-07-15, PR #10 review)
+
+Thanapat's review of PR #10 asked for two changes, implemented as two follow-up tasks on the same branch.
+
+### New prompt scheme
+
+The infer stage no longer snaps a prompt boundary inside the evaluated window.
+Instead it samples ONE turn per channel from ELSEWHERE in the same conversation (never from inside the evaluated window, so target leakage is never allowed), via a relaxation ladder (band-and-solo, then solo, then non-window; the non-window leakage rule is never relaxed).
+Those turns are concatenated non-overlapping at the start of the conditioning audio, and the model generates the FULL ground-truth window, not just a continuation after a boundary.
+Every channel is therefore guaranteed a voice reference in its prompt.
+The meta JSON gained top-level `mix_wav` and a `prompt` block (`turns`, `total_sec`, `total_frames`); `prompt_boundary_sec` and `prompt_boundary_frames` were removed.
+`channels[ch].gen_wav` now covers the whole window, `channels[ch].prompt_wav` is that channel's own solo turn block, and `channels[ch].ref_text` covers all of that channel's turns in the window.
+See `src/inference.py`'s module docstring for the authoritative contract.
+
+### Lean metric scope
+
+The metric battery was cut down to three classes so the PR is easy to review: `ConversationASRMetric` (corpus-level `wer_channel` and `wer_mix`, pooled counts, never a mean of per-utterance WERs), `SpeakerSimilarityMetric` (`sim_o_mean`, prompt vs. whole generated channel, no VAD or segmentation), and `QualityMetric` (`utmos_mean`, one UTMOS call per window on the mixdown).
+All VAD/IPU machinery (`src/metrics/segments.py`) was deleted along with it, since none of the three remaining metrics need it.
+
+Deferred to a later PR (not on this branch):
+
+- `InteractionMetric` (the dGSLM event battery, Wasserstein-1 duration distances, backchannel proxy).
+- Cross-turn speaker consistency, drift, cross-channel confusion, and generated bleed dB.
+- cpWER channel-permutation search and the `swap` flag.
+- Script-following (turn-order accuracy, Kendall tau, turn-count ratio, and the word-timestamp machinery that fed it).
+- Per-IPU anything (transcription, MOS weighting, embeddings).
+- DNSMOS.
+- The mixdown-diarization comparability protocol (already deferred before this revision).
+
+See README.md's Evaluation section for the current metric glossary and the full deferred list.
 5. Repeat with the fine-tuned checkpoint from the Delta batch run once it exists.

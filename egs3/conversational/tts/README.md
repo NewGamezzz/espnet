@@ -218,8 +218,17 @@ Omitting `--ckpt` generates with the freshly assembled pretrained model (zero-in
 
 ## Evaluation
 
-The eval battery is two espnet3 stages plus a report tool: `infer` (`src/inference.py`, `conf/inference_conversational.yaml`) batch-generates multi-channel conversations from manifest windows in one of three modes; `measure` (`espnet3.systems.base.metric.measure`, driven by `conf/metrics.yaml`) runs four custom metric classes (`src/metrics/`) over `infer`'s output and writes `metrics.json`; `local/eval_report.py` turns one or more `metrics.json` files into a single Markdown comparison table.
+The eval battery is two espnet3 stages plus a report tool.
+`infer` (`src/inference.py`, `conf/inference_conversational.yaml`) batch-generates multi-channel conversations from manifest windows in one of three modes.
+`measure` (`espnet3.systems.base.metric.measure`, driven by `conf/metrics.yaml`) runs three custom metric classes (`src/metrics/`) over `infer`'s output and writes `metrics.json`.
+`local/eval_report.py` turns one or more `metrics.json` files into a single Markdown comparison table.
 No diarization is needed anywhere in the battery: this recipe's channels ARE speakers (channel = speaker, by construction, since SSSD audio is per-participant), so every speaker-attributed metric below reads straight off the channel index.
+
+### Prompt construction
+
+Each window's acoustic + text prompt is built from ONE turn per channel, sampled from elsewhere in the same conversation (never from inside the evaluated window, so there is no target leakage), and those turns are concatenated non-overlapping at the start of the conditioning speech.
+The model then generates the ENTIRE window in one pass, not just a continuation after a boundary, so every channel is guaranteed a voice reference in the prompt.
+See `src/inference.py`'s module docstring for the full turn-pool and relaxation-ladder contract.
 
 ### Running the battery
 
@@ -242,7 +251,7 @@ python local/eval_report.py \
 
 Output paths land under `exp/train_poc_multibranch_f5/` (the TRAINING config's `exp_tag`), not the inference config's own `exp_tag: eval_pretrained`: `run.py` always loads `conf/training_poc.yaml`, and the runner propagates its `exp_tag`/`exp_dir` into the inference and metrics configs with the same overwrite-on-differ rule described below, so the inference yaml's `exp_tag` never takes effect in the default invocation.
 
-`mode: generate | gt | resynth` selects what `infer` writes for the SAME window selection and prompt-boundary logic: `generate` runs the model; `gt` copies the ground-truth generated-region audio unchanged; `resynth` round-trips that same ground truth through the F5 mel front-end and Vocos, with no model involved.
+`mode: generate | gt | resynth` selects what `infer` writes for the SAME window selection and prompt construction (see above): `generate` runs the model; `gt` copies the ground-truth window audio unchanged; `resynth` round-trips that same ground truth through the F5 mel front-end and Vocos, with no model involved.
 `gt` and `resynth` are anchors, not skipped conditions: they flow through the identical `infer` output contract and the identical `measure` stage as `generate`, with zero metric-side special-casing, so a `generate`-mode score is only meaningful read AGAINST them (a mediocre WER/SIM/UTMOS next to an equally mediocre `resynth` anchor points at the vocoder/front-end, not the model).
 `mode` has no CLI override flag (this recipe's stage configs are plain YAML, not hydra dotlist overrides), so scoring the anchors means pointing `--inference_config`/`--metrics_config` at copies of the two shipped files with `mode:` changed - keep the two copies' `mode:` in lockstep (`conf/metrics.yaml`'s `inference_dir: ${exp_dir}/infer_${mode}` formula needs its own `mode:` to match whatever `infer` actually wrote, see that file's header comment).
 CRITICAL: the `measure` invocation must ALSO pass the mode-edited `--inference_config`, even though the measure stage never runs inference.
@@ -276,51 +285,44 @@ python local/eval_report.py \
 
 ### Metric glossary (summary keys in `metrics.json`)
 
-Every key below is a MEAN OVER WINDOWS of a per-window (or per-channel-then-window) scalar unless stated otherwise; full per-window detail lives alongside `metrics.json` under `<inference_dir>/<test_name>/scoring/<metric_name>/windows.jsonl`.
-A key with zero defined values anywhere in the run (no window/channel/pair ever produced one) is written as `null`, never a fabricated `0.0` - a `bleed_db_p50` of exactly `0` would misleadingly read as "bleed as loud as the speaker itself" instead of "no data". `local/eval_report.py` renders any such `null` as `-`, the same as a metric/key that never ran at all.
+This is the lean battery from the 2026-07-15 PR #10 review: corpus-level WER, whole-signal speaker similarity, and mix UTMOS only.
+Full per-window detail lives alongside `metrics.json` under `<inference_dir>/<test_name>/scoring/<metric_name>/windows.jsonl`.
+A key with zero defined values anywhere in the run (no utterance/window/channel ever produced one) is written as `null`, never a fabricated `0.0`.
+`local/eval_report.py` renders any such `null` as `-`, the same as a metric/key that never ran at all.
 
-**`ConversationASRMetric`** (faster-whisper, transcribed per IPU, not per whole channel, to avoid whisper's silence-hallucination failure mode on long quiet stretches):
+**`ConversationASRMetric`** (faster-whisper, one whole-file call per utterance with `vad_filter=True`, not per IPU):
 
-- `wer_ch_mean` / `wer_ch_worst` - per-window mean / worst per-channel WER (normalized hypothesis vs. reference text), meaned over windows.
-- `cpwer` - channel-permutation WER, minimized over every channel<->speaker assignment, meaned over windows.
-- `swap_rate` - fraction of windows whose cpWER-minimizing assignment was not the identity (a real channel/speaker mixup, not just transcription noise).
-- `turn_order_acc` - fraction of realized turns, pooled chronologically ACROSS channels, whose time-rank matches script order.
-- `kendall_tau` - Kendall rank correlation between script order and realized-time order over the same pooled, cross-channel turns.
-- `turn_count_ratio` - realized / scripted turn count (a turn with zero aligned hypothesis words is "missing").
+- `wer_channel` - corpus-level (pooled substitution/deletion/insertion/hit counts, never a mean of per-utterance WERs) WER over every channel of every window: hypothesis = the channel's whole generated wav, reference = that channel's window turn texts.
+- `wer_mix` - corpus-level WER over every window's mixdown: hypothesis = the mixdown wav, reference = ALL of the window's turns joined in start-time order across channels.
 
-**`SpeakerDynamicsMetric`** (WavLM-SV x-vector embeddings, cosine similarity):
+**`SpeakerSimilarityMetric`** (WavLM-SV x-vector embeddings, cosine similarity, type 1 only):
 
-- `sim_o_mean` - a channel's generated speech vs. that SAME channel's own acoustic prompt (identity preservation).
-- `sim_consistency` - mean pairwise cosine among a channel's per-IPU embeddings (identity stability within the generated region).
-- `sim_drift_slope` - least-squares slope of per-IPU-to-prompt cosine against IPU index (identity drift across the generated region; negative = drifting away from the prompt voice).
-- `confusion_mean` - a channel's generated speech vs. every OTHER channel's prompt (cross-speaker identity leakage; higher is worse).
-- `bleed_db_p50` / `bleed_db_p90` - percentiles of generated-audio energy leaking into another channel's ground-truth SOLO spans (channel k's energy while only channel j is scripted to speak, relative to channel j's own energy there), POOLED across every scored pair and every window (not a mean of per-window means - the population of interest is "how bad is a bleed pair", not "how bad is a window").
+- `sim_o_mean` - a channel's WHOLE generated speech vs. that SAME channel's acoustic prompt (one solo turn), mean over every (window, channel) pair in the run.
 
-**`InteractionMetric`** (VAD only, no ASR; dGSLM-style event battery over IPU/pause/gap/overlap):
+**`QualityMetric`** (UTMOS22-strong via `torch.hub`, mixdown only):
 
-- `{ipu,pause,gap,overlap}_per_min` - event rate per minute of generated-region audio.
-- `{ipu,pause,gap,overlap}_dur_per_min` - cumulated event duration per minute.
-- `w1_{ipu,pause,gap,overlap}` - Wasserstein-1 distance between the generated and the PAIRED ground-truth event-duration distributions for that same window, computed per window then meaned (the pairing is by construction: every window's `gen_wav` has a same-window `gt_wav`, so this is never an unpaired distribution comparison across different windows).
-- `backchannel_per_min` - rate of short IPUs occurring during overlap (a backchannel proxy).
-- `laughter_per_min` / `laughter_mean_dur` - optional, present only when a laughter detector is configured (off by default).
+- `utmos_mean` - one UTMOS score per window on the mixdown, mean over windows.
 
-**`ChannelQualityMetric`** (UTMOS22-strong via `torch.hub`, per IPU):
+### Deferred to the next PR
 
-- `utmos_mean` - speech-duration-WEIGHTED mean UTMOS per channel (longer IPUs count for more), meaned over channels and windows.
-- `dnsmos_mean` - optional, present only when `enable_dnsmos: true` (off by default).
+The following were cut from this branch in the 2026-07-15 PR #10 review to keep the battery lean and easy to review; they may return in a later PR:
+
+- The interaction/script-following battery (dGSLM event rates, Wasserstein-1 duration distances, backchannel proxy, turn-order accuracy, Kendall tau, turn-count ratio).
+- Cross-turn speaker dynamics (consistency, drift, cross-channel confusion, generated bleed dB).
+- cpWER channel-permutation search and the `swap` flag.
+- A mixdown-diarization comparability protocol against cpWER/cpSIM baselines.
 
 ### Conventions that matter when reading the numbers
 
-- **Diarization-free by construction**: every speaker-attributed metric (WER, SIM, bleed) reads the speaker directly off the channel index; there is no diarization step and none is planned for the per-channel numbers (a separate mixdown-diarization comparability protocol against cpWER/cpSIM baselines is explicitly out of scope for this step).
-- **Per-IPU transcription, not per-channel**: `ConversationASRMetric` calls the transcriber once per VAD-derived IPU (dGSLM 200 ms rule) and concatenates the results, rather than transcribing a channel's full generated region in one call, specifically to avoid whisper hallucinating words into long silent stretches.
+- **Diarization-free by construction**: every speaker-attributed metric (WER, SIM) reads the speaker directly off the channel index; there is no diarization step and none is planned for the per-channel numbers.
+- **Corpus-level WER, never a mean of per-utterance WERs**: `wer_channel` and `wer_mix` each pool substitution/deletion/insertion/hit counts across every utterance in the run, then compute one WER at summary time, so a run full of short reference utterances cannot dominate the number the way a naive mean-of-WERs would let it.
 - **UTMOS is relative-use-only**: UTMOS is a no-reference MOS predictor trained on a particular corpus distribution; treat `utmos_mean` as meaningful only RELATIVE TO the `gt`/`resynth` anchor runs on the same window selection, never as an absolute cross-corpus quality number.
-- **W1 is paired per window**: every `w1_*` key compares a window's generated event-duration distribution against that SAME window's ground truth, then means the per-window distances - it is never a pooled generated-vs-pooled-ground-truth comparison across different windows.
-- **Bleed percentiles are pooled, not per-window**: `bleed_db_p50`/`bleed_db_p90` are percentiles over the flat list of every scored bleed pair across every window in the run, unlike every other summary key (which is a mean of per-window values).
 
 ### Dependencies (eval-only, all lazy, none needed for training)
 
-`faster-whisper` (transcription), `openai-whisper` (only for `whisper.normalizers.EnglishTextNormalizer`; missing at real-runtime raises loudly with an install hint rather than silently falling back to a weaker normalizer, since that would corrupt cross-run WER comparability), `transformers` (WavLM-SV x-vector embedding), `torch.hub` (silero VAD, shared by all four metrics; UTMOS22-strong), and optionally `speechmos` (DNSMOS, config-gated, off by default).
-Every backend is constructor-injectable and every real default defers its import/download to the first actual call, never to module import or `__init__`, so constructing any metric class - including hydra-instantiating the full `conf/metrics.yaml` - is always safe offline; unit tests exercise the metric math with injected fakes, and none of this is imported anywhere on the training path.
+`faster-whisper` (transcription), `openai-whisper` (only for `whisper.normalizers.EnglishTextNormalizer`; missing at real-runtime raises loudly with an install hint rather than silently falling back to a weaker normalizer, since that would corrupt cross-run WER comparability), `transformers` (WavLM-SV x-vector embedding), and `torch.hub` (UTMOS22-strong).
+Every backend is constructor-injectable and every real default defers its import/download to the first actual call, never to module import or `__init__`, so constructing any metric class - including hydra-instantiating the full `conf/metrics.yaml` - is always safe offline.
+Unit tests exercise the metric math with injected fakes, and none of this is imported anywhere on the training path.
 
 ### Fail-fast on bad audio (v1 design decision)
 
