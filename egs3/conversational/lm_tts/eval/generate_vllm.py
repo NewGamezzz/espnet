@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import base64
 import json
+import os
 import sys
 import time
 import urllib.request
@@ -98,6 +99,22 @@ def needs_generation(entry: dict, out_dir: str | Path) -> bool:
     return not (Path(out_dir) / f"{entry['example_id']}.json").exists()
 
 
+def _write_json_atomic(path: Path, record: dict) -> None:
+    """Write ``record`` to ``path`` as ``<name>.json`` atomically: write to
+    ``<path>.tmp`` then ``os.replace`` over the destination.
+
+    ``needs_generation`` treats the mere *existence* of this json as "this
+    record is already handled" (resume marker); a plain ``write_text`` can
+    be torn by a wall-time kill mid-write, leaving a truncated file that
+    still exists and so would permanently hide the record from every
+    future resume. ``os.replace`` is atomic on POSIX, so the destination
+    path only ever shows the old content or the fully-written new content.
+    """
+    tmp_path = path.with_name(path.name + ".tmp")
+    tmp_path.write_text(json.dumps(record, indent=1), encoding="utf-8")
+    os.replace(tmp_path, path)
+
+
 def _post_json(url: str, payload: dict, timeout: float) -> dict:
     """POST ``payload`` as JSON to ``url`` and return the parsed JSON
     response. The only network call in this module; ``generate_one``
@@ -149,11 +166,16 @@ def generate_one(
         latency_s = time.monotonic() - start
 
         message = response["choices"][0]["message"]
-        text = message.get("content", "")
+        # An explicit `"content": null` (not just a missing key) must still
+        # write an empty .txt rather than fail the record.
+        text = message.get("content") or ""
         audio_field = message.get("audio") or {}
         audio_b64 = audio_field.get("data")
         has_audio = audio_b64 is not None
 
+        # .wav/.txt are written first, non-atomically; .json is written
+        # LAST and atomically (see _write_json_atomic) - it is the resume
+        # marker, so it must never appear on disk half-written.
         (out_dir / f"{example_id}.txt").write_text(text, encoding="utf-8")
         if has_audio:
             (out_dir / f"{example_id}.wav").write_bytes(base64.b64decode(audio_b64))
@@ -165,7 +187,7 @@ def generate_one(
             "latency_s": latency_s,
             "has_audio": has_audio,
         }
-        json_path.write_text(json.dumps(record, indent=1), encoding="utf-8")
+        _write_json_atomic(json_path, record)
         return "ok" if has_audio else "no_audio"
     except Exception as exc:  # noqa: BLE001 - any failure must be captured, not crash
         latency_s = time.monotonic() - start
@@ -174,7 +196,7 @@ def generate_one(
             "error": f"{type(exc).__name__}: {exc}",
             "latency_s": latency_s,
         }
-        json_path.write_text(json.dumps(record, indent=1), encoding="utf-8")
+        _write_json_atomic(json_path, record)
         return "failed"
 
 

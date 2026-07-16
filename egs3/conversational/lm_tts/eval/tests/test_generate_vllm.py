@@ -16,6 +16,7 @@ from __future__ import annotations
 import base64
 import importlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -323,6 +324,121 @@ class TestGenerateOne:
         assert captured["url"] == "http://localhost:8123/v1/chat/completions"
         assert captured["payload"]["max_tokens"] == 999
         assert captured["payload"]["vllm_xargs"]["cfg"] == 2.0
+
+
+# ---------------------------------------------------------------------------
+# generate_one: explicit null content must not fail the record (review fix)
+# ---------------------------------------------------------------------------
+
+
+class TestNullContentHandling:
+    def test_explicit_null_content_writes_empty_txt_not_failure(
+        self, tmp_path: Path
+    ):
+        def fake_post(url, payload, timeout):
+            return {
+                "choices": [
+                    {"finish_reason": "stop", "message": {"content": None}}
+                ],
+                "usage": {},
+            }
+
+        entry = _entry("ex_null")
+        outcome = generate_one(
+            entry, tmp_path, "http://localhost:9999", 60, post_fn=fake_post
+        )
+
+        assert outcome == "no_audio"
+        assert (tmp_path / "ex_null.txt").read_text(encoding="utf-8") == ""
+        record = json.loads((tmp_path / "ex_null.json").read_text(encoding="utf-8"))
+        assert record["has_audio"] is False
+        assert "error" not in record
+
+
+# ---------------------------------------------------------------------------
+# generate_one: the .json resume marker is written atomically and LAST
+# (review fix) - a wall-time kill mid-write must never leave a truncated
+# json that permanently hides the record from resume.
+# ---------------------------------------------------------------------------
+
+
+class TestAtomicJsonWrite:
+    def test_no_tmp_file_left_and_json_valid_after_success(self, tmp_path: Path):
+        audio_b64 = _fake_audio_b64()
+
+        def fake_post(url, payload, timeout):
+            return {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "hi", "audio": {"data": audio_b64}},
+                    }
+                ],
+                "usage": {},
+            }
+
+        entry = _entry("ex_atomic_ok")
+        generate_one(
+            entry, tmp_path, "http://localhost:9999", 60, post_fn=fake_post
+        )
+
+        assert (tmp_path / "ex_atomic_ok.json").exists()
+        assert not (tmp_path / "ex_atomic_ok.json.tmp").exists()
+        json.loads((tmp_path / "ex_atomic_ok.json").read_text(encoding="utf-8"))
+
+    def test_no_tmp_file_left_after_failure(self, tmp_path: Path):
+        def fake_post(url, payload, timeout):
+            raise TimeoutError("boom")
+
+        entry = _entry("ex_atomic_fail")
+        generate_one(
+            entry, tmp_path, "http://localhost:9999", 60, post_fn=fake_post
+        )
+
+        assert (tmp_path / "ex_atomic_fail.json").exists()
+        assert not (tmp_path / "ex_atomic_fail.json.tmp").exists()
+
+    def test_json_committed_via_os_replace_only_after_txt_and_wav_exist(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        import eval.generate_vllm as gv
+
+        example_id = "ex_order"
+        audio_b64 = _fake_audio_b64()
+        calls = []
+        real_replace = os.replace
+
+        def spy_replace(src, dst):
+            calls.append(
+                (
+                    (tmp_path / f"{example_id}.txt").exists(),
+                    (tmp_path / f"{example_id}.wav").exists(),
+                )
+            )
+            return real_replace(src, dst)
+
+        monkeypatch.setattr(gv.os, "replace", spy_replace)
+
+        def fake_post(url, payload, timeout):
+            return {
+                "choices": [
+                    {
+                        "finish_reason": "stop",
+                        "message": {"content": "hi", "audio": {"data": audio_b64}},
+                    }
+                ],
+                "usage": {},
+            }
+
+        entry = _entry(example_id)
+        outcome = generate_one(
+            entry, tmp_path, "http://localhost:9999", 60, post_fn=fake_post
+        )
+
+        assert outcome == "ok"
+        # exactly one os.replace call (the json commit), and at the moment
+        # it fired, .txt and .wav were already on disk.
+        assert calls == [(True, True)]
 
 
 # ---------------------------------------------------------------------------

@@ -31,6 +31,11 @@ CONDA_ENV=/work/nvme/bbjs/ttrachu/miniconda3/envs/bagpiper
 SIF=/work/nvme/bbjs/hwang41/qwen3/apptainer/vllm_bagpiper.sif
 CKPT=/work/nvme/bbjs/hwang41/bagpiper/model_vllm/bagpiper
 export HF_HOME=/work/nvme/bbjs/ttrachu/.cache/huggingface
+# Compute nodes are egress-blocked; without these, the HF hub client's
+# HEAD-check for cached models can hang the job waiting on a connection
+# that will never succeed.
+export HF_HUB_OFFLINE=1
+export TRANSFORMERS_OFFLINE=1
 
 PORT=8000
 MODEL_NAME=speechlm-qwen3-8b
@@ -56,6 +61,10 @@ cleanup() {
     pkill -KILL -P "$SERVER_PID" 2>/dev/null || true
     kill -KILL "$SERVER_PID" 2>/dev/null || true
   fi
+  # Name-based safety net: apptainer can orphan worker processes outside
+  # the recorded PID tree (e.g. detached CUDA/multiprocessing workers), so
+  # the PID-based kill above is not sufficient on its own.
+  pkill -f "vllm.entrypoints.openai.api_server" 2>/dev/null || true
 }
 trap cleanup EXIT
 
@@ -68,6 +77,8 @@ apptainer exec --nv \
     --model "$CKPT" \
     --served-model-name "$MODEL_NAME" \
     --port "$PORT" \
+    --trust-remote-code \
+    --tensor-parallel-size 1 \
     --max-model-len 16384 \
     --gpu-memory-utilization 0.85 \
     --max-num-seqs 1024 \
