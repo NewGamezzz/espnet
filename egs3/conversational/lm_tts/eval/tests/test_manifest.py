@@ -83,7 +83,9 @@ class TestBuildManifestSssd:
         entry = next(e for e in entries if e["example_id"] == "sssd_mono_sess1_w00000")
         assert entry["set"] == "sssd"
         assert entry["system"] == SYSTEM_PROMPT
-        assert entry["caption"] == "Two speakers narrate a conversation for sess1_w00000."
+        assert (
+            entry["caption"] == "Two speakers narrate a conversation for sess1_w00000."
+        )
         assert entry["gt_wav"] == "/abs/sssd/sess1_w00000_mix.wav"
         assert entry["speakers"] == ["spkA", "spkB"]
 
@@ -91,8 +93,18 @@ class TestBuildManifestSssd:
         entries = build_manifest_sssd(sssd_dialogues_path)
         entry = next(e for e in entries if e["example_id"] == "sssd_mono_sess1_w00000")
         expected_turns = [
-            {"speaker": "spkA", "start": 0.5, "end": 1.5, "text": "spkA says hello number 0"},
-            {"speaker": "spkB", "start": 2.0, "end": 3.0, "text": "spkB says hello number 1"},
+            {
+                "speaker": "spkA",
+                "start": 0.5,
+                "end": 1.5,
+                "text": "spkA says hello number 0",
+            },
+            {
+                "speaker": "spkB",
+                "start": 2.0,
+                "end": 3.0,
+                "text": "spkB says hello number 1",
+            },
         ]
         assert entry["turns"] == expected_turns
 
@@ -228,7 +240,12 @@ class TestBuildManifestSft:
                 "end": None,
                 "text": "Later that week I dropped by the office.",
             },
-            {"speaker": None, "start": None, "end": None, "text": "That sounds delightful."},
+            {
+                "speaker": None,
+                "start": None,
+                "end": None,
+                "text": "That sounds delightful.",
+            },
         ]
 
     def test_straight_quote_record_turns(
