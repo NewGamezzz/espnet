@@ -360,7 +360,7 @@ class TestMetricsConfigInstantiatesOffline:
             resolve=False,
         )
         metrics = [instantiate(entry.metric) for entry in metrics_config.metrics]
-        assert len(metrics) == 3
+        assert len(metrics) == 4
         assert any(isinstance(m, SpeakerSimilarityMetric) for m in metrics)
 
 

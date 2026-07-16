@@ -46,6 +46,7 @@ _CANONICAL_ORDER = [
     "ConversationASRMetric",
     "SpeakerSimilarityMetric",
     "QualityMetric",
+    "InteractionMetric",
 ]
 
 # Declared order of the lean battery's summary keys (README.md's Metric
@@ -59,6 +60,18 @@ _CANONICAL_KEY_ORDER = [
     "utmos_ipu_mean",
     "utmos_mix_mean",
     "ipu_count",
+    "ipu_per_min",
+    "ipu_sec_per_min",
+    "ipu_dur_w1",
+    "pause_per_min",
+    "pause_sec_per_min",
+    "pause_dur_w1",
+    "gap_per_min",
+    "gap_sec_per_min",
+    "gap_dur_w1",
+    "overlap_per_min",
+    "overlap_sec_per_min",
+    "overlap_dur_w1",
 ]
 
 Condition = Tuple[str, Dict[str, Any]]

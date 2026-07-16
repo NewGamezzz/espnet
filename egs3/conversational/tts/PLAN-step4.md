@@ -133,3 +133,13 @@ Delta-side debugging validated per-IPU scoring (Silero VAD, 200 ms min-silence, 
 
 The VAD backend is faster-whisper's bundled Silero ONNX model (`SileroVADSegmenter`), so no new dependency; it is constructor-injectable and lazy like every other backend.
 "Per-IPU anything" in the deferred list above narrows accordingly: per-IPU transcription and per-IPU embeddings stay deferred, per-IPU MOS is now shipped.
+
+## Revision (2026-07-16, InteractionMetric)
+
+The dGSLM turn-taking battery (design ratified 2026-07-14, deferred by the PR #10 review) lands as `InteractionMetric`, scoped with Thanapat to core events + W1:
+
+- Per-channel Silero VAD IPUs (the 200 ms rule; reuses PR #12's `SileroVADSegmenter`, injectable) -> IPU/pause/gap/overlap events per window, window-edge silences skipped (no before/after speaker to classify).
+- `{e}_per_min` and `{e}_sec_per_min` per event type, POOLED over the run (total / total window minutes, never a mean of per-window rates - the corpus-WER pooling rule applied to rates).
+- `{e}_dur_w1`: Wasserstein-1 distance between generated and ground-truth event-duration distributions, pooled; the reference comes from `channels[ch].gt_wav` in the same meta (no cross-directory pairing), so in `gt` mode every defined W1 collapses to ~0 as a built-in sanity check.
+
+Still deferred from family D: the backchannel proxy (short-IPU-during-overlap), laughter statistics, script-following, and the Fisher reference corpus for cross-corpus W1.

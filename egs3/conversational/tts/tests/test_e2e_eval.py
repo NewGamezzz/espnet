@@ -63,6 +63,11 @@ HOP = 256
 ASR_SUMMARY_KEYS = {"wer_channel", "wer_mix"}
 SPEAKER_SUMMARY_KEYS = {"sim_o_mean"}
 QUALITY_SUMMARY_KEYS = {"utmos_ipu_mean", "utmos_mix_mean", "ipu_count"}
+INTERACTION_SUMMARY_KEYS = {
+    f"{event}_{suffix}"
+    for event in ("ipu", "pause", "gap", "overlap")
+    for suffix in ("per_min", "sec_per_min", "dur_w1")
+}
 
 
 # --------------------------------------------------------------------------- #
@@ -155,6 +160,16 @@ def _fake_metrics_config(inference_dir: Path) -> OmegaConf:
                     },
                     "inputs": {"meta": "meta"},
                 },
+                {
+                    "metric": {
+                        "_target_": (
+                            "egs3.conversational.tts.src.metrics.interaction."
+                            "InteractionMetric"
+                        ),
+                        "vad_backend": _fake("FakeVADBackend"),
+                    },
+                    "inputs": {"meta": "meta"},
+                },
             ],
         }
     )
@@ -165,6 +180,7 @@ def _assert_all_summary_keys_present(results: dict) -> None:
         ("ConversationASRMetric", ASR_SUMMARY_KEYS),
         ("SpeakerSimilarityMetric", SPEAKER_SUMMARY_KEYS),
         ("QualityMetric", QUALITY_SUMMARY_KEYS),
+        ("InteractionMetric", INTERACTION_SUMMARY_KEYS),
     ):
         matches = [k for k in results if k.endswith(suffix)]
         assert len(matches) == 1, f"expected exactly one {suffix} entry, got {matches}"

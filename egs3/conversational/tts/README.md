@@ -220,7 +220,7 @@ Omitting `--ckpt` generates with the freshly assembled pretrained model (zero-in
 
 The eval battery is two espnet3 stages plus a report tool.
 `infer` (`src/inference.py`, `conf/inference_conversational.yaml`) batch-generates multi-channel conversations from manifest windows in one of three modes.
-`measure` (`espnet3.systems.base.metric.measure`, driven by `conf/metrics.yaml`) runs three custom metric classes (`src/metrics/`) over `infer`'s output and writes `metrics.json`.
+`measure` (`espnet3.systems.base.metric.measure`, driven by `conf/metrics.yaml`) runs four custom metric classes (`src/metrics/`) over `infer`'s output and writes `metrics.json`.
 `local/eval_report.py` turns one or more `metrics.json` files into a single Markdown comparison table.
 No diarization is needed anywhere in the battery: this recipe's channels ARE speakers (channel = speaker, by construction, since SSSD audio is per-participant), so every speaker-attributed metric below reads straight off the channel index.
 
@@ -306,11 +306,24 @@ A key with zero defined values anywhere in the run (no utterance/window/channel 
 - `utmos_mix_mean` - one UTMOS score per window on the whole mixdown, mean over windows (the lean-v1 definition, kept for cross-run continuity; depressed by overlap and silence, so read it only against anchors).
 - `ipu_count` - number of scored IPUs in the run. Diagnostic: a model that over-generates speech (e.g. the zero-gate pretrained model filling the forced window duration) shows up here as an inflated count vs. the gt anchor.
 
+**`InteractionMetric`** (the dGSLM turn-taking battery, arXiv 2203.16502; Silero VAD IPUs, same 200 ms rule as QualityMetric):
+
+Events per window: IPU (one VAD speech span of one channel), overlap (both channels speaking), and silences classified as pause (same channel holds the floor on both sides) or gap (the floor changes hands); window-edge silences have no before/after speaker and are skipped.
+Twelve summary keys, three per event type `e` in `{ipu, pause, gap, overlap}`:
+
+- `{e}_per_min` - events per minute, pooled over the run (total count / total window minutes, never a mean of per-window rates - the same pooling rule as corpus WER).
+- `{e}_sec_per_min` - cumulated event seconds per window minute, pooled the same way (dGSLM's "cumulated duration per minute").
+- `{e}_dur_w1` - Wasserstein-1 distance (seconds) between the generated and ground-truth event-duration distributions, pooled over the run. The ground-truth side comes from `channels[ch].gt_wav` in the SAME meta, so no cross-directory pairing is needed; in `gt` mode `gen_wav` IS the ground truth and every defined `*_dur_w1` collapses to ~0 (built-in sanity check). `null` when either side's distribution is empty.
+
+This family is the headline: it is what distinguishes a conversational model from N parallel TTS systems.
+Expected zero-gate pretrained signature: heavy unstructured overlap, few gaps, large W1 everywhere; fine-tuning should pull all twelve numbers toward the gt anchor's.
+
 ### Deferred to the next PR
 
-The following were cut from this branch in the 2026-07-15 PR #10 review to keep the battery lean and easy to review; they may return in a later PR:
+The following were cut in the 2026-07-15 PR #10 review to keep the battery lean and easy to review; they may return in a later PR:
 
-- The interaction/script-following battery (dGSLM event rates, Wasserstein-1 duration distances, backchannel proxy, turn-order accuracy, Kendall tau, turn-count ratio).
+- The script-following battery (turn-order accuracy, Kendall tau, turn-count ratio) and the backchannel proxy (short-IPU-during-overlap counts).
+- Laughter statistics (research-grade tooling, separately timeboxed) and the Fisher reference corpus for cross-corpus interaction W1.
 - Cross-turn speaker dynamics (consistency, drift, cross-channel confusion, generated bleed dB).
 - cpWER channel-permutation search and the `swap` flag.
 - A mixdown-diarization comparability protocol against cpWER/cpSIM baselines.
@@ -324,7 +337,7 @@ The following were cut from this branch in the 2026-07-15 PR #10 review to keep 
 
 ### Dependencies (eval-only, all lazy, none needed for training)
 
-`faster-whisper` (transcription), `openai-whisper` (only for `whisper.normalizers.EnglishTextNormalizer`; missing at real-runtime raises loudly with an install hint rather than silently falling back to a weaker normalizer, since that would corrupt cross-run WER comparability), `transformers` (WavLM-SV x-vector embedding), and `torch.hub` (UTMOS22-strong).
+`faster-whisper` (transcription), `openai-whisper` (only for `whisper.normalizers.EnglishTextNormalizer`; missing at real-runtime raises loudly with an install hint rather than silently falling back to a weaker normalizer, since that would corrupt cross-run WER comparability), `transformers` (WavLM-SV x-vector embedding), `torch.hub` (UTMOS22-strong), and `scipy` (Wasserstein-1 distances; already an espnet dependency).
 Every backend is constructor-injectable and every real default defers its import/download to the first actual call, never to module import or `__init__`, so constructing any metric class - including hydra-instantiating the full `conf/metrics.yaml` - is always safe offline.
 Unit tests exercise the metric math with injected fakes, and none of this is imported anywhere on the training path.
 
