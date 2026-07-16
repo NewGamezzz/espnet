@@ -62,7 +62,7 @@ HOP = 256
 
 ASR_SUMMARY_KEYS = {"wer_channel", "wer_mix"}
 SPEAKER_SUMMARY_KEYS = {"sim_o_mean"}
-QUALITY_SUMMARY_KEYS = {"utmos_mean"}
+QUALITY_SUMMARY_KEYS = {"utmos_ipu_mean", "utmos_mix_mean", "ipu_count"}
 
 
 # --------------------------------------------------------------------------- #
@@ -97,6 +97,16 @@ class FakeEmbedder:
 class FakeMOSBackend:
     def __call__(self, wav, sr):
         return 3.5
+
+
+class FakeVADBackend:
+    """Whole wav as one speech span: every channel yields exactly one IPU
+    (VAD correctness itself is ``tests/test_quality_metric.py``'s job)."""
+
+    def __call__(self, wav, sr):
+        if len(wav) == 0:
+            return []
+        return [(0.0, len(wav) / sr)]
 
 
 def _fake(cls_name: str) -> dict:
@@ -141,6 +151,7 @@ def _fake_metrics_config(inference_dir: Path) -> OmegaConf:
                             "QualityMetric"
                         ),
                         "mos_backend": _fake("FakeMOSBackend"),
+                        "vad_backend": _fake("FakeVADBackend"),
                     },
                     "inputs": {"meta": "meta"},
                 },

@@ -44,7 +44,7 @@ def _speaker_payload(sim_o_mean: float) -> dict:
 
 
 def _quality_payload(utmos: float) -> dict:
-    return {_QUALITY_CLASS: {"valid": {"utmos_mean": utmos}}}
+    return {_QUALITY_CLASS: {"valid": {"utmos_ipu_mean": utmos}}}
 
 
 # --------------------------------------------------------------------------- #
@@ -170,8 +170,10 @@ class TestRenderMarkdown:
         md = render_markdown(["gt", "resynth"], sections, test_name="valid")
 
         assert "## QualityMetric" in md
-        # the resynth column exists but its utmos_mean cell is a dash.
-        lines = [ln for ln in md.splitlines() if ln.startswith("| utmos_mean")]
+        # the resynth column exists but its utmos_ipu_mean cell is a dash.
+        lines = [
+            ln for ln in md.splitlines() if ln.startswith("| utmos_ipu_mean")
+        ]
         assert len(lines) == 1
         assert "-" in [cell.strip() for cell in lines[0].split("|")]
 

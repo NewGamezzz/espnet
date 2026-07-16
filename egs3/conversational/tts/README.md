@@ -285,7 +285,7 @@ python local/eval_report.py \
 
 ### Metric glossary (summary keys in `metrics.json`)
 
-This is the lean battery from the 2026-07-15 PR #10 review: corpus-level WER, whole-signal speaker similarity, and mix UTMOS only.
+This is the lean battery from the 2026-07-15 PR #10 review (corpus-level WER, whole-signal speaker similarity, UTMOS), with the quality leg revised after the first Delta run (2026-07-16): UTMOS is now scored per IPU, with the mixdown score kept as a secondary key.
 Full per-window detail lives alongside `metrics.json` under `<inference_dir>/<test_name>/scoring/<metric_name>/windows.jsonl`.
 A key with zero defined values anywhere in the run (no utterance/window/channel ever produced one) is written as `null`, never a fabricated `0.0`.
 `local/eval_report.py` renders any such `null` as `-`, the same as a metric/key that never ran at all.
@@ -299,9 +299,12 @@ A key with zero defined values anywhere in the run (no utterance/window/channel 
 
 - `sim_o_mean` - a channel's WHOLE generated speech vs. that SAME channel's acoustic prompt (one solo turn), mean over every (window, channel) pair in the run.
 
-**`QualityMetric`** (UTMOS22-strong via `torch.hub`, mixdown only):
+**`QualityMetric`** (UTMOS22-strong via `torch.hub`; Silero VAD via faster-whisper's bundled ONNX model):
 
-- `utmos_mean` - one UTMOS score per window on the mixdown, mean over windows.
+- `utmos_ipu_mean` - PRIMARY quality number: every channel's generated wav is segmented into IPUs (interpausal units: speech bounded by >=200 ms of silence, the dGSLM convention) by Silero VAD, each IPU of >=1 s is scored individually, and the mean pools over every scored IPU in the run.
+  VAD-derived units (not manifest turn spans) because generated audio follows its own alignment, not the ground truth's; per-segment scoring is also the definition under which the SSSD paper reports UTMOS (2.55 +/- 0.72 per utterance), so this key is comparable to the corpus baseline.
+- `utmos_mix_mean` - one UTMOS score per window on the whole mixdown, mean over windows (the lean-v1 definition, kept for cross-run continuity; depressed by overlap and silence, so read it only against anchors).
+- `ipu_count` - number of scored IPUs in the run. Diagnostic: a model that over-generates speech (e.g. the zero-gate pretrained model filling the forced window duration) shows up here as an inflated count vs. the gt anchor.
 
 ### Deferred to the next PR
 
@@ -316,7 +319,8 @@ The following were cut from this branch in the 2026-07-15 PR #10 review to keep 
 
 - **Diarization-free by construction**: every speaker-attributed metric (WER, SIM) reads the speaker directly off the channel index; there is no diarization step and none is planned for the per-channel numbers.
 - **Corpus-level WER, never a mean of per-utterance WERs**: `wer_channel` and `wer_mix` each pool substitution/deletion/insertion/hit counts across every utterance in the run, then compute one WER at summary time, so a run full of short reference utterances cannot dominate the number the way a naive mean-of-WERs would let it.
-- **UTMOS is relative-use-only**: UTMOS is a no-reference MOS predictor trained on a particular corpus distribution; treat `utmos_mean` as meaningful only RELATIVE TO the `gt`/`resynth` anchor runs on the same window selection, never as an absolute cross-corpus quality number.
+- **UTMOS is relative-use-only**: UTMOS is a no-reference MOS predictor trained on a particular corpus distribution; treat `utmos_ipu_mean` and `utmos_mix_mean` as meaningful only RELATIVE TO the `gt`/`resynth` anchor runs on the same window selection, never as an absolute cross-corpus quality number.
+  Concrete demonstration from the first Delta run: the zero-gate pretrained model scored ABOVE ground truth per IPU (2.50 vs 2.21) because UTMOS rewards clean read-style speech and punishes real spontaneous speech.
 
 ### Dependencies (eval-only, all lazy, none needed for training)
 
