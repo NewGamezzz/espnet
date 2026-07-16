@@ -45,16 +45,15 @@ dataset:
   test:
     - name: valid
 
-# The three metric classes below (ConversationASRMetric,
-# SpeakerSimilarityMetric, QualityMetric; see README.md's Evaluation section
-# for the summary-key glossary) each iterate `meta.scp` only
-# (`inputs: {meta: meta}`). This is the lean battery from the 2026-07-15
-# PR #10 review (PLAN-step4.md's Revision section) with the quality leg
-# revised after the first Delta run (2026-07-16): corpus-level WER,
-# whole-signal speaker similarity, and UTMOS per VAD-derived IPU (primary)
-# plus the mixdown score - cross-turn speaker dynamics, the
-# interaction/script-following battery, and DNSMOS are deferred to a later
-# PR. Every backend below is the real (lazy) default -- nothing here is a
+# The four metric classes below (ConversationASRMetric,
+# SpeakerSimilarityMetric, QualityMetric, InteractionMetric; see README.md's
+# Evaluation section for the summary-key glossary) each iterate `meta.scp`
+# only (`inputs: {meta: meta}`). This is the lean battery from the
+# 2026-07-15 PR #10 review (PLAN-step4.md's Revision section) with the
+# quality leg revised after the first Delta run (2026-07-16) and the dGSLM
+# interaction battery added (core events + W1; backchannel proxy, laughter,
+# script-following, cross-turn speaker dynamics, and DNSMOS remain deferred
+# to a later PR). Every backend below is the real (lazy) default -- nothing here is a
 # fake/test double -- and none of it downloads or imports anything until the
 # first real `measure` call: ConversationASRMetric uses faster-whisper
 # large-v3 transcription (one call per file, `vad_filter: true`) and
@@ -76,5 +75,9 @@ metrics:
       meta: meta
   - metric:
       _target_: egs3.conversational.tts.src.metrics.quality.QualityMetric
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.interaction.InteractionMetric
     inputs:
       meta: meta
