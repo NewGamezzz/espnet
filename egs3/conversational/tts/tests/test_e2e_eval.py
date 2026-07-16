@@ -4,28 +4,33 @@ Drives ``ConversationalTTSSystem.infer()`` / ``run_inference`` then
 ``ConversationalTTSSystem.measure()`` / ``measure()`` on a fully fabricated
 fixture (a tiny two-channel FLAC, a hand-built window manifest, and the tiny
 random-init DiT from the trainer suite), proving the step's acceptance
-criterion end to end: ``meta.scp`` -> all four metric classes -> a
+criterion end to end: ``meta.scp`` -> all three lean metric classes -> a
 ``metrics.json`` with every documented summary key present. No corpus, no
-checkpoint, no network: every metric backend (transcriber, normalizer, VAD,
+checkpoint, no network: every metric backend (transcriber, normalizer,
 embedder, MOS predictor) is swapped for a trivial fake, injected through a
 test-scoped metrics config that is hydra-instantiated the same way
 ``conf/metrics.yaml`` is (mirroring ``tests/test_measure.py``'s stub-metric
-approach, extended here to the four REAL metric classes).
+approach, extended here to the three REAL metric classes).
 
-Two runs exercise the two viable ``infer`` code paths:
+Two runs exercise the two viable ``infer`` code paths, BOTH on a two-window
+session: under the reworked infer stage's leakage rule (a channel's prompt
+turn may never come from inside the evaluated window), a session with only
+one window has an empty prompt candidate pool for every channel and every
+window is skipped, so both fixtures below give the session a second window
+whose turns serve as the other window's prompt candidates -- the same
+two-window-per-session pattern ``tests/test_inference.py`` established.
 
-* ``gt`` mode, TWO windows, fully through ``ConversationalTTSSystem``
-  (``system.infer()`` then ``system.measure()``) -- the literal
-  ``python run.py --stages infer`` / ``--stages measure`` dispatch, and the
-  cheapest mode (no model, no vocoder needed).
-* ``generate`` mode, ONE window, through ``run_inference`` directly with the
-  tiny DiT + a fake Vocos injected (the same seam ``tests/test_inference.py``
-  uses for its generate-mode tests) -- proves the plumbing also holds for
-  real model sampling, without paying for a full multi-window generate run.
+* ``gt`` mode, fully through ``ConversationalTTSSystem`` (``system.infer()``
+  then ``system.measure()``) -- the literal ``python run.py --stages infer``
+  / ``--stages measure`` dispatch, and the cheapest mode (no model, no
+  vocoder needed).
+* ``generate`` mode, through ``run_inference`` directly with the tiny DiT +
+  a fake Vocos injected (the same seam ``tests/test_inference.py`` uses for
+  its generate-mode tests) -- proves the plumbing also holds for real model
+  sampling.
 
-Per-metric correctness (WER math, cpWER permutation, bleed dB, W1, MOS
-weighting, ...) is the job of ``tests/test_asr_metric.py`` /
-``test_speaker_metric.py`` / ``test_interaction_metric.py`` /
+Per-metric correctness (pooled WER, SIM-o, UTMOS weighting, ...) is the job
+of ``tests/test_asr_metric.py`` / ``test_speaker_metric.py`` /
 ``test_quality_metric.py``; this file only proves the plumbing.
 """
 
@@ -48,7 +53,6 @@ from egs3.conversational.tts.dataset.preprocessing.windows import (
     to_json,
 )
 from egs3.conversational.tts.src.inference import run_inference
-from egs3.conversational.tts.src.metrics.asr import Word
 from egs3.conversational.tts.src.system import ConversationalTTSSystem
 from espnet3.systems.base.metric import measure
 
@@ -56,30 +60,8 @@ FS = 24000
 SRC_SR = 48000
 HOP = 256
 
-ASR_SUMMARY_KEYS = {
-    "wer_ch_mean",
-    "wer_ch_worst",
-    "cpwer",
-    "swap_rate",
-    "turn_order_acc",
-    "kendall_tau",
-    "turn_count_ratio",
-}
-SPEAKER_SUMMARY_KEYS = {
-    "sim_o_mean",
-    "sim_consistency",
-    "sim_drift_slope",
-    "confusion_mean",
-    "bleed_db_p50",
-    "bleed_db_p90",
-}
-_EVENT_TYPES = ("ipu", "pause", "gap", "overlap")
-INTERACTION_SUMMARY_KEYS = (
-    {f"{e}_per_min" for e in _EVENT_TYPES}
-    | {f"{e}_dur_per_min" for e in _EVENT_TYPES}
-    | {f"w1_{e}" for e in _EVENT_TYPES}
-    | {"backchannel_per_min"}
-)
+ASR_SUMMARY_KEYS = {"wer_channel", "wer_mix"}
+SPEAKER_SUMMARY_KEYS = {"sim_o_mean"}
 QUALITY_SUMMARY_KEYS = {"utmos_mean"}
 
 
@@ -88,24 +70,15 @@ QUALITY_SUMMARY_KEYS = {"utmos_mean"}
 # below (``_target_: <this module>.<ClassName>``) exactly like
 # ``tests/test_measure.py``'s ``StubMetaMetric`` is targeted by ``__name__``.
 # --------------------------------------------------------------------------- #
-class FakeVAD:
-    """Whole-snippet-is-one-segment VAD: content-agnostic and deterministic,
-    so it works uniformly across every metric's audio (native or 16 kHz)."""
-
-    def __call__(self, wav, sr):
-        if len(wav) == 0:
-            return []
-        return [(0.0, len(wav) / sr)]
-
-
 class FakeTranscriber:
-    """One fixed word per IPU snippet; proves the ASR plumbing wires up (WER
-    bookkeeping itself is ``tests/test_asr_metric.py``'s job)."""
+    """One fixed hypothesis regardless of input; proves the ASR plumbing
+    wires up (WER bookkeeping itself is ``tests/test_asr_metric.py``'s
+    job)."""
 
     def __call__(self, wav, sr):
         if len(wav) == 0:
-            return []
-        return [Word(text="ok", start=0.0, end=len(wav) / sr)]
+            return ""
+        return "ok"
 
 
 class FakeNormalizer:
@@ -114,8 +87,8 @@ class FakeNormalizer:
 
 
 class FakeEmbedder:
-    """Fixed unit vector: any two calls cosine to 1.0, so SIM-o/consistency/
-    drift/confusion are always defined (never a None-only fallback path)."""
+    """Fixed unit vector: any two calls cosine to 1.0, so ``sim_o_mean`` is
+    always defined (never a None-only fallback path)."""
 
     def __call__(self, wav, sr):
         return np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64)
@@ -131,7 +104,7 @@ def _fake(cls_name: str) -> dict:
 
 
 def _fake_metrics_config(inference_dir: Path) -> OmegaConf:
-    """The four real metric classes, hydra-instantiated with fake backends
+    """The three real metric classes, hydra-instantiated with fake backends
     injected via nested ``_target_`` entries (recursive instantiate is
     already the house pattern, e.g. ``conf/training_poc.yaml``'s nested
     ``preprocessor:`` block)."""
@@ -148,7 +121,6 @@ def _fake_metrics_config(inference_dir: Path) -> OmegaConf:
                         ),
                         "transcriber": _fake("FakeTranscriber"),
                         "normalizer": _fake("FakeNormalizer"),
-                        "vad": _fake("FakeVAD"),
                     },
                     "inputs": {"meta": "meta"},
                 },
@@ -156,20 +128,9 @@ def _fake_metrics_config(inference_dir: Path) -> OmegaConf:
                     "metric": {
                         "_target_": (
                             "egs3.conversational.tts.src.metrics.speaker."
-                            "SpeakerDynamicsMetric"
+                            "SpeakerSimilarityMetric"
                         ),
                         "embedder": _fake("FakeEmbedder"),
-                        "vad": _fake("FakeVAD"),
-                    },
-                    "inputs": {"meta": "meta"},
-                },
-                {
-                    "metric": {
-                        "_target_": (
-                            "egs3.conversational.tts.src.metrics.interaction."
-                            "InteractionMetric"
-                        ),
-                        "vad": _fake("FakeVAD"),
                     },
                     "inputs": {"meta": "meta"},
                 },
@@ -177,10 +138,9 @@ def _fake_metrics_config(inference_dir: Path) -> OmegaConf:
                     "metric": {
                         "_target_": (
                             "egs3.conversational.tts.src.metrics.quality."
-                            "ChannelQualityMetric"
+                            "QualityMetric"
                         ),
                         "mos_backend": _fake("FakeMOSBackend"),
-                        "vad": _fake("FakeVAD"),
                     },
                     "inputs": {"meta": "meta"},
                 },
@@ -192,9 +152,8 @@ def _fake_metrics_config(inference_dir: Path) -> OmegaConf:
 def _assert_all_summary_keys_present(results: dict) -> None:
     for suffix, expected in (
         ("ConversationASRMetric", ASR_SUMMARY_KEYS),
-        ("SpeakerDynamicsMetric", SPEAKER_SUMMARY_KEYS),
-        ("InteractionMetric", INTERACTION_SUMMARY_KEYS),
-        ("ChannelQualityMetric", QUALITY_SUMMARY_KEYS),
+        ("SpeakerSimilarityMetric", SPEAKER_SUMMARY_KEYS),
+        ("QualityMetric", QUALITY_SUMMARY_KEYS),
     ):
         matches = [k for k in results if k.endswith(suffix)]
         assert len(matches) == 1, f"expected exactly one {suffix} entry, got {matches}"
@@ -269,13 +228,6 @@ def two_window_fixture(tmp_path):
     return _build_fixture(tmp_path, windows, flac_duration_s=35.0)
 
 
-@pytest.fixture
-def one_window_fixture(tmp_path):
-    return _build_fixture(
-        tmp_path, [_window("sess_w00000", 5.0)], flac_duration_s=20.0
-    )
-
-
 # --------------------------------------------------------------------------- #
 # gt mode, two windows, fully through ConversationalTTSSystem (the literal
 # `python run.py --stages infer` / `--stages measure` dispatch).
@@ -309,12 +261,15 @@ class TestEndToEndGtViaSystem:
 
 
 # --------------------------------------------------------------------------- #
-# generate mode, one window, through run_inference directly with the tiny
-# DiT + a fake Vocos injected (same seam tests/test_inference.py uses).
+# generate mode, through run_inference directly with the tiny DiT + a fake
+# Vocos injected (same seam tests/test_inference.py uses). Uses the SAME
+# two-window fixture as the gt-mode test above -- a single-window session
+# has no non-window prompt candidate for any channel under the reworked
+# leakage rule, so both windows must be generated here too.
 # --------------------------------------------------------------------------- #
 class TestEndToEndGenerateMode:
-    def test_infer_then_measure_produce_metrics_json(self, one_window_fixture):
-        fixture = one_window_fixture
+    def test_infer_then_measure_produce_metrics_json(self, two_window_fixture):
+        fixture = two_window_fixture
         inf_dir = fixture["tmp_path"] / "infer_generate"
         infer_cfg = _infer_config(fixture, "generate", inf_dir)
         infer_cfg.sampling.steps = 2  # keep the ODE cheap; plumbing-only smoke
@@ -327,7 +282,7 @@ class TestEndToEndGenerateMode:
             model=model,
             vocoder=vocoder,
         )
-        assert infer_stats == {"n_selected": 1, "n_skipped": 0}
+        assert infer_stats == {"n_selected": 2, "n_skipped": 0}
 
         test_dir = inf_dir / "valid"
         meta = json.loads((test_dir / "meta/sess_w00000.json").read_text("utf-8"))

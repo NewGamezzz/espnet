@@ -24,6 +24,8 @@ from egs3.conversational.tts.local.eval_report import (
 
 
 _ASR_CLASS = "egs3.conversational.tts.src.metrics.asr.ConversationASRMetric"
+_SPEAKER_CLASS = "egs3.conversational.tts.src.metrics.speaker.SpeakerSimilarityMetric"
+_QUALITY_CLASS = "egs3.conversational.tts.src.metrics.quality.QualityMetric"
 
 
 def _write_metrics_json(inference_dir: Path, payload: dict) -> None:
@@ -32,25 +34,17 @@ def _write_metrics_json(inference_dir: Path, payload: dict) -> None:
 
 
 def _asr_payload(**overrides) -> dict:
-    summary = {
-        "wer_ch_mean": 0.1,
-        "wer_ch_worst": 0.2,
-        "cpwer": 0.15,
-        "swap_rate": 0.0,
-        "turn_order_acc": 0.9,
-        "kendall_tau": 0.8,
-        "turn_count_ratio": 1.0,
-    }
+    summary = {"wer_channel": 0.1, "wer_mix": 0.2}
     summary.update(overrides)
     return {_ASR_CLASS: {"valid": summary}}
 
 
+def _speaker_payload(sim_o_mean: float) -> dict:
+    return {_SPEAKER_CLASS: {"valid": {"sim_o_mean": sim_o_mean}}}
+
+
 def _quality_payload(utmos: float) -> dict:
-    return {
-        "egs3.conversational.tts.src.metrics.quality.ChannelQualityMetric": {
-            "valid": {"utmos_mean": utmos}
-        }
-    }
+    return {_QUALITY_CLASS: {"valid": {"utmos_mean": utmos}}}
 
 
 # --------------------------------------------------------------------------- #
@@ -78,11 +72,11 @@ class TestLoadMetricsJson:
         # metric left undefined (see src/metrics/_common.py's
         # summary_value) is Python None going in, and must be JSON null on
         # disk and None coming back out -- not a string, not a dropped key.
-        _write_metrics_json(tmp_path, _asr_payload(wer_ch_mean=None))
+        _write_metrics_json(tmp_path, _asr_payload(wer_channel=None))
         raw = (tmp_path / "metrics.json").read_text("utf-8")
-        assert '"wer_ch_mean": null' in raw
+        assert '"wer_channel": null' in raw
         loaded = load_metrics_json(tmp_path)
-        assert loaded[_ASR_CLASS]["valid"]["wer_ch_mean"] is None
+        assert loaded[_ASR_CLASS]["valid"]["wer_channel"] is None
 
 
 # --------------------------------------------------------------------------- #
@@ -92,25 +86,25 @@ class TestBuildSections:
     def test_one_section_per_metric_class_conditions_as_columns(self):
         conditions = [
             ("gt", {**_asr_payload(), **_quality_payload(4.0)}),
-            ("generate", {**_asr_payload(wer_ch_mean=0.5), **_quality_payload(2.5)}),
+            ("generate", {**_asr_payload(wer_channel=0.5), **_quality_payload(2.5)}),
         ]
         sections = build_sections(conditions, test_name="valid")
 
-        assert set(sections) == {"ConversationASRMetric", "ChannelQualityMetric"}
+        assert set(sections) == {"ConversationASRMetric", "QualityMetric"}
         asr = sections["ConversationASRMetric"]
-        assert asr["values"]["gt"]["wer_ch_mean"] == 0.1
-        assert asr["values"]["generate"]["wer_ch_mean"] == 0.5
-        assert "wer_ch_mean" in asr["keys"]
-        assert "cpwer" in asr["keys"]
+        assert asr["values"]["gt"]["wer_channel"] == 0.1
+        assert asr["values"]["generate"]["wer_channel"] == 0.5
+        assert "wer_channel" in asr["keys"]
+        assert "wer_mix" in asr["keys"]
 
     def test_missing_condition_for_a_metric_class_leaves_it_out_of_values(self):
-        # "resynth" never ran ChannelQualityMetric at all.
+        # "resynth" never ran QualityMetric at all.
         conditions = [
             ("gt", {**_asr_payload(), **_quality_payload(4.0)}),
             ("resynth", _asr_payload()),
         ]
         sections = build_sections(conditions, test_name="valid")
-        quality = sections["ChannelQualityMetric"]
+        quality = sections["QualityMetric"]
         assert "gt" in quality["values"]
         assert "resynth" not in quality["values"]
 
@@ -124,22 +118,40 @@ class TestBuildSections:
         assert "gt" in asr["values"]
         assert "odd_split" not in asr["values"]
 
-    def test_key_union_preserves_first_seen_order_then_appends_new_keys(self):
+    def test_known_keys_follow_the_canonical_order_unknown_keys_appended(self):
+        # "generate"'s payload declares its keys in the OPPOSITE order from
+        # the canonical wer_channel/wer_mix ordering (README.md's Metric
+        # glossary), plus one key the report doesn't recognize; the row
+        # order must still come out canonical-known-then-first-seen-unknown,
+        # not whatever order any one condition's dict happened to iterate.
         conditions = [
-            ("gt", _asr_payload()),
             (
                 "generate",
                 {
-                    "egs3.conversational.tts.src.metrics.asr.ConversationASRMetric": {
-                        "valid": {"wer_ch_mean": 0.4, "brand_new_key": 1.0}
+                    _ASR_CLASS: {
+                        "valid": {
+                            "wer_mix": 0.4,
+                            "wer_channel": 0.3,
+                            "brand_new_key": 1.0,
+                        }
                     }
                 },
             ),
         ]
         sections = build_sections(conditions, test_name="valid")
         keys = sections["ConversationASRMetric"]["keys"]
-        assert keys[0] == "wer_ch_mean"  # first-seen order from "gt"
-        assert keys[-1] == "brand_new_key"  # appended from "generate"
+        assert keys == ["wer_channel", "wer_mix", "brand_new_key"]
+
+    def test_unknown_keys_across_conditions_keep_first_seen_order(self):
+        conditions = [
+            ("gt", {_ASR_CLASS: {"valid": {"z_key": 1.0}}}),
+            ("generate", {_ASR_CLASS: {"valid": {"a_key": 2.0}}}),
+        ]
+        sections = build_sections(conditions, test_name="valid")
+        keys = sections["ConversationASRMetric"]["keys"]
+        # Neither key is canonical, so both fall back to first-seen order
+        # (condition order, "gt" before "generate") rather than alphabetical.
+        assert keys == ["z_key", "a_key"]
 
     def test_empty_conditions_yields_no_sections(self):
         assert build_sections([], test_name="valid") == {}
@@ -152,12 +164,12 @@ class TestRenderMarkdown:
     def test_missing_condition_renders_as_dash_not_a_crash(self):
         conditions = [
             ("gt", {**_asr_payload(), **_quality_payload(4.0)}),
-            ("resynth", _asr_payload()),  # no ChannelQualityMetric here
+            ("resynth", _asr_payload()),  # no QualityMetric here
         ]
         sections = build_sections(conditions, test_name="valid")
         md = render_markdown(["gt", "resynth"], sections, test_name="valid")
 
-        assert "## ChannelQualityMetric" in md
+        assert "## QualityMetric" in md
         # the resynth column exists but its utmos_mean cell is a dash.
         lines = [ln for ln in md.splitlines() if ln.startswith("| utmos_mean")]
         assert len(lines) == 1
@@ -168,10 +180,10 @@ class TestRenderMarkdown:
         # present in the payload (as a real metric module always writes it,
         # per _common.py's summary_value), but its value is JSON null
         # (Python None), not simply absent from the dict.
-        conditions = [("gt", _asr_payload(wer_ch_mean=None))]
+        conditions = [("gt", _asr_payload(wer_channel=None))]
         sections = build_sections(conditions, test_name="valid")
         md = render_markdown(["gt"], sections, test_name="valid")
-        lines = [ln for ln in md.splitlines() if ln.startswith("| wer_ch_mean")]
+        lines = [ln for ln in md.splitlines() if ln.startswith("| wer_channel")]
         assert len(lines) == 1
         assert "-" in [cell.strip() for cell in lines[0].split("|")]
         assert "None" not in lines[0] and "null" not in lines[0]
@@ -184,18 +196,42 @@ class TestRenderMarkdown:
         assert header_line.index("pretrained") < header_line.index("finetuned")
 
     def test_metric_class_gets_its_own_section_heading(self):
-        conditions = [("gt", {**_asr_payload(), **_quality_payload(4.0)})]
+        conditions = [
+            (
+                "gt",
+                {**_asr_payload(), **_speaker_payload(0.8), **_quality_payload(4.0)},
+            )
+        ]
         sections = build_sections(conditions, test_name="valid")
         md = render_markdown(["gt"], sections, test_name="valid")
         assert "## ConversationASRMetric" in md
-        assert "## ChannelQualityMetric" in md
+        assert "## SpeakerSimilarityMetric" in md
+        assert "## QualityMetric" in md
+
+    def test_sections_render_in_the_canonical_class_order(self):
+        # Declared out of canonical order (quality, then asr, then speaker);
+        # the report must still render ConversationASRMetric ->
+        # SpeakerSimilarityMetric -> QualityMetric.
+        conditions = [
+            (
+                "gt",
+                {**_quality_payload(4.0), **_asr_payload(), **_speaker_payload(0.8)},
+            )
+        ]
+        sections = build_sections(conditions, test_name="valid")
+        md = render_markdown(["gt"], sections, test_name="valid")
+        assert (
+            md.index("## ConversationASRMetric")
+            < md.index("## SpeakerSimilarityMetric")
+            < md.index("## QualityMetric")
+        )
 
     def test_no_sections_still_produces_a_valid_report_with_no_metrics_note(self):
         md = render_markdown(["gt", "resynth"], {}, test_name="valid")
         assert "no metrics" in md.lower()
 
     def test_float_values_are_formatted_not_full_precision_floats(self):
-        conditions = [("gt", _asr_payload(wer_ch_mean=0.123456789))]
+        conditions = [("gt", _asr_payload(wer_channel=0.123456789))]
         sections = build_sections(conditions, test_name="valid")
         md = render_markdown(["gt"], sections, test_name="valid")
         assert "0.123456789" not in md
@@ -210,7 +246,7 @@ class TestMainCli:
         gt_dir = tmp_path / "infer_gt"
         gen_dir = tmp_path / "infer_generate"
         _write_metrics_json(gt_dir, {**_asr_payload(), **_quality_payload(4.0)})
-        _write_metrics_json(gen_dir, _asr_payload(wer_ch_mean=0.6))
+        _write_metrics_json(gen_dir, _asr_payload(wer_channel=0.6))
         return gt_dir, gen_dir
 
     def test_writes_report_to_the_given_output_path(self, tmp_path, capsys):
@@ -300,4 +336,4 @@ class TestMainCli:
         code = main(["--label", "gt", str(gt_dir), "--test-name", "test-clean"])
         assert code == 0
         out = capsys.readouterr().out
-        assert "wer_ch_mean" in out
+        assert "wer_channel" in out

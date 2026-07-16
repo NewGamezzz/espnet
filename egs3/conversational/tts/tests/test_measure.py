@@ -50,10 +50,10 @@ def _write_meta_fixture(test_dir: Path, window_ids: list[str]) -> None:
             "mode": "gt",
             "sample_rate": 24000,
             "num_channels": 2,
-            "prompt_boundary_sec": 3.0,
-            "prompt_boundary_frames": 281,
             "window_duration_sec": 12.0,
             "rtf": None,
+            "mix_wav": f"mix/{wid}.wav",
+            "prompt": {"total_sec": 4.0, "total_frames": 375, "turns": []},
             "channels": [
                 {
                     "gen_wav": f"wav/{wid}_ch0.wav",

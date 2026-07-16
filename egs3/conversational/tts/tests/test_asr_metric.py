@@ -1,11 +1,13 @@
 """``ConversationASRMetric`` (``src/metrics/asr.py``) tests.
 
-Fake-transcriber / fake-VAD, CPU-only, no network: covers WER bookkeeping,
-cpWER permutation + swap flag, pooled cross-channel script following (in
-order, out of order, missing turn), the per-IPU timestamp offset, backend
-laziness (transcriber/normalizer never import their real package before
-first call), and a full ``__call__`` round trip against a fabricated
-``inference_dir`` mirroring ``tests/test_measure.py``'s fixture pattern.
+Fake-transcriber, CPU-only, no network: covers the corpus-level (pooled)
+counting primitives (proving pooling is genuinely NOT a mean of
+per-utterance WERs), the mixed-channel reference's start-time ordering, the
+normalizer applying to both hypothesis and reference, backend laziness
+(transcriber/normalizer never import their real package before first call),
+and a full ``__call__`` round trip against a fabricated ``inference_dir``
+matching ``src/inference.py``'s current meta contract (top-level ``mix_wav``,
+no ``prompt_boundary_sec``/``prompt_boundary_frames``).
 
 Real faster-whisper / openai-whisper are only exercised by the asset-gated
 smoke test at the bottom (skipped when the packages are not installed,
@@ -25,9 +27,11 @@ import soundfile as sf
 from egs3.conversational.tts.src.metrics.asr import (
     ConversationASRMetric,
     FasterWhisperTranscriber,
-    Word,
     WhisperEnglishNormalizer,
-    _normalize_word,
+    _counts,
+    _mix_reference,
+    _pool_wer,
+    _wer_from_counts,
 )
 
 try:
@@ -50,244 +54,74 @@ def _trivial_normalizer(text: str) -> str:
 
 
 # --------------------------------------------------------------------------- #
-# _cpwer: permutation search + identity tie-break
+# corpus-level (pooled) WER counting: the core "never average per-utterance
+# WERs" primitive, tested as pure functions.
 # --------------------------------------------------------------------------- #
-class TestCpwer:
-    def test_identity_is_optimal_no_swap(self):
-        ref = ["hello world", "foo bar"]
-        hyp = ["hello world", "foo bar"]
-        wer, swap, perm = ConversationASRMetric._cpwer(ref, hyp)
-        assert wer == pytest.approx(0.0)
-        assert swap is False
-        assert perm == (0, 1)
+class TestWerFromCounts:
+    def test_exact_match_is_zero(self):
+        assert _wer_from_counts(_counts("a b", "a b")) == pytest.approx(0.0)
 
-    def test_swapped_channels_are_detected(self):
-        # channel 0's hypothesis is actually speaker 1's script, and vice
-        # versa: the identity assignment is maximally wrong, the swap is
-        # perfect.
-        ref = ["hello world", "foo bar"]
-        hyp = ["foo bar", "hello world"]
-        wer, swap, perm = ConversationASRMetric._cpwer(ref, hyp)
-        assert wer == pytest.approx(0.0)
-        assert swap is True
-        assert perm == (1, 0)
+    def test_one_substitution(self):
+        # ref "a b", hyp "a c": 1 sub / 2 ref words.
+        assert _wer_from_counts(_counts("a b", "a c")) == pytest.approx(0.5)
 
-    def test_tie_prefers_identity(self):
-        # Every permutation ties at wer=0 since both channels said the exact
-        # same thing; the documented tie-break keeps the identity assignment.
-        ref = ["a a", "a a"]
-        hyp = ["a a", "a a"]
-        _wer, swap, perm = ConversationASRMetric._cpwer(ref, hyp)
-        assert swap is False
-        assert perm == (0, 1)
+    def test_zero_reference_words_is_none_not_a_fabricated_number(self):
+        # An insertion-only utterance (empty reference) has an undefined
+        # denominator (S+D+H == 0); this must be None, not a fabricated 0.0
+        # or a ZeroDivisionError.
+        assert _wer_from_counts(_counts("", "a b")) is None
 
-    def test_partial_error_still_prefers_lower_wer_assignment(self):
-        ref = ["one two", "four five"]
-        hyp = ["one three", "four five"]  # 1 sub in channel 0 only
-        wer, swap, perm = ConversationASRMetric._cpwer(ref, hyp)
-        assert swap is False
-        assert perm == (0, 1)
-        assert wer == pytest.approx(0.25)  # 1 error / 4 total ref words
 
-    def test_single_channel_is_trivially_identity(self):
-        wer, swap, perm = ConversationASRMetric._cpwer(["hello"], ["hello"])
-        assert wer == pytest.approx(0.0)
-        assert swap is False
-        assert perm == (0,)
+class TestPoolWer:
+    def test_pooled_wer_differs_from_mean_of_per_utterance_wer(self):
+        # Utterance A: 2 ref words, 1 substitution -> wer 0.5.
+        # Utterance B: 8 ref words, 1 substitution -> wer 0.125.
+        # A NAIVE mean-of-WERs would give (0.5 + 0.125) / 2 = 0.3125; pooling
+        # the raw counts instead (2 subs / 10 total ref words) gives 0.2 --
+        # the corpus-WER convention this metric is required to use.
+        counts_a = _counts("a b", "a c")
+        counts_b = _counts("a b c d e f g h", "a b c d e f g x")
+        wer_a = _wer_from_counts(counts_a)
+        wer_b = _wer_from_counts(counts_b)
+        mean_of_wers = (wer_a + wer_b) / 2.0
+
+        pooled = _pool_wer([counts_a, counts_b])
+
+        assert pooled == pytest.approx(0.2)
+        assert pooled != pytest.approx(mean_of_wers)
+
+    def test_empty_pool_is_none(self):
+        assert _pool_wer([]) is None
+
+    def test_single_utterance_pool_equals_its_own_wer(self):
+        counts = _counts("a b", "a c")
+        assert _pool_wer([counts]) == pytest.approx(0.5)
 
 
 # --------------------------------------------------------------------------- #
-# pooled, cross-channel script following: _align_words_to_turns +
-# _script_order_stats, exercised together the way _score_window combines them
+# _mix_reference: start-time ordering across channels
 # --------------------------------------------------------------------------- #
-def _pooled_realized_time(per_channel_texts, per_channel_words, channel_of_turn):
-    """Mirror _score_window's pooling: per-channel align, scatter into the
-    window's chronological (``channel_of_turn``) order."""
-    local = [
-        ConversationASRMetric._align_words_to_turns(texts, words)
-        for texts, words in zip(per_channel_texts, per_channel_words)
-    ]
-    cursor = [0] * len(per_channel_texts)
-    pooled = []
-    for ch in channel_of_turn:
-        idx = cursor[ch]
-        pooled.append(local[ch][idx])
-        cursor[ch] += 1
-    return pooled
-
-
-class TestScriptFollowingPooling:
-    def test_in_order_cross_channel_turns_score_perfectly(self):
-        # Global script order: ch0 "hello world" (gi0), ch1 "foo bar" (gi1),
-        # ch0 "baz qux" (gi2). Word times respect that order.
-        ch0_texts = ["hello world", "baz qux"]
-        ch0_words = [
-            Word("hello", 0.0, 0.0),
-            Word("world", 0.5, 0.5),
-            Word("baz", 4.0, 4.0),
-            Word("qux", 4.5, 4.5),
+class TestMixReference:
+    def test_orders_turns_by_start_time_regardless_of_list_order(self):
+        turns = [
+            {"channel": 1, "text": "second", "start": 5.0, "end": 6.0},
+            {"channel": 0, "text": "first", "start": 1.0, "end": 2.0},
         ]
-        ch1_texts = ["foo bar"]
-        ch1_words = [Word("foo", 2.0, 2.0), Word("bar", 2.5, 2.5)]
+        assert _mix_reference(turns) == "first second"
 
-        pooled = _pooled_realized_time(
-            [ch0_texts, ch1_texts], [ch0_words, ch1_words], channel_of_turn=[0, 1, 0]
-        )
-        assert pooled == [pytest.approx(0.25), pytest.approx(2.25), pytest.approx(4.25)]
-
-        stats = ConversationASRMetric._script_order_stats(pooled)
-        assert stats["turn_order_acc"] == pytest.approx(1.0)
-        assert stats["kendall_tau"] == pytest.approx(1.0)
-        assert stats["turn_count_ratio"] == pytest.approx(1.0)
-        assert stats["missing_turns"] == []
-
-    def test_out_of_order_cross_channel_turn_is_penalized(self):
-        # Same script as above, but channel 1 says its turn TOO EARLY (before
-        # channel 0's first scripted turn) -- a real cross-speaker ordering
-        # violation that a per-channel-only metric could never see (channel
-        # 1 only has one turn, so it can't be "out of order" with itself).
-        ch0_texts = ["hello world", "baz qux"]
-        ch0_words = [
-            Word("hello", 0.0, 0.0),
-            Word("world", 0.5, 0.5),
-            Word("baz", 4.0, 4.0),
-            Word("qux", 4.5, 4.5),
+    def test_ties_keep_the_existing_list_order(self):
+        turns = [
+            {"channel": 0, "text": "a", "start": 1.0, "end": 2.0},
+            {"channel": 1, "text": "b", "start": 1.0, "end": 2.0},
         ]
-        ch1_texts = ["foo bar"]
-        ch1_words = [Word("foo", -1.0, -1.0), Word("bar", -0.5, -0.5)]
+        assert _mix_reference(turns) == "a b"
+        # Same tie, reversed list order -> the join flips too, proving the
+        # sort is stable (keys the tie on original position) rather than
+        # imposing some other deterministic order (e.g. channel index).
+        assert _mix_reference(list(reversed(turns))) == "b a"
 
-        pooled = _pooled_realized_time(
-            [ch0_texts, ch1_texts], [ch0_words, ch1_words], channel_of_turn=[0, 1, 0]
-        )
-        assert pooled == [
-            pytest.approx(0.25),
-            pytest.approx(-0.75),
-            pytest.approx(4.25),
-        ]
-
-        stats = ConversationASRMetric._script_order_stats(pooled)
-        # script order [0,1,2]; time order is [1,0,2] (gi1 said earliest) ->
-        # only gi2's rank (2nd->2nd) matches -> 1/3.
-        assert stats["turn_order_acc"] == pytest.approx(1 / 3)
-        # 2 concordant pairs, (0,2) and (1,2); 1 discordant pair (0,1) ->
-        # tau = (2 - 1) / 3.
-        assert stats["kendall_tau"] == pytest.approx(1 / 3)
-        assert stats["turn_count_ratio"] == pytest.approx(1.0)
-
-    def test_missing_turn_excluded_from_order_and_tau_but_counted_in_ratio(self):
-        # channel 0 never says its second scripted turn ("baz qux") at all.
-        ch0_texts = ["hello world", "baz qux"]
-        ch0_words = [Word("hello", 0.0, 0.0), Word("world", 0.5, 0.5)]
-        ch1_texts = ["foo bar"]
-        ch1_words = [Word("foo", 2.0, 2.0), Word("bar", 2.5, 2.5)]
-
-        pooled = _pooled_realized_time(
-            [ch0_texts, ch1_texts], [ch0_words, ch1_words], channel_of_turn=[0, 1, 0]
-        )
-        assert pooled == [pytest.approx(0.25), pytest.approx(2.25), None]
-
-        stats = ConversationASRMetric._script_order_stats(pooled)
-        assert stats["missing_turns"] == [2]
-        assert stats["num_realized_turns"] == 2
-        assert stats["num_scripted_turns"] == 3
-        assert stats["turn_count_ratio"] == pytest.approx(2 / 3)
-        # The two realized turns (gi0, gi1) are still in correct relative
-        # order, so accuracy/tau over just that pair are perfect.
-        assert stats["turn_order_acc"] == pytest.approx(1.0)
-        assert stats["kendall_tau"] == pytest.approx(1.0)
-
-    def test_no_scripted_turns_returns_all_none(self):
-        stats = ConversationASRMetric._script_order_stats([])
-        assert stats["num_scripted_turns"] == 0
-        assert stats["turn_order_acc"] is None
-        assert stats["kendall_tau"] is None
-        assert stats["turn_count_ratio"] is None
-
-    def test_single_realized_turn_has_no_kendall_tau(self):
-        stats = ConversationASRMetric._script_order_stats([0.5])
-        assert stats["turn_order_acc"] == pytest.approx(1.0)
-        assert stats["kendall_tau"] is None
-        assert stats["turn_count_ratio"] == pytest.approx(1.0)
-
-
-class TestNormalizeWord:
-    def test_lowercases_and_strips_punctuation(self):
-        assert _normalize_word("Hello,") == "hello"
-        assert _normalize_word("--World!!") == "world"
-
-    def test_keeps_internal_apostrophes(self):
-        assert _normalize_word("don't") == "don't"
-
-    def test_empty_after_stripping_punctuation_only(self):
-        assert _normalize_word("...") == ""
-
-
-# --------------------------------------------------------------------------- #
-# _transcribe_channel: per-IPU transcription + timestamp offset
-# --------------------------------------------------------------------------- #
-class _ListVAD:
-    def __init__(self, segments):
-        self._segments = segments
-
-    def __call__(self, wav, sr):
-        return self._segments
-
-
-class _QueueTranscriber:
-    """Pops one canned word-list per call, in call order."""
-
-    def __init__(self, calls):
-        self._queue = list(calls)
-
-    def __call__(self, wav, sr):
-        return self._queue.pop(0)
-
-
-class TestTranscribeChannelOffsetsByIpuStart:
-    def test_second_ipu_words_are_offset_by_its_own_start(self, tmp_path):
-        sr = 16000
-        wav = np.zeros(int(sr * 3.0), dtype=np.float32)
-        path = tmp_path / "ch.wav"
-        sf.write(str(path), wav, sr)
-
-        # Two well-separated IPUs (gap 1.5s >> default min_silence=0.2s), no
-        # padding so the reported IPU bounds are exactly these.
-        vad = _ListVAD([(0.0, 0.5), (2.0, 2.5)])
-        transcriber = _QueueTranscriber(
-            [
-                [Word("hi", 0.0, 0.1)],  # 1st IPU call: local time
-                [Word("there", 0.05, 0.15)],  # 2nd IPU call: local time
-            ]
-        )
-        metric = ConversationASRMetric(
-            transcriber=transcriber,
-            normalizer=_trivial_normalizer,
-            vad=vad,
-            pad=0.0,
-        )
-
-        words = metric._transcribe_channel(path)
-
-        assert [w.text for w in words] == ["hi", "there"]
-        assert words[0].start == pytest.approx(0.0)
-        assert words[0].end == pytest.approx(0.1)
-        # Offset by the 2nd IPU's OWN start (2.0), not the 1st IPU's.
-        assert words[1].start == pytest.approx(2.05)
-        assert words[1].end == pytest.approx(2.15)
-
-    def test_no_ipus_yields_no_words_and_transcriber_is_never_called(self, tmp_path):
-        sr = 16000
-        wav = np.zeros(sr, dtype=np.float32)
-        path = tmp_path / "ch.wav"
-        sf.write(str(path), wav, sr)
-
-        def _boom(_wav, _sr):
-            raise AssertionError("transcriber must not be called with zero IPUs")
-
-        metric = ConversationASRMetric(
-            transcriber=_boom, normalizer=_trivial_normalizer, vad=_ListVAD([])
-        )
-        assert metric._transcribe_channel(path) == []
+    def test_empty_turns_is_empty_string(self):
+        assert _mix_reference([]) == ""
 
 
 # --------------------------------------------------------------------------- #
@@ -322,8 +156,6 @@ class TestBackendLaziness:
         assert normalizer._normalizer is None
 
     def test_metric_construction_with_all_real_defaults_does_not_touch_network(self):
-        # Constructing ConversationASRMetric() with no injected backends must
-        # succeed offline: every real default is lazy.
         metric = ConversationASRMetric()
         assert isinstance(metric.transcriber, FasterWhisperTranscriber)
         assert isinstance(metric.normalizer, WhisperEnglishNormalizer)
@@ -338,10 +170,20 @@ class TestBackendLaziness:
 
 
 # --------------------------------------------------------------------------- #
-# full __call__ round trip against a fabricated inference_dir, mirroring
-# tests/test_measure.py's fixture pattern (same meta-JSON shape as
-# src/inference.py's real output contract).
+# full __call__ round trip against a fabricated inference_dir, matching
+# src/inference.py's current meta contract (module docstring): top-level
+# mix_wav, channels[ch].{gen_wav,prompt_wav,gt_wav,ref_text}, turns.
 # --------------------------------------------------------------------------- #
+class _QueueTranscriber:
+    """Pops one canned hypothesis string per call, in call order."""
+
+    def __init__(self, calls):
+        self._queue = list(calls)
+
+    def __call__(self, wav, sr):
+        return self._queue.pop(0)
+
+
 def _write_wav(path: Path, duration_s: float = 0.5, sr: int = 24000) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     sf.write(str(path), np.zeros(int(duration_s * sr), dtype=np.float32), sr)
@@ -351,24 +193,30 @@ def _write_window(
     test_dir: Path,
     window_id: str,
     *refs: str,
-    boundary: float = 5.0,
+    turn_starts: list[float] | None = None,
 ) -> None:
-    """One fabricated window in the infer-stage meta contract, one channel
-    per positional ``refs`` entry; channel ``k``'s single scripted turn sits
-    at ``boundary + 1.5*k`` so cross-channel script order equals channel
-    order (the historical two-channel spacing, generalized)."""
-    for ch in range(len(refs)):
+    """One fabricated window in the CURRENT infer-stage meta contract, one
+    channel per positional ``refs`` entry. ``turn_starts`` (default:
+    ascending, one per channel) lets a test control cross-channel start-time
+    ordering for ``wer_mix``."""
+    n = len(refs)
+    if turn_starts is None:
+        turn_starts = [1.5 * ch for ch in range(n)]
+    for ch in range(n):
         _write_wav(test_dir / "wav" / f"{window_id}_ch{ch}.wav")
+        _write_wav(test_dir / "prompt" / f"{window_id}_ch{ch}.wav")
+        _write_wav(test_dir / "gt" / f"{window_id}_ch{ch}.wav")
+    _write_wav(test_dir / "mix" / f"{window_id}.wav")
     meta = {
         "window_id": window_id,
         "session_id": "sess",
         "mode": "generate",
         "sample_rate": 24000,
-        "num_channels": len(refs),
-        "prompt_boundary_sec": boundary,
-        "prompt_boundary_frames": 469,
+        "num_channels": n,
         "window_duration_sec": 12.0,
         "rtf": 0.5,
+        "mix_wav": f"mix/{window_id}.wav",
+        "prompt": {"total_sec": 4.0, "total_frames": 375, "turns": []},
         "channels": [
             {
                 "gen_wav": f"wav/{window_id}_ch{ch}.wav",
@@ -382,8 +230,8 @@ def _write_window(
             {
                 "channel": ch,
                 "text": ref,
-                "start": boundary + 1.5 * ch,
-                "end": boundary + 1.5 * ch + 1.0,
+                "start": turn_starts[ch],
+                "end": turn_starts[ch] + 1.0,
             }
             for ch, ref in enumerate(refs)
         ],
@@ -392,7 +240,7 @@ def _write_window(
     (test_dir / f"meta/{window_id}.json").write_text(json.dumps(meta), encoding="utf-8")
 
 
-def _write_meta_scp(test_dir: Path, window_ids: list[str]) -> None:
+def _write_meta_scp(test_dir: Path, window_ids: "list[str]") -> None:
     lines = [f"{wid} meta/{wid}.json" for wid in window_ids]
     (test_dir / "meta.scp").write_text("".join(f"{line}\n" for line in lines))
 
@@ -401,57 +249,43 @@ class TestCallRoundTrip:
     def _build_inference_dir(self, tmp_path) -> Path:
         inference_dir = tmp_path / "infer"
         test_dir = inference_dir / "valid"
-        # w1: both channels transcribed perfectly, ch1's turn later than
-        # ch0's -> matches script order.
+        # w1: both channels transcribed perfectly.
         _write_window(test_dir, "sess_w00000", "alpha beta", "gamma delta")
-        # w2: channel 0 has one substitution error; channel 1 still exact.
+        # w2: channel 0 has one substitution error; channel 1 is exact.
         _write_window(test_dir, "sess_w00001", "one two", "four five")
         _write_meta_scp(test_dir, ["sess_w00000", "sess_w00001"])
         return inference_dir
 
     def _metric(self) -> ConversationASRMetric:
-        # One call per channel per window (whole-file IPU); order follows
-        # meta.scp order (w1 then w2) x channel order (ch0 then ch1).
+        # One call per channel + one per mix, per window, in meta.scp order.
         transcriber = _QueueTranscriber(
             [
-                [Word("alpha", 0.0, 0.0), Word("beta", 0.1, 0.1)],  # w1 ch0 (exact)
-                [Word("gamma", 1.0, 1.0), Word("delta", 1.1, 1.1)],  # w1 ch1 (exact)
-                [Word("one", 0.0, 0.0), Word("three", 0.1, 0.1)],  # w2 ch0 (1 sub)
-                [Word("four", 1.0, 1.0), Word("five", 1.1, 1.1)],  # w2 ch1 (exact)
+                "alpha beta",  # w1 ch0 (exact)
+                "gamma delta",  # w1 ch1 (exact)
+                "alpha beta gamma delta",  # w1 mix (exact)
+                "one three",  # w2 ch0 (1 sub: two->three)
+                "four five",  # w2 ch1 (exact)
+                "one three four five",  # w2 mix (1 sub)
             ]
         )
         return ConversationASRMetric(
-            transcriber=transcriber,
-            normalizer=_trivial_normalizer,
-            vad=_ListVAD([(0.0, 0.5)]),
-            pad=0.0,
+            transcriber=transcriber, normalizer=_trivial_normalizer
         )
 
-    def test_summary_matches_hand_derived_values(self, tmp_path):
+    def test_summary_matches_hand_pooled_counts(self, tmp_path):
         inference_dir = self._build_inference_dir(tmp_path)
         data = {"meta": inference_dir / "valid" / "meta.scp"}
 
         summary = self._metric()(data, "valid", inference_dir)
 
-        # window 1: wer=[0,0] -> mean/worst 0; cpwer 0; in-order turns.
-        # window 2: wer=[0.5,0] -> mean 0.25, worst 0.5; cpwer 0.25 (identity
-        # beats the swapped assignment); still in-order turns.
-        assert summary["wer_ch_mean"] == pytest.approx((0.0 + 0.25) / 2)
-        assert summary["wer_ch_worst"] == pytest.approx((0.0 + 0.5) / 2)
-        assert summary["cpwer"] == pytest.approx((0.0 + 0.25) / 2)
-        assert summary["swap_rate"] == pytest.approx(0.0)
-        assert summary["turn_order_acc"] == pytest.approx(1.0)
-        assert summary["kendall_tau"] == pytest.approx(1.0)
-        assert summary["turn_count_ratio"] == pytest.approx(1.0)
-        assert set(summary) == {
-            "wer_ch_mean",
-            "wer_ch_worst",
-            "cpwer",
-            "swap_rate",
-            "turn_order_acc",
-            "kendall_tau",
-            "turn_count_ratio",
-        }
+        # wer_channel: 4 channel utterances, refs = [2,2,2,2] words, one sub
+        # total (w2 ch0) -> pooled (0+0+1)/(0+0+2+2+2+2-... ) let's just
+        # pool directly: S=1,D=0,I=0,H=(2+2+1+2)=7 -> wer = 1/8 = 0.125.
+        assert summary["wer_channel"] == pytest.approx(0.125)
+        # wer_mix: 2 window-utterances, refs = [4,4] words, one sub total
+        # (w2 mix) -> S=1,D=0,I=0,H=(4+3)=7 -> wer = 1/8 = 0.125.
+        assert summary["wer_mix"] == pytest.approx(0.125)
+        assert set(summary) == {"wer_channel", "wer_mix"}
 
     def test_writes_jsonl_and_summary_artifacts_under_scoring_dir(self, tmp_path):
         inference_dir = self._build_inference_dir(tmp_path)
@@ -464,160 +298,166 @@ class TestCallRoundTrip:
         assert len(jsonl_lines) == 2
         records = [json.loads(line) for line in jsonl_lines]
         assert [r["window_id"] for r in records] == ["sess_w00000", "sess_w00001"]
+        # Debug-only per-window WER is present but is NOT what the summary
+        # is computed from (that's the pooled-counts path, tested above).
+        assert records[1]["channels"][0]["wer"] == pytest.approx(0.5)
 
         on_disk_summary = json.loads((scoring_dir / "summary.json").read_text("utf-8"))
         assert on_disk_summary == summary
 
     def test_meta_relative_paths_resolve_against_the_test_dir(self, tmp_path):
         # Same invariant tests/test_measure.py checks for the stub metric:
-        # gen_wav paths in the meta JSON are relative to inference_dir/valid,
-        # and this metric must actually open the files there (not merely
-        # parse JSON structurally). A wrong test_dir would raise FileNotFound
-        # when soundfile tries to read the (nonexistent) resolved path.
+        # gen_wav/mix_wav paths in the meta JSON are relative to
+        # inference_dir/valid, and this metric must actually open the files
+        # there (not merely parse JSON structurally).
         inference_dir = self._build_inference_dir(tmp_path)
         data = {"meta": inference_dir / "valid" / "meta.scp"}
 
         summary = self._metric()(data, "valid", inference_dir)
-        assert summary["wer_ch_mean"] == pytest.approx(0.125)
+        assert summary["wer_channel"] == pytest.approx(0.125)
+
+
+class TestCallRoundTripMixOrdering:
+    def test_wer_mix_reference_follows_start_time_not_channel_index(self, tmp_path):
+        # Channel 1's turn (per turn_starts) happens BEFORE channel 0's, so
+        # the mix reference must read "beta alpha" (time order), not
+        # "alpha beta" (channel-index order) -- exercised through the real
+        # __call__ / _score_window path, not the pure _mix_reference helper.
+        inference_dir = tmp_path / "infer"
+        test_dir = inference_dir / "valid"
+        _write_window(
+            test_dir, "sess_w00000", "alpha", "beta", turn_starts=[5.0, 1.0]
+        )
+        _write_meta_scp(test_dir, ["sess_w00000"])
+
+        transcriber = _QueueTranscriber(
+            ["alpha", "beta", "beta alpha"]  # ch0, ch1, mix (perfect mix hyp)
+        )
+        metric = ConversationASRMetric(
+            transcriber=transcriber, normalizer=_trivial_normalizer
+        )
+        data = {"meta": test_dir / "meta.scp"}
+
+        summary = metric(data, "valid", inference_dir)
+
+        assert summary["wer_mix"] == pytest.approx(0.0)
+
+        scoring_dir = inference_dir / "valid" / "scoring" / "conversation_asr"
+        record = json.loads(
+            (scoring_dir / "windows.jsonl").read_text("utf-8").splitlines()[0]
+        )
+        assert record["mix"]["ref_text"] == "beta alpha"
+
+
+class TestCallRoundTripNormalization:
+    def test_normalizer_applies_to_both_hypothesis_and_reference(self, tmp_path):
+        # ref_text is upper-case, the fake transcriber's hypothesis is
+        # lower-case; without normalizing BOTH sides to the same case, jiwer
+        # (case-sensitive) would score every word as an error. A lowering
+        # normalizer applied symmetrically must make this a perfect match.
+        inference_dir = tmp_path / "infer"
+        test_dir = inference_dir / "valid"
+        _write_window(test_dir, "sess_w00000", "HELLO WORLD")
+        _write_meta_scp(test_dir, ["sess_w00000"])
+
+        transcriber = _QueueTranscriber(["hello world", "hello world"])
+        metric = ConversationASRMetric(
+            transcriber=transcriber, normalizer=str.lower
+        )
+        data = {"meta": test_dir / "meta.scp"}
+
+        summary = metric(data, "valid", inference_dir)
+
+        assert summary["wer_channel"] == pytest.approx(0.0)
+        assert summary["wer_mix"] == pytest.approx(0.0)
 
 
 class TestCallRoundTripEdgeCases:
-    """``__call__``-level coverage for two shapes previously verified only by
-    library probing (a REPL/unit check of the underlying primitive, never
-    through the full metric): a single-channel window (``_cpwer``'s ``n=1``
-    identity path, exercised here through ``_score_window``/``__call__``
-    rather than only via ``TestCpwer.test_single_channel_is_trivially_identity``'s
-    direct call), and a window with an empty reference text on one channel
-    (``jiwer.wer("", hyp)`` probed directly at the library level, never
-    through this metric's normalizer -> jiwer plumbing).
-    """
-
-    def test_single_channel_window_does_not_crash_and_has_identity_assignment(
-        self, tmp_path
-    ):
+    def test_single_channel_window_does_not_crash(self, tmp_path):
         inference_dir = tmp_path / "infer"
         test_dir = inference_dir / "valid"
-        # _write_window generalizes over channel count: ONE ref = ONE channel.
         _write_window(test_dir, "sess_w00000", "hello world")
         _write_meta_scp(test_dir, ["sess_w00000"])
 
-        transcriber = _QueueTranscriber(
-            [[Word("hello", 0.0, 0.0), Word("world", 0.1, 0.1)]]
-        )
+        transcriber = _QueueTranscriber(["hello world", "hello world"])
         metric = ConversationASRMetric(
-            transcriber=transcriber,
-            normalizer=_trivial_normalizer,
-            vad=_ListVAD([(0.0, 0.5)]),
-            pad=0.0,
+            transcriber=transcriber, normalizer=_trivial_normalizer
         )
         data = {"meta": test_dir / "meta.scp"}
 
         summary = metric(data, "valid", inference_dir)
 
-        assert summary["wer_ch_mean"] == pytest.approx(0.0)
-        assert summary["cpwer"] == pytest.approx(0.0)
-        assert summary["swap_rate"] == pytest.approx(0.0)  # n=1 is trivially identity
-        assert set(summary) == {
-            "wer_ch_mean",
-            "wer_ch_worst",
-            "cpwer",
-            "swap_rate",
-            "turn_order_acc",
-            "kendall_tau",
-            "turn_count_ratio",
-        }
+        assert summary["wer_channel"] == pytest.approx(0.0)
+        assert summary["wer_mix"] == pytest.approx(0.0)
 
     def test_empty_reference_text_channel_does_not_crash(self, tmp_path):
-        inference_dir = tmp_path / "infer"
-        test_dir = inference_dir / "valid"
         # ch0 has no scripted reference text at all (e.g. an entirely-silent
-        # generated-region channel); ch1 has a normal reference.
-        _write_window(test_dir, "sess_w00000", "", "gamma delta")
-        _write_meta_scp(test_dir, ["sess_w00000"])
-
-        transcriber = _QueueTranscriber(
-            [
-                [],  # ch0: nothing transcribed
-                [Word("gamma", 1.0, 1.0), Word("delta", 1.1, 1.1)],  # ch1: exact
-            ]
-        )
-        metric = ConversationASRMetric(
-            transcriber=transcriber,
-            normalizer=_trivial_normalizer,
-            vad=_ListVAD([(0.0, 0.5)]),
-            pad=0.0,
-        )
-        data = {"meta": test_dir / "meta.scp"}
-
-        summary = metric(data, "valid", inference_dir)
-
-        # ch0: ref="" hyp="" -> 0 error (jiwer.wer("", "") == 0); ch1: exact.
-        assert summary["wer_ch_mean"] == pytest.approx(0.0)
-        assert summary["cpwer"] == pytest.approx(0.0)
-        # A key can legitimately be undefined (None, not a fabricated
-        # number) when no window produced data for it -- see _common.py.
-        assert all(isinstance(v, (float, int)) or v is None for v in summary.values())
-
-
-class TestCallRoundTripOutOfOrderDetection:
-    """The headline capability -- detecting a CROSS-CHANNEL turn-order
-    violation -- exercised through the real ``__call__``/``_score_window``
-    scatter, not the ``_pooled_realized_time`` test helper. This is the
-    same pooling code path production runs, so a scatter bug (e.g. an
-    off-by-one in ``channel_positions``) would show up here even though the
-    pure-function tests in ``TestScriptFollowingPooling`` already prove the
-    aggregation math itself is correct.
-    """
-
-    def test_channel_speaking_out_of_script_order_lowers_turn_order_acc(
-        self, tmp_path
-    ):
+        # generated channel); ch1 is normal. The window-level turns list
+        # only has ch1's turn (ch0 contributed no turn), so wer_mix's
+        # reference is unaffected.
         inference_dir = tmp_path / "infer"
         test_dir = inference_dir / "valid"
-        # Script order (per _write_window): ch0's turn @ boundary=5.0, then
-        # ch1's turn @ 6.5 -- ch1 is scripted to speak SECOND.
-        _write_window(test_dir, "sess_w00000", "hello world", "foo bar")
+        test_dir.mkdir(parents=True)
+        _write_wav(test_dir / "wav" / "sess_w00000_ch0.wav")
+        _write_wav(test_dir / "wav" / "sess_w00000_ch1.wav")
+        _write_wav(test_dir / "prompt" / "sess_w00000_ch0.wav")
+        _write_wav(test_dir / "prompt" / "sess_w00000_ch1.wav")
+        _write_wav(test_dir / "mix" / "sess_w00000.wav")
+        meta = {
+            "window_id": "sess_w00000",
+            "session_id": "sess",
+            "mode": "generate",
+            "sample_rate": 24000,
+            "num_channels": 2,
+            "window_duration_sec": 12.0,
+            "rtf": 0.5,
+            "mix_wav": "mix/sess_w00000.wav",
+            "prompt": {"total_sec": 4.0, "total_frames": 375, "turns": []},
+            "channels": [
+                {
+                    "gen_wav": "wav/sess_w00000_ch0.wav",
+                    "prompt_wav": "prompt/sess_w00000_ch0.wav",
+                    "gt_wav": "wav/sess_w00000_ch0.wav",
+                    "ref_text": "",
+                },
+                {
+                    "gen_wav": "wav/sess_w00000_ch1.wav",
+                    "prompt_wav": "prompt/sess_w00000_ch1.wav",
+                    "gt_wav": "wav/sess_w00000_ch1.wav",
+                    "ref_text": "gamma delta",
+                },
+            ],
+            "turns": [
+                {"channel": 1, "text": "gamma delta", "start": 1.5, "end": 2.5}
+            ],
+        }
+        (test_dir / "meta").mkdir(parents=True, exist_ok=True)
+        (test_dir / "meta/sess_w00000.json").write_text(
+            json.dumps(meta), encoding="utf-8"
+        )
         _write_meta_scp(test_dir, ["sess_w00000"])
 
-        # But channel 1 actually speaks FIRST (negative local time, well
-        # before channel 0's realized time) -- a real interleaving
-        # violation between speakers, exactly the failure mode PLAN-step4.md
-        # calls out ("script order violated").
         transcriber = _QueueTranscriber(
-            [
-                [Word("hello", 5.0, 5.0), Word("world", 5.5, 5.5)],  # ch0
-                [Word("foo", -1.0, -1.0), Word("bar", -0.5, -0.5)],  # ch1
-            ]
+            ["", "gamma delta", "gamma delta"]  # ch0, ch1, mix
         )
         metric = ConversationASRMetric(
-            transcriber=transcriber,
-            normalizer=_trivial_normalizer,
-            vad=_ListVAD([(0.0, 0.5)]),
-            pad=0.0,
+            transcriber=transcriber, normalizer=_trivial_normalizer
         )
         data = {"meta": test_dir / "meta.scp"}
 
         summary = metric(data, "valid", inference_dir)
 
-        # 2 realized turns, actual time order reversed vs script order ->
-        # 0/2 positions match, and the single pair is discordant.
-        assert summary["turn_order_acc"] == pytest.approx(0.0)
-        assert summary["kendall_tau"] == pytest.approx(-1.0)
-        assert summary["turn_count_ratio"] == pytest.approx(1.0)
-        # WER/cpWER are unaffected by ordering -- both channels still
-        # transcribed exactly, sanity-checking the two behaviors are
-        # independent in the shipped code.
-        assert summary["wer_ch_mean"] == pytest.approx(0.0)
+        # ch0: ref="" hyp="" -> S=D=I=0, H=0 -> per-utterance WER undefined,
+        # but the pooled denominator still has ch1's 2 ref words -> defined.
+        assert summary["wer_channel"] == pytest.approx(0.0)
+        assert summary["wer_mix"] == pytest.approx(0.0)
 
 
 # --------------------------------------------------------------------------- #
 # conf/metrics.yaml wiring: the binding constraint that the shipped config
 # instantiates every metric offline with its real (lazy) defaults, i.e.
 # constructing ConversationASRMetric() from the config never downloads.
-# Mirrors the equivalent test in test_speaker_metric.py / test_quality_metric.py
-# / test_interaction_metric.py, closing the previously-deferred gap that only
-# those three metrics' own entries were individually guarded (see
-# .superpowers/sdd/progress.md, Task 3 note).
+# Mirrors the equivalent test in test_speaker_metric.py / test_quality_metric.py.
 # --------------------------------------------------------------------------- #
 class TestMetricsConfigInstantiatesOffline:
     def test_conversation_asr_metric_entry_instantiates_without_network(
@@ -659,9 +499,8 @@ class TestMetricsConfigInstantiatesOffline:
         assert metric.transcriber._model is None
         assert isinstance(metric.normalizer, WhisperEnglishNormalizer)
         assert metric.normalizer._normalizer is None
-        assert metric.vad.backend._model is None
 
-    # The all-four-entries-instantiate-together check already lives in
+    # The all-three-entries-instantiate-together check already lives in
     # tests/test_speaker_metric.py's TestMetricsConfigInstantiatesOffline
     # (test_every_configured_metric_instantiates_without_network); no need
     # to duplicate that loop here.
@@ -669,8 +508,7 @@ class TestMetricsConfigInstantiatesOffline:
 
 # --------------------------------------------------------------------------- #
 # asset-gated real-backend smoke: skipped unless faster-whisper AND
-# openai-whisper are actually installed (neither is available locally per
-# the task brief; this closes the gap on a machine that has them).
+# openai-whisper are actually installed.
 # --------------------------------------------------------------------------- #
 @pytest.mark.skipif(
     not (_HAS_FASTER_WHISPER and _HAS_OPENAI_WHISPER),
@@ -686,5 +524,5 @@ class TestRealBackendsSmoke:
     def test_real_transcriber_does_not_crash_on_silence(self):
         transcriber = FasterWhisperTranscriber(model_size="tiny")
         silence = np.zeros(16000, dtype=np.float32)
-        words = transcriber(silence, 16000)
-        assert isinstance(words, list)
+        result = transcriber(silence, 16000)
+        assert isinstance(result, str)

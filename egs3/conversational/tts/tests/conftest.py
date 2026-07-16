@@ -11,7 +11,6 @@ import string
 import sys
 from pathlib import Path
 
-import numpy as np
 import pytest
 import torch
 
@@ -128,38 +127,3 @@ def deterministic_span_mask(seq_len: torch.Tensor, frac_lengths: torch.Tensor):
     lengths = (frac_lengths * seq_len).long()
     start = ((seq_len - lengths) // 2).long()
     return mask_from_start_end_indices(seq_len, start, start + lengths)
-
-
-# --------------------------------------------------------------------------- #
-# shared metric-test fake: a deterministic energy-threshold VAD
-# --------------------------------------------------------------------------- #
-class _FrameEnergyVAD:
-    """Frame-wise energy-threshold VAD (was byte-identical across
-    ``test_speaker_metric.py`` / ``test_interaction_metric.py`` /
-    ``test_quality_metric.py`` before being hoisted here): splits on true
-    silence gaps, so a constructed amplitude envelope with several speech
-    blocks separated by silence yields one raw segment per block -- needed
-    to drive ``build_ipus`` into producing more than one IPU per channel.
-    """
-
-    def __init__(self, frame_sec: float = 0.01, threshold: float = 1e-6):
-        self.frame_sec = frame_sec
-        self.threshold = threshold
-
-    def __call__(self, wav, sr):
-        frame = max(1, int(round(self.frame_sec * sr)))
-        out = []
-        in_speech = False
-        start = 0
-        n = len(wav)
-        for i in range(0, n, frame):
-            block = wav[i : i + frame]
-            active = bool(np.max(np.abs(block)) > self.threshold)
-            if active and not in_speech:
-                start, in_speech = i, True
-            elif not active and in_speech:
-                out.append((start / sr, i / sr))
-                in_speech = False
-        if in_speech:
-            out.append((start / sr, n / sr))
-        return out
