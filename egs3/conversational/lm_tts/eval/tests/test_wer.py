@@ -111,9 +111,21 @@ def test_cpwer_finds_speaker_permutation():
 
 
 def test_cpwer_unbalanced_counts_unmapped_ref_as_deletions():
+    refs = {"s1": "alpha beta gamma", "s2": "delta epsilon"}
+    r = cpwer(refs, {"c0": "alpha beta gamma"})
+    assert r.counts.deletions >= 2 and r.mapping["c0"] == "s1"
+
+
+def test_cpwer_unmapped_ref_deletions_count_normalized_tokens():
+    """Pins the consistency semantics explicitly: an unmapped speaker's
+    deletions are the normalized (not raw) token count, so the pooled
+    denominator stays in the same unit as every mapped pair. Computed via
+    ``normalize`` itself so this survives normalizer version changes.
+    """
     refs = {"s1": "one two three", "s2": "four five"}
     r = cpwer(refs, {"c0": "one two three"})
-    assert r.counts.deletions >= 2 and r.mapping["c0"] == "s1"
+    expected_deletions = len(normalize("four five").split())
+    assert r.counts.deletions == expected_deletions
 
 
 def test_cpwer_unmapped_cluster_counts_as_insertions():

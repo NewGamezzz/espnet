@@ -96,23 +96,23 @@ def _unmapped_ref_counts(ref_text: str) -> ErrorCounts:
     """A speaker with no assigned cluster: its whole reference counts as
     deletions (equivalent to scoring against an empty hypothesis).
 
-    Counted on the raw (pre-``normalize``) whitespace split, not the
-    normalized token count: ``EnglishTextNormalizer`` collapses runs of
-    spelled-out numbers into a single merged digit token (e.g. ``"four
-    five"`` -> ``"45"``), which would undercount how many reference words
-    are actually being penalized.
+    Counted on ``normalize(ref_text)``, the same unit every other count in
+    this module uses, so the pooled denominator stays consistent across
+    mapped and unmapped entries. A normalized-empty unmapped ref
+    contributes 0 deletions - fine for this pseudo path only (unlike
+    ``count_errors``, which raises on an empty normalized ref for real
+    pairs).
     """
-    words = ref_text.split()
+    words = normalize(ref_text).split()
     return ErrorCounts(hits=0, substitutions=0, deletions=len(words), insertions=0)
 
 
 def _unmapped_hyp_counts(hyp_text: str) -> ErrorCounts:
     """A cluster with no assigned speaker: its whole hypothesis counts as
     insertions (equivalent to scoring an empty reference against it). See
-    ``_unmapped_ref_counts`` for why this counts raw words, not normalized
-    tokens.
+    ``_unmapped_ref_counts`` for why this counts normalized tokens.
     """
-    words = hyp_text.split()
+    words = normalize(hyp_text).split()
     return ErrorCounts(hits=0, substitutions=0, deletions=0, insertions=len(words))
 
 
