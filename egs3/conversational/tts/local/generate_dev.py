@@ -65,43 +65,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_model(config, ckpt_path: Path | None, use_ema: bool, device: torch.device):
-    from hydra.utils import instantiate
-    from omegaconf import OmegaConf
-
-    # Resolve while the node is still attached to the root config (the model
-    # block interpolates ${data_dir}/${pretrained_dir}/${seed}).
-    model_config = OmegaConf.to_container(config.model, resolve=True)
-    if ckpt_path is not None:
-        # The training ckpt supersedes every pretrained weight: skip the
-        # native checkpoint load, the embedding surgery, and the provenance
-        # check (and with them the hard dependency on downloads/ existing).
-        model_config["pretrained_ckpt"] = None
-    model = instantiate(model_config)
-    if ckpt_path is not None:
-        ckpt = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        if use_ema and "ema_model_state_dict" in ckpt:
-            prefix = "ema_model."
-            state = {
-                k[len(prefix) :]: v
-                for k, v in ckpt["ema_model_state_dict"].items()
-                if k.startswith(prefix)
-            }
-            print(f"loaded EMA weights from {ckpt_path}")
-        else:
-            state = ckpt.get("state_dict", ckpt)
-            print(f"loaded raw weights from {ckpt_path}")
-        model.load_state_dict(state, strict=True)
-    return model.to(device).eval()
-
-
-def load_vocoder(device: torch.device):
-    # Same Vocos as espnet2/tts/f5/inference.py::F5TTSInference._load_vocoder.
-    from vocos import Vocos
-
-    return Vocos.from_pretrained("charactr/vocos-mel-24khz").to(device).eval()
-
-
 def main() -> None:
     args = parse_args()
     from omegaconf import OmegaConf
@@ -110,6 +73,12 @@ def main() -> None:
     from egs3.conversational.tts.dataset.preprocessing.text import render_tokens
     from egs3.conversational.tts.dataset.preprocessor import (
         ConversationalTextPreprocessor,
+    )
+    from egs3.conversational.tts.src.generation import (
+        generate_region,
+        load_model,
+        load_vocoder,
+        write_wav,
     )
 
     config = OmegaConf.load(args.training_config)
@@ -159,41 +128,27 @@ def main() -> None:
     model = load_model(config, args.ckpt, use_ema=not args.no_ema, device=device)
     vocoder = load_vocoder(device)
 
-    # Every channel keeps its first prompt_frames as the acoustic prompt
-    # (lens), the ODE fills the remainder jointly with the exchanges active.
-    lens = torch.full((n,), prompt_frames, device=device, dtype=torch.long)
-    with torch.inference_mode():
-        mel, _ = model.cfm.sample(
-            cond=speech,  # raw wave rows; CFM extracts the mel itself
-            text=text,
-            duration=total_frames,
-            counts=[n],
-            lens=lens,
-            steps=args.steps,
-            cfg_strength=args.cfg_strength,
-            sway_sampling_coef=args.sway_sampling_coef,
-            seed=args.seed,
-        )
-        gen_mel = mel[:, prompt_frames:, :].to(torch.float32)  # drop the prompt
-        wavs = vocoder.decode(gen_mel.permute(0, 2, 1)).cpu()  # (N, T_gen)
+    # Every channel keeps its first prompt_frames as the acoustic prompt, the
+    # ODE fills the remainder jointly with the exchanges active (shared path
+    # with the infer stage; see src/generation.py).
+    wavs, _ = generate_region(
+        model,
+        vocoder,
+        speech,
+        text,
+        prompt_frames,
+        total_frames,
+        steps=args.steps,
+        cfg_strength=args.cfg_strength,
+        sway_sampling_coef=args.sway_sampling_coef,
+        seed=args.seed,
+    )
 
     args.out_dir.mkdir(parents=True, exist_ok=True)
     window_id = sample["window_id"]
-    try:
-        import soundfile as sf
-
-        def write(path, wav):
-            sf.write(str(path), wav.numpy(), fs)
-
-    except ImportError:
-        import torchaudio
-
-        def write(path, wav):
-            torchaudio.save(str(path), wav.unsqueeze(0), fs)
-
     for ch in range(n):
-        write(args.out_dir / f"{window_id}_ch{ch}.wav", wavs[ch])
-    write(args.out_dir / f"{window_id}_mix.wav", wavs.sum(dim=0) / n)
+        write_wav(args.out_dir / f"{window_id}_ch{ch}.wav", wavs[ch], fs)
+    write_wav(args.out_dir / f"{window_id}_mix.wav", wavs.sum(dim=0) / n, fs)
 
     lines = [
         f"window {window_id} ({args.split}[{index}])",

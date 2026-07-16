@@ -216,6 +216,119 @@ Outputs per-channel wavs, a mixdown, and a dump of the masked scripts; separated
 Omitting `--ckpt` generates with the freshly assembled pretrained model (zero-init gates = N independent F5 passes), which is the audible baseline; with `--ckpt` the pretrained load is skipped entirely, so the `downloads/` dir is not needed on the generating machine.
 `--seed` reproduces a run bit-exactly while keeping the per-channel noise independent (`CFM.sample`'s upstream per-row reseed would start every channel from identical noise, off the training distribution).
 
+## Evaluation
+
+The eval battery is two espnet3 stages plus a report tool.
+`infer` (`src/inference.py`, `conf/inference_conversational.yaml`) batch-generates multi-channel conversations from manifest windows in one of three modes.
+`measure` (`espnet3.systems.base.metric.measure`, driven by `conf/metrics.yaml`) runs three custom metric classes (`src/metrics/`) over `infer`'s output and writes `metrics.json`.
+`local/eval_report.py` turns one or more `metrics.json` files into a single Markdown comparison table.
+No diarization is needed anywhere in the battery: this recipe's channels ARE speakers (channel = speaker, by construction, since SSSD audio is per-participant), so every speaker-attributed metric below reads straight off the channel index.
+
+### Prompt construction
+
+Each window's acoustic + text prompt is built from ONE turn per channel, sampled from elsewhere in the same conversation (never from inside the evaluated window, so there is no target leakage), and those turns are concatenated non-overlapping at the start of the conditioning speech.
+The model then generates the ENTIRE window in one pass, not just a continuation after a boundary, so every channel is guaranteed a voice reference in the prompt.
+See `src/inference.py`'s module docstring for the full turn-pool and relaxation-ladder contract.
+
+### Running the battery
+
+```bash
+cd egs3/conversational/tts
+
+# infer: batch-generate from the valid split (mode: generate is the shipped
+# default, i.e. the assembled model, zero-init gates unless --ckpt is wired
+# into conf/training_poc.yaml); writes exp/train_poc_multibranch_f5/infer_generate/valid/
+python run.py --stages infer --inference_config conf/inference_conversational.yaml
+
+# measure: score whatever infer just wrote; writes metrics.json next to it
+python run.py --stages measure --metrics_config conf/metrics.yaml
+
+# report: one Markdown table, conditions as columns
+python local/eval_report.py \
+    --label pretrained exp/train_poc_multibranch_f5/infer_generate \
+    -o exp/train_poc_multibranch_f5/report.md
+```
+
+Output paths land under `exp/train_poc_multibranch_f5/` (the TRAINING config's `exp_tag`), not the inference config's own `exp_tag: eval_pretrained`: `run.py` always loads `conf/training_poc.yaml`, and the runner propagates its `exp_tag`/`exp_dir` into the inference and metrics configs with the same overwrite-on-differ rule described below, so the inference yaml's `exp_tag` never takes effect in the default invocation.
+
+`mode: generate | gt | resynth` selects what `infer` writes for the SAME window selection and prompt construction (see above): `generate` runs the model; `gt` copies the ground-truth window audio unchanged; `resynth` round-trips that same ground truth through the F5 mel front-end and Vocos, with no model involved.
+`gt` and `resynth` are anchors, not skipped conditions: they flow through the identical `infer` output contract and the identical `measure` stage as `generate`, with zero metric-side special-casing, so a `generate`-mode score is only meaningful read AGAINST them (a mediocre WER/SIM/UTMOS next to an equally mediocre `resynth` anchor points at the vocoder/front-end, not the model).
+`mode` has no CLI override flag (this recipe's stage configs are plain YAML, not hydra dotlist overrides), so scoring the anchors means pointing `--inference_config`/`--metrics_config` at copies of the two shipped files with `mode:` changed - keep the two copies' `mode:` in lockstep (`conf/metrics.yaml`'s `inference_dir: ${exp_dir}/infer_${mode}` formula needs its own `mode:` to match whatever `infer` actually wrote, see that file's header comment).
+CRITICAL: the `measure` invocation must ALSO pass the mode-edited `--inference_config`, even though the measure stage never runs inference.
+`run.py` always loads an inference config (defaulting to the shipped generate-mode file), and the runner's context propagation copies `inference_dir` from inference_config into metrics_config whenever the two resolved values DIFFER (overwrite-on-differ, with only a logged warning) - so a `measure` run that omits the flag silently scores `infer_generate` instead of the anchor directory.
+This exact scenario is pinned by `tests/test_run.py::TestAnchorModePropagation`.
+
+```bash
+# conf/generated/ is gitignored, so the sed output below can never be
+# accidentally committed the way a stray conf/inference_gt.yaml could be.
+# It still lives under conf/ (not exp/) because espnet3's config loader
+# infers the recipe's default package from a `.../egs3/<corpus>/<system>/conf/...`
+# path segment; a copy outside conf/ would fail to load without an explicit
+# --default_package flag, which run.py's CLI does not expose.
+mkdir -p conf/generated
+for m in gt resynth; do
+  sed "s/^mode: generate/mode: $m/" conf/inference_conversational.yaml > conf/generated/inference_$m.yaml
+  sed "s/^mode: generate/mode: $m/" conf/metrics.yaml               > conf/generated/metrics_$m.yaml
+  python run.py --stages infer   --inference_config conf/generated/inference_$m.yaml
+  python run.py --stages measure --inference_config conf/generated/inference_$m.yaml \
+                                 --metrics_config   conf/generated/metrics_$m.yaml
+done
+
+python local/eval_report.py \
+    --label gt         exp/train_poc_multibranch_f5/infer_gt \
+    --label resynth    exp/train_poc_multibranch_f5/infer_resynth \
+    --label pretrained exp/train_poc_multibranch_f5/infer_generate \
+    -o exp/train_poc_multibranch_f5/report.md
+```
+
+`--label NAME INFERENCE_DIR` may be repeated for any number of conditions (add a fine-tuned checkpoint's `infer_generate` dir the same way once one exists); columns appear in the given order and a condition with no `metrics.json` yet (or missing a particular metric/key) renders as `-` rather than failing the report.
+
+### Metric glossary (summary keys in `metrics.json`)
+
+This is the lean battery from the 2026-07-15 PR #10 review: corpus-level WER, whole-signal speaker similarity, and mix UTMOS only.
+Full per-window detail lives alongside `metrics.json` under `<inference_dir>/<test_name>/scoring/<metric_name>/windows.jsonl`.
+A key with zero defined values anywhere in the run (no utterance/window/channel ever produced one) is written as `null`, never a fabricated `0.0`.
+`local/eval_report.py` renders any such `null` as `-`, the same as a metric/key that never ran at all.
+
+**`ConversationASRMetric`** (faster-whisper, one whole-file call per utterance with `vad_filter=True`, not per IPU):
+
+- `wer_channel` - corpus-level (pooled substitution/deletion/insertion/hit counts, never a mean of per-utterance WERs) WER over every channel of every window: hypothesis = the channel's whole generated wav, reference = that channel's window turn texts.
+- `wer_mix` - corpus-level WER over every window's mixdown: hypothesis = the mixdown wav, reference = ALL of the window's turns joined in start-time order across channels.
+
+**`SpeakerSimilarityMetric`** (WavLM-SV x-vector embeddings, cosine similarity, type 1 only):
+
+- `sim_o_mean` - a channel's WHOLE generated speech vs. that SAME channel's acoustic prompt (one solo turn), mean over every (window, channel) pair in the run.
+
+**`QualityMetric`** (UTMOS22-strong via `torch.hub`, mixdown only):
+
+- `utmos_mean` - one UTMOS score per window on the mixdown, mean over windows.
+
+### Deferred to the next PR
+
+The following were cut from this branch in the 2026-07-15 PR #10 review to keep the battery lean and easy to review; they may return in a later PR:
+
+- The interaction/script-following battery (dGSLM event rates, Wasserstein-1 duration distances, backchannel proxy, turn-order accuracy, Kendall tau, turn-count ratio).
+- Cross-turn speaker dynamics (consistency, drift, cross-channel confusion, generated bleed dB).
+- cpWER channel-permutation search and the `swap` flag.
+- A mixdown-diarization comparability protocol against cpWER/cpSIM baselines.
+
+### Conventions that matter when reading the numbers
+
+- **Diarization-free by construction**: every speaker-attributed metric (WER, SIM) reads the speaker directly off the channel index; there is no diarization step and none is planned for the per-channel numbers.
+- **Corpus-level WER, never a mean of per-utterance WERs**: `wer_channel` and `wer_mix` each pool substitution/deletion/insertion/hit counts across every utterance in the run, then compute one WER at summary time, so a run full of short reference utterances cannot dominate the number the way a naive mean-of-WERs would let it.
+- **UTMOS is relative-use-only**: UTMOS is a no-reference MOS predictor trained on a particular corpus distribution; treat `utmos_mean` as meaningful only RELATIVE TO the `gt`/`resynth` anchor runs on the same window selection, never as an absolute cross-corpus quality number.
+
+### Dependencies (eval-only, all lazy, none needed for training)
+
+`faster-whisper` (transcription), `openai-whisper` (only for `whisper.normalizers.EnglishTextNormalizer`; missing at real-runtime raises loudly with an install hint rather than silently falling back to a weaker normalizer, since that would corrupt cross-run WER comparability), `transformers` (WavLM-SV x-vector embedding), and `torch.hub` (UTMOS22-strong).
+Every backend is constructor-injectable and every real default defers its import/download to the first actual call, never to module import or `__init__`, so constructing any metric class - including hydra-instantiating the full `conf/metrics.yaml` - is always safe offline.
+Unit tests exercise the metric math with injected fakes, and none of this is imported anywhere on the training path.
+
+### Fail-fast on bad audio (v1 design decision)
+
+A corrupt or missing wav aborts the whole `measure` run: no metric catches or skips a bad window internally, so a single bad file fails loudly rather than the run silently under-reporting a metric over fewer windows than it claims.
+Graceful per-window skip-and-count is future work, not implemented in v1.
+
 ## Debug tools
 
 ```bash

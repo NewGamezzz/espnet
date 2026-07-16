@@ -30,7 +30,23 @@ logger = logging.getLogger(__name__)
 
 
 class ConversationalTTSSystem(BaseSystem):
-    """System with ``create_dataset`` (inherited: SSSD builder) and ``train``."""
+    """System with ``create_dataset`` (inherited SSSD builder), ``train``, a
+    recipe-local ``infer`` (multi-channel generate / gt / resynth), and
+    ``measure`` (inherited from ``BaseSystem`` unmodified: it just calls
+    ``espnet3.systems.base.metric.measure(self.metrics_config)`` over
+    whatever ``infer`` wrote, so no recipe-local override is needed here)."""
+
+    def infer(self, *args, **kwargs):
+        """Run the multi-channel infer stage (``src/inference.py``)."""
+        self._reject_stage_args("infer", args, kwargs)
+        from egs3.conversational.tts.src.inference import run_inference
+
+        logger.info(
+            "Inference start | inference_dir=%s mode=%s",
+            getattr(self.inference_config, "inference_dir", None),
+            getattr(self.inference_config, "mode", None),
+        )
+        return run_inference(self.inference_config)
 
     def _ensure_directories(self) -> None:
         config = self.training_config

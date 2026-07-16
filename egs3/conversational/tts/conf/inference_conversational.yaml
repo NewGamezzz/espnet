@@ -1,0 +1,71 @@
+##########################################################
+#           Conversational F5 - infer stage              #
+##########################################################
+# Quick usage (from the recipe dir):
+#   python run.py --stages infer \
+#       --inference_config conf/inference_conversational.yaml
+#
+# Merged over egs3/TEMPLATE/tts/conf/inference.yaml (which supplies recipe_dir,
+# exp_dir, data_dir, ...). The stage is recipe-local (src/inference.py), so the
+# TEMPLATE's model/provider/runner blocks are ignored here.
+
+# The stage self-references its training config (model / vocab / feats / hop),
+# so `infer` runs with only --inference_config, exactly as generate_dev.py
+# loads its --training_config.
+training_config: conf/training_poc.yaml
+
+# Dead in the default run.py path: run.py always loads a training config,
+# and espnet3.utils.run_utils.apply_training_experiment_context overwrites a
+# DIFFERING exp_tag/exp_dir with the training config's values (warning-only
+# log), so outputs land under exp/train_poc_multibranch_f5/, not
+# exp/eval_pretrained/. This value only takes effect for a standalone
+# stage runner that loads no training config (none exists in this recipe
+# today); kept for that documented house pattern, see the README's
+# "Running the battery" note.
+exp_tag: eval_pretrained
+
+# generate = run the model (zero-init gates unless --ckpt); gt = copy the
+# ground-truth generated region; resynth = round-trip it through mel + Vocos.
+# The three modes write layout-identical trees, one per mode.
+mode: generate
+device: cpu
+
+inference_dir: ${exp_dir}/infer_${mode}
+test_name: valid
+
+# Checkpoint handling mirrors generate_dev.py: null keeps the assembled
+# pretrained model (independent F5 passes); a Lightning ckpt supersedes it.
+ckpt: null
+use_ema: true
+
+dataset:
+  split: valid
+  manifest_path: null   # null -> resolve from the recipe data dir
+  dataset_root: null    # null -> $SSSD_ROOT / dataset config default
+
+# Window selection: filter, then a seeded, capped draw (logged + reproducible).
+selection:
+  num_active_speakers: 2
+  min_duration: null    # optional duration band (seconds); null = no bound
+  max_duration: null
+  num_windows: 50
+  seed: 0
+
+# Prompt turn selection: one turn per channel, sampled from elsewhere in the
+# same conversation (never from inside the evaluated window - leakage is
+# never allowed) and concatenated as the acoustic + text prompt.  A
+# relaxation ladder prefers non-window+solo+in-band turns, then drops the
+# duration band, then drops the solo requirement; windows where even a
+# leakage-free pick doesn't exist are skipped and counted.  See
+# src/inference.py's module docstring for the full scheme.
+prompt:
+  turn_min_sec: 2.0
+  turn_max_sec: 10.0
+  seed: 0
+
+# Multi-branch ODE sampling (as generate_dev.py / the F5 inference path).
+sampling:
+  steps: 32
+  cfg_strength: 2.0
+  sway_sampling_coef: -1.0
+  seed: 0
