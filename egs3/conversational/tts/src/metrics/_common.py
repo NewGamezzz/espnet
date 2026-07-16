@@ -114,7 +114,7 @@ def summary_value(
         key: The summary key's name, for the warning message.
         metric_name: The calling metric class's name (e.g.
             ``"ConversationASRMetric"``), for the warning message -- this
-            function is shared across all four metric modules, so the
+            function is shared across all three metric modules, so the
             caller must identify itself explicitly.
     """
     if value is None:

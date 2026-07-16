@@ -94,11 +94,13 @@ def read_audio_span(
 ) -> torch.Tensor:
     """Seek-read a multichannel ``[t0, t1)`` span of a session file and resample.
 
-    Mirrors ``ConversationDataset._load_speech``'s read/resample path exactly
-    (seek in source-rate samples, ``soundfile_read`` with ``always_2d=True``,
-    resample only if the target rate differs) so prompt-turn audio is
-    processed identically to window audio.  Returns ``(N, T)`` at
-    ``target_fs``.
+    Mirrors ``ConversationDataset._load_speech``'s read/resample path (seek in
+    source-rate samples, ``soundfile_read`` with ``always_2d=True``, resample
+    only if the target rate differs) so prompt-turn audio is processed
+    identically to window audio.  Channel-count validation is NOT repeated
+    here: the caller reads the same session file through the dataset loader
+    first, which already raises on a manifest mismatch.  Returns ``(N, T)``
+    at ``target_fs``.
     """
     start = round(t0 * source_sample_rate)
     stop = round(t1 * source_sample_rate)
