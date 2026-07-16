@@ -52,7 +52,14 @@ _CANONICAL_ORDER = [
 # glossary); a row for a key not in this list (e.g. from a future metric) is
 # appended afterward in first-seen order, the same fallback _section_order
 # uses for an unrecognized metric class.
-_CANONICAL_KEY_ORDER = ["wer_channel", "wer_mix", "sim_o_mean", "utmos_mean"]
+_CANONICAL_KEY_ORDER = [
+    "wer_channel",
+    "wer_mix",
+    "sim_o_mean",
+    "utmos_ipu_mean",
+    "utmos_mix_mean",
+    "ipu_count",
+]
 
 Condition = Tuple[str, Dict[str, Any]]
 

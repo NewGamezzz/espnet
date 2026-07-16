@@ -119,3 +119,17 @@ Deferred to a later PR (not on this branch):
 
 See README.md's Evaluation section for the current metric glossary and the full deferred list.
 5. Repeat with the fine-tuned checkpoint from the Delta batch run once it exists.
+
+## Revision (2026-07-16, first Delta run)
+
+The first real run (gt + resynth anchors + zero-gate pretrained on ~50 valid windows) exposed that the mixdown-only UTMOS definition is the least interpretable one: whole mixdowns embed overlap and silence, which UTMOS punishes regardless of audio quality (gt scored 1.52 on mixdowns vs the SSSD paper's per-utterance 2.55 +/- 0.72).
+Delta-side debugging validated per-IPU scoring (Silero VAD, 200 ms min-silence, IPUs >= 1 s): per-IPU vs manifest-per-turn UTMOS agreed within ~0.1 on both anchors, and manifest turn spans are alignment-invalid for generated audio anyway (the model places speech at times of its own choosing).
+
+`QualityMetric` therefore changed (this revision's PR):
+
+- `utmos_ipu_mean` (PRIMARY) - UTMOS per VAD-derived IPU on every channel, pooled over the run.
+- `utmos_mix_mean` - the previous `utmos_mean` (one whole-mixdown score per window), renamed and kept for continuity.
+- `ipu_count` - number of scored IPUs; a free over-generation diagnostic (pretrained produced ~2x gt's count by filling the forced window duration).
+
+The VAD backend is faster-whisper's bundled Silero ONNX model (`SileroVADSegmenter`), so no new dependency; it is constructor-injectable and lazy like every other backend.
+"Per-IPU anything" in the deferred list above narrows accordingly: per-IPU transcription and per-IPU embeddings stay deferred, per-IPU MOS is now shipped.

@@ -49,19 +49,22 @@ dataset:
 # SpeakerSimilarityMetric, QualityMetric; see README.md's Evaluation section
 # for the summary-key glossary) each iterate `meta.scp` only
 # (`inputs: {meta: meta}`). This is the lean battery from the 2026-07-15
-# PR #10 review (PLAN-step4.md's Revision section): corpus-level WER,
-# whole-signal speaker similarity, and mix UTMOS only - cross-turn speaker
-# dynamics, the interaction/script-following battery, and DNSMOS are
-# deferred to a later PR. Every backend below is the real (lazy) default --
-# nothing here is a fake/test double -- and none of it downloads or imports
-# anything until the first real `measure` call: ConversationASRMetric uses
-# faster-whisper large-v3 transcription (one call per file, `vad_filter:
-# true`) and whisper's EnglishTextNormalizer. SpeakerSimilarityMetric uses
-# WavLM-SV x-vector embedding (microsoft/wavlm-base-plus-sv - an accessible
-# default, not necessarily the checkpoint pinned for the first Delta run).
+# PR #10 review (PLAN-step4.md's Revision section) with the quality leg
+# revised after the first Delta run (2026-07-16): corpus-level WER,
+# whole-signal speaker similarity, and UTMOS per VAD-derived IPU (primary)
+# plus the mixdown score - cross-turn speaker dynamics, the
+# interaction/script-following battery, and DNSMOS are deferred to a later
+# PR. Every backend below is the real (lazy) default -- nothing here is a
+# fake/test double -- and none of it downloads or imports anything until the
+# first real `measure` call: ConversationASRMetric uses faster-whisper
+# large-v3 transcription (one call per file, `vad_filter: true`) and
+# whisper's EnglishTextNormalizer. SpeakerSimilarityMetric uses WavLM-SV
+# x-vector embedding (microsoft/wavlm-base-plus-sv - an accessible default,
+# not necessarily the checkpoint pinned for the first Delta run).
 # QualityMetric uses the UTMOS22-strong default (torch.hub-based, NOT the
 # PyPI `speechmos` package - see src/metrics/quality.py's module docstring
-# for the verified deviation from the plan's wording).
+# for the verified deviation from the plan's wording) and Silero VAD as
+# bundled with faster-whisper (no extra dependency) for IPU segmentation.
 metrics:
   - metric:
       _target_: egs3.conversational.tts.src.metrics.asr.ConversationASRMetric
