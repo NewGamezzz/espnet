@@ -45,10 +45,35 @@ def diarize(
         import torch
         from pyannote.audio import Pipeline
 
-        pipeline = Pipeline.from_pretrained(
-            "pyannote/speaker-diarization-3.1",
-            use_auth_token=hf_token or os.environ.get("HF_TOKEN"),
-        )
+        # pyannote/speaker-diarization-3.1 ships a PyTorch-Lightning
+        # checkpoint whose `torch.load` pulls globals (e.g.
+        # `torch.torch_version.TorchVersion`) that are not on PyTorch
+        # 2.6's `weights_only=True` allowlist, so the load raises
+        # UnpicklingError under torch >= 2.6. The model is a gated,
+        # explicitly license-accepted download (a trusted source), so we
+        # force `weights_only=False` for the duration of the load only,
+        # then restore `torch.load`. This is narrower and more robust
+        # than allowlisting the checkpoint's globals one at a time.
+        _orig_load = torch.load
+
+        def _trusting_load(*args, **kwargs):
+            # Force (not setdefault): pyannote loads its checkpoint via
+            # PyTorch-Lightning's `pl_load`, which passes
+            # `weights_only=True` explicitly, so a setdefault would be a
+            # no-op. Overriding is safe here - the model is a trusted,
+            # license-accepted download and the override is scoped to
+            # this one load.
+            kwargs["weights_only"] = False
+            return _orig_load(*args, **kwargs)
+
+        torch.load = _trusting_load
+        try:
+            pipeline = Pipeline.from_pretrained(
+                "pyannote/speaker-diarization-3.1",
+                use_auth_token=hf_token or os.environ.get("HF_TOKEN"),
+            )
+        finally:
+            torch.load = _orig_load
         _pipeline = pipeline.to(torch.device(device))
 
     annotation = _pipeline(wav_path)
