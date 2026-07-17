@@ -635,13 +635,23 @@ def test_importing_eval_run_eval_and_report_does_not_load_heavy_deps():
     idiom: importing these modules must never pull in torch/transformers/
     pyannote at module scope - only inside ``EvalDeps`` construction (the
     real, non-faked path) or ``main``.
+
+    We compare ``sys.modules`` before/after the import and flag only
+    NEWLY-added heavy modules: pyannote.audio ships a legacy namespace
+    ``.pth`` that does ``sys.modules.setdefault('pyannote', ...)`` at
+    interpreter startup, so a bare empty ``pyannote`` namespace stub is
+    present before any import. That stub is not an eager heavy-dep load;
+    the before/after diff correctly ignores it while still catching a real
+    ``import pyannote.audio`` (or torch/transformers) at module scope.
     """
     result = subprocess.run(
         [
             sys.executable,
             "-c",
-            "import sys, eval.run_eval, eval.report; "
-            "heavy = [m for m in sys.modules "
+            "import sys; "
+            "_before = set(sys.modules); "
+            "import eval.run_eval, eval.report; "
+            "heavy = [m for m in set(sys.modules) - _before "
             "if m.split('.')[0] in ('torch', 'transformers', 'pyannote')]; "
             "assert not heavy, heavy",
         ],
