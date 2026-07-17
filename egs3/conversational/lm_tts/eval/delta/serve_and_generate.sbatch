@@ -31,11 +31,15 @@ CONDA_ENV=/work/nvme/bbjs/ttrachu/miniconda3/envs/bagpiper
 SIF=/work/nvme/bbjs/hwang41/qwen3/apptainer/vllm_bagpiper.sif
 CKPT=/work/nvme/bbjs/hwang41/bagpiper/model_vllm/bagpiper
 export HF_HOME=/work/nvme/bbjs/ttrachu/.cache/huggingface
-# Compute nodes are egress-blocked; without these, the HF hub client's
-# HEAD-check for cached models can hang the job waiting on a connection
-# that will never succeed.
-export HF_HUB_OFFLINE=1
-export TRANSFORMERS_OFFLINE=1
+# NOTE: do NOT set HF_HUB_OFFLINE / TRANSFORMERS_OFFLINE here. Empirically
+# (Delta, 2026-07-17) exporting them - together with binding only the
+# checkpoint dir into the container - suppressed the model's audio-output
+# path: the server returned finish_reason=stop with no audio for every
+# request (0/20). The proven-good launch from the A/B harness
+# (/work/nvme/bbjs/ttrachu/ab_test/job.sh) uses `--bind /work --pwd /work`
+# and no offline vars, and produces audio reliably (20/20). The vLLM
+# server loads the checkpoint from a local path, so no HF egress is needed
+# regardless.
 
 PORT=8000
 MODEL_NAME=speechlm-qwen3-8b
@@ -70,8 +74,7 @@ trap cleanup EXIT
 
 # --- Start the vLLM server (apptainer, proven flags) --------------------
 echo "starting vLLM server on port $PORT (log: $SERVER_LOG)"
-apptainer exec --nv \
-  --bind "$CKPT:$CKPT:ro" \
+apptainer exec --nv --bind /work --pwd /work \
   "$SIF" \
   python -m vllm.entrypoints.openai.api_server \
     --model "$CKPT" \
