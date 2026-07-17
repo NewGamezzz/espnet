@@ -105,7 +105,7 @@ def reference_embedding(
     turns_for_speaker: list[dict] | None,
     embed_fn: Callable[[np.ndarray], np.ndarray],
     max_sec: float = 30.0,
-) -> np.ndarray:
+) -> np.ndarray | None:
     """Build one speaker's reference embedding from `ref_wav`.
 
     When `turns_for_speaker` is given (window-relative-seconds dicts with
@@ -113,6 +113,14 @@ def reference_embedding(
     turn spans, in the order given; otherwise embeds the whole file. The
     concatenated audio is capped to the first `max_sec` seconds before
     being passed to `embed_fn`.
+
+    Returns ``None`` when no valid reference audio remains (every turn
+    span fell outside the file or was zero-length, or the file itself is
+    empty). Embedding an empty clip yields a NaN vector, which would then
+    poison every cosine similarity against this speaker AND bias the
+    injective assignment (a single NaN score makes every permutation
+    total NaN); callers must therefore skip a ``None`` reference, the same
+    way clusters with no qualifying segment are skipped.
     """
     audio = _load_wav_mono_16k(ref_wav)
 
@@ -127,6 +135,9 @@ def reference_embedding(
 
     max_samples = int(round(max_sec * _TARGET_SR))
     audio = audio[:max_samples]
+
+    if audio.size == 0:
+        return None
 
     return embed_fn(audio)
 
@@ -202,7 +213,7 @@ def _best_injective_assignment(
 def segment_similarities(
     gen_wav: str,
     segments: list[DiarSegment],
-    ref_embs: dict[str, np.ndarray],
+    ref_embs: dict[str, np.ndarray | None],
     embed_fn: Callable[[np.ndarray], np.ndarray],
     min_sec: float = 1.0,
 ) -> SimResult:
@@ -227,7 +238,9 @@ def segment_similarities(
     cluster_embs = _embed_segments_by_cluster(gen_wav, segments, embed_fn, min_sec)
 
     clusters = sorted(cluster_embs.keys())
-    speakers = sorted(ref_embs.keys())
+    # Skip speakers whose reference crop was degenerate (None embedding);
+    # including one would inject NaN similarities and bias the assignment.
+    speakers = sorted(s for s, emb in ref_embs.items() if emb is not None)
 
     sim_matrix: dict[tuple[str, str], float] = {}
     for cluster in clusters:

@@ -17,6 +17,7 @@ Task 4's `diarize()`/`transcribe()`.
 from __future__ import annotations
 
 import importlib
+import math
 import sys
 
 import numpy as np
@@ -109,6 +110,23 @@ def test_reference_embedding_whole_file_when_turns_none(tmp_path):
     assert received == [4 * _SR]
 
 
+def test_reference_embedding_none_when_all_turns_out_of_bounds(tmp_path):
+    # Every turn span falls past the end of a 4s ref wav -> no valid audio.
+    # Must return None WITHOUT embedding an empty clip (which would yield a
+    # NaN vector that then poisons similarities and the assignment).
+    audio = np.zeros(4 * _SR, dtype=np.float32)
+    wav_path = _write_wav(tmp_path / "ref.wav", audio)
+
+    received: list[int] = []
+    turns = [{"speaker": "spk1", "start": 10.0, "end": 12.0, "text": "gone"}]
+    result = reference_embedding(
+        wav_path, turns, _sample_count_embed_fn(received), max_sec=30.0
+    )
+
+    assert result is None
+    assert received == []  # embed_fn never called on empty audio
+
+
 # ---------------------------------------------------------------------------
 # segment_similarities
 # ---------------------------------------------------------------------------
@@ -168,6 +186,29 @@ def test_segment_similarities_single_speaker_margin_is_none(tmp_path):
     result = segment_similarities(gen_wav, segments, ref_embs, _fake_embed_fn())
 
     assert result.margin_mean is None
+
+
+def test_segment_similarities_skips_none_reference_speaker(tmp_path):
+    # A speaker whose reference crop was degenerate (None embedding) must
+    # be excluded, not injected as NaN similarities that bias assignment.
+    gen_wav = _two_tone_gen_wav(tmp_path / "gen.wav")
+    segments = [
+        DiarSegment(start=0.0, end=2.0, cluster="A"),
+        DiarSegment(start=2.0, end=4.0, cluster="B"),
+    ]
+
+    plain = _fake_embed_fn()
+    ref_embs = {
+        "spk1": plain(np.full(_SR, 0.1, dtype=np.float32)),
+        "spk2": None,  # degenerate reference
+    }
+
+    result = segment_similarities(gen_wav, segments, ref_embs, _fake_embed_fn())
+
+    # spk2 is excluded: no pair mentions it, and nothing is NaN.
+    assert all(speaker == "spk1" for (_cluster, speaker) in result.sim_matrix)
+    assert not math.isnan(result.sim_own_mean)
+    assert result.margin_mean is None  # only one usable speaker
 
 
 # ---------------------------------------------------------------------------
