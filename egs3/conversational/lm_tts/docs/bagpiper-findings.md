@@ -359,3 +359,57 @@ Validated against `config.json`: built vocab = 256 special + 151936 text + 8*102
 **Landmine flagged for Task 6 / 12 (first real forward).** `load_bagpiper` does `model.to(dtype=bfloat16)`, which also casts the Xcodec codec inside `discrete_audio`. But `discrete_audio_feats` (raw wav) enters `encode_batch` as float32, so the first real forward may hit a bf16-codec-vs-float32-input dtype clash (or slow/unsupported bf16 CPU codec ops). If so, cast the wav to the codec dtype at the `encode_batch` call site (in the gate / caller, not in `espnet2/`), or keep the codec in float32. Also `loss_masks` come out float64 (numpy default from python-float `stream_weights`); harmless (upcast in `_loss`) but worth a glance.
 
 **Loss value: BLOCKED on this hardware (RAM).** The retained model is **16.88 GB in bf16** (8.44 B params); this machine has **16 GiB (17.18 GB) physical RAM** with ~8-9 GB free. The final model alone exceeds physical RAM, and `ParallelLLM.from_pretrained` additionally loads the full Qwen3-8B-Base base weights (~15 GB, overwritten by the checkpoint) before the shard load, so peak is ~30 GB -> the machine would thrash/swap. Per amendment 4 this is reported rather than attempted (running it risks destabilizing the machine Claude Code itself runs on; `flash_attention` is also unavailable on CPU, and MPS shares the same 16 GiB pool with a working-set cap that rejects a 15.7 GiB allocation). The numeric loss must be produced on a box with >=~24 GB RAM (or any CUDA GPU); `python scripts/gate_teacher_forced.py` will then print it with the coverage assertion already baked into `load_bagpiper`. All non-loss aspects of Task 5 (config validity, strict coverage, batch pipeline) are verified above.
+
+---
+
+## Baseline Conversational Generation Eval (2026-07-17)
+
+First end-to-end capability measurement of the pretrained BagPiper checkpoint (no fine-tune) on conversational generation, via the `eval/` battery.
+
+**Sets.** 50 SSSD test windows (`sssd_mono_*`; mono, caption-prompted, window-relative turns) plus 20 native SFT `dev_multi_talker` records (`multi_talker_tts_*`; no per-turn timestamps).
+**Generation.** vLLM fork (apptainer SIF, `mode=text_audio`, CFG 3.0, audio-temp 0.8 / text-temp 0.6, `max_tokens` 12000); SSSD produced 48/50 audio (2 `no_audio`), SFT 20/20.
+**Metrics env.** the pixi env `tools/.pixi/envs/default` (torch 2.6.0+cu124, cuDNN 9.1.0, numpy 2.4.6); whisper-large-v3 (word timestamps), pyannote `speaker-diarization-3.1` (via `pyannote.audio==3.3.2`), WavLM-base-plus-sv x-vector, UTMOS (SpeechMOS `utmos22_strong`).
+WER pools I/D/S counts across utterances then divides once (never per-utterance averaging).
+
+**Headline (`report.md`).**
+
+| run | WER_concat | cpWER | SIM_own | SIM_margin | sim_cross_gt | UTMOS |
+| --- | --- | --- | --- | --- | --- | --- |
+| sssd_gt_anchor | 0.19 | 0.33 | 0.91 | 0.23 | - | 1.64 |
+| sssd_vllm | 0.93 | 1.00 | 0.76 | 0.10 | - | 2.11 |
+| sft_gt_anchor | 0.11 | - | - | - | - | 2.37 |
+| sft_vllm | 1.40 | - | - | - | 0.79 | 1.93 |
+
+The `*_gt_anchor` rows are the ground-truth audio scored against itself: they are the pipeline calibration / ceiling, not zero.
+Read a generated row as a delta against its own anchor, not against 0 (WER) or 1 (SIM).
+
+**Pipeline validated.** GT-anchor WER (SSSD 0.19 concat, 0.15 median; SFT 0.11) and SIM_own 0.91 confirm the metric chain is sound.
+On GT audio whisper's hypothesis/reference word ratio is 0.96, so whisper is reliable and a high generated WER is not an ASR artifact.
+
+**Capability is bimodal and length/complexity-dependent, not uniformly poor.**
+SSSD: the 5 windows at <= 0.5 WER are short (median 6.6 s / 27 ref words) and can be word-perfect (best window "Glad you got that going for you", cpWER 0.00); the 42 windows > 0.5 WER are long (median 21 s / 104 ref words).
+SFT: the best 2-turn record (WER 0.33) is a coherent, correctly-ordered rendition of the reference with only TTS-level substitutions ("prepared to discuss" -> "privy to", "Sterling" -> "Tulling").
+So the model CAN produce accurate conversational speech on short / simple spans; degradation is driven by length and turn count.
+
+**Two distinct failure modes on hard spans.**
+SSSD long windows UNDER-generate: hyp/ref word ratio median 0.65, with 28/47 windows below 0.7 - the model truncates / omits content (deletion-dominated pooled counts).
+SFT hard records OVER-generate via repetition collapse: the worst record (WER 5.14) starts faithful then loops ("here here here ..." x ~50), 478 hyp words for a 90-word reference (6/20 records over-generate).
+Both are long-form degeneration, and neither is a scoring artifact: the concat-reference turn order is coherent and the good SFT case matches it, refuting a turn-order confound.
+
+**Speaker identity moderately preserved.**
+SSSD generated SIM_own 0.76 against a 0.91 GT ceiling; speaker-distinctness margin 0.10 vs 0.23 GT (generated speakers are less distinguishable from each other than the real ones).
+SFT cross-run speaker similarity is 0.79.
+
+**Naturalness (UTMOS) is not the bottleneck.**
+Generated UTMOS (2.11 SSSD, 1.93 SFT) exceeds the noisy conversational GT (1.64 SSSD): the low absolute values reflect the domain / training data, not a synthesis defect - the model's problem is what it says, not audio cleanliness.
+
+**Per-record errors (handled).** SSSD had 2 `no_audio` (finish=stop with no audio tokens) plus 1 window whose reference normalizes to empty ("Uh"); aggregates pool over scorable rows only.
+
+**Artifacts.** `report.md`, `results_*.json`, and best/worst transcript dumps live under the Delta eval output dir; a copy is in the session results bundle.
+
+**OPEN - engine equivalence (design D2).** The 5-prompt espnet-decode-path equivalence check is NOT complete.
+The espnet decode path needs the full espnet stack, which is not installed in the metrics pixi env, and the earlier attempt failed on the old conda env's broken cuDNN.
+The battery reported here is the vLLM path only (4 primary passes: SSSD/SFT x GT-anchor/vLLM).
+The espnet equivalence check remains to be run before the eval can be called engine-agnostic-validated.
+
+**Env / correctness fixes made during this run** (see git log): pyannote loads under torch >= 2.6 by scope-forcing `weights_only=False`; `serve_and_generate.sbatch` uses `--bind /work --pwd /work` with no HF offline vars (offline vars + checkpoint-only bind suppressed the audio path); the import-hygiene test tolerates pyannote's namespace `.pth`; and `_mean_ignore_none` skips NaN as well as None (a single NaN margin had poisoned `sim_margin_mean`).
