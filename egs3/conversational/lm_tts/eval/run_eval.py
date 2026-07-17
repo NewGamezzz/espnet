@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -319,7 +320,12 @@ def _safe_wer(counts: ErrorCounts | None) -> float | None:
 
 
 def _mean_ignore_none(values: Iterable[float | None]) -> float | None:
-    present = [v for v in values if v is not None]
+    # Skip both None (metric not applicable to that row, e.g. a
+    # single-cluster window has no distinctness margin) and NaN (a
+    # degenerate per-row computation). A single NaN left in would poison
+    # the whole mean via ``sum`` - observed suppressing ``sim_margin_mean``
+    # to NaN when exactly one of 35 numeric rows was NaN.
+    present = [v for v in values if v is not None and not math.isnan(v)]
     return sum(present) / len(present) if present else None
 
 

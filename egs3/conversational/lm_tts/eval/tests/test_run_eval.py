@@ -608,6 +608,23 @@ class TestAggregate:
         assert agg["wer_concat"]["wer"] is None
         assert agg["cpwer"]["wer"] is None
 
+    def test_aggregate_skips_nan_rows_in_means(self):
+        # A single NaN per-row value must not poison the pooled mean.
+        # Regression: one NaN sim_margin_mean (of 35 numeric rows)
+        # suppressed the whole sim_margin_mean aggregate to NaN.
+        rows = [
+            {"error": None, "wer_concat_counts": None, "cpwer_counts": None,
+             "sim_own_mean": 0.8, "sim_margin_mean": float("nan"),
+             "sim_cross_gt": None, "utmos": 3.0, "mapping_disagrees": None},
+            {"error": None, "wer_concat_counts": None, "cpwer_counts": None,
+             "sim_own_mean": 0.6, "sim_margin_mean": 0.2,
+             "sim_cross_gt": None, "utmos": float("nan"), "mapping_disagrees": None},
+        ]
+        agg = aggregate(rows)
+        assert agg["sim_margin_mean"] == pytest.approx(0.2)
+        assert agg["utmos_mean"] == pytest.approx(3.0)
+        assert agg["sim_own_mean"] == pytest.approx((0.8 + 0.6) / 2)
+
     def test_end_to_end_aggregate_from_run_battery(self, battery_fixture):
         rows = run_battery(
             battery_fixture["entries"],
