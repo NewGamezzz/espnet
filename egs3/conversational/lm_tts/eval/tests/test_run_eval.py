@@ -374,6 +374,69 @@ class TestEvaluateRecordSetAAnchor:
 
 
 # ---------------------------------------------------------------------------
+# evaluate_record: Set librispeech (WER/UTMOS only, no diarization)
+# ---------------------------------------------------------------------------
+
+
+def _librispeech_entry(gt_wav: str) -> dict:
+    return {
+        "example_id": "librispeech_test_clean_1089-134686-0000",
+        "set": "librispeech",
+        "system": "sys",
+        "caption": 'Please read the following text in a calm, neutral voice: "hello world"',
+        "gt_wav": gt_wav,
+        "turns": [
+            {"speaker": None, "start": None, "end": None, "text": "hello world"}
+        ],
+        "speakers": None,
+        "ref_wavs": None,
+    }
+
+
+class TestEvaluateRecordSetLibrispeech:
+    def test_skips_diarization_entirely(self, tmp_path):
+        wav = _write_two_tone_wav(tmp_path / "gen.wav", 0.1, 0.1)
+
+        def exploding_diarize(wav_path):
+            raise AssertionError("diarize_fn must not be called for set=librispeech")
+
+        deps = EvalDeps(
+            diarize_fn=exploding_diarize,
+            transcribe_fn=lambda wav_path: ("hello world", []),
+            embed_fn=_fake_embed_fn(),
+            utmos_fn=lambda wav_path: 3.5,
+        )
+
+        row = evaluate_record(_librispeech_entry(wav), wav, deps, mode="generated")
+
+        assert row["error"] is None
+        assert row["n_clusters"] is None
+        assert row["wer_concat_counts"]["hits"] == 2
+        assert row["utmos"] == pytest.approx(3.5)
+        assert row["cpwer_counts"] is None
+        assert row["sim_cross_gt"] is None
+        assert row["sim_own_mean"] is None
+
+    def test_skips_diarization_in_anchor_mode_too(self, tmp_path):
+        wav = _write_two_tone_wav(tmp_path / "gt.wav", 0.1, 0.1)
+
+        def exploding_diarize(wav_path):
+            raise AssertionError("diarize_fn must not be called for set=librispeech")
+
+        deps = EvalDeps(
+            diarize_fn=exploding_diarize,
+            transcribe_fn=lambda wav_path: ("hello world", []),
+            embed_fn=_fake_embed_fn(),
+            utmos_fn=lambda wav_path: 3.5,
+        )
+
+        row = evaluate_record(_librispeech_entry(wav), wav, deps, mode="anchor")
+
+        assert row["error"] is None
+        assert row["purity_gt"] is None
+
+
+# ---------------------------------------------------------------------------
 # evaluate_record: Set B (sft)
 # ---------------------------------------------------------------------------
 

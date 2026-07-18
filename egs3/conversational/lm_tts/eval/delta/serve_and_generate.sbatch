@@ -123,7 +123,7 @@ PYTHONPATH="$GATE_CLONE:$RECIPE_DIR:${PYTHONPATH:-}" \
     --manifest "$MANIFEST" \
     --out-dir "$OUT_DIR" \
     --port "$PORT" \
-    --concurrency 4 \
+    --concurrency "${CONCURRENCY:-4}" \
     --timeout 1200 \
     --max-tokens 12000
 CLIENT_EXIT=$?

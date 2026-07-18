@@ -180,8 +180,14 @@ def evaluate_record(
     try:
         row["duration_s"] = _wav_duration(wav_path)
 
-        segments = deps.diarize_fn(wav_path)
-        row["n_clusters"] = len({segment.cluster for segment in segments})
+        if entry["set"] == "librispeech":
+            # Single known speaker, no cloning reference: the design
+            # mandates WER/UTMOS only, so the (expensive) diarization
+            # stage is skipped outright and n_clusters stays None.
+            segments = []
+        else:
+            segments = deps.diarize_fn(wav_path)
+            row["n_clusters"] = len({segment.cluster for segment in segments})
 
         full_text, words = deps.transcribe_fn(wav_path)
         turn_texts = [turn["text"] for turn in entry["turns"]]
@@ -239,7 +245,7 @@ def evaluate_record(
 
             if mode == "anchor":
                 row["purity_gt"] = purity(segments, entry["turns"])
-        else:  # Set B (sft): no speaker labels, so no cpWER/sim_own.
+        elif entry["set"] == "sft":  # Set B: no speaker labels, so no cpWER/sim_own.
             if mode == "generated":
                 gt_segments = deps.diarize_fn(entry["gt_wav"])
                 row["sim_cross_gt"] = cluster_cross_similarity(
