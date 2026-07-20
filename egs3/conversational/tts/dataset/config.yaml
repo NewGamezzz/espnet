@@ -37,6 +37,18 @@ builder:
   # Shortest emitted window below window_min: bounds both the session tail
   # and mid-session mini-windows emitted before an oversized blocked span.
   tail_min: 5.0
+  # Transcription-hole guards (SSSD's Parakeet pseudo-labels leave stretches of
+  # real speech unlabeled; a window that sweeps one in pairs audio with a
+  # transcript that does not cover it - see preprocessing/windows.py).
+  # trim_to_turns shrinks each window to [first turn start, last turn end],
+  # losslessly removing lead-in/trail-out holes; a window trimmed below tail_min
+  # is dropped. min_coverage is a conservative backstop for interior holes: drop
+  # a window whose transcribed union covers less than this fraction of its
+  # duration (0.0 disables). A turn-coverage floor cannot distinguish a hole
+  # from a genuine silent pause, so keep it low. Both default off, preserving
+  # the current build and byte-compatibility with the bagpiper windowing copy.
+  trim_to_turns: false
+  min_coverage: 0.0
   split_ratios:
     train: 0.96
     valid: 0.02

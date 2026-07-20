@@ -569,3 +569,109 @@ class TestSelectWindowSpans:
                 for t in w.turns:
                     assert w.t0 <= t.start and t.end <= w.t1
         assert hit, "no seed produced a cut at the noisy turn end"
+
+
+class TestCoverageGuard:
+    """Optional trim_to_turns / min_coverage knobs that strip transcription
+    holes (untranscribed speech swept into a window). Both default to exact
+    no-ops so the shared windowing stays byte-compatible with the bagpiper
+    copy; the F5 recipe opts in via config."""
+
+    def test_defaults_are_noop(self):
+        # Not passing the new knobs must equal passing their off values.
+        rec = make_recording(120.0)
+        turns = dialogue_turns(120.0)
+        a, sa = build_windows(
+            "s1", rec, turns, rng=random.Random("seed"), **WINDOW_KW
+        )
+        b, sb = build_windows(
+            "s1",
+            rec,
+            turns,
+            rng=random.Random("seed"),
+            trim_to_turns=False,
+            min_coverage=0.0,
+            **WINDOW_KW,
+        )
+        assert a == b
+        assert sa == sb
+
+    def test_trim_removes_lead_in_hole(self):
+        # 12 s of leading silence then a 6 s turn in a single tail window.
+        rec = make_recording(20.0)
+        turns = [turn(0, 12.0, 18.0)]
+        off, _ = build_windows(
+            "s1", rec, turns, rng=random.Random("s"), **WINDOW_KW
+        )
+        assert (off[0].t0, off[0].t1) == (0.0, 20.0)  # hole kept when off
+        on, _ = build_windows(
+            "s1", rec, turns, rng=random.Random("s"), trim_to_turns=True, **WINDOW_KW
+        )
+        assert len(on) == 1
+        assert (on[0].t0, on[0].t1) == (12.0, 18.0)  # trimmed to the turn
+        assert on[0].turns == off[0].turns
+
+    def test_trim_below_tail_min_is_dropped(self):
+        # A 3 s turn behind a 15 s hole trims to 3 s < tail_min (5 s): dropped.
+        rec = make_recording(20.0)
+        turns = [turn(0, 15.0, 18.0)]
+        on, stats = build_windows(
+            "s1", rec, turns, rng=random.Random("s"), trim_to_turns=True, **WINDOW_KW
+        )
+        assert on == []
+        assert stats.dropped_trimmed_short_windows == 1
+        assert stats.dropped_trimmed_short_sec == pytest.approx(3.0)
+        assert stats.n_windows == 0
+
+    def test_min_coverage_drops_interior_hole(self):
+        # Two 2 s turns straddling a 14.5 s interior hole: trimming cannot
+        # remove an interior gap, but the coverage floor drops the window.
+        rec = make_recording(20.0)
+        turns = [turn(0, 0.5, 2.5), turn(1, 17.0, 19.0)]
+        kept, _ = build_windows(
+            "s1", rec, turns, rng=random.Random("s"), min_coverage=0.0, **WINDOW_KW
+        )
+        assert len(kept) == 1  # kept when floor disabled
+        dropped, stats = build_windows(
+            "s1", rec, turns, rng=random.Random("s"), min_coverage=0.5, **WINDOW_KW
+        )
+        assert dropped == []
+        assert stats.dropped_low_coverage_windows == 1
+        assert stats.dropped_low_coverage_sec == pytest.approx(20.0)
+        assert stats.n_windows == 0
+
+    def test_coverage_uses_union_not_sum(self):
+        # Both channels talk simultaneously in [0.5, 5.0] then silence: the
+        # summed turn duration (9 s / 20 s = 0.45) would clear a 0.3 floor,
+        # but the union (4.5 s / 20 s = 0.225) does not. The union must win.
+        rec = make_recording(20.0)
+        turns = [turn(0, 0.5, 5.0), turn(1, 0.5, 5.0)]
+        union_sec = sum(b - a for a, b in occupied_intervals(turns))
+        assert union_sec == pytest.approx(4.5)
+        dropped, stats = build_windows(
+            "s1", rec, turns, rng=random.Random("s"), min_coverage=0.3, **WINDOW_KW
+        )
+        assert dropped == []
+        assert stats.dropped_low_coverage_windows == 1
+
+    def test_clean_dialogue_high_coverage_kept(self):
+        # Ordinary turn-taking (3 s speech / 1 s gap = 0.75 occupancy) clears
+        # a 0.5 floor: no window is dropped and every turn stays contained.
+        rec = make_recording(120.0)
+        turns = dialogue_turns(120.0)
+        records, stats = build_windows(
+            "s1",
+            rec,
+            turns,
+            rng=random.Random("s"),
+            trim_to_turns=True,
+            min_coverage=0.5,
+            **WINDOW_KW,
+        )
+        assert records
+        assert stats.dropped_low_coverage_windows == 0
+        assert stats.dropped_trimmed_short_windows == 0
+        for w in records:
+            assert w.turns == tuple(
+                t for t in turns if t.start >= w.t0 - 1e-9 and t.end <= w.t1 + 1e-9
+            )

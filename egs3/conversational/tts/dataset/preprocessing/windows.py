@@ -27,7 +27,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from .sssd import Recording, Turn
+from .sssd import Recording, Turn, occupied_intervals
 
 # Float-safety slack for containment checks on exact-boundary turns.
 _EPS = 1e-9
@@ -90,6 +90,13 @@ class WindowingStats:
     # summary distinguishes unbreakable audio from search slivers.
     dropped_sliver_sec: float = 0.0
     dropped_empty_windows: int = 0
+    # Windows removed by the optional coverage guard (build_windows'
+    # min_coverage / trim_to_turns knobs). Both stay 0 unless a knob is set,
+    # so the default behavior - and these stats - are unchanged.
+    dropped_low_coverage_windows: int = 0
+    dropped_low_coverage_sec: float = 0.0
+    dropped_trimmed_short_windows: int = 0
+    dropped_trimmed_short_sec: float = 0.0
     # All-channel gap (next turn start - previous turn end) at each chosen
     # interior cut point; 0.0 for a zero-gap speaker exchange.
     cut_gaps: list[float] = field(default_factory=list)
@@ -100,6 +107,10 @@ class WindowingStats:
         self.dropped_tail_sec += other.dropped_tail_sec
         self.dropped_sliver_sec += other.dropped_sliver_sec
         self.dropped_empty_windows += other.dropped_empty_windows
+        self.dropped_low_coverage_windows += other.dropped_low_coverage_windows
+        self.dropped_low_coverage_sec += other.dropped_low_coverage_sec
+        self.dropped_trimmed_short_windows += other.dropped_trimmed_short_windows
+        self.dropped_trimmed_short_sec += other.dropped_trimmed_short_sec
         self.cut_gaps.extend(other.cut_gaps)
 
 
@@ -256,8 +267,26 @@ def build_windows(
     boundary_guard: float,
     tail_min: float,
     rng: random.Random,
+    trim_to_turns: bool = False,
+    min_coverage: float = 0.0,
 ) -> tuple[list[WindowRecord], WindowingStats]:
-    """Window one session: boundary selection, turn assignment, empty-window drop."""
+    """Window one session: boundary selection, turn assignment, empty-window drop.
+
+    Two optional guards strip transcription holes - stretches of real audible
+    speech that carry no turn (SSSD's Parakeet pseudo-labels have such gaps).
+    Both default to exact no-ops, so the shared windowing stays byte-compatible
+    with the bagpiper copy unless a recipe opts in.
+
+    ``trim_to_turns`` shrinks each window to ``[min turn start, max turn end]``
+    (clamped inside the original span), losslessly removing lead-in/trail-out
+    holes; a window trimmed below ``tail_min`` is dropped. ``min_coverage`` is a
+    conservative backstop for *interior* holes that trimming cannot reach: a
+    window whose transcribed union (``occupied_intervals``, so simultaneous
+    speech on two channels counts once, not twice) covers less than
+    ``min_coverage`` of its duration is dropped. Note a turn-coverage floor
+    cannot tell a transcription hole from a genuinely silent pause and drops
+    both, which is why trimming is the primary fix and this is only a floor.
+    """
     blocked = blocked_intervals(turns, boundary_guard)
     spans, stats = select_window_spans(
         blocked,
@@ -279,7 +308,28 @@ def build_windows(
             stats.n_windows -= 1
             stats.dropped_empty_windows += 1
             continue
-        edges.update(edge for edge in (t0, t1) if _EPS < edge < rec.duration - _EPS)
+        # Optional hole guards. w_t0/w_t1 are the emitted window bounds; with
+        # both knobs off they equal (t0, t1), so behavior is unchanged.
+        w_t0, w_t1 = t0, t1
+        if trim_to_turns:
+            # min/max, not inside[0]/inside[-1]: turns are start-sorted, so the
+            # last-starting turn is not the last-ending one. max(t0, ...) guards
+            # float noise so trimming only ever shrinks the span.
+            w_t0 = max(t0, min(t.start for t in inside))
+            w_t1 = min(t1, max(t.end for t in inside))
+            if w_t1 - w_t0 < tail_min:
+                stats.n_windows -= 1
+                stats.dropped_trimmed_short_windows += 1
+                stats.dropped_trimmed_short_sec += w_t1 - w_t0
+                continue
+        if min_coverage > 0.0:
+            covered = sum(b - a for a, b in occupied_intervals(inside))
+            if covered < min_coverage * (w_t1 - w_t0):
+                stats.n_windows -= 1
+                stats.dropped_low_coverage_windows += 1
+                stats.dropped_low_coverage_sec += w_t1 - w_t0
+                continue
+        edges.update(edge for edge in (w_t0, w_t1) if _EPS < edge < rec.duration - _EPS)
         records.append(
             WindowRecord(
                 window_id=f"{session_id}_w{len(records):05d}",
@@ -287,8 +337,8 @@ def build_windows(
                 audio_relpath=rec.audio_relpath,
                 num_channels=rec.num_channels,
                 sample_rate=rec.sample_rate,
-                t0=round(t0, 6),
-                t1=round(t1, 6),
+                t0=round(w_t0, 6),
+                t1=round(w_t1, 6),
                 # Turn times are rounded exactly like t0/t1: cuts land exactly
                 # on turn endpoints, whose float accumulation noise (e.g.
                 # end=912.6400000000001 vs cut rounded to 912.64) would
