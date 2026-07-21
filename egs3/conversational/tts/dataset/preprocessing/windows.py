@@ -97,6 +97,9 @@ class WindowingStats:
     dropped_low_coverage_sec: float = 0.0
     dropped_trimmed_short_windows: int = 0
     dropped_trimmed_short_sec: float = 0.0
+    # Seconds skipped by the optional snap_start_to_turn knob (silence/holes
+    # between a cut and the next turn). Stays 0 unless the knob is set.
+    snapped_gap_sec: float = 0.0
     # All-channel gap (next turn start - previous turn end) at each chosen
     # interior cut point; 0.0 for a zero-gap speaker exchange.
     cut_gaps: list[float] = field(default_factory=list)
@@ -111,6 +114,7 @@ class WindowingStats:
         self.dropped_low_coverage_sec += other.dropped_low_coverage_sec
         self.dropped_trimmed_short_windows += other.dropped_trimmed_short_windows
         self.dropped_trimmed_short_sec += other.dropped_trimmed_short_sec
+        self.snapped_gap_sec += other.snapped_gap_sec
         self.cut_gaps.extend(other.cut_gaps)
 
 
@@ -163,6 +167,14 @@ def _containing_block(
     return None
 
 
+def _next_turn_start(turn_starts: Sequence[float], t: float) -> float | None:
+    """Smallest turn start >= ``t`` (``turn_starts`` ascending), or None."""
+    for s in turn_starts:
+        if s >= t - _EPS:
+            return s
+    return None
+
+
 def select_window_spans(
     blocked: Sequence[tuple[float, float]],
     duration: float,
@@ -171,8 +183,17 @@ def select_window_spans(
     window_max: float,
     tail_min: float,
     rng: random.Random,
+    turn_starts: Sequence[float] = (),
+    snap_start_to_turn: bool = False,
 ) -> tuple[list[tuple[float, float]], WindowingStats]:
     """Greedy left-to-right span selection against the blocked-interval list.
+
+    With ``snap_start_to_turn`` (off by default), each iteration first advances
+    ``cur`` to the next turn start (``turn_starts`` ascending), skipping any
+    silence or transcription hole after the previous cut so the length budget is
+    spent on speech; the skipped seconds are recorded in ``snapped_gap_sec``.
+    Starting a window exactly on a turn start never splits a turn, so it is valid
+    even when ``boundary_guard`` would place that instant inside a blocked band.
 
     Each iteration draws a target duration uniform in [window_min, window_max]
     and applies a retry loop:
@@ -204,6 +225,14 @@ def select_window_spans(
     spans: list[tuple[float, float]] = []
     cur = 0.0
     while cur < duration - _EPS:
+        if snap_start_to_turn:
+            # Begin the next window on the next turn, skipping the intervening
+            # silence/hole; strictly non-decreasing, so the loop still advances.
+            nxt = _next_turn_start(turn_starts, cur)
+            if nxt is None or nxt >= duration - _EPS:
+                break
+            stats.snapped_gap_sec += nxt - cur
+            cur = nxt
         remaining = duration - cur
         if remaining <= window_max + _EPS:
             if remaining >= tail_min:
@@ -269,25 +298,32 @@ def build_windows(
     rng: random.Random,
     trim_to_turns: bool = False,
     min_coverage: float = 0.0,
+    snap_start_to_turn: bool = False,
 ) -> tuple[list[WindowRecord], WindowingStats]:
     """Window one session: boundary selection, turn assignment, empty-window drop.
 
-    Two optional guards strip transcription holes - stretches of real audible
+    Three optional guards strip transcription holes - stretches of real audible
     speech that carry no turn (SSSD's Parakeet pseudo-labels have such gaps).
-    Both default to exact no-ops, so the shared windowing stays byte-compatible
+    All default to exact no-ops, so the shared windowing stays byte-compatible
     with the bagpiper copy unless a recipe opts in.
 
-    ``trim_to_turns`` shrinks each window to ``[min turn start, max turn end]``
-    (clamped inside the original span), losslessly removing lead-in/trail-out
-    holes; a window trimmed below ``tail_min`` is dropped. ``min_coverage`` is a
-    conservative backstop for *interior* holes that trimming cannot reach: a
-    window whose transcribed union (``occupied_intervals``, so simultaneous
-    speech on two channels counts once, not twice) covers less than
-    ``min_coverage`` of its duration is dropped. Note a turn-coverage floor
-    cannot tell a transcription hole from a genuinely silent pause and drops
-    both, which is why trimming is the primary fix and this is only a floor.
+    ``snap_start_to_turn`` begins each window on the next turn instead of the
+    previous cut, skipping the silence/hole between them so the length budget
+    covers speech (this brackets the *leading* edge during selection; the
+    skipped seconds are counted in ``snapped_gap_sec``). ``trim_to_turns``
+    shrinks each window to ``[min turn start, max turn end]`` (clamped inside the
+    original span), losslessly removing lead-in/trail-out holes - it also
+    brackets the *trailing* edge that snap-start leaves; a window trimmed below
+    ``tail_min`` is dropped. ``min_coverage`` is a conservative backstop for
+    *interior* holes that neither reaches: a window whose transcribed union
+    (``occupied_intervals``, so simultaneous speech on two channels counts once,
+    not twice) covers less than ``min_coverage`` of its duration is dropped.
+    Note a turn-coverage floor cannot tell a transcription hole from a genuinely
+    silent pause and drops both, which is why trimming is the primary fix and
+    this is only a floor.
     """
     blocked = blocked_intervals(turns, boundary_guard)
+    turn_starts = sorted(t.start for t in turns)
     spans, stats = select_window_spans(
         blocked,
         rec.duration,
@@ -295,6 +331,8 @@ def build_windows(
         window_max=window_max,
         tail_min=tail_min,
         rng=rng,
+        turn_starts=turn_starts,
+        snap_start_to_turn=snap_start_to_turn,
     )
     records: list[WindowRecord] = []
     edges: set[float] = set()

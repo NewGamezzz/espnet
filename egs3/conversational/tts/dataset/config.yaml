@@ -49,6 +49,12 @@ builder:
   # the current build and byte-compatibility with the bagpiper windowing copy.
   trim_to_turns: false
   min_coverage: 0.0
+  # snap_start_to_turn begins each window on the next turn instead of the
+  # previous cut, skipping the silence/hole between them so the length budget
+  # covers speech (raises coverage; skipped seconds are reported as
+  # snapped-gaps). It brackets the leading edge during selection; trim_to_turns
+  # brackets the trailing edge it leaves. Defaults off (byte-compatible build).
+  snap_start_to_turn: false
   split_ratios:
     train: 0.96
     valid: 0.02

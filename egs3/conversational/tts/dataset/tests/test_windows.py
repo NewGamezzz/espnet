@@ -675,3 +675,71 @@ class TestCoverageGuard:
             assert w.turns == tuple(
                 t for t in turns if t.start >= w.t0 - 1e-9 and t.end <= w.t1 + 1e-9
             )
+
+
+class TestSnapStart:
+    """Optional snap_start_to_turn knob: begin each window at the next turn
+    instead of the previous cut, skipping intervening silence/holes so the
+    length budget covers speech. Defaults off (exact no-op)."""
+
+    def test_default_off_starts_first_window_at_zero(self):
+        # Off (default): the first window still starts at the recording edge.
+        rec = make_recording(60.0)
+        turns = dialogue_turns(60.0)
+        off, _ = build_windows("s", rec, turns, rng=random.Random("s"), **WINDOW_KW)
+        assert off[0].t0 == 0.0
+
+    def test_snap_off_equals_default(self):
+        rec = make_recording(120.0)
+        turns = dialogue_turns(120.0)
+        a, sa = build_windows("s", rec, turns, rng=random.Random("k"), **WINDOW_KW)
+        b, sb = build_windows(
+            "s", rec, turns, rng=random.Random("k"), snap_start_to_turn=False, **WINDOW_KW
+        )
+        assert a == b
+        assert sa == sb
+
+    def test_snap_begins_each_window_on_a_turn(self):
+        # A 2 s lead-in silence, then turns; snap starts the first window on the
+        # first turn and every later window on a turn too.
+        rec = make_recording(80.0)
+        turns = [
+            turn(0, 2.0, 6.0), turn(1, 7.0, 11.0), turn(0, 40.0, 44.0),
+            turn(1, 45.0, 49.0), turn(0, 60.0, 64.0),
+        ]
+        starts = {t.start for t in turns}
+        on, _ = build_windows(
+            "s", rec, turns, rng=random.Random("s"), snap_start_to_turn=True, **WINDOW_KW
+        )
+        assert on
+        assert on[0].t0 == 2.0  # skipped the 0-2 s lead-in silence
+        for w in on:
+            assert w.t0 in starts
+
+    def test_snap_skips_lead_in_gap_and_accounts_it(self):
+        # A cluster, a 30 s gap, then more turns: no window may begin inside the
+        # gap, and the skipped seconds are recorded in snapped_gap_sec.
+        rec = make_recording(80.0)
+        turns = [
+            turn(0, 2.0, 8.0), turn(1, 9.0, 15.0),      # early cluster
+            turn(0, 45.0, 51.0), turn(1, 52.0, 58.0),   # after a 30 s gap
+        ]
+        on, stats = build_windows(
+            "s", rec, turns, rng=random.Random("s"), snap_start_to_turn=True, **WINDOW_KW
+        )
+        assert on
+        for w in on:
+            assert not (15.0 - 1e-9 < w.t0 < 45.0)  # never starts inside the gap
+        assert stats.snapped_gap_sec > 0.0
+
+    def test_snap_is_deterministic(self):
+        rec = make_recording(120.0)
+        turns = dialogue_turns(120.0)
+        a, sa = build_windows(
+            "s", rec, turns, rng=random.Random("k"), snap_start_to_turn=True, **WINDOW_KW
+        )
+        b, sb = build_windows(
+            "s", rec, turns, rng=random.Random("k"), snap_start_to_turn=True, **WINDOW_KW
+        )
+        assert a == b
+        assert sa == sb
