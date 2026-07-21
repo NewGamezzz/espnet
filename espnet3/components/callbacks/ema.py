@@ -23,6 +23,7 @@ class EMACallback(pl.Callback):
         self.ema_kwargs = ema_kwargs
         self.ema: EMA | None = None
         self._backup: dict | None = None
+        self._last_global_step: int = 0
 
     def setup(self, trainer: pl.Trainer, pl_module: pl.LightningModule, stage: str):
         # Initialize EMA on the main process only, matching F5-TTS
@@ -37,6 +38,11 @@ class EMACallback(pl.Callback):
                 **self.ema_kwargs,
             ).to(pl_module.device)
 
+    def on_train_start(self, trainer, pl_module):
+        # Runs after any checkpoint restore, so on resume this picks up the
+        # restored global_step instead of replaying pre-resume steps as updates.
+        self._last_global_step = trainer.global_step
+
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
         # Mirror F5-TTS exactly:
         #   if accelerator.sync_gradients:   # a real optimizer update (end of accum)
@@ -44,14 +50,24 @@ class EMACallback(pl.Callback):
         #           ema_model.update()
         # on_train_batch_end runs AFTER optimizer.step()/scheduler.step()/zero_grad(),
         # so this is the post-zero_grad, once-per-update, main-only placement.
+        # `trainer.global_step` only advances on true optimizer steps, so updating
+        # once per advance reproduces sync_gradients exactly — including the
+        # epoch-final partial accumulation window, which Lightning flushes with a
+        # real optimizer.step() even when (batch_idx + 1) is not divisible by
+        # accumulate_grad_batches.
         # Warmup is handled entirely inside EMA.update() via update_after_step /
         # update_every (settable through ema_kwargs) — same as upstream, which
         # never gates the call to ema_model.update() itself.
+        # At most ONE update per hook call: this hook only ever sees the
+        # post-batch weights, so replaying update() once per global_step
+        # increment (possible with multiple optimizers) would compound the
+        # decay against the same weight snapshot instead of tracking real
+        # intermediate states.
         if self.ema is None or not trainer.is_global_zero:
             return
-        accum = max(int(getattr(trainer, "accumulate_grad_batches", 1)), 1)
-        if (batch_idx + 1) % accum != 0:  # not a true optimizer step yet
-            return
+        if trainer.global_step == self._last_global_step:
+            return  # mid-accumulation micro-step, no real optimizer step
+        self._last_global_step = trainer.global_step
         self.ema.update()
 
     def _swap_in_ema(self, trainer, pl_module):
