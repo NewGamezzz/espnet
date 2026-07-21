@@ -58,12 +58,17 @@ class EMACallback(pl.Callback):
         # Warmup is handled entirely inside EMA.update() via update_after_step /
         # update_every (settable through ema_kwargs) — same as upstream, which
         # never gates the call to ema_model.update() itself.
+        # At most ONE update per hook call: this hook only ever sees the
+        # post-batch weights, so replaying update() once per global_step
+        # increment (possible with multiple optimizers) would compound the
+        # decay against the same weight snapshot instead of tracking real
+        # intermediate states.
         if self.ema is None or not trainer.is_global_zero:
             return
-        steps_advanced = trainer.global_step - self._last_global_step
+        if trainer.global_step == self._last_global_step:
+            return  # mid-accumulation micro-step, no real optimizer step
         self._last_global_step = trainer.global_step
-        for _ in range(steps_advanced):
-            self.ema.update()
+        self.ema.update()
 
     def _swap_in_ema(self, trainer, pl_module):
         """Load the EMA weights into the online model for evaluation.
