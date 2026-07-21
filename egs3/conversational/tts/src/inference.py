@@ -92,6 +92,7 @@ from typing import Any, Sequence
 
 import torch
 from omegaconf import OmegaConf
+from tqdm import tqdm
 
 from egs3.conversational.tts.src.generation import (
     build_dataset,
@@ -319,7 +320,10 @@ def run_inference(
     turn_max = float(prompt_cfg.get("turn_max_sec", 10.0))
     prompt_seed = prompt_cfg.get("seed", 0)
     samp = cfg.sampling
-    for idx in indices:
+    # tqdm renders a live bar on a tty; under a non-tty Slurm log it prints
+    # one plain line per refresh (rate + ETA), so long infer runs are
+    # observable either way.
+    for idx in tqdm(indices, desc=f"infer[{mode}]", unit="window"):
         record = dataset.records[idx]
         pool_turns = pools.get(record.session_id, [])
 
