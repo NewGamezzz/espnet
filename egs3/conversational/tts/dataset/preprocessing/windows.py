@@ -27,7 +27,7 @@ import random
 from dataclasses import dataclass, field
 from typing import Sequence
 
-from .sssd import Recording, Turn
+from .sssd import Recording, Turn, occupied_intervals
 
 # Float-safety slack for containment checks on exact-boundary turns.
 _EPS = 1e-9
@@ -90,6 +90,16 @@ class WindowingStats:
     # summary distinguishes unbreakable audio from search slivers.
     dropped_sliver_sec: float = 0.0
     dropped_empty_windows: int = 0
+    # Windows removed by the optional coverage guard (build_windows'
+    # min_coverage / trim_to_turns knobs). Both stay 0 unless a knob is set,
+    # so the default behavior - and these stats - are unchanged.
+    dropped_low_coverage_windows: int = 0
+    dropped_low_coverage_sec: float = 0.0
+    dropped_trimmed_short_windows: int = 0
+    dropped_trimmed_short_sec: float = 0.0
+    # Seconds skipped by the optional snap_start_to_turn knob (silence/holes
+    # between a cut and the next turn). Stays 0 unless the knob is set.
+    snapped_gap_sec: float = 0.0
     # All-channel gap (next turn start - previous turn end) at each chosen
     # interior cut point; 0.0 for a zero-gap speaker exchange.
     cut_gaps: list[float] = field(default_factory=list)
@@ -100,6 +110,11 @@ class WindowingStats:
         self.dropped_tail_sec += other.dropped_tail_sec
         self.dropped_sliver_sec += other.dropped_sliver_sec
         self.dropped_empty_windows += other.dropped_empty_windows
+        self.dropped_low_coverage_windows += other.dropped_low_coverage_windows
+        self.dropped_low_coverage_sec += other.dropped_low_coverage_sec
+        self.dropped_trimmed_short_windows += other.dropped_trimmed_short_windows
+        self.dropped_trimmed_short_sec += other.dropped_trimmed_short_sec
+        self.snapped_gap_sec += other.snapped_gap_sec
         self.cut_gaps.extend(other.cut_gaps)
 
 
@@ -152,6 +167,14 @@ def _containing_block(
     return None
 
 
+def _next_turn_start(turn_starts: Sequence[float], t: float) -> float | None:
+    """Smallest turn start >= ``t`` (``turn_starts`` ascending), or None."""
+    for s in turn_starts:
+        if s >= t - _EPS:
+            return s
+    return None
+
+
 def select_window_spans(
     blocked: Sequence[tuple[float, float]],
     duration: float,
@@ -160,8 +183,17 @@ def select_window_spans(
     window_max: float,
     tail_min: float,
     rng: random.Random,
+    turn_starts: Sequence[float] = (),
+    snap_start_to_turn: bool = False,
 ) -> tuple[list[tuple[float, float]], WindowingStats]:
     """Greedy left-to-right span selection against the blocked-interval list.
+
+    With ``snap_start_to_turn`` (off by default), each iteration first advances
+    ``cur`` to the next turn start (``turn_starts`` ascending), skipping any
+    silence or transcription hole after the previous cut so the length budget is
+    spent on speech; the skipped seconds are recorded in ``snapped_gap_sec``.
+    Starting a window exactly on a turn start never splits a turn, so it is valid
+    even when ``boundary_guard`` would place that instant inside a blocked band.
 
     Each iteration draws a target duration uniform in [window_min, window_max]
     and applies a retry loop:
@@ -193,6 +225,14 @@ def select_window_spans(
     spans: list[tuple[float, float]] = []
     cur = 0.0
     while cur < duration - _EPS:
+        if snap_start_to_turn:
+            # Begin the next window on the next turn, skipping the intervening
+            # silence/hole; strictly non-decreasing, so the loop still advances.
+            nxt = _next_turn_start(turn_starts, cur)
+            if nxt is None or nxt >= duration - _EPS:
+                break
+            stats.snapped_gap_sec += nxt - cur
+            cur = nxt
         remaining = duration - cur
         if remaining <= window_max + _EPS:
             if remaining >= tail_min:
@@ -256,9 +296,34 @@ def build_windows(
     boundary_guard: float,
     tail_min: float,
     rng: random.Random,
+    trim_to_turns: bool = False,
+    min_coverage: float = 0.0,
+    snap_start_to_turn: bool = False,
 ) -> tuple[list[WindowRecord], WindowingStats]:
-    """Window one session: boundary selection, turn assignment, empty-window drop."""
+    """Window one session: boundary selection, turn assignment, empty-window drop.
+
+    Three optional guards strip transcription holes - stretches of real audible
+    speech that carry no turn (SSSD's Parakeet pseudo-labels have such gaps).
+    All default to exact no-ops, so the shared windowing stays byte-compatible
+    with the bagpiper copy unless a recipe opts in.
+
+    ``snap_start_to_turn`` begins each window on the next turn instead of the
+    previous cut, skipping the silence/hole between them so the length budget
+    covers speech (this brackets the *leading* edge during selection; the
+    skipped seconds are counted in ``snapped_gap_sec``). ``trim_to_turns``
+    shrinks each window to ``[min turn start, max turn end]`` (clamped inside the
+    original span), losslessly removing lead-in/trail-out holes - it also
+    brackets the *trailing* edge that snap-start leaves; a window trimmed below
+    ``tail_min`` is dropped. ``min_coverage`` is a conservative backstop for
+    *interior* holes that neither reaches: a window whose transcribed union
+    (``occupied_intervals``, so simultaneous speech on two channels counts once,
+    not twice) covers less than ``min_coverage`` of its duration is dropped.
+    Note a turn-coverage floor cannot tell a transcription hole from a genuinely
+    silent pause and drops both, which is why trimming is the primary fix and
+    this is only a floor.
+    """
     blocked = blocked_intervals(turns, boundary_guard)
+    turn_starts = sorted(t.start for t in turns)
     spans, stats = select_window_spans(
         blocked,
         rec.duration,
@@ -266,6 +331,8 @@ def build_windows(
         window_max=window_max,
         tail_min=tail_min,
         rng=rng,
+        turn_starts=turn_starts,
+        snap_start_to_turn=snap_start_to_turn,
     )
     records: list[WindowRecord] = []
     edges: set[float] = set()
@@ -279,7 +346,28 @@ def build_windows(
             stats.n_windows -= 1
             stats.dropped_empty_windows += 1
             continue
-        edges.update(edge for edge in (t0, t1) if _EPS < edge < rec.duration - _EPS)
+        # Optional hole guards. w_t0/w_t1 are the emitted window bounds; with
+        # both knobs off they equal (t0, t1), so behavior is unchanged.
+        w_t0, w_t1 = t0, t1
+        if trim_to_turns:
+            # min/max, not inside[0]/inside[-1]: turns are start-sorted, so the
+            # last-starting turn is not the last-ending one. max(t0, ...) guards
+            # float noise so trimming only ever shrinks the span.
+            w_t0 = max(t0, min(t.start for t in inside))
+            w_t1 = min(t1, max(t.end for t in inside))
+            if w_t1 - w_t0 < tail_min:
+                stats.n_windows -= 1
+                stats.dropped_trimmed_short_windows += 1
+                stats.dropped_trimmed_short_sec += w_t1 - w_t0
+                continue
+        if min_coverage > 0.0:
+            covered = sum(b - a for a, b in occupied_intervals(inside))
+            if covered < min_coverage * (w_t1 - w_t0):
+                stats.n_windows -= 1
+                stats.dropped_low_coverage_windows += 1
+                stats.dropped_low_coverage_sec += w_t1 - w_t0
+                continue
+        edges.update(edge for edge in (w_t0, w_t1) if _EPS < edge < rec.duration - _EPS)
         records.append(
             WindowRecord(
                 window_id=f"{session_id}_w{len(records):05d}",
@@ -287,8 +375,8 @@ def build_windows(
                 audio_relpath=rec.audio_relpath,
                 num_channels=rec.num_channels,
                 sample_rate=rec.sample_rate,
-                t0=round(t0, 6),
-                t1=round(t1, 6),
+                t0=round(w_t0, 6),
+                t1=round(w_t1, 6),
                 # Turn times are rounded exactly like t0/t1: cuts land exactly
                 # on turn endpoints, whose float accumulation noise (e.g.
                 # end=912.6400000000001 vs cut rounded to 912.64) would

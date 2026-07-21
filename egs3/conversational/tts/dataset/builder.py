@@ -256,6 +256,9 @@ class SSSDBuilder(DatasetBuilder):
                     boundary_guard=_CFG["boundary_guard"],
                     tail_min=_CFG["tail_min"],
                     rng=random.Random(f"{seed}:window:{sid}"),
+                    trim_to_turns=_CFG["trim_to_turns"],
+                    min_coverage=_CFG["min_coverage"],
+                    snap_start_to_turn=_CFG["snap_start_to_turn"],
                 )
                 stats[split].merge(session_stats)
                 for record in records:
@@ -308,7 +311,12 @@ class SSSDBuilder(DatasetBuilder):
                 f"({st.dropped_span_sec / 3600:.1f}h) oversized blocked spans, "
                 f"{st.dropped_sliver_sec:.1f}s slivers, "
                 f"{st.dropped_tail_sec:.1f}s tails, "
-                f"{st.dropped_empty_windows} empty windows"
+                f"{st.dropped_empty_windows} empty windows, "
+                f"{st.dropped_low_coverage_windows} low-coverage "
+                f"({st.dropped_low_coverage_sec / 3600:.1f}h), "
+                f"{st.dropped_trimmed_short_windows} trimmed-short "
+                f"({st.dropped_trimmed_short_sec / 3600:.1f}h), "
+                f"{st.snapped_gap_sec / 3600:.1f}h snapped-gaps"
             )
             print(f"    duration[s]: {_distribution(durations[split])}")
             print(f"    turns/window: {_distribution(turns_per_window[split])}")
