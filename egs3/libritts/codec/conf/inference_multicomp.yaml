@@ -1,0 +1,43 @@
+##########################################################
+#          MULTI-COMPRESSION INFERENCE SETTING           #
+##########################################################
+# Quick usage:
+#   python run.py --stages infer \
+#       --training_config conf/training_encodec_multicomp.yaml \
+#       --inference_config conf/inference_multicomp.yaml
+#
+# Merged over egs3/TEMPLATE/codec/conf/inference.yaml (see
+# conf/inference.yaml for the merge mechanics). Runs the encode ->
+# decode roundtrip of the multi-compression fine-tuned codec at the
+# configured compression `rate`.
+#
+# The wrapped architecture is rebuilt from
+# ${exp_dir}/multicomp_model.yaml (dumped by src.factory during the
+# train stage), and the fine-tuned averaged checkpoint is loaded
+# strictly on top.
+#
+# For a rate sweep, override `rate` (and `inference_dir`, so runs do
+# not overwrite each other), e.g.:
+#   --inference_config conf/inference_multicomp.yaml \
+#   -o 'model.rate=0.25' 'inference_dir=${exp_dir}/inference_r0.25'
+
+dataset:
+  test:
+    - name: test
+      data_src_args:
+        split: test
+        inference: true
+
+model:
+  _target_: src.inference.MultiCompressionAudioCoding
+  train_config: ${exp_dir}/multicomp_model.yaml
+  # Averaged checkpoint with wrapped-layout, model-level keys. NOT
+  # last.ckpt: loading a raw Lightning checkpoint is rejected.
+  model_file: ${exp_dir}/valid.mel_loss.ave_5best.pth
+  rate: 0.5
+
+output_fn: src.inference.build_output
+output_artifacts:
+  wav:
+    type: wav
+    sample_rate: 24000

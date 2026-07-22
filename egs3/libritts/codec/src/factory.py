@@ -26,9 +26,11 @@ compression wrapper.  Lightning checkpoints saved during fine-tuning
 therefore use the wrapped key layout.
 """
 
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 import torch
+import yaml
 from omegaconf import OmegaConf
 
 from espnet2.gan_codec.shared.quantizer.residual_vq import ResidualVectorQuantizer
@@ -90,18 +92,25 @@ def _build_base_model(
         )
 
     if pretrained_model_file is not None:
-        state_dict = torch.load(pretrained_model_file, map_location="cpu")
-        prefixed = [k for k in state_dict if k.startswith("model.")]
-        if prefixed:
-            raise ValueError(
-                f"'{pretrained_model_file}' contains 'model.'-prefixed keys "
-                "(a raw Lightning checkpoint). Use the averaged checkpoint "
-                "(e.g. valid.mel_loss.ave_5best.pth), whose prefix is already "
-                "stripped."
-            )
-        model.load_state_dict(state_dict, strict=True)
+        load_model_state_strict(model, pretrained_model_file)
 
     return model
+
+
+def load_model_state_strict(model: torch.nn.Module, model_file: str) -> None:
+    """Strictly load a model-level checkpoint, rejecting Lightning layouts.
+
+    espnet2's own loading uses ``strict=False``, so a raw Lightning
+    checkpoint's ``model.``-prefixed keys would silently load nothing.
+    """
+    state_dict = torch.load(model_file, map_location="cpu")
+    if any(k.startswith("model.") for k in state_dict):
+        raise ValueError(
+            f"'{model_file}' contains 'model.'-prefixed keys (a raw Lightning "
+            "checkpoint). Use the averaged checkpoint (e.g. "
+            "valid.mel_loss.ave_5best.pth), whose prefix is already stripped."
+        )
+    model.load_state_dict(state_dict, strict=True)
 
 
 def freeze_codec_module(model: AbsGANESPnetModel, module: str = "none") -> None:
@@ -131,6 +140,7 @@ def build_multicomp_model(
     pretrained_model_file: Optional[str] = None,
     pretrained_model_tag: Optional[str] = None,
     freeze_codec_module_name: str = "none",
+    dump_config_to: Optional[str] = None,
 ) -> AbsGANESPnetModel:
     """Build a pretrained codec wrapped with the multi-compression quantizer.
 
@@ -151,6 +161,12 @@ def build_multicomp_model(
         pretrained_model_tag: espnet_model_zoo tag (e.g.
             ``espnet/libritts_encodec_24k``); weights come with the tag.
         freeze_codec_module_name: ``none`` | ``encoder`` | ``decoder``.
+        dump_config_to: when set (training config points it at
+            ``${exp_dir}/multicomp_model.yaml``), the resolved model spec
+            minus ``pretrained_model_file`` is written there so inference
+            can rebuild the wrapped architecture and load the fine-tuned
+            checkpoint on top.  This substitutes for ``save_espnet_config``,
+            which ``CodecSystem.train`` skips on the task-less Hydra path.
 
     Returns:
         ``ESPnetGANCodecModel`` (an ``AbsGANESPnetModel``, so
@@ -183,4 +199,23 @@ def build_multicomp_model(
     )
 
     freeze_codec_module(model, freeze_codec_module_name)
+
+    if dump_config_to is not None:
+        spec = {
+            "codec": codec,
+            "codec_conf": _to_plain(codec_conf),
+            "task": task,
+            "pretrained_train_config": pretrained_train_config,
+            "pretrained_model_tag": pretrained_model_tag,
+            # pretrained_model_file intentionally omitted: at inference the
+            # fine-tuned checkpoint supplies all weights.
+            "compression_model": _to_plain(compression_model),
+            "freeze_codec_module_name": freeze_codec_module_name,
+        }
+        spec = {k: v for k, v in spec.items() if v is not None}
+        dump_path = Path(dump_config_to)
+        dump_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(dump_path, "w", encoding="utf-8") as f:
+            yaml.safe_dump(spec, f, sort_keys=False)
+
     return model

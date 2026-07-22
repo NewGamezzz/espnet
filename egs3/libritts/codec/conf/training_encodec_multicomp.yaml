@@ -1,0 +1,210 @@
+##########################################################
+#          MULTI-COMPRESSION FINE-TUNING SETTING         #
+##########################################################
+# Fine-tunes a pretrained Encodec with the multi-compression quantizer
+# wrapper (per-codebook variable-rate frame merging before each RVQ
+# layer), ported from NewGamezzz/Multi-Compression-Audio-Codec.
+#
+# Quick usage:
+#   python run.py --stages create_dataset --training_config conf/training_encodec_multicomp.yaml
+#   python run.py --stages train           --training_config conf/training_encodec_multicomp.yaml
+#
+# NOTE: skip the collect_stats stage — chunk batching needs no shape
+# files (see conf/training_encodec.yaml's dataloader comment), and this
+# config's task-less Hydra model path has nothing to collect.
+#
+# NOTE: no `task:` key on purpose. CodecSystem then instantiates
+# `model:` as a Hydra _target_ (src.factory.build_multicomp_model),
+# which loads the pretrained baseline strictly BEFORE wrapping the
+# quantizer. The factory dumps the model spec to
+# ${exp_dir}/multicomp_model.yaml for the inference stage
+# (conf/inference_multicomp.yaml) to rebuild from.
+##########################################################
+#                  SYSTEM AND PATH SETTING               #
+##########################################################
+num_device: 1
+num_nodes: 1
+
+recipe_dir: .
+data_dir: ${recipe_dir}/data
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+stats_dir: ${exp_dir}/stats
+inference_dir: ${exp_dir}/inference
+
+exp_tag: train_encodec_multicomp_libritts
+
+# The baseline run this fine-tuning starts from (architecture config +
+# averaged weights). Point these at your trained baseline exp dir, or
+# switch to `pretrained_model_tag` (HF zoo, e.g.
+# espnet/libritts_encodec_24k) inside `model:` below.
+baseline_exp_dir: ${recipe_dir}/exp/train_encodec_libritts
+
+##########################################################
+#                    DATASET DEFINITION                  #
+##########################################################
+create_dataset:
+  recipe_dir: ${recipe_dir}
+
+dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  recipe_dir: ${recipe_dir}
+  train:
+    - data_src_args:
+        split: train
+  valid:
+    - data_src_args:
+        split: valid
+  preprocessor:
+    _target_: espnet2.train.preprocessor.CommonPreprocessor
+    train: true
+    token_type: null
+    speech_name: audio
+    force_single_channel: true
+    audio_pad_value: 0.0
+
+##########################################################
+#                    CODEC MODEL SETTING                 #
+##########################################################
+model:
+  _target_: src.factory.build_multicomp_model
+  pretrained_train_config: ${baseline_exp_dir}/config.yaml
+  # Averaged checkpoint (model-level keys). NOT last.ckpt — the factory
+  # rejects Lightning-prefixed checkpoints, which espnet2's strict=False
+  # loading would silently ignore.
+  pretrained_model_file: ${baseline_exp_dir}/valid.mel_loss.ave_5best.pth
+  freeze_codec_module_name: none   # none | encoder | decoder
+  dump_config_to: ${exp_dir}/multicomp_model.yaml
+  compression_model:
+    name: cosine_similarity        # cosine_similarity | density_peak | dp_segmentation | identity
+    params:
+      threshold: 1.0
+      mode: topk
+    # Training samples a compression rate per forward pass in
+    # [min_rate, max_rate]; validation always uses eval_rate so epochs
+    # are comparable.
+    min_rate: 0.1
+    max_rate: 1.0
+    random_rate: per_quantizer     # per_quantizer | per_sample | coarse-fine | fine-coarse | none
+    eval_rate: 0.5
+
+##########################################################
+#            OPTIMIZER & SCHEDULER SETTING               #
+##########################################################
+# Lower LR than the from-scratch baseline (3.0e-4): this is fine-tuning
+# of a converged codec; the source repo fine-tuned with 1.0e-4.
+optimizers:
+  generator:
+    optimizer:
+      _target_: torch.optim.AdamW
+      lr: 1.0e-4
+      betas: [0.5, 0.9]
+      eps: 1.0e-9
+      weight_decay: 0.0
+    params: generator
+    accum_grad_steps: 1
+    step_every_n_iters: 1
+    gradient_clip_val: null
+  discriminator:
+    optimizer:
+      _target_: torch.optim.AdamW
+      lr: 1.0e-4
+      betas: [0.5, 0.9]
+      eps: 1.0e-9
+      weight_decay: 0.0
+    params: discriminator
+    accum_grad_steps: 1
+    step_every_n_iters: 1
+    gradient_clip_val: null
+
+schedulers:
+  generator:
+    scheduler:
+      _target_: torch.optim.lr_scheduler.ExponentialLR
+      gamma: 0.999875
+    interval: epoch
+  discriminator:
+    scheduler:
+      _target_: torch.optim.lr_scheduler.ExponentialLR
+      gamma: 0.999875
+    interval: epoch
+
+optimizer: null
+scheduler: null
+scheduler_interval: null
+
+best_model_criterion:
+  - - valid/mel_loss
+    - 5
+    - min
+  - - train/mel_loss
+    - 5
+    - min
+  - - step
+    - 5
+    - max
+
+##########################################################
+#                   DATALOADER SETTING                   #
+##########################################################
+# Same chunk-based iteration as conf/training_encodec.yaml (see the
+# comments there for why no collect_stats shape files are needed).
+dataloader:
+  collate_fn:
+    _target_: espnet2.train.collate_fn.CommonCollateFn
+    float_pad_value: 0.0
+    int_pad_value: 0
+  train:
+    iter_factory:
+      _target_: espnet2.iterators.chunk_iter_factory.ChunkIterFactory
+      # Number of chunks / samples per batch per GPU.
+      batch_size: 4
+      chunk_length: 61440
+      num_cache_chunks: 64
+      num_samples_per_epoch: 10000
+      shuffle: true
+      num_workers: 4
+      collate_fn: ${dataloader.collate_fn}
+      batches:
+        type: unsorted
+        batch_size: 1        # required by ChunkIterFactory's per-sample sampler
+        batch_bins: 0        # required by signature, unused for "unsorted"
+        shape_files:
+          - ${data_dir}/manifest/train.tsv
+  valid:
+    iter_factory:
+      _target_: espnet2.iterators.chunk_iter_factory.ChunkIterFactory
+      batch_size: 4
+      chunk_length: 61440
+      num_cache_chunks: 64
+      shuffle: false
+      num_workers: 4
+      collate_fn: ${dataloader.collate_fn}
+      batches:
+        type: unsorted
+        batch_size: 1
+        batch_bins: 0
+        shape_files:
+          - ${data_dir}/manifest/valid.tsv
+
+##########################################################
+#                    TRAINER SETTING                     #
+##########################################################
+trainer:
+  accelerator: auto
+  devices: ${num_device}
+  num_nodes: ${num_nodes}
+  max_epochs: 60
+  check_val_every_n_epoch: 1
+  log_every_n_steps: 500
+  # For multi-GPU training (num_device > 1), set this to
+  # ddp_find_unused_parameters_true: GAN steps alternate generator/
+  # discriminator optimization (and skip_discriminator_prob skips the
+  # discriminator entirely on some steps), so each backward leaves one
+  # module's parameters without gradients, which default DDP treats as an
+  # error.
+  strategy: auto
+  gan:
+    generator_first: true
+    skip_discriminator_prob: 0.3
+
+fit: {}
