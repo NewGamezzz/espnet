@@ -117,6 +117,9 @@ def main(
         training_config=training_config,
         inference_config=inference_config,
         metrics_config=metrics_config,
+        # The codec template has no pack/upload or demo stages.
+        publication_config=None,
+        demo_config=None,
         log=logger,
     )
     validate_experiment_context(
