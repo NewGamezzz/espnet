@@ -40,8 +40,8 @@ class IdentityCompression(BaseCompressionModel):
         if padding_mask is not None:
             boundary = boundary.masked_fill(padding_mask, 0)
 
-        boundary_soft   = boundary.float()
-        segment_idx     = torch.cumsum(boundary, dim=1)
+        boundary_soft = boundary.float()
+        segment_idx = torch.cumsum(boundary, dim=1)
         expected_length = boundary_soft.sum(dim=1, keepdim=True) + 1
 
         return CompressionOutput(

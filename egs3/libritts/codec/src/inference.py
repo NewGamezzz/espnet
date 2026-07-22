@@ -94,9 +94,7 @@ class MultiCompressionAudioCoding:
         if decode_conf is not None:
             cfg.update(decode_conf)
 
-        audio = torch.as_tensor(audio, dtype=getattr(torch, self.dtype)).to(
-            self.device
-        )
+        audio = torch.as_tensor(audio, dtype=getattr(torch, self.dtype)).to(self.device)
 
         self.quantizer.set_inference_rate(cfg["rate"])
         try:

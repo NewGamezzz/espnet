@@ -1,8 +1,9 @@
-import torch
-import torch.nn as nn
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Optional
+
+import torch
+import torch.nn as nn
 
 
 @dataclass

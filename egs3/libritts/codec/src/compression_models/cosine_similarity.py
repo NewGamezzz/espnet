@@ -5,8 +5,14 @@ from .base import BaseCompressionModel, CompressionOutput
 
 
 class CosineSimilarityCompression(BaseCompressionModel):
-    def __init__(self, threshold=1, mode="topk", percent_kept_boundary=None,
-                 max_tokens_per_group=None, **kwargs):
+    def __init__(
+        self,
+        threshold=1,
+        mode="topk",
+        percent_kept_boundary=None,
+        max_tokens_per_group=None,
+        **kwargs,
+    ):
         super().__init__()
         self.threshold = threshold
         self.kwargs = kwargs
@@ -21,8 +27,9 @@ class CosineSimilarityCompression(BaseCompressionModel):
 
         if self.percent_kept_boundary is not None and self.mode != "topk":
             warning_msg = (
-                "percent_kept_boundary is provided but mode is not 'topk', it will be ignored. "
-                "Please set mode='topk' to use percent_kept_boundary or remove percent_kept_boundary if not needed."
+                "percent_kept_boundary is provided but mode is not 'topk', it "
+                "will be ignored. Please set mode='topk' to use "
+                "percent_kept_boundary or remove it if not needed."
             )
             print(f"WARNING: {warning_msg}")
 
@@ -63,7 +70,15 @@ class CosineSimilarityCompression(BaseCompressionModel):
         return cosine_sim, valid_len
 
     def _compute_stop_tokens_topk_or_num_segment(
-        self, cosine_sim, rate, valid_len, B, T, device, anchor_boundary, percent_kept_boundary
+        self,
+        cosine_sim,
+        rate,
+        valid_len,
+        B,
+        T,
+        device,
+        anchor_boundary,
+        percent_kept_boundary,
     ):
         """Shared batch loop for 'topk' and 'num_segment' modes."""
         if self.mode == "topk":
@@ -89,7 +104,9 @@ class CosineSimilarityCompression(BaseCompressionModel):
 
             if anchor_boundary is not None and percent_kept_boundary is not None:
                 anchors_b = anchor_boundary[b, 1:] == 1
-                k_anchor = min(int(percent_kept_boundary * k_b), int(anchors_b.int().sum().item()))
+                k_anchor = min(
+                    int(percent_kept_boundary * k_b), int(anchors_b.int().sum().item())
+                )
                 if k_anchor > 0:
                     sim_anchors = sim_b.clone()
                     sim_anchors[~anchors_b] = float("inf")
@@ -107,11 +124,28 @@ class CosineSimilarityCompression(BaseCompressionModel):
 
         return stop_tokens
 
-    def _compute_stop_tokens(self, cosine_sim, rate, valid_len, B, T, device, anchor_boundary, percent_kept_boundary):
+    def _compute_stop_tokens(
+        self,
+        cosine_sim,
+        rate,
+        valid_len,
+        B,
+        T,
+        device,
+        anchor_boundary,
+        percent_kept_boundary,
+    ):
         """Dispatch to mode-specific stop-token computation."""
         if self.mode in ["topk", "num_segment"]:
             return self._compute_stop_tokens_topk_or_num_segment(
-                cosine_sim, rate, valid_len, B, T, device, anchor_boundary, percent_kept_boundary
+                cosine_sim,
+                rate,
+                valid_len,
+                B,
+                T,
+                device,
+                anchor_boundary,
+                percent_kept_boundary,
             )
         if self.mode == "threshold":
             return (cosine_sim < rate).long()
@@ -127,10 +161,13 @@ class CosineSimilarityCompression(BaseCompressionModel):
             # mode only in the inequality (<= vs <), which matters at the
             # exact-equality edge case.
             return (cosine_sim <= rate).long()
-        raise ValueError(f"Invalid mode {self.mode}. Choose from 'topk', 'threshold', 'num_segment', or 'flexicodec'.")
+        raise ValueError(
+            f"Invalid mode {self.mode}. Choose from 'topk', 'threshold', "
+            "'num_segment', or 'flexicodec'."
+        )
 
     def _build_boundary(self, stop_tokens, B, device, padding_mask):
-        """Prepend t=0 zero and apply padding mask to produce a (B, T) boundary tensor."""
+        """Prepend a t=0 zero and mask padding into a (B, T) boundary tensor."""
         boundary = torch.cat(
             [torch.zeros(B, 1, device=device, dtype=stop_tokens.dtype), stop_tokens],
             dim=1,
@@ -171,7 +208,9 @@ class CosineSimilarityCompression(BaseCompressionModel):
         is_seg_start = boundary.clone().long()
         is_seg_start[:, 0] = 1
 
-        arange_t = torch.arange(T, device=device, dtype=torch.long).unsqueeze(0).expand(B, T)
+        arange_t = (
+            torch.arange(T, device=device, dtype=torch.long).unsqueeze(0).expand(B, T)
+        )
         segment_start_markers = arange_t * is_seg_start
         last_seg_start = torch.cummax(segment_start_markers, dim=1).values
         in_seg_idx = arange_t - last_seg_start
@@ -194,23 +233,32 @@ class CosineSimilarityCompression(BaseCompressionModel):
         device = x.device
         max_segments = segment_idx.max().item() + 1
         seg_ids = torch.arange(max_segments, device=device)[None, :, None]  # (1, S, 1)
-        assign = (segment_idx.unsqueeze(1) == seg_ids).float()              # (B, S, T)
+        assign = (segment_idx.unsqueeze(1) == seg_ids).float()  # (B, S, T)
         if padding_mask is not None:
             assign = assign.masked_fill(padding_mask.unsqueeze(1), 0.0)
         assign_norm = assign / (assign.sum(dim=2, keepdim=True) + 1e-6)
-        segment_means = torch.matmul(assign_norm, x)                        # (B, S, D)
-        return torch.matmul(assign.transpose(1, 2), segment_means)          # (B, T, D)
+        segment_means = torch.matmul(assign_norm, x)  # (B, S, D)
+        return torch.matmul(assign.transpose(1, 2), segment_means)  # (B, T, D)
 
     # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
-    def forward(self, x, rate=None, padding_mask=None, anchor_boundary=None, percent_kept_boundary=None, **kwargs) -> CompressionOutput:
+    def forward(
+        self,
+        x,
+        rate=None,
+        padding_mask=None,
+        anchor_boundary=None,
+        percent_kept_boundary=None,
+        **kwargs,
+    ) -> CompressionOutput:
         """
         Args:
             x: (B, T, D)
             padding_mask: (B, T), True = padding
-            anchor_boundary: (B, T) binary tensor indicating anchor boundaries to include
+            anchor_boundary: (B, T) binary tensor of anchor boundaries to
+                include
 
         Returns:
             CompressionOutput
@@ -226,7 +274,14 @@ class CosineSimilarityCompression(BaseCompressionModel):
 
         cosine_sim, valid_len = self._compute_cosine_sim(x, padding_mask)
         stop_tokens = self._compute_stop_tokens(
-            cosine_sim, rate, valid_len, B, T, device, anchor_boundary, percent_kept_boundary
+            cosine_sim,
+            rate,
+            valid_len,
+            B,
+            T,
+            device,
+            anchor_boundary,
+            percent_kept_boundary,
         )
         boundary = self._build_boundary(stop_tokens, B, device, padding_mask)
         # Optional FlexiCodec-style hard cap on segment length.  No-op when
@@ -243,4 +298,3 @@ class CosineSimilarityCompression(BaseCompressionModel):
             reconstructed_features=average_vectors,
             expected_length=expected_length,
         )
-

@@ -85,10 +85,16 @@ class RVQCompressionWrapper(nn.Module):
             n_q = n_q or len(self.layers)
 
             for idx, layer in enumerate(self.layers[:n_q]):
-                if rate is not None and isinstance(rate, torch.Tensor) and rate.dim() == 2:
+                if (
+                    rate is not None
+                    and isinstance(rate, torch.Tensor)
+                    and rate.dim() == 2
+                ):
                     rate_layer = rate[idx, :]
 
-                use_anchor = anchor_start_layer is not None and idx >= anchor_start_layer
+                use_anchor = (
+                    anchor_start_layer is not None and idx >= anchor_start_layer
+                )
                 compression_output = self.compression_model(
                     residual.transpose(1, 2),
                     rate=rate_layer,
@@ -96,14 +102,16 @@ class RVQCompressionWrapper(nn.Module):
                     anchor_boundary=anchor_boundary if use_anchor else None,
                     percent_kept_boundary=1.0 if use_anchor else None,
                 )
-                compressed_residual = compression_output.reconstructed_features.transpose(
-                    1, 2
+                compressed_residual = (
+                    compression_output.reconstructed_features.transpose(1, 2)
                 )
 
                 # Accumulate anchor from free layers only.  Trigger when
                 # explicitly asked (is_anchor_boundary) OR when
                 # anchor_start_layer is set (implicit need).
-                if (is_anchor_boundary or anchor_start_layer is not None) and not use_anchor:
+                if (
+                    is_anchor_boundary or anchor_start_layer is not None
+                ) and not use_anchor:
                     anchor_boundary = (
                         torch.logical_or(
                             anchor_boundary, compression_output.boundary_soft.bool()
@@ -144,7 +152,11 @@ class RVQCompressionWrapper(nn.Module):
                     break
                 mask = torch.full((x.shape[0],), fill_value=i, device=x.device) < n_q
 
-                if rate is not None and isinstance(rate, torch.Tensor) and rate.dim() == 2:
+                if (
+                    rate is not None
+                    and isinstance(rate, torch.Tensor)
+                    and rate.dim() == 2
+                ):
                     rate_layer = rate[i, :]
 
                 use_anchor = anchor_start_layer is not None and i >= anchor_start_layer
@@ -155,11 +167,13 @@ class RVQCompressionWrapper(nn.Module):
                     anchor_boundary=anchor_boundary if use_anchor else None,
                     percent_kept_boundary=1.0 if use_anchor else None,
                 )
-                compressed_residual = compression_output.reconstructed_features.transpose(
-                    1, 2
+                compressed_residual = (
+                    compression_output.reconstructed_features.transpose(1, 2)
                 )
 
-                if (is_anchor_boundary or anchor_start_layer is not None) and not use_anchor:
+                if (
+                    is_anchor_boundary or anchor_start_layer is not None
+                ) and not use_anchor:
                     anchor_boundary = (
                         torch.logical_or(
                             anchor_boundary, compression_output.boundary_soft.bool()
@@ -218,7 +232,9 @@ class RVQCompressionWrapper(nn.Module):
                 rate_layer = rate[st + idx, :]  # (Q, B) -> (B,)
 
             abs_idx = st + idx
-            use_anchor = anchor_start_layer is not None and abs_idx >= anchor_start_layer
+            use_anchor = (
+                anchor_start_layer is not None and abs_idx >= anchor_start_layer
+            )
             all_quantized.append(residual)
             if use_anchor:
                 # Boundaries are fixed by the anchor — keep all of them
@@ -240,7 +256,9 @@ class RVQCompressionWrapper(nn.Module):
             )
             segment_indices.append(compression_output.segment_idx)
 
-            if (is_anchor_boundary or anchor_start_layer is not None) and not use_anchor:
+            if (
+                is_anchor_boundary or anchor_start_layer is not None
+            ) and not use_anchor:
                 anchor_boundary = (
                     torch.logical_or(
                         anchor_boundary, compression_output.boundary_soft.bool()

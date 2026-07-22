@@ -34,7 +34,6 @@ import yaml
 from omegaconf import OmegaConf
 
 from espnet2.gan_codec.shared.quantizer.residual_vq import ResidualVectorQuantizer
-from espnet2.tasks.gan_codec import GANCodecTask
 from espnet2.train.abs_gan_espnet_model import AbsGANESPnetModel
 
 from .compression_models import build_compression_model
@@ -77,16 +76,17 @@ def _build_base_model(
 
         return AudioCoding.from_pretrained(model_tag=pretrained_model_tag).model
 
+    from espnet3.utils.task_utils import get_espnet_model
+
     if pretrained_train_config is not None:
         # Build from the previous run's espnet2-style config.yaml WITHOUT
-        # letting build_model_from_file load weights (it uses strict=False,
-        # which silently ignores mismatched keys).
-        model, _ = GANCodecTask.build_model_from_file(
-            pretrained_train_config, None, "cpu"
-        )
+        # loading weights here (build_model_from_file would, but with
+        # strict=False, which silently ignores mismatched keys). Merging
+        # over the task defaults also tolerates partial configs.
+        with open(pretrained_train_config, encoding="utf-8") as f:
+            train_args = yaml.safe_load(f)
+        model = get_espnet_model(task, train_args)
     else:
-        from espnet3.utils.task_utils import get_espnet_model
-
         model = get_espnet_model(
             task, {"codec": codec, "codec_conf": _to_plain(codec_conf) or {}}
         )

@@ -1,6 +1,7 @@
 import math
-import torch
 from typing import Optional
+
+import torch
 
 from .base import BaseCompressionModel, CompressionOutput
 
@@ -91,16 +92,16 @@ class DPSegmentationCompression(BaseCompressionModel):
                 break
 
             # Build sliding-window index: idx[w, t] = w + t
-            w_idx = torch.arange(n_windows, device=device)   # (n_windows,)
-            t_idx = torch.arange(s, device=device)            # (s,)
-            idx = w_idx.unsqueeze(1) + t_idx.unsqueeze(0)     # (n_windows, s)
+            w_idx = torch.arange(n_windows, device=device)  # (n_windows,)
+            t_idx = torch.arange(s, device=device)  # (s,)
+            idx = w_idx.unsqueeze(1) + t_idx.unsqueeze(0)  # (n_windows, s)
 
-            frames    = x[idx]                                 # (n_windows, s, D)
-            seg_mean  = frames.mean(dim=1, keepdim=True)       # (n_windows, 1, D)
-            l2_sum    = (frames - seg_mean).norm(dim=-1).sum(dim=1)  # (n_windows,)
+            frames = x[idx]  # (n_windows, s, D)
+            seg_mean = frames.mean(dim=1, keepdim=True)  # (n_windows, 1, D)
+            l2_sum = (frames - seg_mean).norm(dim=-1).sum(dim=1)  # (n_windows,)
 
             # 0-indexed end frames for windows of length s: s−1, s, …, T−1
-            j_vals = torch.arange(s - 1, T, device=device)    # (n_windows,)
+            j_vals = torch.arange(s - 1, T, device=device)  # (n_windows,)
             cost[j_vals, s - 1] = l2_sum
 
         return cost  # (T, U)
@@ -133,9 +134,7 @@ class DPSegmentationCompression(BaseCompressionModel):
         )
         d[0, 0] = 0.0
 
-        parent = torch.zeros(
-            (T + 1, max_segments + 1), dtype=torch.long, device=device
-        )
+        parent = torch.zeros((T + 1, max_segments + 1), dtype=torch.long, device=device)
 
         # For span s_idx (0-indexed, span length = s_idx+1):
         #   candidates[s_idx, j] = d_prev[j - s_idx] - cost[j, s_idx]
@@ -145,8 +144,8 @@ class DPSegmentationCompression(BaseCompressionModel):
         NEG_INF_T = cost.new_full((U,), NEG_INF)
 
         for i in range(1, max_segments + 1):
-            d_prev = d[:, i - 1]                        # (T+1,)
-            padded = torch.cat([NEG_INF_T, d_prev[:T]]) # (U+T,)
+            d_prev = d[:, i - 1]  # (T+1,)
+            padded = torch.cat([NEG_INF_T, d_prev[:T]])  # (U+T,)
 
             shifted = torch.stack(
                 [padded[U - s_idx : U - s_idx + T] for s_idx in range(U)], dim=0
@@ -155,10 +154,12 @@ class DPSegmentationCompression(BaseCompressionModel):
             candidates = shifted - cost.T
 
             valid = (shifted > NEG_INF) & (cost.T < float("inf"))
-            candidates = torch.where(valid, candidates, cost.new_full(candidates.shape, NEG_INF))
+            candidates = torch.where(
+                valid, candidates, cost.new_full(candidates.shape, NEG_INF)
+            )
 
             best_vals, best_s_idx = candidates.max(dim=0)
-            d[1 : T + 1, i]      = best_vals
+            d[1 : T + 1, i] = best_vals
             parent[1 : T + 1, i] = best_s_idx + 1
 
         return d, parent
@@ -215,51 +216,53 @@ class DPSegmentationCompression(BaseCompressionModel):
     # ------------------------------------------------------------------
 
     def _run_dp_anchor_subset(
-            self,
-            x_b: torch.Tensor,             # (vlen, D)
-            anchor_positions: torch.Tensor,  # (K,) sorted positions in [1, vlen)
-            num_segments: int,
-        ) -> torch.Tensor:
-            vlen   = x_b.shape[0]
-            device = x_b.device
+        self,
+        x_b: torch.Tensor,  # (vlen, D)
+        anchor_positions: torch.Tensor,  # (K,) sorted positions in [1, vlen)
+        num_segments: int,
+    ) -> torch.Tensor:
+        vlen = x_b.shape[0]
+        device = x_b.device
 
-            # Augmented candidate positions: 0, a_1, …, a_K, vlen
-            positions = torch.cat([
+        # Augmented candidate positions: 0, a_1, …, a_K, vlen
+        positions = torch.cat(
+            [
                 torch.zeros(1, dtype=torch.long, device=device),
                 anchor_positions,
                 torch.tensor([vlen], dtype=torch.long, device=device),
-            ])  # (M,) with M = K + 2
+            ]
+        )  # (M,) with M = K + 2
 
-            cost_table = self._compute_cost_table(x_b)  # (vlen, max_span)
-            
-            # Initialize everything as invalid (infinite cost)
-            constrained_cost = torch.full_like(cost_table, float("inf"))
+        cost_table = self._compute_cost_table(x_b)  # (vlen, max_span)
 
-            # ---------------------------------------------------------------
-            # FIX 2: Vectorized Span Calculation (No Python Loops)
-            # ---------------------------------------------------------------
-            # Create a matrix of all possible spans: (M, M)
-            p_end = positions.view(-1, 1)    # (M, 1)
-            p_start = positions.view(1, -1)  # (1, M)
-            spans = p_end - p_start          # (M, M) matrix of all spans
+        # Initialize everything as invalid (infinite cost)
+        constrained_cost = torch.full_like(cost_table, float("inf"))
 
-            # Build a boolean mask for valid spans
-            mask = (spans > 0) & (spans <= cost_table.shape[1])
-            if self.max_span is not None:
-                mask &= (spans <= self.max_span)
+        # ---------------------------------------------------------------
+        # FIX 2: Vectorized Span Calculation (No Python Loops)
+        # ---------------------------------------------------------------
+        # Create a matrix of all possible spans: (M, M)
+        p_end = positions.view(-1, 1)  # (M, 1)
+        p_start = positions.view(1, -1)  # (1, M)
+        spans = p_end - p_start  # (M, M) matrix of all spans
 
-            # Extract the valid end positions and valid spans
-            valid_ends = p_end.expand_as(spans)[mask]
-            valid_spans = spans[mask]
+        # Build a boolean mask for valid spans
+        mask = (spans > 0) & (spans <= cost_table.shape[1])
+        if self.max_span is not None:
+            mask &= spans <= self.max_span
 
-            # Vectorized assignment: copy only valid anchor-to-anchor costs
-            constrained_cost[valid_ends - 1, valid_spans - 1] = cost_table[valid_ends - 1, valid_spans - 1]
-            
-            # Run constrained DP
-            seg_idx_b = self._run_dp(constrained_cost, vlen, num_segments)
-            return seg_idx_b
+        # Extract the valid end positions and valid spans
+        valid_ends = p_end.expand_as(spans)[mask]
+        valid_spans = spans[mask]
 
+        # Vectorized assignment: copy only valid anchor-to-anchor costs
+        constrained_cost[valid_ends - 1, valid_spans - 1] = cost_table[
+            valid_ends - 1, valid_spans - 1
+        ]
 
+        # Run constrained DP
+        seg_idx_b = self._run_dp(constrained_cost, vlen, num_segments)
+        return seg_idx_b
 
     # ------------------------------------------------------------------
     # Fallback
@@ -270,9 +273,7 @@ class DPSegmentationCompression(BaseCompressionModel):
         """Evenly distribute T frames into num_segments segments."""
         segment_idx = torch.zeros(T, dtype=torch.long, device=device)
         for t in range(T):
-            segment_idx[t] = min(
-                int(t * num_segments / T), num_segments - 1
-            )
+            segment_idx[t] = min(int(t * num_segments / T), num_segments - 1)
         return segment_idx
 
     # ------------------------------------------------------------------
@@ -308,15 +309,18 @@ class DPSegmentationCompression(BaseCompressionModel):
         Uses scatter_add + gather instead of a dense (B, S, T) assignment
         matrix, reducing peak memory from O(B·S·T·D) to O(B·T·D).
         """
-        import torch.nn.functional as F
         B, T, D = x.shape
         device = x.device
         max_segments = int(segment_idx.max().item()) + 1
 
-        x_masked = x if padding_mask is None else x.masked_fill(padding_mask.unsqueeze(-1), 0.0)
+        x_masked = (
+            x
+            if padding_mask is None
+            else x.masked_fill(padding_mask.unsqueeze(-1), 0.0)
+        )
 
         # Scatter-add frames into segments → (B, S, D)
-        idx_exp = segment_idx.unsqueeze(-1).expand(B, T, D)    # (B, T, D)
+        idx_exp = segment_idx.unsqueeze(-1).expand(B, T, D)  # (B, T, D)
         seg_sum = torch.zeros(B, max_segments, D, device=device, dtype=x.dtype)
         seg_sum.scatter_add_(1, idx_exp, x_masked)
 
@@ -327,7 +331,7 @@ class DPSegmentationCompression(BaseCompressionModel):
         seg_count = torch.zeros(B, max_segments, 1, device=device, dtype=x.dtype)
         seg_count.scatter_add_(1, segment_idx.unsqueeze(-1), ones)
 
-        seg_means = seg_sum / (seg_count + 1e-6)               # (B, S, D)
+        seg_means = seg_sum / (seg_count + 1e-6)  # (B, S, D)
 
         # Gather back to frame resolution → (B, T, D)
         return seg_means.gather(1, idx_exp)
@@ -390,9 +394,7 @@ class DPSegmentationCompression(BaseCompressionModel):
         )
 
         valid_len = (
-            (~padding_mask).sum(dim=1).float()
-            if padding_mask is not None
-            else None
+            (~padding_mask).sum(dim=1).float() if padding_mask is not None else None
         )
 
         if isinstance(rate, torch.Tensor):
@@ -435,18 +437,18 @@ class DPSegmentationCompression(BaseCompressionModel):
                 if use_anchors:
                     # Anchors live at positions 1..vlen-1 (position 0 is never a
                     # boundary by convention).
-                    anchors_b = (
-                        anchor_boundary[b, 1:vlen].nonzero(as_tuple=True)[0] + 1
-                    )
+                    anchors_b = anchor_boundary[b, 1:vlen].nonzero(as_tuple=True)[0] + 1
                     if anchors_b.numel() > 0:
                         seg_idx_b = self._run_dp_anchor_subset(
-                            x_b, anchors_b, num_segments,
+                            x_b,
+                            anchors_b,
+                            num_segments,
                         )
                     else:
-                        cost      = self._compute_cost_table(x_b)
+                        cost = self._compute_cost_table(x_b)
                         seg_idx_b = self._run_dp(cost, vlen, num_segments)
                 else:
-                    cost      = self._compute_cost_table(x_b)
+                    cost = self._compute_cost_table(x_b)
                     seg_idx_b = self._run_dp(cost, vlen, num_segments)
 
             all_segment_idx[b, :vlen] = seg_idx_b
@@ -455,15 +457,13 @@ class DPSegmentationCompression(BaseCompressionModel):
 
         # Derive boundary tensor from segment indices.
         boundary = torch.zeros(B, T, device=device, dtype=torch.long)
-        boundary[:, 1:] = (
-            (all_segment_idx[:, 1:] != all_segment_idx[:, :-1]).long()
-        )
+        boundary[:, 1:] = (all_segment_idx[:, 1:] != all_segment_idx[:, :-1]).long()
         if padding_mask is not None:
             boundary = boundary.masked_fill(padding_mask, 0)
 
         boundary_soft = boundary.float()
         # Recompute cumsum-based segment_idx for pipeline consistency.
-        segment_idx   = torch.cumsum(boundary, dim=1)
+        segment_idx = torch.cumsum(boundary, dim=1)
         reconstructed = self._segment_average(x, segment_idx, padding_mask)
         expected_length = boundary_soft.sum(dim=1, keepdim=True) + 1
 

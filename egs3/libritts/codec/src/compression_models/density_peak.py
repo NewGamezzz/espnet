@@ -1,6 +1,7 @@
+from typing import Optional
+
 import torch
 import torch.nn.functional as F
-from typing import Optional
 
 from .base import BaseCompressionModel, CompressionOutput
 
@@ -74,9 +75,9 @@ class DensityPeakCompression(BaseCompressionModel):
         Returns:
             sim: (T, T)
         """
-        x_norm = F.normalize(x, dim=-1)          # (T, D)
-        cos = torch.matmul(x_norm, x_norm.T)     # (T, T)  in [-1, 1]
-        return (cos + 1.0) / 2.0                  # rescale to [0, 1]
+        x_norm = F.normalize(x, dim=-1)  # (T, D)
+        cos = torch.matmul(x_norm, x_norm.T)  # (T, T)  in [-1, 1]
+        return (cos + 1.0) / 2.0  # rescale to [0, 1]
 
     def _local_density(self, sim: torch.Tensor) -> torch.Tensor:
         """Local density rho = exp(mean of k-NN similarities).
@@ -93,8 +94,8 @@ class DensityPeakCompression(BaseCompressionModel):
         sim_no_diag = sim.clone()
         sim_no_diag.fill_diagonal_(0.0)
 
-        knn_sims, _ = torch.topk(sim_no_diag, k, dim=-1)   # (T, k)
-        return torch.exp(knn_sims.mean(dim=-1))              # (T,)
+        knn_sims, _ = torch.topk(sim_no_diag, k, dim=-1)  # (T, k)
+        return torch.exp(knn_sims.mean(dim=-1))  # (T,)
 
     def _peak_distance(self, sim: torch.Tensor, rho: torch.Tensor) -> torch.Tensor:
         """Peak distance delta.
@@ -108,19 +109,19 @@ class DensityPeakCompression(BaseCompressionModel):
         Returns:
             delta: (T,)
         """
-        dist = 1.0 - sim                                         # (T, T)
+        dist = 1.0 - sim  # (T, T)
 
         # (T, T)[i, j] = True when rho[j] > rho[i]
-        higher = rho.unsqueeze(0) > rho.unsqueeze(1)            # (T, T)
+        higher = rho.unsqueeze(0) > rho.unsqueeze(1)  # (T, T)
 
         # Replace non-higher-density entries with inf so min ignores them.
         dist_masked = dist.masked_fill(~higher, float("inf"))
-        delta, _ = dist_masked.min(dim=-1)                       # (T,)
+        delta, _ = dist_masked.min(dim=-1)  # (T,)
 
         # Frames with no denser neighbour get max distance (global peak rule).
         is_peak = delta.isinf()
         if is_peak.any():
-            max_dist = dist.max(dim=-1).values                   # (T,)
+            max_dist = dist.max(dim=-1).values  # (T,)
             delta = torch.where(is_peak, max_dist, delta)
 
         return delta
@@ -185,7 +186,7 @@ class DensityPeakCompression(BaseCompressionModel):
             assigned[seed] = True
 
             # Penalise adding other high-score frames into this cluster.
-            sim_score = sim[seed] - self.beta * s   # (T,)
+            sim_score = sim[seed] - self.beta * s  # (T,)
 
             # Forward expansion.
             for t in range(seed + 1, min(T, seed + max_span + 1)):
@@ -254,13 +255,13 @@ class DensityPeakCompression(BaseCompressionModel):
         """
         device = x.device
         max_segments = int(segment_idx.max().item()) + 1
-        seg_ids = torch.arange(max_segments, device=device)[None, :, None]   # (1, S, 1)
-        assign = (segment_idx.unsqueeze(1) == seg_ids).float()               # (B, S, T)
+        seg_ids = torch.arange(max_segments, device=device)[None, :, None]  # (1, S, 1)
+        assign = (segment_idx.unsqueeze(1) == seg_ids).float()  # (B, S, T)
         if padding_mask is not None:
             assign = assign.masked_fill(padding_mask.unsqueeze(1), 0.0)
         assign_norm = assign / (assign.sum(dim=2, keepdim=True) + 1e-6)
-        segment_means = torch.matmul(assign_norm, x)                         # (B, S, D)
-        return torch.matmul(assign.transpose(1, 2), segment_means)           # (B, T, D)
+        segment_means = torch.matmul(assign_norm, x)  # (B, S, D)
+        return torch.matmul(assign.transpose(1, 2), segment_means)  # (B, T, D)
 
     # ------------------------------------------------------------------
     # topk mode forward
@@ -287,7 +288,7 @@ class DensityPeakCompression(BaseCompressionModel):
         )
 
         if isinstance(rate, torch.Tensor):
-            rate_b = rate.squeeze(-1)   # (B,) or scalar tensor
+            rate_b = rate.squeeze(-1)  # (B,) or scalar tensor
         else:
             rate_b = torch.full((B,), rate, device=device, dtype=torch.float)
 
@@ -298,8 +299,8 @@ class DensityPeakCompression(BaseCompressionModel):
             if vlen <= 1:
                 continue
 
-            x_b = x[b, :vlen]                                     # (vlen, D)
-            s_b, _, _ = self._density_scores(x_b)                 # (vlen,)
+            x_b = x[b, :vlen]  # (vlen, D)
+            s_b, _, _ = self._density_scores(x_b)  # (vlen,)
 
             r_t = rate_b[b] if rate_b.dim() > 0 else rate_b  # float32 scalar tensor
 
@@ -316,7 +317,7 @@ class DensityPeakCompression(BaseCompressionModel):
             k = min(k, vlen - 1)
 
             # Rank frames 1..vlen-1 by density score; higher s → more boundary-like.
-            boundary_scores = s_b[1:]                              # (vlen-1,)
+            boundary_scores = s_b[1:]  # (vlen-1,)
             _, top_idx = torch.topk(boundary_scores, k, largest=True)
             stop_tokens[b, top_idx] = 1
 
@@ -378,7 +379,7 @@ class DensityPeakCompression(BaseCompressionModel):
             if vlen <= 1:
                 continue
 
-            x_b = x[b, :vlen]                                     # (vlen, D)
+            x_b = x[b, :vlen]  # (vlen, D)
 
             s_b, sim_b, _ = self._density_scores(x_b)
 
@@ -387,7 +388,9 @@ class DensityPeakCompression(BaseCompressionModel):
             #   low  rate (→ 0.0) = easy to merge = few  segments (more compression)
             # When rate is None, fall back to the constructor threshold.
             if rate_b is not None:
-                threshold = float(rate_b[b].item() if rate_b.dim() > 0 else rate_b.item())
+                threshold = float(
+                    rate_b[b].item() if rate_b.dim() > 0 else rate_b.item()
+                )
             else:
                 threshold = self.threshold
 
@@ -400,9 +403,7 @@ class DensityPeakCompression(BaseCompressionModel):
 
         # Derive boundary tensor from segment indices.
         boundary = torch.zeros(B, T, device=device, dtype=torch.long)
-        boundary[:, 1:] = (
-            (all_segment_idx[:, 1:] != all_segment_idx[:, :-1]).long()
-        )
+        boundary[:, 1:] = (all_segment_idx[:, 1:] != all_segment_idx[:, :-1]).long()
         if padding_mask is not None:
             boundary = boundary.masked_fill(padding_mask, 0)
 
