@@ -381,6 +381,35 @@ class CompressionResidualVectorQuantizer(nn.Module):
         self.random_rate = random_rate
         self.eval_rate = eval_rate
         self._inference_rate = None
+        # Accept unwrapped-layout checkpoints transparently: a pretrained
+        # ResidualVectorQuantizer state dict ("vq.layers...") is remapped to
+        # the wrapped layout ("rvq.vq.rvq.layers...") at load time, so
+        # baseline checkpoints load strictly into the wrapped model even
+        # after construction (e.g. via trainer.init init_param).
+        # (_register_* is the stable-across-versions spelling of the public
+        # register_load_state_dict_pre_hook.)
+        self._register_load_state_dict_pre_hook(self._remap_unwrapped_state_dict)
+
+    def _remap_unwrapped_state_dict(
+        self,
+        state_dict,
+        prefix,
+        local_metadata,
+        strict,
+        missing_keys,
+        unexpected_keys,
+        error_msgs,
+    ):
+        """Remap original-quantizer keys to the wrapped layout in place.
+
+        Wrapped-layout keys (``rvq.*``) are left untouched, so fine-tuned
+        checkpoints load unchanged; when both layouts are present (a merged
+        dict), the unwrapped entries win.
+        """
+        old_prefix = f"{prefix}vq."
+        new_prefix = f"{prefix}rvq.vq.rvq."
+        for key in [k for k in state_dict if k.startswith(old_prefix)]:
+            state_dict[new_prefix + key[len(old_prefix) :]] = state_dict.pop(key)
 
     # ------------------------------------------------------------------
     # Rate handling
