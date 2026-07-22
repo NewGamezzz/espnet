@@ -65,9 +65,6 @@ class MultiCompressionAudioCoding:
 
         with open(train_config, encoding="utf-8") as f:
             spec = yaml.safe_load(f)
-        # The fine-tuned checkpoint supplies all weights; never re-load the
-        # baseline (the factory omits it from the dump, this is defensive).
-        spec.pop("pretrained_model_file", None)
 
         model = build_multicomp_model(**spec)
         load_model_state_strict(model, model_file)

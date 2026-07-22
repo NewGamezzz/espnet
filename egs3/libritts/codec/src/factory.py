@@ -9,7 +9,6 @@ must NOT set a top-level ``task:`` key, so ``CodecSystem`` falls back to
     model:
       _target_: src.factory.build_multicomp_model
       pretrained_train_config: /path/to/baseline_exp/config.yaml
-      pretrained_model_file: /path/to/baseline_exp/valid.mel_loss.ave_5best.pth
       compression_model:
         name: cosine_similarity
         params: {threshold: 1.0, mode: topk}
@@ -19,11 +18,13 @@ must NOT set a top-level ``task:`` key, so ``CodecSystem`` falls back to
         eval_rate: 0.5
       freeze_codec_module: none
 
-Load order matters: pretrained weights are loaded STRICTLY into the
-unwrapped model first (so the silent ``strict=False`` key-mismatch trap
-cannot occur), and only then is the quantizer swapped for the
-compression wrapper.  Lightning checkpoints saved during fine-tuning
-therefore use the wrapped key layout.
+The factory builds the ARCHITECTURE only (plus the quantizer wrapping and
+optional freezing).  Baseline weights are loaded by the trainer via
+``trainer.init.init_param`` (see ``conf/training_encodec_multicomp.yaml``),
+after any init scheme, so they can never be overwritten; the wrapped
+quantizer's ``load_state_dict`` pre-hook remaps unwrapped-layout keys so
+that load stays strict.  The exception is ``pretrained_model_tag`` (HF
+zoo), where the download inherently carries its weights.
 """
 
 from pathlib import Path
@@ -54,10 +55,9 @@ def _build_base_model(
     codec_conf: Optional[Dict[str, Any]],
     task: str,
     pretrained_train_config: Optional[str],
-    pretrained_model_file: Optional[str],
     pretrained_model_tag: Optional[str],
 ) -> AbsGANESPnetModel:
-    """Build the unwrapped base codec model with pretrained weights loaded."""
+    """Build the unwrapped base codec model (architecture only)."""
     sources = [
         pretrained_model_tag is not None,
         pretrained_train_config is not None,
@@ -71,7 +71,7 @@ def _build_base_model(
         )
 
     if pretrained_model_tag is not None:
-        # Zoo download; key layouts of packaged models match their configs.
+        # Zoo download; the tag inherently carries its own weights.
         from espnet2.bin.gan_codec_inference import AudioCoding
 
         return AudioCoding.from_pretrained(model_tag=pretrained_model_tag).model
@@ -79,22 +79,17 @@ def _build_base_model(
     from espnet3.utils.task_utils import get_espnet_model
 
     if pretrained_train_config is not None:
-        # Build from the previous run's espnet2-style config.yaml WITHOUT
-        # loading weights here (build_model_from_file would, but with
-        # strict=False, which silently ignores mismatched keys). Merging
-        # over the task defaults also tolerates partial configs.
+        # Build from the previous run's espnet2-style config.yaml. Its
+        # weights are loaded separately via trainer.init.init_param (or
+        # the fine-tuned checkpoint at inference). Merging over the task
+        # defaults also tolerates partial configs.
         with open(pretrained_train_config, encoding="utf-8") as f:
             train_args = yaml.safe_load(f)
-        model = get_espnet_model(task, train_args)
-    else:
-        model = get_espnet_model(
-            task, {"codec": codec, "codec_conf": _to_plain(codec_conf) or {}}
-        )
+        return get_espnet_model(task, train_args)
 
-    if pretrained_model_file is not None:
-        load_model_state_strict(model, pretrained_model_file)
-
-    return model
+    return get_espnet_model(
+        task, {"codec": codec, "codec_conf": _to_plain(codec_conf) or {}}
+    )
 
 
 def load_model_state_strict(model: torch.nn.Module, model_file: str) -> None:
@@ -137,12 +132,16 @@ def build_multicomp_model(
     codec_conf: Optional[Dict[str, Any]] = None,
     task: str = "espnet2.tasks.gan_codec.GANCodecTask",
     pretrained_train_config: Optional[str] = None,
-    pretrained_model_file: Optional[str] = None,
     pretrained_model_tag: Optional[str] = None,
     freeze_codec_module_name: str = "none",
     dump_config_to: Optional[str] = None,
 ) -> AbsGANESPnetModel:
-    """Build a pretrained codec wrapped with the multi-compression quantizer.
+    """Build a codec wrapped with the multi-compression quantizer.
+
+    Weights are NOT loaded here (except with ``pretrained_model_tag``,
+    whose zoo download carries them): baseline weights come from
+    ``trainer.init.init_param`` at trainer construction, and inference
+    loads the fine-tuned checkpoint on top of the rebuilt architecture.
 
     Args:
         compression_model: dict with ``name`` (registry key), optional
@@ -153,20 +152,16 @@ def build_multicomp_model(
             exclusive with the pretrained_* sources).
         task: espnet2 task path used with ``codec``/``codec_conf``.
         pretrained_train_config: espnet2-style config.yaml of a previous
-            run (built via ``save_espnet_config``); combine with
-            ``pretrained_model_file`` to load its weights.
-        pretrained_model_file: averaged checkpoint (model-level keys,
-            e.g. ``valid.mel_loss.ave_5best.pth``), loaded strictly into
-            the unwrapped model.
+            run (built via ``save_espnet_config``); architecture only.
         pretrained_model_tag: espnet_model_zoo tag (e.g.
             ``espnet/libritts_encodec_24k``); weights come with the tag.
         freeze_codec_module_name: ``none`` | ``encoder`` | ``decoder``.
         dump_config_to: when set (training config points it at
             ``${exp_dir}/multicomp_model.yaml``), the resolved model spec
-            minus ``pretrained_model_file`` is written there so inference
-            can rebuild the wrapped architecture and load the fine-tuned
-            checkpoint on top.  This substitutes for ``save_espnet_config``,
-            which ``CodecSystem.train`` skips on the task-less Hydra path.
+            is written there so inference can rebuild the wrapped
+            architecture and load the fine-tuned checkpoint on top.  This
+            substitutes for ``save_espnet_config``, which
+            ``CodecSystem.train`` skips on the task-less Hydra path.
 
     Returns:
         ``ESPnetGANCodecModel`` (an ``AbsGANESPnetModel``, so
@@ -177,7 +172,6 @@ def build_multicomp_model(
         codec_conf=codec_conf,
         task=task,
         pretrained_train_config=pretrained_train_config,
-        pretrained_model_file=pretrained_model_file,
         pretrained_model_tag=pretrained_model_tag,
     )
 
@@ -207,8 +201,6 @@ def build_multicomp_model(
             "task": task,
             "pretrained_train_config": pretrained_train_config,
             "pretrained_model_tag": pretrained_model_tag,
-            # pretrained_model_file intentionally omitted: at inference the
-            # fine-tuned checkpoint supplies all weights.
             "compression_model": _to_plain(compression_model),
             "freeze_codec_module_name": freeze_codec_module_name,
         }

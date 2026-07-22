@@ -70,8 +70,7 @@ model:
   # Architecture comes from the baseline run's config; its WEIGHTS are
   # loaded by `trainer.init.init_param` below (espnet2 ordering: any init
   # scheme first, pretrained weights after, so they can never be
-  # overwritten). The factory's `pretrained_model_file` arg remains
-  # available for programmatic strict pre-wrap loading.
+  # overwritten).
   pretrained_train_config: ${baseline_exp_dir}/config.yaml
   freeze_codec_module_name: none   # none | encoder | decoder
   dump_config_to: ${exp_dir}/multicomp_model.yaml
