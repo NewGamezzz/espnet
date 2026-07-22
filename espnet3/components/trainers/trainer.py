@@ -1,6 +1,7 @@
 """Trainer class for the espnet3 package."""
 
 import copy
+import logging
 import warnings
 from argparse import Namespace
 from typing import Any, Dict, Union
@@ -11,6 +12,7 @@ from omegaconf import DictConfig, ListConfig, OmegaConf
 from typeguard import typechecked
 
 from espnet2.torch_utils.initialize import initialize
+from espnet2.torch_utils.load_pretrained_model import load_pretrained_model
 from espnet3.components.callbacks.default_callbacks import get_default_callbacks
 from espnet3.components.modeling.lightning_module import ESPnetLightningModule
 
@@ -71,8 +73,7 @@ class ESPnet3LightningTrainer:
 
         # Instantiate the Lightning Model
         self.model = model
-        if getattr(self.config, "init", None) is not None:
-            initialize(self.model, self.config.init)
+        self._apply_init(getattr(self.config, "init", None))
 
         # Accelerator
         accelerator = _get_or_initialize(self.config, "accelerator", "auto")
@@ -145,6 +146,7 @@ class ESPnet3LightningTrainer:
             "profiler",
             "plugins",
             "callbacks",
+            "init",
         ):
             self._del_config_key_on(trainer_config, key)
 
@@ -159,6 +161,51 @@ class ESPnet3LightningTrainer:
             plugins=plugins,
             **trainer_config,
         )
+
+    def _apply_init(self, init_config) -> None:
+        """Apply weight initialization and optional pretrained-weight loading.
+
+        ``trainer.init`` accepts either:
+
+        - a string: an espnet2 initialization scheme (e.g. ``xavier_uniform``)
+          forwarded to ``espnet2.torch_utils.initialize.initialize``; or
+        - a mapping with optional keys:
+            - ``mode``: the initialization scheme string, applied first;
+            - ``init_param``: list of espnet2 ``--init_param`` specs
+              (``<path>:<src_key>:<dst_key>:<exclude_keys>``), loaded AFTER
+              the scheme so pretrained weights are never overwritten by it;
+            - ``ignore_init_mismatch``: bool (default false). When false,
+              checkpoint keys that do not exist in the model raise instead
+              of being silently dropped.
+
+        This mirrors espnet2's ordering in ``AbsTask.main_worker`` (init
+        scheme during model build, ``--init_param`` afterwards).
+        """
+        if init_config is None:
+            return
+        if isinstance(init_config, str):
+            initialize(self.model, init_config)
+            return
+        if not isinstance(init_config, (dict, DictConfig)):
+            raise TypeError(
+                "trainer.init must be a string (init scheme) or a mapping "
+                "with optional 'mode'/'init_param'/'ignore_init_mismatch' "
+                f"keys; got {type(init_config).__name__}."
+            )
+
+        mode = init_config.get("mode")
+        if mode:
+            initialize(self.model, mode)
+
+        ignore_init_mismatch = bool(init_config.get("ignore_init_mismatch", False))
+        for spec in init_config.get("init_param") or []:
+            logging.info(f"Loading pretrained params from {spec}")
+            load_pretrained_model(
+                init_param=str(spec),
+                model=self.model,
+                ignore_init_mismatch=ignore_init_mismatch,
+                map_location="cpu",
+            )
 
     def _validate_strategy_compatibility(self, strategy) -> None:
         """Reject unsupported strategies for the multiple-optimizer path only."""
