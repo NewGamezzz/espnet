@@ -100,7 +100,6 @@ class RVQCompressionWrapper(nn.Module):
                     rate=rate_layer,
                     padding_mask=padding_mask,
                     anchor_boundary=anchor_boundary if use_anchor else None,
-                    percent_kept_boundary=1.0 if use_anchor else None,
                 )
                 compressed_residual = (
                     compression_output.reconstructed_features.transpose(1, 2)
@@ -165,7 +164,6 @@ class RVQCompressionWrapper(nn.Module):
                     rate=rate_layer,
                     padding_mask=padding_mask,
                     anchor_boundary=anchor_boundary if use_anchor else None,
-                    percent_kept_boundary=1.0 if use_anchor else None,
                 )
                 compressed_residual = (
                     compression_output.reconstructed_features.transpose(1, 2)
@@ -208,7 +206,6 @@ class RVQCompressionWrapper(nn.Module):
         st: Optional[int] = None,
         padding_mask: Optional[torch.Tensor] = None,
         is_anchor_boundary: bool = False,
-        anchor_boundary_percent_kept: Optional[torch.Tensor] = None,
         anchor_start_layer: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]:
         """Shared encode loop used by both encode() and encode_with_segments().
@@ -236,20 +233,11 @@ class RVQCompressionWrapper(nn.Module):
                 anchor_start_layer is not None and abs_idx >= anchor_start_layer
             )
             all_quantized.append(residual)
-            if use_anchor:
-                # Boundaries are fixed by the anchor — keep all of them
-                # (no further sub-selection).
-                pct_kept = 1.0
-            elif anchor_boundary_percent_kept is not None:
-                pct_kept = anchor_boundary_percent_kept[abs_idx]
-            else:
-                pct_kept = None
             compression_output = self.compression_model(
                 residual.transpose(1, 2),
                 rate=rate_layer,
                 padding_mask=padding_mask,
                 anchor_boundary=anchor_boundary if use_anchor else None,
-                percent_kept_boundary=pct_kept,
             )
             compressed_residual = compression_output.reconstructed_features.transpose(
                 1, 2
@@ -282,7 +270,6 @@ class RVQCompressionWrapper(nn.Module):
         st: Optional[int] = None,
         padding_mask: Optional[torch.Tensor] = None,
         is_anchor_boundary: bool = False,
-        anchor_boundary_percent_kept: Optional[torch.Tensor] = None,
         anchor_start_layer: Optional[int] = None,
     ) -> torch.Tensor:
         """Encode to discrete codes. Returns (n_q, B, T') code indices."""
@@ -293,7 +280,6 @@ class RVQCompressionWrapper(nn.Module):
             st=st,
             padding_mask=padding_mask,
             is_anchor_boundary=is_anchor_boundary,
-            anchor_boundary_percent_kept=anchor_boundary_percent_kept,
             anchor_start_layer=anchor_start_layer,
         )
         return out_indices
@@ -314,7 +300,6 @@ class RVQCompressionWrapper(nn.Module):
         st: Optional[int] = None,
         padding_mask: Optional[torch.Tensor] = None,
         is_anchor_boundary: bool = False,
-        anchor_boundary_percent_kept: Optional[torch.Tensor] = None,
         anchor_start_layer: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]:
         """Encode and also return pre-quantization residuals and segment indices."""
@@ -325,7 +310,6 @@ class RVQCompressionWrapper(nn.Module):
             st=st,
             padding_mask=padding_mask,
             is_anchor_boundary=is_anchor_boundary,
-            anchor_boundary_percent_kept=anchor_boundary_percent_kept,
             anchor_start_layer=anchor_start_layer,
         )
 

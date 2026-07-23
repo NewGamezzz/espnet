@@ -48,17 +48,10 @@ class DPSegmentationCompression(BaseCompressionModel):
     def __init__(
         self,
         max_span: Optional[int] = 4,
-        percent_kept_boundary: Optional[float] = None,
         **kwargs,
     ):
         super().__init__()
         self.max_span = max_span
-        # Anchor support is "all-or-none" by design (Option A): when enabled,
-        # every anchor is kept as a forced boundary.  percent_kept_boundary acts
-        # as a switch — > 0 enables anchors, 0/None disables.  The fractional
-        # value is preserved for API compatibility with cosine_similarity but
-        # has no effect on selection (anchors are not subsampled).
-        self.percent_kept_boundary = percent_kept_boundary
 
     # ------------------------------------------------------------------
     # Cost-table computation (vectorised over windows for each span s)
@@ -346,7 +339,6 @@ class DPSegmentationCompression(BaseCompressionModel):
         rate=None,
         padding_mask: Optional[torch.Tensor] = None,
         anchor_boundary: Optional[torch.Tensor] = None,
-        percent_kept_boundary: Optional[float] = None,
         **kwargs,
     ) -> CompressionOutput:
         """Segment the input sequence using DP-optimal boundary placement.
@@ -360,21 +352,16 @@ class DPSegmentationCompression(BaseCompressionModel):
             padding_mask:          (B, T) bool tensor; True marks padding positions.
             anchor_boundary:       (B, T) binary tensor of boundary positions
                                    inherited from prior codebooks (1 = boundary).
-                                   When provided together with a positive
-                                   ``percent_kept_boundary``, **all** anchors are
-                                   forced as cuts; the segment count for each
-                                   resulting chunk is then jointly optimised by
-                                   a 2-D allocation DP, so the result is
-                                   globally optimal under the original L2
-                                   distortion objective subject to the constraint
-                                   "every anchor is a boundary".
-            percent_kept_boundary: Switch (kept for API parity with
-                                   cosine_similarity).  Any positive value
-                                   enables the anchor-augmented path; 0/None
-                                   disables it.  Anchors are never subsampled.
-                                   When the constraint is infeasible
-                                   (num_anchors > num_segments − 1), the code
-                                   falls back to plain unconstrained DP.
+                                   When provided, **all** anchors are forced as
+                                   cuts; the segment count for each resulting
+                                   chunk is then jointly optimised by a 2-D
+                                   allocation DP, so the result is globally
+                                   optimal under the original L2 distortion
+                                   objective subject to the constraint "every
+                                   anchor is a boundary".  When the constraint
+                                   is infeasible (num_anchors > num_segments
+                                   − 1), the code falls back to plain
+                                   unconstrained DP.
 
         Returns:
             CompressionOutput
@@ -385,13 +372,7 @@ class DPSegmentationCompression(BaseCompressionModel):
         if rate is None:
             return self._no_rate_output(x, padding_mask)
 
-        if percent_kept_boundary is None:
-            percent_kept_boundary = self.percent_kept_boundary
-        use_anchors = (
-            anchor_boundary is not None
-            and percent_kept_boundary is not None
-            and percent_kept_boundary > 0
-        )
+        use_anchors = anchor_boundary is not None
 
         valid_len = (
             (~padding_mask).sum(dim=1).float() if padding_mask is not None else None
