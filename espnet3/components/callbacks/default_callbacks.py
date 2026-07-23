@@ -161,19 +161,12 @@ class AverageCheckpointsCallback(Callback):
                     else:
                         avg_state_dict[k] = avg_state_dict[k] / len(checkpoints)
 
-                # Remove the extra prefix in model keys when present.
-                # ESPnetLightningModule.state_dict() returns the inner
-                # model's state dict directly (no "model." prefix), so
-                # filtering on the prefix alone would silently write an
-                # EMPTY averaged checkpoint for those runs.
-                if any(k.startswith("model.") for k in avg_state_dict):
-                    new_avg_state_dict = {
-                        k.removeprefix("model."): v
-                        for k, v in avg_state_dict.items()
-                        if k.startswith("model.")
-                    }
-                else:
-                    new_avg_state_dict = avg_state_dict
+                # remove extra prefix in model keys
+                new_avg_state_dict = {
+                    k.removeprefix("model."): v
+                    for k, v in avg_state_dict.items()
+                    if k.startswith("model.")
+                }
 
                 avg_ckpt_path = Path(self.output_dir) / (
                     f"{ckpt_callback.monitor.replace('/', '.')}."

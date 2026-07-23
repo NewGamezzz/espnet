@@ -36,7 +36,7 @@ inference_dir: ${exp_dir}/inference
 exp_tag: train_encodec_multicomp_libritts
 
 # The baseline run this fine-tuning starts from (architecture config +
-# averaged weights). Point these at your trained baseline exp dir, or
+# weights). Point these at your trained baseline exp dir, or
 # switch to `pretrained_model_tag` (HF zoo, e.g.
 # espnet/libritts_encodec_24k) inside `model:` below.
 baseline_exp_dir: ${recipe_dir}/exp/train_encodec_libritts
@@ -71,11 +71,14 @@ model:
   _target_: src.factory.build_multicomp_model
   # Architecture comes from the baseline run's config; its weights are
   # strict-loaded into the UNWRAPPED model before the quantizer is
-  # wrapped, so the key layouts match exactly.
-  # NOT last.ckpt: mismatched checkpoint keys raise here (no silent
-  # partial load).
+  # wrapped, so the key layouts match exactly. Lightning checkpoints
+  # (last.ckpt) are unwrapped automatically; the load itself is always
+  # strict, so a wrong file raises instead of silently partial-loading.
+  # Do NOT point this at an ave_Nbest.pth: the current framework writes
+  # those files EMPTY (AverageCheckpointsCallback bug), which the strict
+  # load here would catch, but only at run time.
   pretrained_train_config: ${baseline_exp_dir}/config.yaml
-  pretrained_model_file: ${baseline_exp_dir}/valid.mel_loss.ave_5best.pth
+  pretrained_model_file: ${baseline_exp_dir}/last.ckpt
   freeze_codec_module_name: none   # none | encoder | decoder
   dump_config_to: ${exp_dir}/multicomp_model.yaml
   compression_model:

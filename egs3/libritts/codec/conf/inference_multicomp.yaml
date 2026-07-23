@@ -31,9 +31,11 @@ dataset:
 model:
   _target_: src.inference.MultiCompressionAudioCoding
   train_config: ${exp_dir}/multicomp_model.yaml
-  # Averaged checkpoint with wrapped-layout, model-level keys. NOT
-  # last.ckpt: loading a raw Lightning checkpoint is rejected.
-  model_file: ${exp_dir}/valid.mel_loss.ave_5best.pth
+  # Fine-tuned checkpoint (wrapped key layout). Lightning checkpoints
+  # (last.ckpt) are unwrapped automatically and loaded strictly. Do NOT
+  # use ave_Nbest.pth: the current framework writes those files EMPTY
+  # (AverageCheckpointsCallback bug); the strict load here would raise.
+  model_file: ${exp_dir}/last.ckpt
   rate: 0.5
   # Anchor constraint (optional): layers at/after this index may only
   # place boundaries inside the union of the earlier layers' boundaries.

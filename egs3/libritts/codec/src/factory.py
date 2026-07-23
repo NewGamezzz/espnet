@@ -9,7 +9,7 @@ must NOT set a top-level ``task:`` key, so ``CodecSystem`` falls back to
     model:
       _target_: src.factory.build_multicomp_model
       pretrained_train_config: /path/to/baseline_exp/config.yaml
-      pretrained_model_file: /path/to/baseline_exp/valid.mel_loss.ave_5best.pth
+      pretrained_model_file: /path/to/baseline_exp/last.ckpt
       compression_model:
         name: cosine_similarity
         params: {}
@@ -98,18 +98,25 @@ def _build_base_model(
 
 
 def load_model_state_strict(model: torch.nn.Module, model_file: str) -> None:
-    """Strictly load a model-level checkpoint, rejecting Lightning layouts.
+    """Strictly load a model-level or Lightning checkpoint.
 
-    espnet2's own loading uses ``strict=False``, so a raw Lightning
-    checkpoint's ``model.``-prefixed keys would silently load nothing.
+    Lightning checkpoints (``last.ckpt``) nest the weights under a
+    ``state_dict`` key; they are unwrapped here (and a legacy ``model.``
+    key prefix is stripped when present).  Unlike espnet2's own
+    ``strict=False`` loading - which silently yields a random model when
+    keys do not match (e.g. the framework's EMPTY ``ave_Nbest.pth``
+    files) - the load is always strict, so any mismatch raises.
     """
     state_dict = torch.load(model_file, map_location="cpu")
+    if "state_dict" in state_dict:  # Lightning checkpoint layout
+        state_dict = state_dict["state_dict"]
     if any(k.startswith("model.") for k in state_dict):
-        raise ValueError(
-            f"'{model_file}' contains 'model.'-prefixed keys (a raw Lightning "
-            "checkpoint). Use the averaged checkpoint (e.g. "
-            "valid.mel_loss.ave_5best.pth), whose prefix is already stripped."
-        )
+        # Older ESPnetLightningModule versions prefixed the inner model.
+        state_dict = {
+            k.removeprefix("model."): v
+            for k, v in state_dict.items()
+            if k.startswith("model.")
+        }
     model.load_state_dict(state_dict, strict=True)
 
 
@@ -160,9 +167,10 @@ def build_multicomp_model(
         task: espnet2 task path used with ``codec``/``codec_conf``.
         pretrained_train_config: espnet2-style config.yaml of a previous
             run (built via ``save_espnet_config``); architecture only.
-        pretrained_model_file: model-level checkpoint (e.g. the baseline's
-            ``valid.mel_loss.ave_5best.pth``) strict-loaded into the
-            unwrapped model before wrapping.  Not allowed together with
+        pretrained_model_file: baseline checkpoint strict-loaded into the
+            unwrapped model before wrapping - either a model-level state
+            dict or a Lightning checkpoint (``last.ckpt``), which is
+            unwrapped automatically.  Not allowed together with
             ``pretrained_model_tag`` (the tag carries its own weights).
         pretrained_model_tag: espnet_model_zoo tag (e.g.
             ``espnet/libritts_encodec_24k``); weights come with the tag.

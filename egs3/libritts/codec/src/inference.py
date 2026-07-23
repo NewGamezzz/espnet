@@ -43,7 +43,8 @@ class MultiCompressionAudioCoding:
     built by ``src.factory.build_multicomp_model``.  The wrapped
     architecture is rebuilt from the model spec the factory dumped during
     training (``dump_config_to`` -> ``multicomp_model.yaml``), then the
-    fine-tuned averaged checkpoint (wrapped key layout) is loaded strictly
+    fine-tuned checkpoint (wrapped key layout; Lightning checkpoints are
+    unwrapped automatically) is loaded strictly
     on top.
 
     The compression ``rate`` and the optional ``anchor_start_layer``

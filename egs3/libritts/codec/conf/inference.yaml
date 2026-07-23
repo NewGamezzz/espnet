@@ -27,11 +27,13 @@ dataset:
 model:
   _target_: espnet2.bin.gan_codec_inference.AudioCoding
   train_config: ${exp_dir}/config.yaml
-  # Averaged checkpoint with model-level keys. NOT last.ckpt: espnet2
-  # loads with strict=False, so a raw Lightning checkpoint's
-  # `model.`-prefixed keys would silently load nothing and inference
-  # would run on random weights.
-  model_file: ${exp_dir}/valid.mel_loss.ave_5best.pth
+  # last.ckpt works here: espnet2's build_model_from_file unwraps
+  # Lightning checkpoints (state_dict key) and the inner keys are
+  # model-level. Do NOT use the ave_Nbest.pth files: the current
+  # AverageCheckpointsCallback writes them EMPTY (it filters on a
+  # "model." key prefix that no longer exists), and espnet2's
+  # strict=False load then silently yields a random model.
+  model_file: ${exp_dir}/last.ckpt
 
 output_fn: src.inference.build_output
 output_artifacts:
