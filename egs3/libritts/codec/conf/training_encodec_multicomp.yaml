@@ -76,12 +76,12 @@ model:
   dump_config_to: ${exp_dir}/multicomp_model.yaml
   compression_model:
     name: cosine_similarity        # cosine_similarity | density_peak | dp_segmentation | identity
-    params:
-      threshold: 1.0
-      mode: topk
+    params: {}
     # Training samples a compression rate per forward pass in
     # [min_rate, max_rate]; validation always uses eval_rate so epochs
-    # are comparable.
+    # are comparable. For cosine_similarity and density_peak the rate
+    # acts directly as the similarity threshold (higher rate = more
+    # segments = less compression).
     min_rate: 0.1
     max_rate: 1.0
     random_rate: per_quantizer     # per_quantizer | per_sample | coarse-fine | fine-coarse | none

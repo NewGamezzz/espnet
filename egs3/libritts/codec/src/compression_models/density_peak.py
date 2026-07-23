@@ -17,51 +17,36 @@ class DensityPeakCompression(BaseCompressionModel):
 
     where
 
-    * ``rho[i] = exp( mean of k-NN cosine similarities )``  — local density,
-    * ``delta[i]`` — min distance to any frame j with rho[j] > rho[i];
+    * ``rho[i] = exp( mean of k-NN cosine similarities )``  - local density,
+    * ``delta[i]`` - min distance to any frame j with rho[j] > rho[i];
       for the global density peak, ``delta = max distance to any frame``.
 
-    Two operating modes are supported:
-
-    * ``"topk"``       — Use *s* to rank boundary candidates; keep the top
-                         ``round(rate * T) - 1`` frames as segment starts
-                         (rate-controlled, compatible with the training loop).
-    * ``"clustering"`` — Full VARSTok greedy bidirectional expansion.  Each
-                         iteration picks the highest-scored unassigned frame as a
-                         seed, then expands forward/backward up to *max_span*
-                         frames subject to a similarity *threshold*.  The
-                         *rate* argument (when provided) overrides *max_span* via
-                         ``max_span = max(1, round(1 / rate))``.
+    Segmentation is the full VARSTok greedy bidirectional expansion: each
+    iteration picks the highest-scored unassigned frame as a seed, then
+    expands forward/backward up to *max_span* frames subject to a
+    similarity threshold.  ``rate`` is used directly as that threshold:
+    high rate (-> 1.0) makes merging hard (many segments, little
+    compression); low rate (-> 0.0) makes merging easy (few segments,
+    heavy compression).
 
     Args:
-        k: Number of nearest neighbours for local density (default 10).
+        k: Number of nearest neighbours for local density (default 5).
         beta: Penalty weight that discourages absorbing high-scored frames
               into a neighbouring cluster (default 0.2).
-        threshold: Cosine-similarity cutoff in [0, 1] for frame assignment in
-                   ``"clustering"`` mode (default 0.7).
-        max_span: Maximum frames per cluster in ``"clustering"`` mode
-                  (default 4).  Overridden by *rate* when provided.
-        mode: ``"topk"`` or ``"clustering"`` (default ``"topk"``).
+        max_span: Maximum frames per cluster (default 4).
     """
 
     def __init__(
         self,
         k: int = 5,
         beta: float = 0.2,
-        threshold: float = 0.7,
         max_span: int = 4,
-        mode: str = "topk",
         **kwargs,
     ):
         super().__init__()
         self.k = k
         self.beta = beta
-        self.threshold = threshold
         self.max_span = max_span
-        self.mode = mode
-
-        if mode not in ("topk", "clustering"):
-            raise ValueError(f"mode must be 'topk' or 'clustering', got '{mode}'.")
 
     # ------------------------------------------------------------------
     # Density-peak helpers (operate on a single, unpadded sequence)
@@ -142,7 +127,7 @@ class DensityPeakCompression(BaseCompressionModel):
         return rho * delta, sim, rho
 
     # ------------------------------------------------------------------
-    # Greedy bidirectional clustering (clustering mode)
+    # Greedy bidirectional clustering
     # ------------------------------------------------------------------
 
     def _greedy_cluster(
@@ -264,25 +249,36 @@ class DensityPeakCompression(BaseCompressionModel):
         return torch.matmul(assign.transpose(1, 2), segment_means)  # (B, T, D)
 
     # ------------------------------------------------------------------
-    # topk mode forward
+    # Public interface
     # ------------------------------------------------------------------
 
-    def _forward_topk(
+    def forward(
         self,
         x: torch.Tensor,
-        rate,
-        padding_mask,
-        B: int,
-        T: int,
-        device: torch.device,
+        rate=None,
+        padding_mask: Optional[torch.Tensor] = None,
+        **kwargs,
     ) -> CompressionOutput:
-        """Boundary selection by density score ranking (rate-controlled).
+        """Segment the input sequence using density peak clustering.
 
-        Frames 1..T-1 are ranked by their density score *s*.  The top-k are
-        selected as segment-start boundaries, where
-        ``k = clamp(rate * valid_len - 1, min=0)``, matching the topk formula
-        in CosineSimilarityCompression.
+        Args:
+            x:            (B, T, D) input features.
+            rate:         Compression rate in (0, 1], used directly as the
+                          similarity threshold for cluster merging;
+                          ``max_span`` is fixed at construction time.  Pass
+                          ``None`` to return a trivial per-frame identity
+                          segmentation.
+            padding_mask: (B, T) bool tensor; True marks padding positions.
+
+        Returns:
+            CompressionOutput
         """
+        B, T, _ = x.shape
+        device = x.device
+
+        if rate is None:
+            return self._no_rate_output(x, padding_mask)
+
         valid_len = (
             (~padding_mask).sum(dim=1).float() if padding_mask is not None else None
         )
@@ -291,86 +287,6 @@ class DensityPeakCompression(BaseCompressionModel):
             rate_b = rate.squeeze(-1)  # (B,) or scalar tensor
         else:
             rate_b = torch.full((B,), rate, device=device, dtype=torch.float)
-
-        stop_tokens = torch.zeros(B, T - 1, device=device, dtype=torch.long)
-
-        for b in range(B):
-            vlen = int(valid_len[b].item()) if valid_len is not None else T
-            if vlen <= 1:
-                continue
-
-            x_b = x[b, :vlen]  # (vlen, D)
-            s_b, _, _ = self._density_scores(x_b)  # (vlen,)
-
-            r_t = rate_b[b] if rate_b.dim() > 0 else rate_b  # float32 scalar tensor
-
-            # Replicate CosineSimilarityCompression topk formula exactly,
-            # keeping arithmetic in float32 tensors to match its rounding:
-            #   no padding   → k = (r × (vlen−1)).long()
-            #   with padding → k = clamp((r × vlen − 1).long(), min=0)
-            if valid_len is None:
-                k = int((r_t * (vlen - 1)).long().item())
-            else:
-                k = max(0, int((r_t * vlen - 1).long().item()))
-            if k <= 0:
-                continue
-            k = min(k, vlen - 1)
-
-            # Rank frames 1..vlen-1 by density score; higher s → more boundary-like.
-            boundary_scores = s_b[1:]  # (vlen-1,)
-            _, top_idx = torch.topk(boundary_scores, k, largest=True)
-            stop_tokens[b, top_idx] = 1
-
-        boundary = torch.cat(
-            [torch.zeros(B, 1, device=device, dtype=stop_tokens.dtype), stop_tokens],
-            dim=1,
-        )
-        if padding_mask is not None:
-            boundary = boundary.masked_fill(padding_mask, 0)
-
-        boundary_soft = boundary.float()
-        segment_idx = torch.cumsum(boundary, dim=1)
-        reconstructed = self._segment_average(x, segment_idx, padding_mask)
-        expected_length = boundary_soft.sum(dim=1, keepdim=True) + 1
-
-        return CompressionOutput(
-            boundary_soft=boundary_soft,
-            segment_idx=segment_idx,
-            reconstructed_features=reconstructed,
-            expected_length=expected_length,
-        )
-
-    # ------------------------------------------------------------------
-    # clustering mode forward
-    # ------------------------------------------------------------------
-
-    def _forward_clustering(
-        self,
-        x: torch.Tensor,
-        rate,
-        padding_mask,
-        B: int,
-        T: int,
-        device: torch.device,
-    ) -> CompressionOutput:
-        """Full VARSTok greedy bidirectional clustering.
-
-        *rate* is used directly as the similarity threshold:
-        high rate (→ 1.0) makes merging hard (many segments, little compression);
-        low rate (→ 0.0) makes merging easy (few segments, heavy compression).
-        ``max_span`` is always taken from the constructor.
-        """
-        valid_len = (
-            (~padding_mask).sum(dim=1).float() if padding_mask is not None else None
-        )
-
-        if rate is not None:
-            if isinstance(rate, torch.Tensor):
-                rate_b = rate.squeeze(-1)
-            else:
-                rate_b = torch.full((B,), rate, device=device, dtype=torch.float)
-        else:
-            rate_b = None
 
         all_segment_idx = torch.zeros(B, T, dtype=torch.long, device=device)
 
@@ -384,15 +300,9 @@ class DensityPeakCompression(BaseCompressionModel):
             s_b, sim_b, _ = self._density_scores(x_b)
 
             # rate is used directly as the similarity threshold:
-            #   high rate (→ 1.0) = hard to merge = many segments (less compression)
-            #   low  rate (→ 0.0) = easy to merge = few  segments (more compression)
-            # When rate is None, fall back to the constructor threshold.
-            if rate_b is not None:
-                threshold = float(
-                    rate_b[b].item() if rate_b.dim() > 0 else rate_b.item()
-                )
-            else:
-                threshold = self.threshold
+            #   high rate (-> 1.0) = hard to merge = many segments
+            #   low  rate (-> 0.0) = easy to merge = few  segments
+            threshold = float(rate_b[b].item() if rate_b.dim() > 0 else rate_b.item())
 
             seg_idx_b = self._greedy_cluster(s_b, sim_b, self.max_span, threshold)
             all_segment_idx[b, :vlen] = seg_idx_b
@@ -420,41 +330,3 @@ class DensityPeakCompression(BaseCompressionModel):
             reconstructed_features=reconstructed,
             expected_length=expected_length,
         )
-
-    # ------------------------------------------------------------------
-    # Public interface
-    # ------------------------------------------------------------------
-
-    def forward(
-        self,
-        x: torch.Tensor,
-        rate=None,
-        padding_mask: Optional[torch.Tensor] = None,
-        **kwargs,
-    ) -> CompressionOutput:
-        """Segment the input sequence using density peak clustering.
-
-        Args:
-            x:            (B, T, D) input features.
-            rate:         Compression rate ∈ (0, 1].
-                          *topk* mode      — keeps ``round(rate * T) - 1`` boundaries
-                          ranked by density score *s*.
-                          *clustering* mode — used directly as the similarity
-                          threshold; ``max_span`` is fixed at construction time.
-                          Pass ``None`` to return a trivial per-frame identity
-                          segmentation.
-            padding_mask: (B, T) bool tensor; True marks padding positions.
-
-        Returns:
-            CompressionOutput
-        """
-        B, T, _ = x.shape
-        device = x.device
-
-        if rate is None:
-            return self._no_rate_output(x, padding_mask)
-
-        if self.mode == "topk":
-            return self._forward_topk(x, rate, padding_mask, B, T, device)
-        else:
-            return self._forward_clustering(x, rate, padding_mask, B, T, device)

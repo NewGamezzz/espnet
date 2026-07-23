@@ -11,7 +11,7 @@ must NOT set a top-level ``task:`` key, so ``CodecSystem`` falls back to
       pretrained_train_config: /path/to/baseline_exp/config.yaml
       compression_model:
         name: cosine_similarity
-        params: {threshold: 1.0, mode: topk}
+        params: {}
         min_rate: 0.2
         max_rate: 1.0
         random_rate: per_quantizer

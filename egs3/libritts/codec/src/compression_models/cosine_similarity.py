@@ -5,33 +5,29 @@ from .base import BaseCompressionModel, CompressionOutput
 
 
 class CosineSimilarityCompression(BaseCompressionModel):
-    def __init__(
-        self,
-        threshold=1,
-        mode="topk",
-        percent_kept_boundary=None,
-        max_tokens_per_group=None,
-        **kwargs,
-    ):
+    """Threshold segmentation on consecutive-frame cosine similarity.
+
+    A new segment starts at every frame whose cosine similarity to the
+    previous frame is below ``rate``, i.e. the two frames are dissimilar
+    enough that the latter is judged to belong to a new segment.  ``rate``
+    therefore acts directly as the similarity threshold: high rate (-> 1.0)
+    means many boundaries and little compression; low rate (-> 0.0) means
+    few boundaries and heavy compression.
+
+    When ``anchor_boundary`` is given (anchored layers of the RVQ wrapper),
+    boundaries are additionally restricted to the anchor set, so later
+    layers can only segment at positions already chosen by earlier layers.
+    """
+
+    def __init__(self, max_tokens_per_group=None, **kwargs):
         super().__init__()
-        self.threshold = threshold
         self.kwargs = kwargs
-        self.mode = mode
-        self.percent_kept_boundary = percent_kept_boundary
         # Mirror FlexiCodec's max_tokens_per_group: hard cap on segment
         # length.  When set, any segment that would naturally be longer
         # than this gets split into max_tokens_per_group-sized chunks
         # (with a possible smaller leftover at the end of the natural
-        # segment).  Applies to all modes; None disables.
+        # segment).  None disables.
         self.max_tokens_per_group = max_tokens_per_group
-
-        if self.percent_kept_boundary is not None and self.mode != "topk":
-            warning_msg = (
-                "percent_kept_boundary is provided but mode is not 'topk', it "
-                "will be ignored. Please set mode='topk' to use "
-                "percent_kept_boundary or remove it if not needed."
-            )
-            print(f"WARNING: {warning_msg}")
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -56,115 +52,15 @@ class CosineSimilarityCompression(BaseCompressionModel):
         )
 
     def _compute_cosine_sim(self, x, padding_mask):
-        """Compute frame-to-frame cosine similarities, masking padding positions.
+        """Frame-to-frame cosine similarities, (B, T-1).
 
-        Returns:
-            cosine_sim: (B, T-1)
-            valid_len:  (B,) float or None if no padding mask
+        Padded positions are filled with 1.0 so they never fall below the
+        threshold (and ``_build_boundary`` masks them again anyway).
         """
         cosine_sim = F.cosine_similarity(x[:, :-1], x[:, 1:], dim=-1)  # (B, T-1)
-        valid_len = None
         if padding_mask is not None:
-            valid_len = (~padding_mask).sum(dim=1).float()  # (B,)
             cosine_sim = cosine_sim.masked_fill(padding_mask[:, 1:], 1.0)
-        return cosine_sim, valid_len
-
-    def _compute_stop_tokens_topk_or_num_segment(
-        self,
-        cosine_sim,
-        rate,
-        valid_len,
-        B,
-        T,
-        device,
-        anchor_boundary,
-        percent_kept_boundary,
-    ):
-        """Shared batch loop for 'topk' and 'num_segment' modes."""
-        if self.mode == "topk":
-            k = (
-                torch.clamp(((rate * valid_len) - 1).long(), min=0)
-                if valid_len is not None
-                else (rate * torch.ones(B, device=device) * (T - 1)).long()
-            )
-        else:  # num_segment
-            if isinstance(rate, torch.Tensor):
-                k = torch.clamp((rate.squeeze() - 1).long(), min=0)
-            else:
-                k = torch.tensor([max(0, int(rate) - 1)] * B, device=device)
-
-        stop_tokens = torch.zeros_like(cosine_sim, dtype=torch.long)
-        for b in range(B):
-            k_b = k[b].item() if k.dim() > 0 else k.item()
-            if k_b <= 0:
-                continue
-
-            sim_b = cosine_sim[b].clone()
-            indices_b = []
-
-            if anchor_boundary is not None and percent_kept_boundary is not None:
-                anchors_b = anchor_boundary[b, 1:] == 1
-                k_anchor = min(
-                    int(percent_kept_boundary * k_b), int(anchors_b.int().sum().item())
-                )
-                if k_anchor > 0:
-                    sim_anchors = sim_b.clone()
-                    sim_anchors[~anchors_b] = float("inf")
-                    _, picked_anchors = torch.topk(sim_anchors, k_anchor, largest=False)
-                    indices_b.append(picked_anchors)
-                    sim_b[picked_anchors] = float("inf")
-                    k_b -= k_anchor
-
-            if k_b > 0:
-                _, picked_remaining = torch.topk(sim_b, k_b, largest=False)
-                indices_b.append(picked_remaining)
-
-            if indices_b:
-                stop_tokens[b, torch.cat(indices_b)] = 1
-
-        return stop_tokens
-
-    def _compute_stop_tokens(
-        self,
-        cosine_sim,
-        rate,
-        valid_len,
-        B,
-        T,
-        device,
-        anchor_boundary,
-        percent_kept_boundary,
-    ):
-        """Dispatch to mode-specific stop-token computation."""
-        if self.mode in ["topk", "num_segment"]:
-            return self._compute_stop_tokens_topk_or_num_segment(
-                cosine_sim,
-                rate,
-                valid_len,
-                B,
-                T,
-                device,
-                anchor_boundary,
-                percent_kept_boundary,
-            )
-        if self.mode == "threshold":
-            return (cosine_sim < rate).long()
-        if self.mode == "flexicodec":
-            # FlexiCodec's threshold-based segmentation
-            # (modeling_flexicodec.py::_perform_similarity_alignment_vectorized).
-            # A new segment starts wherever consecutive-frame cosine similarity
-            # is AT OR BELOW ``rate`` -- i.e. the two frames are dissimilar
-            # enough that the latter is judged to belong to a new segment.
-            # Fully vectorised; the "iterate left-to-right" framing in some
-            # descriptions is just informal -- the underlying op is a single
-            # element-wise comparison.  Differs from the existing "threshold"
-            # mode only in the inequality (<= vs <), which matters at the
-            # exact-equality edge case.
-            return (cosine_sim <= rate).long()
-        raise ValueError(
-            f"Invalid mode {self.mode}. Choose from 'topk', 'threshold', "
-            "'num_segment', or 'flexicodec'."
-        )
+        return cosine_sim
 
     def _build_boundary(self, stop_tokens, B, device, padding_mask):
         """Prepend a t=0 zero and mask padding into a (B, T) boundary tensor."""
@@ -250,15 +146,16 @@ class CosineSimilarityCompression(BaseCompressionModel):
         rate=None,
         padding_mask=None,
         anchor_boundary=None,
-        percent_kept_boundary=None,
         **kwargs,
     ) -> CompressionOutput:
         """
         Args:
             x: (B, T, D)
+            rate: similarity threshold in (0, 1]; a float, a per-sample
+                (B,) tensor, or None for trivial per-frame segmentation.
             padding_mask: (B, T), True = padding
-            anchor_boundary: (B, T) binary tensor of anchor boundaries to
-                include
+            anchor_boundary: (B, T) binary tensor; when given, boundaries
+                are restricted to these anchor positions.
 
         Returns:
             CompressionOutput
@@ -266,23 +163,16 @@ class CosineSimilarityCompression(BaseCompressionModel):
         B, T, _ = x.shape
         device = x.device
 
-        if percent_kept_boundary is None:
-            percent_kept_boundary = self.percent_kept_boundary
-
         if rate is None:
             return self._no_rate_output(x, padding_mask)
 
-        cosine_sim, valid_len = self._compute_cosine_sim(x, padding_mask)
-        stop_tokens = self._compute_stop_tokens(
-            cosine_sim,
-            rate,
-            valid_len,
-            B,
-            T,
-            device,
-            anchor_boundary,
-            percent_kept_boundary,
-        )
+        cosine_sim = self._compute_cosine_sim(x, padding_mask)
+        if isinstance(rate, torch.Tensor) and rate.dim() == 1:
+            rate = rate.unsqueeze(-1)  # (B,) -> (B, 1), broadcast over T-1
+        stop_tokens = (cosine_sim < rate).long()
+        if anchor_boundary is not None:
+            # Anchored layers may only place boundaries inside the anchor set.
+            stop_tokens = stop_tokens * anchor_boundary[:, 1:].bool().long()
         boundary = self._build_boundary(stop_tokens, B, device, padding_mask)
         # Optional FlexiCodec-style hard cap on segment length.  No-op when
         # ``self.max_tokens_per_group is None``.
