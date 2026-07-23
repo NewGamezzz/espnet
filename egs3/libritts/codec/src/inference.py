@@ -37,15 +37,25 @@ def build_output(data, model_output, idx):
 
 
 class MultiCompressionAudioCoding:
-    """Encode -> decode roundtrip for a multi-compression fine-tuned codec.
+    """Encode -> decode roundtrip for a multi-compression codec.
 
     Analog of ``espnet2.bin.gan_codec_inference.AudioCoding`` for models
     built by ``src.factory.build_multicomp_model``.  The wrapped
-    architecture is rebuilt from the model spec the factory dumped during
-    training (``dump_config_to`` -> ``multicomp_model.yaml``), then the
-    fine-tuned checkpoint (wrapped key layout; Lightning checkpoints are
-    unwrapped automatically) is loaded strictly
-    on top.
+    architecture comes from exactly one of two sources:
+
+    - ``train_config``: the model spec the factory dumped during
+      fine-tuning (``dump_config_to`` -> ``multicomp_model.yaml``).
+    - ``model_conf``: inline factory kwargs (``compression_model`` plus
+      a codec source such as ``pretrained_train_config``), for
+      evaluating a codec that was never fine-tuned with the wrapper
+      (e.g. rate-sweeping baseline weights).
+
+    The weights ALWAYS come from ``model_file`` and are loaded strictly:
+    fine-tuned checkpoints match the wrapped key layout directly, and
+    baseline (unwrapped-layout) checkpoints are remapped by the
+    wrapper's load hook; Lightning checkpoints are unwrapped
+    automatically.  ``model_conf`` must therefore not name weight
+    sources (``pretrained_model_file``/``pretrained_model_tag``).
 
     The compression ``rate`` and the optional ``anchor_start_layer``
     (layers at/after it constrain their boundaries to the union of the
@@ -57,18 +67,42 @@ class MultiCompressionAudioCoding:
 
     def __init__(
         self,
-        train_config: str,
-        model_file: str,
+        train_config: Optional[str] = None,
+        model_file: Optional[str] = None,
+        model_conf: Optional[Dict[str, Any]] = None,
         rate: Optional[float] = None,
         anchor_start_layer: Optional[int] = None,
         target_bandwidth: Optional[float] = None,
         dtype: str = "float32",
         device: Union[str, torch.device] = "cpu",
     ):
-        from .factory import build_multicomp_model, load_model_state_strict
+        from .factory import _to_plain, build_multicomp_model, load_model_state_strict
 
-        with open(train_config, encoding="utf-8") as f:
-            spec = yaml.safe_load(f)
+        if model_file is None:
+            raise ValueError(
+                "'model_file' is required: it names the evaluated weights "
+                "(fine-tuned or baseline checkpoint)."
+            )
+        if (train_config is None) == (model_conf is None):
+            raise ValueError(
+                "Specify exactly one architecture source: 'train_config' "
+                "(the multicomp_model.yaml spec dumped during fine-tuning) "
+                "or 'model_conf' (inline factory kwargs, e.g. for "
+                "evaluating baseline weights without fine-tuning)."
+            )
+
+        if train_config is not None:
+            with open(train_config, encoding="utf-8") as f:
+                spec = yaml.safe_load(f)
+        else:
+            spec = dict(_to_plain(model_conf))
+            forbidden = {"pretrained_model_file", "pretrained_model_tag"} & set(spec)
+            if forbidden:
+                raise ValueError(
+                    f"model_conf must not contain weight sources "
+                    f"({sorted(forbidden)}): weights always come from "
+                    "'model_file'."
+                )
 
         model = build_multicomp_model(**spec)
         load_model_state_strict(model, model_file)
