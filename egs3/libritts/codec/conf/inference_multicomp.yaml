@@ -35,6 +35,10 @@ model:
   # last.ckpt: loading a raw Lightning checkpoint is rejected.
   model_file: ${exp_dir}/valid.mel_loss.ave_5best.pth
   rate: 0.5
+  # Anchor constraint (optional): layers at/after this index may only
+  # place boundaries inside the union of the earlier layers' boundaries.
+  # null disables; e.g. 2 anchors layers 2+ on layers 0-1.
+  anchor_start_layer: null
 
 output_fn: src.inference.build_output
 output_artifacts:

@@ -46,10 +46,12 @@ class MultiCompressionAudioCoding:
     fine-tuned averaged checkpoint (wrapped key layout) is loaded strictly
     on top.
 
-    The compression ``rate`` is delivered to the quantizer wrapper via
-    ``set_inference_rate`` around the unmodified ``codec.encode`` call
-    (which forwards no extra kwargs), and can be overridden per call via
-    ``decode_conf={"rate": ...}``.
+    The compression ``rate`` and the optional ``anchor_start_layer``
+    (layers at/after it constrain their boundaries to the union of the
+    earlier layers' boundaries) are delivered to the quantizer wrapper via
+    its ``set_inference_*`` state around the unmodified ``codec.encode``
+    call (which forwards no extra kwargs), and can be overridden per call
+    via ``decode_conf={"rate": ..., "anchor_start_layer": ...}``.
     """
 
     def __init__(
@@ -57,6 +59,7 @@ class MultiCompressionAudioCoding:
         train_config: str,
         model_file: str,
         rate: Optional[float] = None,
+        anchor_start_layer: Optional[int] = None,
         target_bandwidth: Optional[float] = None,
         dtype: str = "float32",
         device: Union[str, torch.device] = "cpu",
@@ -75,6 +78,7 @@ class MultiCompressionAudioCoding:
         self.device = device
         self.dtype = dtype
         self.rate = rate
+        self.anchor_start_layer = anchor_start_layer
         self.target_bandwidth = target_bandwidth
 
     @torch.no_grad()
@@ -87,17 +91,23 @@ class MultiCompressionAudioCoding:
         """Run the codec roundtrip; mirrors ``AudioCoding.__call__``."""
         assert audio is not None, "Audio is invalid, input a valid audio."
 
-        cfg: Dict[str, Any] = {"rate": self.rate, "target_bw": self.target_bandwidth}
+        cfg: Dict[str, Any] = {
+            "rate": self.rate,
+            "anchor_start_layer": self.anchor_start_layer,
+            "target_bw": self.target_bandwidth,
+        }
         if decode_conf is not None:
             cfg.update(decode_conf)
 
         audio = torch.as_tensor(audio, dtype=getattr(torch, self.dtype)).to(self.device)
 
         self.quantizer.set_inference_rate(cfg["rate"])
+        self.quantizer.set_inference_anchor_start_layer(cfg["anchor_start_layer"])
         try:
             codes = self.model.encode(audio, target_bw=cfg["target_bw"])
         finally:
             self.quantizer.reset_inference_rate()
+            self.quantizer.reset_inference_anchor_start_layer()
 
         output_dict = dict(codes=codes)
         if not encode_only:

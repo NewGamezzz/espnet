@@ -84,7 +84,7 @@ model:
     # segments = less compression).
     min_rate: 0.1
     max_rate: 1.0
-    random_rate: per_quantizer     # per_quantizer | per_sample | coarse-fine | fine-coarse | none
+    random_rate: per_quantizer     # per_quantizer | per_sample | none
     eval_rate: 0.5
 
 ##########################################################

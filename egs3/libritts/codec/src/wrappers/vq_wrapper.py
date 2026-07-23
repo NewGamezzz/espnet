@@ -38,7 +38,7 @@ from typing import List, Optional, Tuple
 import torch
 import torch.nn as nn
 
-RATE_STRATEGIES = ("per_quantizer", "per_sample", "coarse-fine", "fine-coarse", "none")
+RATE_STRATEGIES = ("per_quantizer", "per_sample", "none")
 
 
 class RVQCompressionWrapper(nn.Module):
@@ -70,7 +70,6 @@ class RVQCompressionWrapper(nn.Module):
         rate=None,
         n_q: Optional[int] = None,
         padding_mask: Optional[torch.Tensor] = None,
-        is_anchor_boundary: Optional[bool] = False,
         anchor_start_layer: Optional[int] = None,
     ):
         quantized_out = 0.0
@@ -105,12 +104,9 @@ class RVQCompressionWrapper(nn.Module):
                     compression_output.reconstructed_features.transpose(1, 2)
                 )
 
-                # Accumulate anchor from free layers only.  Trigger when
-                # explicitly asked (is_anchor_boundary) OR when
-                # anchor_start_layer is set (implicit need).
-                if (
-                    is_anchor_boundary or anchor_start_layer is not None
-                ) and not use_anchor:
+                # Accumulate the boundary union from free layers only; it
+                # becomes the anchor set for layers >= anchor_start_layer.
+                if anchor_start_layer is not None and not use_anchor:
                     anchor_boundary = (
                         torch.logical_or(
                             anchor_boundary, compression_output.boundary_soft.bool()
@@ -169,9 +165,7 @@ class RVQCompressionWrapper(nn.Module):
                     compression_output.reconstructed_features.transpose(1, 2)
                 )
 
-                if (
-                    is_anchor_boundary or anchor_start_layer is not None
-                ) and not use_anchor:
+                if anchor_start_layer is not None and not use_anchor:
                     anchor_boundary = (
                         torch.logical_or(
                             anchor_boundary, compression_output.boundary_soft.bool()
@@ -205,7 +199,6 @@ class RVQCompressionWrapper(nn.Module):
         n_q: Optional[int] = None,
         st: Optional[int] = None,
         padding_mask: Optional[torch.Tensor] = None,
-        is_anchor_boundary: bool = False,
         anchor_start_layer: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]:
         """Shared encode loop used by both encode() and encode_with_segments().
@@ -244,9 +237,7 @@ class RVQCompressionWrapper(nn.Module):
             )
             segment_indices.append(compression_output.segment_idx)
 
-            if (
-                is_anchor_boundary or anchor_start_layer is not None
-            ) and not use_anchor:
+            if anchor_start_layer is not None and not use_anchor:
                 anchor_boundary = (
                     torch.logical_or(
                         anchor_boundary, compression_output.boundary_soft.bool()
@@ -269,7 +260,6 @@ class RVQCompressionWrapper(nn.Module):
         n_q: Optional[int] = None,
         st: Optional[int] = None,
         padding_mask: Optional[torch.Tensor] = None,
-        is_anchor_boundary: bool = False,
         anchor_start_layer: Optional[int] = None,
     ) -> torch.Tensor:
         """Encode to discrete codes. Returns (n_q, B, T') code indices."""
@@ -279,7 +269,6 @@ class RVQCompressionWrapper(nn.Module):
             n_q=n_q,
             st=st,
             padding_mask=padding_mask,
-            is_anchor_boundary=is_anchor_boundary,
             anchor_start_layer=anchor_start_layer,
         )
         return out_indices
@@ -299,7 +288,6 @@ class RVQCompressionWrapper(nn.Module):
         n_q: Optional[int] = None,
         st: Optional[int] = None,
         padding_mask: Optional[torch.Tensor] = None,
-        is_anchor_boundary: bool = False,
         anchor_start_layer: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]:
         """Encode and also return pre-quantization residuals and segment indices."""
@@ -309,7 +297,6 @@ class RVQCompressionWrapper(nn.Module):
             n_q=n_q,
             st=st,
             padding_mask=padding_mask,
-            is_anchor_boundary=is_anchor_boundary,
             anchor_start_layer=anchor_start_layer,
         )
 
@@ -330,8 +317,7 @@ class CompressionResidualVectorQuantizer(nn.Module):
         min_rate / max_rate: sampling range for training-time rates.
         random_rate: sampling strategy — ``per_quantizer`` (one rate per
             codebook layer and batch item), ``per_sample`` (one per batch
-            item), ``coarse-fine`` / ``fine-coarse`` (fixed per-layer
-            schedules), or ``none`` (no compression during training).
+            item), or ``none`` (no compression during training).
         eval_rate: deterministic rate used in eval-mode forward passes
             (validation).  ``None`` means no compression at validation.
     """
@@ -365,6 +351,7 @@ class CompressionResidualVectorQuantizer(nn.Module):
         self.random_rate = random_rate
         self.eval_rate = eval_rate
         self._inference_rate = None
+        self._inference_anchor_start_layer = None
         # Accept unwrapped-layout checkpoints transparently: a pretrained
         # ResidualVectorQuantizer state dict ("vq.layers...") is remapped to
         # the wrapped layout ("rvq.vq.rvq.layers...") at load time, so
@@ -418,6 +405,19 @@ class CompressionResidualVectorQuantizer(nn.Module):
     def reset_inference_rate(self) -> None:
         self._inference_rate = None
 
+    def set_inference_anchor_start_layer(self, layer: Optional[int]) -> None:
+        """Set the anchor start layer used by encode when none is passed.
+
+        Layers at/after this index constrain their boundaries to the union
+        of the earlier (free) layers' boundaries.  Inference-only: like the
+        inference rate, it exists because ``codec.encode()`` forwards no
+        extra kwargs.  Reset after use so training is never affected.
+        """
+        self._inference_anchor_start_layer = layer
+
+    def reset_inference_anchor_start_layer(self) -> None:
+        self._inference_anchor_start_layer = None
+
     def _sample_rate(self, batch_size: int, device) -> Optional[torch.Tensor]:
         """Sample a training-time rate tensor according to ``random_rate``.
 
@@ -433,18 +433,6 @@ class CompressionResidualVectorQuantizer(nn.Module):
 
         if self.random_rate == "per_sample":
             return torch.rand(batch_size, device=device) * span + self.min_rate
-
-        if self.random_rate == "coarse-fine":
-            half = n_q // 2
-            rate = torch.ones(n_q, batch_size, device=device)
-            rate[:half, :] = torch.linspace(0.02, 1.0, half, device=device).unsqueeze(1)
-            return rate
-
-        if self.random_rate == "fine-coarse":
-            half = n_q // 2
-            rate = torch.zeros(n_q, batch_size, device=device)
-            rate[:half, :] = torch.linspace(1, 0, half, device=device).unsqueeze(1)
-            return rate
 
         # "none": no compression during training.
         return None
@@ -469,7 +457,6 @@ class CompressionResidualVectorQuantizer(nn.Module):
         bandwidth: Optional[float] = None,
         rate=None,
         padding_mask: Optional[torch.Tensor] = None,
-        is_anchor_boundary: Optional[bool] = False,
         anchor_start_layer: Optional[int] = None,
     ):
         """Residual vector quantization with per-layer compression.
@@ -488,7 +475,6 @@ class CompressionResidualVectorQuantizer(nn.Module):
                 n_q=n_q,
                 rate=rate,
                 padding_mask=padding_mask,
-                is_anchor_boundary=is_anchor_boundary,
                 anchor_start_layer=anchor_start_layer,
             )
             bw = torch.tensor(n_q * bw_per_q).to(x)
@@ -499,7 +485,6 @@ class CompressionResidualVectorQuantizer(nn.Module):
                 n_q=n_q,
                 rate=rate,
                 padding_mask=padding_mask,
-                is_anchor_boundary=is_anchor_boundary,
                 anchor_start_layer=anchor_start_layer,
             )
             bw = torch.tensor(n_q * bw_per_q).to(x)
@@ -519,10 +504,13 @@ class CompressionResidualVectorQuantizer(nn.Module):
         st: Optional[int] = None,
         rate=None,
         padding_mask: Optional[torch.Tensor] = None,
+        anchor_start_layer: Optional[int] = None,
         **kwargs,
     ) -> torch.Tensor:
         """Encode to codes at the given bandwidth; (n_q, B, T') indices."""
         rate = self._resolve_rate(x.size(0), x.device, rate)
+        if anchor_start_layer is None:
+            anchor_start_layer = self._inference_anchor_start_layer
         n_q = self.rvq.get_num_quantizers_for_bandwidth(sample_rate, bandwidth)
         return self.rvq.vq.encode(
             x,
@@ -530,6 +518,7 @@ class CompressionResidualVectorQuantizer(nn.Module):
             st=st or 0,
             rate=rate,
             padding_mask=padding_mask,
+            anchor_start_layer=anchor_start_layer,
             **kwargs,
         )
 
@@ -545,10 +534,13 @@ class CompressionResidualVectorQuantizer(nn.Module):
         st: Optional[int] = None,
         rate=None,
         padding_mask: Optional[torch.Tensor] = None,
+        anchor_start_layer: Optional[int] = None,
         **kwargs,
     ) -> Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]:
         """Encode and also return per-layer residuals and segment indices."""
         rate = self._resolve_rate(x.size(0), x.device, rate)
+        if anchor_start_layer is None:
+            anchor_start_layer = self._inference_anchor_start_layer
         n_q = self.rvq.get_num_quantizers_for_bandwidth(sample_rate, bandwidth)
         return self.rvq.vq.encode_with_segments(
             x,
@@ -556,6 +548,7 @@ class CompressionResidualVectorQuantizer(nn.Module):
             st=st or 0,
             rate=rate,
             padding_mask=padding_mask,
+            anchor_start_layer=anchor_start_layer,
             **kwargs,
         )
 

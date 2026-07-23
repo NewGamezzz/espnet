@@ -41,7 +41,6 @@ class DensityPeakCompression(BaseCompressionModel):
         k: int = 5,
         beta: float = 0.2,
         max_span: int = 4,
-        **kwargs,
     ):
         super().__init__()
         self.k = k
@@ -119,12 +118,11 @@ class DensityPeakCompression(BaseCompressionModel):
         Returns:
             s:   (T,)   clustering score
             sim: (T, T) similarity matrix (kept for greedy clustering)
-            rho: (T,)   local density (kept for greedy clustering)
         """
         sim = self._similarity_matrix(x)
         rho = self._local_density(sim)
         delta = self._peak_distance(sim, rho)
-        return rho * delta, sim, rho
+        return rho * delta, sim
 
     # ------------------------------------------------------------------
     # Greedy bidirectional clustering
@@ -206,49 +204,6 @@ class DensityPeakCompression(BaseCompressionModel):
         return segment_idx
 
     # ------------------------------------------------------------------
-    # Shared helpers (mirrored from CosineSimilarityCompression)
-    # ------------------------------------------------------------------
-
-    def _no_rate_output(self, x: torch.Tensor, padding_mask) -> CompressionOutput:
-        """Trivial per-frame segmentation returned when rate is None."""
-        B, T, _ = x.shape
-        device = x.device
-        boundary = torch.ones(B, T, device=device, dtype=torch.long)
-        boundary[:, 0] = 0
-        if padding_mask is not None:
-            boundary = boundary.masked_fill(padding_mask, 0)
-        boundary_soft = boundary.float()
-        segment_idx = torch.cumsum(boundary, dim=1)
-        expected_length = boundary_soft.sum(dim=1, keepdim=True) + 1
-        return CompressionOutput(
-            boundary_soft=boundary_soft,
-            segment_idx=segment_idx,
-            reconstructed_features=x,
-            expected_length=expected_length,
-        )
-
-    def _segment_average(
-        self,
-        x: torch.Tensor,
-        segment_idx: torch.Tensor,
-        padding_mask,
-    ) -> torch.Tensor:
-        """Segment-wise mean features, upsampled back to frame resolution.
-
-        Returns:
-            (B, T, D)
-        """
-        device = x.device
-        max_segments = int(segment_idx.max().item()) + 1
-        seg_ids = torch.arange(max_segments, device=device)[None, :, None]  # (1, S, 1)
-        assign = (segment_idx.unsqueeze(1) == seg_ids).float()  # (B, S, T)
-        if padding_mask is not None:
-            assign = assign.masked_fill(padding_mask.unsqueeze(1), 0.0)
-        assign_norm = assign / (assign.sum(dim=2, keepdim=True) + 1e-6)
-        segment_means = torch.matmul(assign_norm, x)  # (B, S, D)
-        return torch.matmul(assign.transpose(1, 2), segment_means)  # (B, T, D)
-
-    # ------------------------------------------------------------------
     # Public interface
     # ------------------------------------------------------------------
 
@@ -297,7 +252,7 @@ class DensityPeakCompression(BaseCompressionModel):
 
             x_b = x[b, :vlen]  # (vlen, D)
 
-            s_b, sim_b, _ = self._density_scores(x_b)
+            s_b, sim_b = self._density_scores(x_b)
 
             # rate is used directly as the similarity threshold:
             #   high rate (-> 1.0) = hard to merge = many segments

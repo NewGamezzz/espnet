@@ -29,10 +29,8 @@ class BaseCompressionModel(nn.Module, ABC):
     """Abstract base class for all compression models.
 
     Subclasses must implement ``forward``, which segments an input feature
-    sequence and returns a ``CompressionOutput``.
-
-    ``predict_segments`` is provided as a concrete no-grad wrapper and does
-    not need to be overridden.
+    sequence and returns a ``CompressionOutput``.  The per-frame identity
+    output (``rate=None``) and the segment-averaging math are shared here.
     """
 
     @abstractmethod
@@ -55,12 +53,63 @@ class BaseCompressionModel(nn.Module, ABC):
             CompressionOutput
         """
 
-    @torch.no_grad()
-    def predict_segments(
+    def _no_rate_output(
+        self, x: torch.Tensor, padding_mask: Optional[torch.Tensor]
+    ) -> CompressionOutput:
+        """Trivial per-frame segmentation (used when rate is None)."""
+        B, T, _ = x.shape
+        device = x.device
+        boundary = torch.ones(B, T, device=device, dtype=torch.long)
+        boundary[:, 0] = 0
+        if padding_mask is not None:
+            boundary = boundary.masked_fill(padding_mask, 0)
+        boundary_soft = boundary.float()
+        segment_idx = torch.cumsum(boundary, dim=1)
+        expected_length = boundary_soft.sum(dim=1, keepdim=True) + 1
+        return CompressionOutput(
+            boundary_soft=boundary_soft,
+            segment_idx=segment_idx,
+            reconstructed_features=x,
+            expected_length=expected_length,
+        )
+
+    def _segment_average(
         self,
         x: torch.Tensor,
-        padding_mask: Optional[torch.Tensor] = None,
-        **kwargs,
-    ) -> CompressionOutput:
-        """No-grad wrapper around ``forward`` for inference-time use."""
-        return self.forward(x, padding_mask=padding_mask, **kwargs)
+        segment_idx: torch.Tensor,
+        padding_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """Segment-wise mean features, upsampled back to frame resolution.
+
+        Uses scatter_add + gather instead of a dense (B, S, T) assignment
+        matrix, keeping peak memory at O(B·T·D).
+
+        Returns:
+            (B, T, D)
+        """
+        B, T, D = x.shape
+        device = x.device
+        max_segments = int(segment_idx.max().item()) + 1
+
+        x_masked = (
+            x
+            if padding_mask is None
+            else x.masked_fill(padding_mask.unsqueeze(-1), 0.0)
+        )
+
+        # Scatter-add frames into segments -> (B, S, D)
+        idx_exp = segment_idx.unsqueeze(-1).expand(B, T, D)  # (B, T, D)
+        seg_sum = torch.zeros(B, max_segments, D, device=device, dtype=x.dtype)
+        seg_sum.scatter_add_(1, idx_exp, x_masked)
+
+        # Count frames per segment (use ones, zero out padding)
+        ones = torch.ones(B, T, 1, device=device, dtype=x.dtype)
+        if padding_mask is not None:
+            ones = ones.masked_fill(padding_mask.unsqueeze(-1), 0.0)
+        seg_count = torch.zeros(B, max_segments, 1, device=device, dtype=x.dtype)
+        seg_count.scatter_add_(1, segment_idx.unsqueeze(-1), ones)
+
+        seg_means = seg_sum / (seg_count + 1e-6)  # (B, S, D)
+
+        # Gather back to frame resolution -> (B, T, D)
+        return seg_means.gather(1, idx_exp)

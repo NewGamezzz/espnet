@@ -19,9 +19,8 @@ class CosineSimilarityCompression(BaseCompressionModel):
     layers can only segment at positions already chosen by earlier layers.
     """
 
-    def __init__(self, max_tokens_per_group=None, **kwargs):
+    def __init__(self, max_tokens_per_group=None):
         super().__init__()
-        self.kwargs = kwargs
         # Mirror FlexiCodec's max_tokens_per_group: hard cap on segment
         # length.  When set, any segment that would naturally be longer
         # than this gets split into max_tokens_per_group-sized chunks
@@ -32,24 +31,6 @@ class CosineSimilarityCompression(BaseCompressionModel):
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
-
-    def _no_rate_output(self, x, padding_mask):
-        """Return trivial per-frame segmentation (used when rate=None)."""
-        B, T, _ = x.shape
-        device = x.device
-        boundary = torch.ones(B, T, device=device, dtype=torch.long)
-        boundary[:, 0] = 0
-        if padding_mask is not None:
-            boundary = boundary.masked_fill(padding_mask, 0)
-        boundary_soft = boundary.float()
-        segment_idx = torch.cumsum(boundary, dim=1)
-        expected_length = boundary_soft.sum(dim=1, keepdim=True) + 1
-        return CompressionOutput(
-            boundary_soft=boundary_soft,
-            segment_idx=segment_idx,
-            reconstructed_features=x,
-            expected_length=expected_length,
-        )
 
     def _compute_cosine_sim(self, x, padding_mask):
         """Frame-to-frame cosine similarities, (B, T-1).
@@ -119,22 +100,6 @@ class CosineSimilarityCompression(BaseCompressionModel):
         if padding_mask is not None:
             new_boundary = new_boundary.masked_fill(padding_mask, 0)
         return new_boundary
-
-    def _segment_average(self, x, segment_idx, padding_mask):
-        """Compute segment-wise average features and upsample back to frame level.
-
-        Returns:
-            average_vectors: (B, T, D)
-        """
-        device = x.device
-        max_segments = segment_idx.max().item() + 1
-        seg_ids = torch.arange(max_segments, device=device)[None, :, None]  # (1, S, 1)
-        assign = (segment_idx.unsqueeze(1) == seg_ids).float()  # (B, S, T)
-        if padding_mask is not None:
-            assign = assign.masked_fill(padding_mask.unsqueeze(1), 0.0)
-        assign_norm = assign / (assign.sum(dim=2, keepdim=True) + 1e-6)
-        segment_means = torch.matmul(assign_norm, x)  # (B, S, D)
-        return torch.matmul(assign.transpose(1, 2), segment_means)  # (B, T, D)
 
     # ------------------------------------------------------------------
     # Public interface
