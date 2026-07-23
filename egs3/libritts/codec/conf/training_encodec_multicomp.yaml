@@ -3,7 +3,7 @@
 ##########################################################
 # Fine-tunes a pretrained Encodec with the multi-compression quantizer
 # wrapper (per-codebook variable-rate frame merging before each RVQ
-# layer), ported from NewGamezzz/Multi-Compression-Audio-Codec.
+# layer)
 #
 # Quick usage:
 #   python run.py --stages create_dataset --training_config conf/training_encodec_multicomp.yaml
@@ -74,9 +74,6 @@ model:
   # wrapped, so the key layouts match exactly. Lightning checkpoints
   # (last.ckpt) are unwrapped automatically; the load itself is always
   # strict, so a wrong file raises instead of silently partial-loading.
-  # Do NOT point this at an ave_Nbest.pth: the current framework writes
-  # those files EMPTY (AverageCheckpointsCallback bug), which the strict
-  # load here would catch, but only at run time.
   pretrained_train_config: ${baseline_exp_dir}/config.yaml
   pretrained_model_file: ${baseline_exp_dir}/last.ckpt
   freeze_codec_module_name: none   # none | encoder | decoder

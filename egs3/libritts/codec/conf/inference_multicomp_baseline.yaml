@@ -54,9 +54,7 @@ model:
       eval_rate: 0.5
   # Baseline weights (unwrapped key layout, remapped at load time).
   # Lightning checkpoints (last.ckpt) are unwrapped automatically and
-  # loaded strictly. Do NOT use ave_Nbest.pth: the current framework
-  # writes those files EMPTY (AverageCheckpointsCallback bug); the
-  # strict load here would raise.
+  # loaded strictly.
   model_file: ${baseline_exp_dir}/last.ckpt
   rate: 0.5
   # Anchor constraint (optional): layers at/after this index may only
