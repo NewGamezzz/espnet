@@ -36,13 +36,6 @@ class DPSegmentationCompression(BaseCompressionModel):
                   allow more aggressive compression but increase cost-table
                   memory from O(T·U·D) toward O(T²·D).  Set to ``None``
                   to remove the constraint entirely (equivalent to U = T).
-
-    Note — variable-rate inference:
-        The paper's model is "schedulable": R_S (the compression rate) is
-        passed as a runtime argument to the DP scheduler, so a single trained
-        model can be evaluated at multiple rates at inference time.  Our
-        ``rate`` argument mirrors this exactly.  U, however, is fixed at
-        training time and should not be changed at inference.
     """
 
     def __init__(
@@ -230,9 +223,6 @@ class DPSegmentationCompression(BaseCompressionModel):
         # Initialize everything as invalid (infinite cost)
         constrained_cost = torch.full_like(cost_table, float("inf"))
 
-        # ---------------------------------------------------------------
-        # FIX 2: Vectorized Span Calculation (No Python Loops)
-        # ---------------------------------------------------------------
         # Create a matrix of all possible spans: (M, M)
         p_end = positions.view(-1, 1)  # (M, 1)
         p_start = positions.view(1, -1)  # (1, M)
