@@ -354,9 +354,10 @@ class CompressionResidualVectorQuantizer(nn.Module):
         self._inference_anchor_start_layer = None
         # Accept unwrapped-layout checkpoints transparently: a pretrained
         # ResidualVectorQuantizer state dict ("vq.layers...") is remapped to
-        # the wrapped layout ("rvq.vq.rvq.layers...") at load time, so
-        # baseline checkpoints load strictly into the wrapped model even
-        # after construction (e.g. via trainer.init init_param).
+        # the wrapped layout ("rvq.vq.rvq.layers...") at load time, so a
+        # baseline checkpoint can be loaded strictly into the wrapped model
+        # even after construction (e.g. rate-sweeping baseline weights at
+        # inference without fine-tuning).
         # (_register_* is the stable-across-versions spelling of the public
         # register_load_state_dict_pre_hook.)
         self._register_load_state_dict_pre_hook(self._remap_unwrapped_state_dict)

@@ -200,6 +200,10 @@ best_model_criterion:
 # Optional random seed used by collect_stats/train.
 seed:
 
+# Extra model initialization mode forwarded to ESPnet's initializer.
+# Example: xavier_uniform
+init:
+
 ##########################################################
 #                   PARALLELIZATION SETTING              #
 ##########################################################
@@ -286,15 +290,6 @@ trainer:
   gan:
     generator_first: false        # whether to update the generator before the discriminator
     skip_discriminator_prob: 0.0  # if > 0, skip the discriminator turn with this probability
-
-  # Optional weight initialization, applied at trainer construction.
-  # Either a string (espnet2 init scheme, e.g. xavier_uniform) or a mapping:
-  #   init:
-  #     mode: xavier_uniform     # optional scheme, applied first
-  #     init_param:              # optional espnet2 --init_param specs,
-  #       - /path/to/model.pth   # loaded AFTER the scheme (never overwritten)
-  #     ignore_init_mismatch: false
-  # init:
 
   logger:
     - _target_: lightning.pytorch.loggers.TensorBoardLogger

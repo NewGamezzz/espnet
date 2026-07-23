@@ -16,7 +16,9 @@
 # NOTE: no `task:` key on purpose. CodecSystem then instantiates
 # `model:` as a Hydra _target_ (src.factory.build_multicomp_model),
 # which loads the pretrained baseline strictly BEFORE wrapping the
-# quantizer. The factory dumps the model spec to
+# quantizer. The factory is the recipe's ONLY weight-loading mechanism
+# (recipe-local by design; do not add a framework `init:` scheme, which
+# could touch the loaded weights). The factory dumps the model spec to
 # ${exp_dir}/multicomp_model.yaml for the inference stage
 # (conf/inference_multicomp.yaml) to rebuild from.
 ##########################################################
@@ -67,11 +69,13 @@ dataset:
 ##########################################################
 model:
   _target_: src.factory.build_multicomp_model
-  # Architecture comes from the baseline run's config; its WEIGHTS are
-  # loaded by `trainer.init.init_param` below (espnet2 ordering: any init
-  # scheme first, pretrained weights after, so they can never be
-  # overwritten).
+  # Architecture comes from the baseline run's config; its weights are
+  # strict-loaded into the UNWRAPPED model before the quantizer is
+  # wrapped, so the key layouts match exactly.
+  # NOT last.ckpt: mismatched checkpoint keys raise here (no silent
+  # partial load).
   pretrained_train_config: ${baseline_exp_dir}/config.yaml
+  pretrained_model_file: ${baseline_exp_dir}/valid.mel_loss.ave_5best.pth
   freeze_codec_module_name: none   # none | encoder | decoder
   dump_config_to: ${exp_dir}/multicomp_model.yaml
   compression_model:
@@ -203,17 +207,6 @@ trainer:
   # module's parameters without gradients, which default DDP treats as an
   # error.
   strategy: auto
-  # Weight initialization step (applied at trainer construction, AFTER the
-  # factory builds and wraps the model). `mode` (an espnet2 init scheme,
-  # e.g. xavier_uniform) would run first; `init_param` entries (espnet2
-  # --init_param syntax) load afterwards, so the pretrained weights always
-  # win. The baseline checkpoint has the unwrapped key layout; the wrapped
-  # quantizer remaps it transparently at load time.
-  # NOT last.ckpt: mismatched checkpoint keys raise here (no silent
-  # partial load unless ignore_init_mismatch is set).
-  init:
-    init_param:
-      - ${baseline_exp_dir}/valid.mel_loss.ave_5best.pth
   gan:
     generator_first: true
     skip_discriminator_prob: 0.3

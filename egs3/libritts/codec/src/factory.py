@@ -9,6 +9,7 @@ must NOT set a top-level ``task:`` key, so ``CodecSystem`` falls back to
     model:
       _target_: src.factory.build_multicomp_model
       pretrained_train_config: /path/to/baseline_exp/config.yaml
+      pretrained_model_file: /path/to/baseline_exp/valid.mel_loss.ave_5best.pth
       compression_model:
         name: cosine_similarity
         params: {}
@@ -18,13 +19,17 @@ must NOT set a top-level ``task:`` key, so ``CodecSystem`` falls back to
         eval_rate: 0.5
       freeze_codec_module: none
 
-The factory builds the ARCHITECTURE only (plus the quantizer wrapping and
-optional freezing).  Baseline weights are loaded by the trainer via
-``trainer.init.init_param`` (see ``conf/training_encodec_multicomp.yaml``),
-after any init scheme, so they can never be overwritten; the wrapped
-quantizer's ``load_state_dict`` pre-hook remaps unwrapped-layout keys so
-that load stays strict.  The exception is ``pretrained_model_tag`` (HF
-zoo), where the download inherently carries its weights.
+The factory is the recipe's ONLY weight-loading mechanism (deliberately
+recipe-local: no espnet3 framework hook is involved, so other recipes'
+loading conventions are unaffected).  ``pretrained_model_file`` is
+strict-loaded into the UNWRAPPED base model BEFORE the quantizer is
+wrapped, so the checkpoint's natural key layout matches and nothing can
+overwrite the weights afterwards - on the task-less Hydra path nothing
+else touches the model between ``instantiate(config.model)`` and
+``fit``.  ``pretrained_model_tag`` (HF zoo) inherently carries its own
+weights instead.  The weight path is excluded from the ``dump_config_to``
+spec, so the inference-time rebuild never depends on the baseline
+checkpoint still existing.
 """
 
 from pathlib import Path
@@ -80,7 +85,7 @@ def _build_base_model(
 
     if pretrained_train_config is not None:
         # Build from the previous run's espnet2-style config.yaml. Its
-        # weights are loaded separately via trainer.init.init_param (or
+        # weights are loaded separately via pretrained_model_file (or
         # the fine-tuned checkpoint at inference). Merging over the task
         # defaults also tolerates partial configs.
         with open(pretrained_train_config, encoding="utf-8") as f:
@@ -132,16 +137,18 @@ def build_multicomp_model(
     codec_conf: Optional[Dict[str, Any]] = None,
     task: str = "espnet2.tasks.gan_codec.GANCodecTask",
     pretrained_train_config: Optional[str] = None,
+    pretrained_model_file: Optional[str] = None,
     pretrained_model_tag: Optional[str] = None,
     freeze_codec_module_name: str = "none",
     dump_config_to: Optional[str] = None,
 ) -> AbsGANESPnetModel:
     """Build a codec wrapped with the multi-compression quantizer.
 
-    Weights are NOT loaded here (except with ``pretrained_model_tag``,
-    whose zoo download carries them): baseline weights come from
-    ``trainer.init.init_param`` at trainer construction, and inference
-    loads the fine-tuned checkpoint on top of the rebuilt architecture.
+    ``pretrained_model_file`` (when given) is strict-loaded into the
+    UNWRAPPED base model before wrapping - the factory is the recipe's
+    only weight-loading mechanism.  Inference instead rebuilds the
+    architecture from the dumped spec (which never contains the weight
+    path) and loads the fine-tuned checkpoint on top.
 
     Args:
         compression_model: dict with ``name`` (registry key), optional
@@ -153,20 +160,32 @@ def build_multicomp_model(
         task: espnet2 task path used with ``codec``/``codec_conf``.
         pretrained_train_config: espnet2-style config.yaml of a previous
             run (built via ``save_espnet_config``); architecture only.
+        pretrained_model_file: model-level checkpoint (e.g. the baseline's
+            ``valid.mel_loss.ave_5best.pth``) strict-loaded into the
+            unwrapped model before wrapping.  Not allowed together with
+            ``pretrained_model_tag`` (the tag carries its own weights).
         pretrained_model_tag: espnet_model_zoo tag (e.g.
             ``espnet/libritts_encodec_24k``); weights come with the tag.
         freeze_codec_module_name: ``none`` | ``encoder`` | ``decoder``.
         dump_config_to: when set (training config points it at
             ``${exp_dir}/multicomp_model.yaml``), the resolved model spec
-            is written there so inference can rebuild the wrapped
-            architecture and load the fine-tuned checkpoint on top.  This
-            substitutes for ``save_espnet_config``, which
-            ``CodecSystem.train`` skips on the task-less Hydra path.
+            (architecture only, no ``pretrained_model_file``) is written
+            there so inference can rebuild the wrapped architecture and
+            load the fine-tuned checkpoint on top.  This substitutes for
+            ``save_espnet_config``, which ``CodecSystem.train`` skips on
+            the task-less Hydra path.
 
     Returns:
         ``ESPnetGANCodecModel`` (an ``AbsGANESPnetModel``, so
         ``CodecSystem`` selects the GAN trainer automatically).
     """
+    if pretrained_model_file is not None and pretrained_model_tag is not None:
+        raise ValueError(
+            "'pretrained_model_file' cannot be combined with "
+            "'pretrained_model_tag': the zoo download already carries its "
+            "own weights."
+        )
+
     model = _build_base_model(
         codec=codec,
         codec_conf=codec_conf,
@@ -174,6 +193,11 @@ def build_multicomp_model(
         pretrained_train_config=pretrained_train_config,
         pretrained_model_tag=pretrained_model_tag,
     )
+
+    # Load BEFORE wrapping: the checkpoint's natural (unwrapped) key layout
+    # matches the model exactly, so the load can stay strict.
+    if pretrained_model_file is not None:
+        load_model_state_strict(model, pretrained_model_file)
 
     quantizer = model.codec.generator.quantizer
     if not isinstance(quantizer, ResidualVectorQuantizer):
