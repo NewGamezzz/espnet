@@ -19,17 +19,11 @@ must NOT set a top-level ``task:`` key, so ``CodecSystem`` falls back to
         eval_rate: 0.5
       freeze_codec_module: none
 
-The factory is the recipe's ONLY weight-loading mechanism (deliberately
-recipe-local: no espnet3 framework hook is involved, so other recipes'
-loading conventions are unaffected).  ``pretrained_model_file`` is
-strict-loaded into the UNWRAPPED base model BEFORE the quantizer is
-wrapped, so the checkpoint's natural key layout matches and nothing can
-overwrite the weights afterwards - on the task-less Hydra path nothing
-else touches the model between ``instantiate(config.model)`` and
-``fit``.  ``pretrained_model_tag`` (HF zoo) inherently carries its own
-weights instead.  The weight path is excluded from the ``dump_config_to``
-spec, so the inference-time rebuild never depends on the baseline
-checkpoint still existing.
+``pretrained_model_file`` is strict-loaded into the UNWRAPPED base model
+BEFORE the quantizer is wrapped, so the checkpoint's natural key layout
+matches and nothing can overwrite the weights afterwards.
+``pretrained_model_tag`` (HF zoo) inherently carries its own weights
+instead.
 """
 
 from pathlib import Path
@@ -104,8 +98,7 @@ def load_model_state_strict(model: torch.nn.Module, model_file: str) -> None:
     ``state_dict`` key; they are unwrapped here (and a legacy ``model.``
     key prefix is stripped when present).  Unlike espnet2's own
     ``strict=False`` loading - which silently yields a random model when
-    keys do not match (e.g. the framework's EMPTY ``ave_Nbest.pth``
-    files) - the load is always strict, so any mismatch raises.
+    keys do not match - the load is always strict, so any mismatch raises.
     """
     state_dict = torch.load(model_file, map_location="cpu")
     if "state_dict" in state_dict:  # Lightning checkpoint layout
