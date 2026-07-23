@@ -1,10 +1,5 @@
 """Multi-compression RVQ wrappers.
 
-Ported from https://github.com/NewGamezzz/Multi-Compression-Audio-Codec
-(src/wrappers/vq_wrapper.py), reduced to the "multi" wrapper mode
-(per-codebook compression of the residual before each VQ layer; the
-"single" and FiLM-conditioned modes were intentionally dropped).
-
 Two layers of wrapping:
 
 - ``RVQCompressionWrapper`` wraps espnet2's ``ResidualVectorQuantization``
