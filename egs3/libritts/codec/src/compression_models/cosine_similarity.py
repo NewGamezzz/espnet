@@ -19,7 +19,7 @@ class CosineSimilarityCompression(BaseCompressionModel):
     layers can only segment at positions already chosen by earlier layers.
     """
 
-    def __init__(self, max_tokens_per_group=None):
+    def __init__(self, max_tokens_per_group=4):
         super().__init__()
         # Mirror FlexiCodec's max_tokens_per_group: hard cap on segment
         # length.  When set, any segment that would naturally be longer
