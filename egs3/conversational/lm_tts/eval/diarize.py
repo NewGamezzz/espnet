@@ -29,10 +29,16 @@ class DiarSegment:
 
 
 def diarize(
-    wav_path: str, hf_token: str | None = None, device: str = "cuda"
+    wav_path: str,
+    hf_token: str | None = None,
+    device: str = "cuda",
+    num_speakers: int | None = None,
 ) -> list[DiarSegment]:
     """Run pyannote speaker diarization on `wav_path`, returning segments
     sorted by start time.
+
+    `num_speakers` forces the pipeline to exactly that many clusters;
+    None (the default) leaves the speaker count unconstrained.
 
     Lazily imports `pyannote.audio.Pipeline` and `torch` (never at module
     scope) and loads `pyannote/speaker-diarization-3.1` (a gated model -
@@ -76,7 +82,8 @@ def diarize(
             torch.load = _orig_load
         _pipeline = pipeline.to(torch.device(device))
 
-    annotation = _pipeline(wav_path)
+    kwargs = {} if num_speakers is None else {"num_speakers": num_speakers}
+    annotation = _pipeline(wav_path, **kwargs)
     segments = [
         DiarSegment(start=segment.start, end=segment.end, cluster=label)
         for segment, _track, label in annotation.itertracks(yield_label=True)

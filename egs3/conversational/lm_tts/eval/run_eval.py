@@ -81,6 +81,7 @@ class EvalDeps:
 
     hf_token: str | None = None
     device: str = "cuda"
+    num_speakers: int | None = None
     diarize_fn: Callable[[str], list[DiarSegment]] | None = None
     transcribe_fn: Callable[[str], tuple[str, list[Word]]] | None = None
     embed_fn: Callable | None = None
@@ -89,8 +90,12 @@ class EvalDeps:
     def __post_init__(self) -> None:
         if self.diarize_fn is None:
             hf_token, device = self.hf_token, self.device
+            num_speakers = self.num_speakers
             self.diarize_fn = lambda wav_path: diarize(
-                wav_path, hf_token=hf_token, device=device
+                wav_path,
+                hf_token=hf_token,
+                device=device,
+                num_speakers=num_speakers,
             )
         if self.transcribe_fn is None:
             device = self.device
@@ -395,11 +400,20 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--out", required=True, help="path to write results.json")
     ap.add_argument("--hf-token", default=None, help="pyannote gated-model HF token")
     ap.add_argument("--device", default="cuda")
+    ap.add_argument(
+        "--num-speakers",
+        type=int,
+        default=None,
+        help="force diarization to exactly this many clusters "
+        "(default: unconstrained)",
+    )
     return ap
 
 
 def _build_deps(args: argparse.Namespace) -> EvalDeps:
-    return EvalDeps(hf_token=args.hf_token, device=args.device)
+    return EvalDeps(
+        hf_token=args.hf_token, device=args.device, num_speakers=args.num_speakers
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

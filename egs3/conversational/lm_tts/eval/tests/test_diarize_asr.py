@@ -118,6 +118,33 @@ def test_purity_weights_by_overlap_time_not_segment_count():
 
 
 # ---------------------------------------------------------------------------
+# diarize() num_speakers threading (against a fake cached pipeline - the
+# module-global cache lets us exercise the wrapper without pyannote)
+# ---------------------------------------------------------------------------
+
+
+def test_diarize_forwards_num_speakers_only_when_set(monkeypatch):
+    from eval import diarize as diarize_mod
+
+    calls = []
+
+    class _FakeAnnotation:
+        def itertracks(self, yield_label=True):
+            return iter(())
+
+    class _FakePipeline:
+        def __call__(self, wav_path, **kwargs):
+            calls.append((wav_path, kwargs))
+            return _FakeAnnotation()
+
+    monkeypatch.setattr(diarize_mod, "_pipeline", _FakePipeline())
+
+    assert diarize_mod.diarize("a.wav", num_speakers=2) == []
+    assert diarize_mod.diarize("b.wav") == []
+    assert calls == [("a.wav", {"num_speakers": 2}), ("b.wav", {})]
+
+
+# ---------------------------------------------------------------------------
 # import hygiene: importing the wrapper modules must not import the heavy,
 # GPU-bound deps - those load lazily, only inside diarize()/transcribe().
 # ---------------------------------------------------------------------------
