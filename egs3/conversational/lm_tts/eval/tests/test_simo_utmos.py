@@ -127,6 +127,25 @@ def test_reference_embedding_none_when_all_turns_out_of_bounds(tmp_path):
     assert received == []  # embed_fn never called on empty audio
 
 
+def test_reference_embedding_none_when_turns_shorter_than_min_sec(tmp_path):
+    # A speaker whose only turn is a 0.2s backchannel yields sub-min_sec
+    # reference audio. Must return None WITHOUT embedding: real embedders'
+    # conv stacks crash outright on such clips ("Kernel size can't be
+    # greater than actual input size"), the same failure class as the
+    # empty-clip NaN case above.
+    audio = np.linspace(-1.0, 1.0, 4 * _SR, dtype=np.float32)
+    wav_path = _write_wav(tmp_path / "ref.wav", audio)
+
+    received: list[int] = []
+    turns = [{"speaker": "spk1", "start": 1.0, "end": 1.2, "text": "we can"}]
+    result = reference_embedding(
+        wav_path, turns, _sample_count_embed_fn(received), max_sec=30.0
+    )
+
+    assert result is None
+    assert received == []
+
+
 # ---------------------------------------------------------------------------
 # segment_similarities
 # ---------------------------------------------------------------------------
