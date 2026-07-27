@@ -1,7 +1,7 @@
 """Recipe LightningModule: two-group optimizer + packed conversation batches.
 
-Subclasses ``ESPnetLightningModule`` for exactly two reasons, both outside
-what the stock espnet3 config paths can express:
+Subclasses ``ESPnetLightningModule`` for three reasons, all outside what the
+stock espnet3 config paths can express:
 
 - ``configure_optimizers``: ONE optimizer with two param groups (injected
   exchange modules at ``optim.lr_exchange``, pretrained backbone at
@@ -10,12 +10,27 @@ what the stock espnet3 config paths can express:
   into one group; the named multi-optimizer path forces manual optimization
   and cannot select "everything except the exchanges".
 - ``train_dataloader``/``val_dataloader``: a standard ``DataLoader`` around
-  ``ConversationBatchSampler`` built fresh each epoch (the espnet3 trainer
-  forces ``reload_dataloaders_every_n_epochs=1``) with the CURRENT epoch,
-  giving seeded per-epoch batch reshuffling.  The espnet3 iter_factory path
-  cannot do this: ``DataLoaderBuilder._build_iter_factory`` hardcodes
-  ``build_iter(epoch, shuffle=False)``, freezing the batch order across
-  epochs even when the config says ``shuffle: true``.
+  ``ConversationBatchSampler`` built once per fit.  Per-epoch batch
+  reshuffling is delivered by ``ConversationBatchSampler.set_epoch``, which
+  Lightning calls at the start of every epoch - except the first one after a
+  resume: ``FitLoop.run`` materializes the dataloader iterator (eagerly
+  consumed by worker prefetch) before ``set_epoch`` runs, so on resume the
+  constructor's ``epoch=`` value is what actually seeds the first epoch's
+  order, not a value ``set_epoch`` will still get to correct.  The
+  constructor therefore seeds the sampler from the fit loop's
+  processed-epoch count (``trainer.fit_loop.epoch_progress.current.processed``)
+  rather than ``self.current_epoch`` (which reads the completed-epoch count
+  espnet3's ``save_last`` checkpoint stores as one epoch behind at
+  resume time): that keeps the eagerly-materialized first iterator correct,
+  and ``set_epoch`` keeps every subsequent epoch correct.  The
+  espnet3 iter_factory path cannot do this: ``DataLoaderBuilder._build_iter_factory``
+  hardcodes ``build_iter(epoch, shuffle=False)``, freezing the batch order
+  across epochs even when the config says ``shuffle: true``.
+- ``on_validation_end``: gated on ``trainer.sanity_checking``, releases the
+  sanity probe's abandoned val dataloader iterator so its worker processes
+  are shut down immediately instead of lingering until the first real
+  validation (``on_sanity_check_end`` is Callback-only in Lightning 2.6.5,
+  not a LightningModule hook, so it never fires here).
 """
 
 from __future__ import annotations
@@ -122,24 +137,43 @@ class ConversationalLightningModule(ESPnetLightningModule):
             "lr_scheduler": {"scheduler": scheduler, "interval": interval},
         }
 
+    def _initial_epoch(self) -> int:
+        """The epoch that should seed a freshly constructed sampler.
+
+        On a normal (non-resume) fit this is ``self.current_epoch`` (0).  On
+        resume, ``FitLoop.run`` materializes the train dataloader iterator
+        before Lightning's ``set_epoch`` propagation runs (see module
+        docstring), so the constructor value - not a later ``set_epoch`` call
+        - determines the first resumed epoch's batch order.  The fit loop's
+        processed-epoch count is the correct value there; ``self.current_epoch``
+        still reads the completed-epoch count at that point, which espnet3's
+        ``save_last`` checkpoint stores one epoch behind.
+        """
+        trainer = getattr(self, "_trainer", None)
+        if trainer is not None:
+            return int(trainer.fit_loop.epoch_progress.current.processed)
+        return self.current_epoch
+
     def _packed_dataloader(self, dataset, mode: str) -> torch.utils.data.DataLoader:
         dataset.use_espnet_collator = False  # collator takes raw sample dicts
         loader_config = OmegaConf.to_container(
             getattr(self.config.dataloader, mode), resolve=True
         )
+        initial_epoch = self._initial_epoch()
         sampler = ConversationBatchSampler(
             dataset,
             batch_bins=int(loader_config.pop("batch_bins")),
             min_batch_size=int(loader_config.pop("min_batch_size", 1)),
             shuffle=bool(loader_config.pop("shuffle", mode == "train")),
             seed=int(self.config.get("seed") or 0),
-            epoch=self.current_epoch,
+            epoch=initial_epoch,
         )
         logger.info(
-            "[%s] ConversationBatchSampler: %d batches (epoch=%d)",
+            "[%s] ConversationBatchSampler: %d batches (initial epoch=%d; "
+            "per-epoch reshuffle via set_epoch)",
             mode,
             len(sampler),
-            self.current_epoch,
+            initial_epoch,
         )
         return torch.utils.data.DataLoader(
             dataset,
@@ -153,3 +187,36 @@ class ConversationalLightningModule(ESPnetLightningModule):
 
     def val_dataloader(self):
         return self._packed_dataloader(self.valid_dataset, "valid")
+
+    def on_validation_end(self) -> None:
+        """Shut down the sanity probe's dataloader workers.
+
+        ``on_sanity_check_end`` is a Callback-only hook in Lightning 2.6.5 -
+        removed from ``ModelHooks`` long ago (the changelog records
+        "Deprecated the ``on_sanity_check_start`` hook in ``ModelHooks``");
+        a plain ``hasattr(LightningModule, "on_sanity_check_end")`` is
+        ``False`` and a live fit never calls it.  ``on_validation_end`` is
+        the real ``ModelHooks`` substitute: it fires once per validation
+        pass, including the sanity pass, while ``trainer.sanity_checking``
+        is still ``True``.  The sanity check stops after
+        ``num_sanity_val_steps`` of the valid batches, abandoning an
+        unexhausted iterator whose worker processes otherwise linger until
+        the first real validation rebuilds it (observed live: 16 idle
+        workers for 30+ min on a 4-rank run).
+        """
+        super().on_validation_end()
+        if self.trainer.sanity_checking:
+            self._release_sanity_val_iterator()
+
+    def _release_sanity_val_iterator(self) -> None:
+        """``_DataFetcher.teardown()`` is Lightning's own worker-shutdown path:
+        it resets its own state and then calls ``reset()`` on the SAME
+        ``CombinedLoader`` object ``val_loop._combined_loader`` points at
+        (``val_loop.reset()`` sets up the fetcher with that exact loader), so
+        clearing the fetcher already clears the loader's iterator - no
+        separate ``val_loop._combined_loader.reset()`` call is needed.
+        """
+        val_loop = self.trainer.fit_loop.epoch_loop.val_loop
+        if val_loop._data_fetcher is not None:
+            val_loop._data_fetcher.teardown()
+            val_loop._data_fetcher = None

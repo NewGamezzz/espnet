@@ -174,7 +174,7 @@ The flow time is likewise shared per conversation because at inference all chann
 
 A recipe-local duration-bucketed batch sampler computes each window's cost from metadata alone (`round(24000 * (t1 - t0))` sample-rows per channel; never loads audio) and packs batches under `dataloader.<split>.batch_bins`, padded to the longest window in the batch.
 The stock espnet3 iter_factory path was rejected: its shape files would have to stay in sync with the `min_active_speakers` filter, and `DataLoaderBuilder._build_iter_factory` calls `build_iter(epoch, shuffle=False)`, freezing the batch order across epochs even when the config says `shuffle: true`.
-The recipe LightningModule instead builds a standard `DataLoader` around the sampler each epoch (espnet3 forces `reload_dataloaders_every_n_epochs=1`) with the current epoch as the shuffle seed, and the sampler reproduces the iter_factory path's DDP policy (drop tail batches to a multiple of world size, stride by rank).
+The recipe LightningModule instead builds a standard `DataLoader` around the sampler once per fit (`reload_dataloaders_every_n_epochs: 0`) and relies on `ConversationBatchSampler.set_epoch` - called by Lightning at the start of every epoch - to reshuffle the batch order in place, with the sampler reproducing the iter_factory path's DDP policy (drop tail batches to a multiple of world size, stride by rank).
 
 ### Config knobs (`conf/training_poc.yaml`)
 

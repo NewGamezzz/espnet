@@ -2,14 +2,19 @@
 
 from types import SimpleNamespace
 
+import lightning.pytorch as pl
 import pytest
-from .conftest import REPO_ROOT  # noqa: F401  (sys.path setup)
+import torch
+from lightning.pytorch.callbacks import ModelCheckpoint
 
+from egs3.conversational.tts.src.lit_module import ConversationalLightningModule
 from egs3.conversational.tts.src.sampler import (
     ConversationBatchSampler,
     pack_batches,
     window_costs,
 )
+
+from .conftest import REPO_ROOT  # noqa: F401  (sys.path setup)
 
 FS = 24000
 
@@ -118,3 +123,371 @@ def test_ddp_too_few_batches_raises(monkeypatch):
     sampler = ConversationBatchSampler(dataset, batch_bins=10**9)
     with pytest.raises(RuntimeError, match="world_size"):
         list(sampler)
+
+
+def test_set_epoch_matches_construction_epoch():
+    dataset = fake_dataset([(10.0 + i, 2) for i in range(24)])
+    kwargs = dict(batch_bins=2 * round(FS * 60.0), shuffle=True, seed=7)
+    moved = ConversationBatchSampler(dataset, epoch=0, **kwargs)
+    moved.set_epoch(3)
+    built = ConversationBatchSampler(dataset, epoch=3, **kwargs)
+    assert list(iter(moved)) == list(iter(built))
+    moved.set_epoch(0)
+    assert list(iter(moved)) == list(
+        iter(ConversationBatchSampler(dataset, epoch=0, **kwargs))
+    )
+
+
+def test_sampler_alias_reaches_set_epoch_through_lightning():
+    """Lightning only calls set_epoch on dataloader.sampler and
+    dataloader.batch_sampler.sampler (lightning 2.6.5,
+    fabric/utilities/data.py::_set_sampler_epoch), so the batch sampler
+    must expose itself under .sampler."""
+    import torch
+    from lightning.fabric.utilities.data import _set_sampler_epoch
+
+    dataset = fake_dataset([(10.0 + i, 2) for i in range(8)])
+    sampler = ConversationBatchSampler(
+        dataset, batch_bins=2 * round(FS * 60.0), shuffle=True, seed=0, epoch=0
+    )
+    assert sampler.sampler is sampler
+    loader = torch.utils.data.DataLoader(dataset, batch_sampler=sampler)
+    _set_sampler_epoch(loader, 5)
+    assert sampler.epoch == 5
+
+
+# --------------------------------------------------------------------------
+# Fit-loop-level ordering contract (Finding 1 in the final-review wave):
+# lit_module.py's docstring explains that Lightning's FitLoop.run() eagerly
+# materializes the first (and first-resumed) dataloader iterator via
+# setup_data() *before* per-epoch set_epoch propagation runs, so the
+# sampler's CONSTRUCTOR epoch - not a later set_epoch call - decides that
+# iterator's batch order.  These tests pin that contract at the real
+# lightning.pytorch.Trainer level (CPU, tiny synthetic data, no GPUs)
+# instead of only unit-testing ConversationBatchSampler in isolation.
+# --------------------------------------------------------------------------
+
+
+class _RecordingBatchSampler(ConversationBatchSampler):
+    """ConversationBatchSampler that records the epoch value seen by every
+    __iter__ call, so a Trainer-level fit/resume exercises the same eager-
+    iterator timing as production training."""
+
+    def __init__(self, *args, epoch_log: list, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.epoch_log = epoch_log
+
+    def __iter__(self):
+        self.epoch_log.append(self.epoch)
+        return super().__iter__()
+
+
+class _TinyConversationDataset(torch.utils.data.Dataset):
+    """Trivial dataset with the ``records``/``fs`` shape ConversationBatchSampler
+    needs (see ``window_costs``), backing random tensors for a real
+    LightningModule/Trainer fit - deliberately NOT ConversationDataset or the
+    F5 model, which this test has no reason to drag in."""
+
+    def __init__(self, n: int = 8, seed: int = 0):
+        gen = torch.Generator().manual_seed(seed)
+        self.x = torch.randn(n, 4, generator=gen)
+        self.y = torch.randn(n, 1, generator=gen)
+        self.records = [
+            SimpleNamespace(t0=0.0, t1=1.0 + i, num_channels=1) for i in range(n)
+        ]
+        self.fs = 1
+
+    def __len__(self):
+        return len(self.records)
+
+    def __getitem__(self, idx):
+        return self.x[idx], self.y[idx]
+
+
+class _ResumeOrderingModule(pl.LightningModule):
+    """Minimal LightningModule mirroring ``_packed_dataloader``'s initial-epoch
+    seeding in ``src/lit_module.py``: ``train_dataloader`` seeds the sampler
+    from the fit loop's processed-epoch count when a trainer is attached
+    (falling back to ``self.current_epoch`` beforehand), because that is the
+    value in effect when ``FitLoop.run()`` eagerly materializes the first
+    iterator - ``self.current_epoch`` (the completed-epoch count) is what a
+    ``save_last`` checkpoint written from ``on_train_epoch_end`` stores one
+    epoch behind, per the module docstring.
+
+    ``use_processed_epoch=False`` reproduces the pre-fix behavior (seed from
+    ``self.current_epoch``) so the regression this harness catches can be
+    demonstrated directly, independent of lit_module.py's own fix.
+    """
+
+    def __init__(self, dataset, epoch_log: list, use_processed_epoch: bool = True):
+        super().__init__()
+        self.model = torch.nn.Linear(4, 1)
+        self.dataset = dataset
+        self.epoch_log = epoch_log
+        self.use_processed_epoch = use_processed_epoch
+
+    def _initial_epoch(self) -> int:
+        if self.use_processed_epoch:
+            # Delegate to the real production method (unbound: it only reads
+            # self._trainer / self.current_epoch, both plain LightningModule
+            # attributes) so this test fails if ConversationalLightningModule
+            # regresses, instead of only checking a hand-rolled copy of it.
+            return ConversationalLightningModule._initial_epoch(self)
+        return self.current_epoch  # the pre-fix path, kept local on purpose
+
+    def train_dataloader(self):
+        sampler = _RecordingBatchSampler(
+            self.dataset,
+            batch_bins=10**9,  # everything fits in one batch; only order matters
+            min_batch_size=1,
+            shuffle=True,
+            seed=0,
+            epoch=self._initial_epoch(),
+            epoch_log=self.epoch_log,
+        )
+        return torch.utils.data.DataLoader(self.dataset, batch_sampler=sampler)
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        return torch.nn.functional.mse_loss(self.model(x), y)
+
+    def configure_optimizers(self):
+        return torch.optim.SGD(self.parameters(), lr=0.01)
+
+
+def _resume_ordering_trainer(tmp_path, max_epochs, ckpt_dir):
+    """A Trainer configured like espnet3's recipe: loaders built once per fit
+    (``reload_dataloaders_every_n_epochs=0``), no sanity pass, and a
+    save-on-epoch-end ``save_last`` checkpoint mirroring
+    ``espnet3.components.callbacks.default_callbacks.get_default_callbacks``."""
+    checkpoint = ModelCheckpoint(
+        dirpath=str(ckpt_dir),
+        save_last=True,
+        save_on_train_epoch_end=True,
+        save_weights_only=False,
+        filename="step{step}",
+        auto_insert_metric_name=False,
+    )
+    trainer = pl.Trainer(
+        default_root_dir=str(tmp_path),
+        accelerator="cpu",
+        devices=1,
+        max_epochs=max_epochs,
+        reload_dataloaders_every_n_epochs=0,
+        num_sanity_val_steps=0,
+        use_distributed_sampler=False,
+        limit_train_batches=1,
+        callbacks=[checkpoint],
+        logger=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+    )
+    return trainer, checkpoint
+
+
+def _run_fit_then_resume(tmp_path, use_processed_epoch: bool):
+    """Fit 2 epochs, then resume for a 3rd from the ``save_last`` checkpoint.
+
+    Returns ``(fresh_log, resumed_log)``: the epoch values ConversationBatchSampler
+    saw at __iter__ time during each fit.
+    """
+    dataset = _TinyConversationDataset()
+    ckpt_dir = tmp_path / "ckpt"
+
+    fresh_log: list[int] = []
+    trainer, checkpoint = _resume_ordering_trainer(
+        tmp_path, max_epochs=2, ckpt_dir=ckpt_dir
+    )
+    module = _ResumeOrderingModule(dataset, fresh_log, use_processed_epoch)
+    trainer.fit(module)
+
+    resumed_log: list[int] = []
+    trainer2, _ = _resume_ordering_trainer(tmp_path, max_epochs=3, ckpt_dir=ckpt_dir)
+    module2 = _ResumeOrderingModule(dataset, resumed_log, use_processed_epoch)
+    trainer2.fit(module2, ckpt_path=checkpoint.last_model_path)
+
+    return fresh_log, resumed_log
+
+
+def test_resume_first_epoch_uses_fit_loop_processed_epoch(tmp_path):
+    """Finding 1 regression test: on resume, the first epoch must shuffle
+    with a NEW epoch value, not replay the just-completed epoch's order.
+
+    Seeding the sampler from ``trainer.fit_loop.epoch_progress.current.processed``
+    (the fixed behavior) gives epochs 0, 1 on the fresh fit and epoch 2 on the
+    resumed fit - never repeating 1, which is what pre-fix ``self.current_epoch``
+    seeding (an espnet3 ``save_last`` checkpoint stores it one epoch behind)
+    would produce (see the next test)."""
+    fresh_log, resumed_log = _run_fit_then_resume(tmp_path, use_processed_epoch=True)
+    assert fresh_log == [0, 1]
+    assert resumed_log == [2]
+
+
+def test_resume_first_epoch_replays_prior_order_pre_fix(tmp_path):
+    """Same harness seeded from ``self.current_epoch`` (lit_module.py's
+    pre-fix behavior): the resumed epoch incorrectly replays epoch 1's batch
+    order instead of advancing to a fresh epoch 2 - this is the exact bug
+    Finding 1 fixes, reproduced independently of lit_module.py's own code so
+    the mechanism is pinned even if lit_module.py's implementation changes."""
+    fresh_log, resumed_log = _run_fit_then_resume(tmp_path, use_processed_epoch=False)
+    assert fresh_log == [0, 1]
+    assert resumed_log == [1]  # the bug: replays the epoch-1 order, not epoch 2
+
+
+# --------------------------------------------------------------------------
+# Sanity-probe worker-leak fix: ``num_sanity_val_steps`` is kept ON (2 of 6
+# val batches) so a broken val/train path still fails fast at t=0, but the
+# 2-batch sanity pass abandons an unexhausted CombinedLoader iterator whose
+# (num_workers=2) worker processes would otherwise linger until the first
+# real validation rebuilds it.  ``ConversationalLightningModule`` releases
+# that iterator from ``on_validation_end`` (gated on
+# ``trainer.sanity_checking``) - NOT ``on_sanity_check_end``, which is a
+# Callback-only hook in Lightning 2.6.5 and never fires on a
+# LightningModule (``hasattr(pl.LightningModule, "on_sanity_check_end")``
+# is False; a live fit with that method defined never calls it).
+# --------------------------------------------------------------------------
+
+
+class _TinySupervisedDataset(torch.utils.data.Dataset):
+    """Plain (non-conversation) tensor dataset for the val/train DataLoaders
+    in the sanity-cleanup harness - deliberately simpler than
+    ``_TinyConversationDataset``: this harness exercises the sanity/
+    validation hook timing, not ``ConversationBatchSampler``."""
+
+    def __init__(self, n: int, seed: int):
+        gen = torch.Generator().manual_seed(seed)
+        self.x = torch.randn(n, 4, generator=gen)
+        self.y = torch.randn(n, 1, generator=gen)
+
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        return self.x[idx], self.y[idx]
+
+
+class _SanityCleanupModule(pl.LightningModule):
+    """Minimal LightningModule exercising the sanity-cleanup fix without
+    dragging in the full F5 model stack.
+
+    ``on_validation_end`` delegates to
+    ``ConversationalLightningModule._release_sanity_val_iterator`` (unbound,
+    the same delegation pattern ``_ResumeOrderingModule`` uses for
+    ``_initial_epoch``): that private helper only reads
+    ``self.trainer``/``self._trainer`` state, so calling it on a module that
+    is not actually a ``ConversationalLightningModule`` is safe, and this
+    test fails if the production helper regresses instead of only checking
+    a hand-rolled copy of it.  (The public ``on_validation_end`` hook itself
+    is not delegated to directly: it calls ``super().on_validation_end()``,
+    and a zero-arg ``super()`` compiled into ``ConversationalLightningModule``
+    would break when invoked unbound on a module outside that MRO.)
+    """
+
+    def __init__(self, train_dataset, val_dataset):
+        super().__init__()
+        self.model = torch.nn.Linear(4, 1)
+        self.train_dataset = train_dataset
+        self.val_dataset = val_dataset
+        self.sanity_validation_step_calls = 0
+        self.real_validation_step_calls = 0
+
+    def train_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.train_dataset, batch_size=1, num_workers=0
+        )
+
+    def val_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.val_dataset, batch_size=1, num_workers=2
+        )
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        return torch.nn.functional.mse_loss(self.model(x), y)
+
+    def validation_step(self, batch, batch_idx):
+        if self.trainer.sanity_checking:
+            self.sanity_validation_step_calls += 1
+        else:
+            self.real_validation_step_calls += 1
+        x, y = batch
+        return torch.nn.functional.mse_loss(self.model(x), y)
+
+    def configure_optimizers(self):
+        return torch.optim.SGD(self.parameters(), lr=0.01)
+
+    def on_validation_end(self) -> None:
+        if self.trainer.sanity_checking:
+            ConversationalLightningModule._release_sanity_val_iterator(self)
+
+
+class _RecordValCombinedLoaderIterator(pl.Callback):
+    """Records the val loop's ``CombinedLoader._iterator`` at
+    ``on_train_start`` - i.e. after the sanity pass has finished but before
+    the first real training/validation step runs - so the test can tell
+    whether the sanity pass's abandoned iterator was released in time."""
+
+    def __init__(self):
+        self.iterator_at_train_start = "not_recorded"
+
+    def on_train_start(self, trainer, pl_module):
+        combined_loader = trainer.fit_loop.epoch_loop.val_loop._combined_loader
+        self.iterator_at_train_start = (
+            None if combined_loader is None else combined_loader._iterator
+        )
+
+
+def test_sanity_check_end_releases_abandoned_val_iterator(tmp_path):
+    """Regression test for the sanity-check worker leak.
+
+    ``num_sanity_val_steps=2`` against a 6-batch, ``num_workers=2`` val
+    DataLoader means the sanity pass consumes only 2 of 6 batches, leaving
+    the ``CombinedLoader``'s iterator - and its worker processes - alive
+    and unexhausted unless something explicitly releases it before the
+    first real validation would otherwise rebuild it.
+    ``ConversationalLightningModule.on_validation_end`` does that release
+    via ``CombinedLoader.reset()`` (Lightning's own worker-shutdown path).
+
+    ``CombinedLoader.reset()`` only clears the iterator, not the loader
+    object itself, so the first real validation's ``setup_data()`` takes the
+    "already built" early-return path and calls ``reset()`` -> ``iter()``
+    again on the SAME ``CombinedLoader`` - a released iterator must still be
+    usable, not just gone.  ``check_val_every_n_epoch`` defaults to 1, so
+    this one-epoch fit also runs one real (non-sanity) validation pass,
+    letting this test assert that rebuild succeeds in the same run.
+
+    TDD evidence for this fix (see the report for the full transcript): with
+    the ``on_validation_end`` override removed from ``_SanityCleanupModule``
+    (the pre-fix state - no LightningModule-level cleanup at all, matching
+    the codebase before this test was written), ``iterator_at_train_start``
+    is NOT None: the sanity pass's abandoned iterator survives, unexhausted,
+    into training. With the override delegating to the real
+    ``ConversationalLightningModule._release_sanity_val_iterator`` (asserted
+    below), it is None.
+    """
+    train_dataset = _TinySupervisedDataset(n=4, seed=0)
+    val_dataset = _TinySupervisedDataset(n=6, seed=1)
+    module = _SanityCleanupModule(train_dataset, val_dataset)
+    recorder = _RecordValCombinedLoaderIterator()
+    trainer = pl.Trainer(
+        default_root_dir=str(tmp_path),
+        accelerator="cpu",
+        devices=1,
+        max_epochs=1,
+        num_sanity_val_steps=2,
+        limit_train_batches=1,
+        limit_val_batches=6,
+        use_distributed_sampler=False,
+        callbacks=[recorder],
+        logger=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        enable_checkpointing=False,
+    )
+    trainer.fit(module)
+
+    assert module.sanity_validation_step_calls >= 1  # the sanity probe really ran
+    assert recorder.iterator_at_train_start is None  # its iterator was released
+    # ... and the released loader still works: the first real validation
+    # (check_val_every_n_epoch=1) rebuilt and iterated it successfully.
+    assert module.real_validation_step_calls == 6
