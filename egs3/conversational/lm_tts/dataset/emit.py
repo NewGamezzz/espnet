@@ -139,6 +139,20 @@ def emit_mono_record(
         if t.speaker not in ordered_speakers:
             ordered_speakers.append(t.speaker)
 
+    channel_wavs = {
+        spk: str(window_audio.channel_paths[ch])
+        for ch, spk in channel_speakers.items()
+    }
+    turn_dicts = [
+        {
+            "speaker": t.speaker,
+            "start": round(t.start - window.t0, 3),
+            "end": round(t.end - window.t0, 3),
+            "text": t.text,
+        }
+        for t in sorted(turns, key=lambda t: (t.start, t.channel))
+    ]
+
     return {
         "example_id": f"sssd_mono_{window.window_id}",
         "messages": [
@@ -153,5 +167,7 @@ def emit_mono_record(
             "speakers": ordered_speakers,
             "t0": window.t0,
             "t1": window.t1,
+            "turns": turn_dicts,
+            "channel_wavs": channel_wavs,
         },
     }
