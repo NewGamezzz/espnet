@@ -170,10 +170,13 @@ trainer:
   # calls it each epoch); rebuilding loaders every epoch is not needed and,
   # on resume, leaked a second generation of dataloader workers.
   reload_dataloaders_every_n_epochs: 0
-  # The sanity check abandons a 2-batch val iterator whose workers linger
-  # until the first real validation; val_check_interval already validates
-  # within the first quarter epoch.
-  num_sanity_val_steps: 0
+  # Kept deliberately (not 0): the sanity probe fails fast on broken
+  # val/train paths at t=0. Its abandoned iterator's workers are shut down
+  # by ConversationalLightningModule.on_validation_end (gated on
+  # trainer.sanity_checking - on_sanity_check_end is Callback-only in
+  # Lightning 2.6.5 and never fires on a LightningModule), so this no
+  # longer leaks workers until the first real validation.
+  num_sanity_val_steps: 2
   strategy: auto
   callbacks:
     - _target_: espnet3.components.callbacks.ema.EMACallback

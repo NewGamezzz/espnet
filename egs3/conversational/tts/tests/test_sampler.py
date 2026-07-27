@@ -332,3 +332,162 @@ def test_resume_first_epoch_replays_prior_order_pre_fix(tmp_path):
     fresh_log, resumed_log = _run_fit_then_resume(tmp_path, use_processed_epoch=False)
     assert fresh_log == [0, 1]
     assert resumed_log == [1]  # the bug: replays the epoch-1 order, not epoch 2
+
+
+# --------------------------------------------------------------------------
+# Sanity-probe worker-leak fix: ``num_sanity_val_steps`` is kept ON (2 of 6
+# val batches) so a broken val/train path still fails fast at t=0, but the
+# 2-batch sanity pass abandons an unexhausted CombinedLoader iterator whose
+# (num_workers=2) worker processes would otherwise linger until the first
+# real validation rebuilds it.  ``ConversationalLightningModule`` releases
+# that iterator from ``on_validation_end`` (gated on
+# ``trainer.sanity_checking``) - NOT ``on_sanity_check_end``, which is a
+# Callback-only hook in Lightning 2.6.5 and never fires on a
+# LightningModule (``hasattr(pl.LightningModule, "on_sanity_check_end")``
+# is False; a live fit with that method defined never calls it).
+# --------------------------------------------------------------------------
+
+
+class _TinySupervisedDataset(torch.utils.data.Dataset):
+    """Plain (non-conversation) tensor dataset for the val/train DataLoaders
+    in the sanity-cleanup harness - deliberately simpler than
+    ``_TinyConversationDataset``: this harness exercises the sanity/
+    validation hook timing, not ``ConversationBatchSampler``."""
+
+    def __init__(self, n: int, seed: int):
+        gen = torch.Generator().manual_seed(seed)
+        self.x = torch.randn(n, 4, generator=gen)
+        self.y = torch.randn(n, 1, generator=gen)
+
+    def __len__(self):
+        return len(self.x)
+
+    def __getitem__(self, idx):
+        return self.x[idx], self.y[idx]
+
+
+class _SanityCleanupModule(pl.LightningModule):
+    """Minimal LightningModule exercising the sanity-cleanup fix without
+    dragging in the full F5 model stack.
+
+    ``on_validation_end`` delegates to
+    ``ConversationalLightningModule._release_sanity_val_iterator`` (unbound,
+    the same delegation pattern ``_ResumeOrderingModule`` uses for
+    ``_initial_epoch``): that private helper only reads
+    ``self.trainer``/``self._trainer`` state, so calling it on a module that
+    is not actually a ``ConversationalLightningModule`` is safe, and this
+    test fails if the production helper regresses instead of only checking
+    a hand-rolled copy of it.  (The public ``on_validation_end`` hook itself
+    is not delegated to directly: it calls ``super().on_validation_end()``,
+    and a zero-arg ``super()`` compiled into ``ConversationalLightningModule``
+    would break when invoked unbound on a module outside that MRO.)
+    """
+
+    def __init__(self, train_dataset, val_dataset):
+        super().__init__()
+        self.model = torch.nn.Linear(4, 1)
+        self.train_dataset = train_dataset
+        self.val_dataset = val_dataset
+        self.sanity_validation_step_calls = 0
+        self.real_validation_step_calls = 0
+
+    def train_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.train_dataset, batch_size=1, num_workers=0
+        )
+
+    def val_dataloader(self):
+        return torch.utils.data.DataLoader(
+            self.val_dataset, batch_size=1, num_workers=2
+        )
+
+    def training_step(self, batch, batch_idx):
+        x, y = batch
+        return torch.nn.functional.mse_loss(self.model(x), y)
+
+    def validation_step(self, batch, batch_idx):
+        if self.trainer.sanity_checking:
+            self.sanity_validation_step_calls += 1
+        else:
+            self.real_validation_step_calls += 1
+        x, y = batch
+        return torch.nn.functional.mse_loss(self.model(x), y)
+
+    def configure_optimizers(self):
+        return torch.optim.SGD(self.parameters(), lr=0.01)
+
+    def on_validation_end(self) -> None:
+        if self.trainer.sanity_checking:
+            ConversationalLightningModule._release_sanity_val_iterator(self)
+
+
+class _RecordValCombinedLoaderIterator(pl.Callback):
+    """Records the val loop's ``CombinedLoader._iterator`` at
+    ``on_train_start`` - i.e. after the sanity pass has finished but before
+    the first real training/validation step runs - so the test can tell
+    whether the sanity pass's abandoned iterator was released in time."""
+
+    def __init__(self):
+        self.iterator_at_train_start = "not_recorded"
+
+    def on_train_start(self, trainer, pl_module):
+        combined_loader = trainer.fit_loop.epoch_loop.val_loop._combined_loader
+        self.iterator_at_train_start = (
+            None if combined_loader is None else combined_loader._iterator
+        )
+
+
+def test_sanity_check_end_releases_abandoned_val_iterator(tmp_path):
+    """Regression test for the sanity-check worker leak.
+
+    ``num_sanity_val_steps=2`` against a 6-batch, ``num_workers=2`` val
+    DataLoader means the sanity pass consumes only 2 of 6 batches, leaving
+    the ``CombinedLoader``'s iterator - and its worker processes - alive
+    and unexhausted unless something explicitly releases it before the
+    first real validation would otherwise rebuild it.
+    ``ConversationalLightningModule.on_validation_end`` does that release
+    via ``CombinedLoader.reset()`` (Lightning's own worker-shutdown path).
+
+    ``CombinedLoader.reset()`` only clears the iterator, not the loader
+    object itself, so the first real validation's ``setup_data()`` takes the
+    "already built" early-return path and calls ``reset()`` -> ``iter()``
+    again on the SAME ``CombinedLoader`` - a released iterator must still be
+    usable, not just gone.  ``check_val_every_n_epoch`` defaults to 1, so
+    this one-epoch fit also runs one real (non-sanity) validation pass,
+    letting this test assert that rebuild succeeds in the same run.
+
+    TDD evidence for this fix (see the report for the full transcript): with
+    the ``on_validation_end`` override removed from ``_SanityCleanupModule``
+    (the pre-fix state - no LightningModule-level cleanup at all, matching
+    the codebase before this test was written), ``iterator_at_train_start``
+    is NOT None: the sanity pass's abandoned iterator survives, unexhausted,
+    into training. With the override delegating to the real
+    ``ConversationalLightningModule._release_sanity_val_iterator`` (asserted
+    below), it is None.
+    """
+    train_dataset = _TinySupervisedDataset(n=4, seed=0)
+    val_dataset = _TinySupervisedDataset(n=6, seed=1)
+    module = _SanityCleanupModule(train_dataset, val_dataset)
+    recorder = _RecordValCombinedLoaderIterator()
+    trainer = pl.Trainer(
+        default_root_dir=str(tmp_path),
+        accelerator="cpu",
+        devices=1,
+        max_epochs=1,
+        num_sanity_val_steps=2,
+        limit_train_batches=1,
+        limit_val_batches=6,
+        use_distributed_sampler=False,
+        callbacks=[recorder],
+        logger=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        enable_checkpointing=False,
+    )
+    trainer.fit(module)
+
+    assert module.sanity_validation_step_calls >= 1  # the sanity probe really ran
+    assert recorder.iterator_at_train_start is None  # its iterator was released
+    # ... and the released loader still works: the first real validation
+    # (check_val_every_n_epoch=1) rebuilt and iterated it successfully.
+    assert module.real_validation_step_calls == 6

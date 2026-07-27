@@ -1,7 +1,7 @@
 """Recipe LightningModule: two-group optimizer + packed conversation batches.
 
-Subclasses ``ESPnetLightningModule`` for exactly two reasons, both outside
-what the stock espnet3 config paths can express:
+Subclasses ``ESPnetLightningModule`` for three reasons, all outside what the
+stock espnet3 config paths can express:
 
 - ``configure_optimizers``: ONE optimizer with two param groups (injected
   exchange modules at ``optim.lr_exchange``, pretrained backbone at
@@ -26,6 +26,11 @@ what the stock espnet3 config paths can express:
   espnet3 iter_factory path cannot do this: ``DataLoaderBuilder._build_iter_factory``
   hardcodes ``build_iter(epoch, shuffle=False)``, freezing the batch order
   across epochs even when the config says ``shuffle: true``.
+- ``on_validation_end``: gated on ``trainer.sanity_checking``, releases the
+  sanity probe's abandoned val dataloader iterator so its worker processes
+  are shut down immediately instead of lingering until the first real
+  validation (``on_sanity_check_end`` is Callback-only in Lightning 2.6.5,
+  not a LightningModule hook, so it never fires here).
 """
 
 from __future__ import annotations
@@ -182,3 +187,32 @@ class ConversationalLightningModule(ESPnetLightningModule):
 
     def val_dataloader(self):
         return self._packed_dataloader(self.valid_dataset, "valid")
+
+    def on_validation_end(self) -> None:
+        """Shut down the sanity probe's dataloader workers.
+
+        ``on_sanity_check_end`` is a Callback-only hook in Lightning 2.6.5 -
+        removed from ``ModelHooks`` long ago (the changelog records
+        "Deprecated the ``on_sanity_check_start`` hook in ``ModelHooks``");
+        a plain ``hasattr(LightningModule, "on_sanity_check_end")`` is
+        ``False`` and a live fit never calls it.  ``on_validation_end`` is
+        the real ``ModelHooks`` substitute: it fires once per validation
+        pass, including the sanity pass, while ``trainer.sanity_checking``
+        is still ``True``.  The sanity check stops after
+        ``num_sanity_val_steps`` of the valid batches, abandoning an
+        unexhausted iterator whose worker processes otherwise linger until
+        the first real validation rebuilds it (observed live: 16 idle
+        workers for 30+ min on a 4-rank run).
+        """
+        super().on_validation_end()
+        if self.trainer.sanity_checking:
+            self._release_sanity_val_iterator()
+
+    def _release_sanity_val_iterator(self) -> None:
+        """``CombinedLoader.reset()`` is Lightning's own worker-shutdown path."""
+        val_loop = self.trainer.fit_loop.epoch_loop.val_loop
+        if val_loop._data_fetcher is not None:
+            val_loop._data_fetcher.teardown()
+            val_loop._data_fetcher = None
+        if val_loop._combined_loader is not None:
+            val_loop._combined_loader.reset()

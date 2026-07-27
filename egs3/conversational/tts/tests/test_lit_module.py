@@ -83,10 +83,13 @@ def test_init_marks_sampler_as_self_sharding():
     assert module.is_espnet_sampler is True
 
 
-def test_training_config_has_no_per_epoch_reload():
+def test_training_config_has_no_per_epoch_reload_and_keeps_sanity_probe():
     """reload=1 made resume build two train loaders (sampler logs epoch=5
-    then epoch=6, Delta job 20532548) and the sanity check leaked its val
-    workers; reshuffling now rides ConversationBatchSampler.set_epoch."""
+    then epoch=6, Delta job 20532548); reshuffling now rides
+    ConversationBatchSampler.set_epoch. The sanity probe (num_sanity_val_steps)
+    is kept ON to fail fast on broken val/train paths - its dataloader
+    workers are shut down by ConversationalLightningModule.on_validation_end
+    (gated on trainer.sanity_checking) instead of being disabled."""
     import yaml
     from .conftest import REPO_ROOT
 
@@ -95,4 +98,4 @@ def test_training_config_has_no_per_epoch_reload():
     )
     trainer = yaml.safe_load(config_path.read_text())["trainer"]
     assert trainer["reload_dataloaders_every_n_epochs"] == 0
-    assert trainer["num_sanity_val_steps"] == 0
+    assert trainer["num_sanity_val_steps"] == 2
