@@ -10,12 +10,15 @@ what the stock espnet3 config paths can express:
   into one group; the named multi-optimizer path forces manual optimization
   and cannot select "everything except the exchanges".
 - ``train_dataloader``/``val_dataloader``: a standard ``DataLoader`` around
-  ``ConversationBatchSampler`` built fresh each epoch (the espnet3 trainer
-  forces ``reload_dataloaders_every_n_epochs=1``) with the CURRENT epoch,
-  giving seeded per-epoch batch reshuffling.  The espnet3 iter_factory path
-  cannot do this: ``DataLoaderBuilder._build_iter_factory`` hardcodes
-  ``build_iter(epoch, shuffle=False)``, freezing the batch order across
-  epochs even when the config says ``shuffle: true``.
+  ``ConversationBatchSampler`` built once per fit.  Per-epoch batch
+  reshuffling is delivered by ``ConversationBatchSampler.set_epoch``, which
+  Lightning calls with the completed-epoch count; the constructor's
+  ``epoch=self.current_epoch`` is only the initial value (relevant on resume,
+  where the loader may be built while ``current_epoch`` still reads the
+  restored epoch, before Lightning's ``set_epoch`` corrects it).  The
+  espnet3 iter_factory path cannot do this: ``DataLoaderBuilder._build_iter_factory``
+  hardcodes ``build_iter(epoch, shuffle=False)``, freezing the batch order
+  across epochs even when the config says ``shuffle: true``.
 """
 
 from __future__ import annotations
@@ -136,7 +139,8 @@ class ConversationalLightningModule(ESPnetLightningModule):
             epoch=self.current_epoch,
         )
         logger.info(
-            "[%s] ConversationBatchSampler: %d batches (epoch=%d)",
+            "[%s] ConversationBatchSampler: %d batches (initial epoch=%d; "
+            "per-epoch reshuffle via set_epoch)",
             mode,
             len(sampler),
             self.current_epoch,

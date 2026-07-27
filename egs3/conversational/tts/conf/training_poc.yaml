@@ -166,9 +166,14 @@ trainer:
   log_every_n_steps: 50
   max_epochs: 1000
   gradient_clip_val: 1.0
-  # Rebuild dataloaders each epoch so ConversationBatchSampler sees the
-  # current epoch for its seeded batch reshuffle (src/lit_module.py).
-  reload_dataloaders_every_n_epochs: 1
+  # Batch order reshuffles via ConversationBatchSampler.set_epoch (Lightning
+  # calls it each epoch); rebuilding loaders every epoch is not needed and,
+  # on resume, leaked a second generation of dataloader workers.
+  reload_dataloaders_every_n_epochs: 0
+  # The sanity check abandons a 2-batch val iterator whose workers linger
+  # until the first real validation; val_check_interval already validates
+  # within the first quarter epoch.
+  num_sanity_val_steps: 0
   strategy: auto
   callbacks:
     - _target_: espnet3.components.callbacks.ema.EMACallback

@@ -81,3 +81,18 @@ def test_init_marks_sampler_as_self_sharding():
     )
     module = ConversationalLightningModule(torch.nn.Linear(1, 1), config)
     assert module.is_espnet_sampler is True
+
+
+def test_training_config_has_no_per_epoch_reload():
+    """reload=1 made resume build two train loaders (sampler logs epoch=5
+    then epoch=6, Delta job 20532548) and the sanity check leaked its val
+    workers; reshuffling now rides ConversationBatchSampler.set_epoch."""
+    import yaml
+    from .conftest import REPO_ROOT
+
+    config_path = (
+        REPO_ROOT / "egs3" / "conversational" / "tts" / "conf" / "training_poc.yaml"
+    )
+    trainer = yaml.safe_load(config_path.read_text())["trainer"]
+    assert trainer["reload_dataloaders_every_n_epochs"] == 0
+    assert trainer["num_sanity_val_steps"] == 0
