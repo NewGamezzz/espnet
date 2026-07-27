@@ -93,12 +93,13 @@ def pack_batches(
 class ConversationBatchSampler:
     """Batch sampler with seeded per-epoch reshuffling and DDP alignment.
 
-    ``__iter__`` yields lists of global dataset indices.  With ``shuffle``,
-    the batch ORDER is shuffled with ``RandomState(seed + epoch)`` (batch
-    composition stays fixed - duration bucketing is the point).  Under
-    torch.distributed, tail batches are dropped so every rank sees the same
-    batch count (the same policy as espnet3's iter_factory path), then the
-    batches are strided by rank.
+    Reshuffling is driven by ``set_epoch`` between epochs; the constructor
+    ``epoch`` is only the initial value.  ``__iter__`` yields lists of global
+    dataset indices.  With ``shuffle``, the batch ORDER is shuffled with
+    ``RandomState(seed + epoch)`` (batch composition stays fixed - duration
+    bucketing is the point).  Under torch.distributed, tail batches are
+    dropped so every rank sees the same batch count (the same policy as
+    espnet3's iter_factory path), then the batches are strided by rank.
     """
 
     def __init__(
@@ -116,6 +117,19 @@ class ConversationBatchSampler:
         self._packed = pack_batches(
             window_costs(dataset), batch_bins, min_batch_size=min_batch_size
         )
+        # Lightning's per-epoch epoch propagation (_set_sampler_epoch) only
+        # looks at dataloader.sampler and dataloader.batch_sampler.sampler,
+        # never at the batch sampler itself, so expose self under .sampler.
+        self.sampler = self
+
+    def set_epoch(self, epoch: int) -> None:
+        """Adopt ``epoch`` for the next ``__iter__`` (DistributedSampler contract).
+
+        Lightning calls this at every epoch start with the number of completed
+        epochs, which equals the ``current_epoch`` the old per-epoch-rebuild
+        scheme passed to the constructor, so batch order is unchanged.
+        """
+        self.epoch = int(epoch)
 
     @staticmethod
     def _world_info() -> tuple[int, int]:

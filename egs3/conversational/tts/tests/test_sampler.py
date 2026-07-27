@@ -118,3 +118,34 @@ def test_ddp_too_few_batches_raises(monkeypatch):
     sampler = ConversationBatchSampler(dataset, batch_bins=10**9)
     with pytest.raises(RuntimeError, match="world_size"):
         list(sampler)
+
+
+def test_set_epoch_matches_construction_epoch():
+    dataset = fake_dataset([(10.0 + i, 2) for i in range(24)])
+    kwargs = dict(batch_bins=2 * round(FS * 60.0), shuffle=True, seed=7)
+    moved = ConversationBatchSampler(dataset, epoch=0, **kwargs)
+    moved.set_epoch(3)
+    built = ConversationBatchSampler(dataset, epoch=3, **kwargs)
+    assert list(iter(moved)) == list(iter(built))
+    moved.set_epoch(0)
+    assert list(iter(moved)) == list(
+        iter(ConversationBatchSampler(dataset, epoch=0, **kwargs))
+    )
+
+
+def test_sampler_alias_reaches_set_epoch_through_lightning():
+    """Lightning only calls set_epoch on dataloader.sampler and
+    dataloader.batch_sampler.sampler (lightning 2.6.5,
+    fabric/utilities/data.py::_set_sampler_epoch), so the batch sampler
+    must expose itself under .sampler."""
+    import torch
+    from lightning.fabric.utilities.data import _set_sampler_epoch
+
+    dataset = fake_dataset([(10.0 + i, 2) for i in range(8)])
+    sampler = ConversationBatchSampler(
+        dataset, batch_bins=2 * round(FS * 60.0), shuffle=True, seed=0, epoch=0
+    )
+    assert sampler.sampler is sampler
+    loader = torch.utils.data.DataLoader(dataset, batch_sampler=sampler)
+    _set_sampler_epoch(loader, 5)
+    assert sampler.epoch == 5
