@@ -1,5 +1,7 @@
 """ConversationalLightningModule logging: per-channel keys stay unsynced."""
 
+from types import SimpleNamespace
+
 import pytest
 import torch
 from omegaconf import OmegaConf
@@ -99,3 +101,32 @@ def test_training_config_has_no_per_epoch_reload_and_keeps_sanity_probe():
     trainer = yaml.safe_load(config_path.read_text())["trainer"]
     assert trainer["reload_dataloaders_every_n_epochs"] == 0
     assert trainer["num_sanity_val_steps"] == 2
+
+
+def _bare_module_with_trainer(sanity_checking: bool):
+    """Same __new__ bypass as ``_bare_module`` (skips DataOrganizer setup),
+    but stubs enough of the ``trainer`` property's internals
+    (``_fabric``, ``_jit_is_scripting``, ``_trainer``) for
+    ``self.trainer.sanity_checking`` to resolve, since ``on_validation_end``
+    reads it through the real property rather than ``_trainer`` directly."""
+    module = ConversationalLightningModule.__new__(ConversationalLightningModule)
+    module.__dict__["_fabric"] = None
+    module.__dict__["_jit_is_scripting"] = False
+    module.__dict__["_trainer"] = SimpleNamespace(sanity_checking=sanity_checking)
+    return module
+
+
+@pytest.mark.parametrize("sanity_checking", [True, False])
+def test_on_validation_end_releases_iterator_only_during_sanity(sanity_checking):
+    """Exercises the real production on_validation_end wrapper (super() call
+    + trainer.sanity_checking gate) end to end, not just the private
+    _release_sanity_val_iterator body the integration test in
+    test_sampler.py delegates to. Records calls via an instance-level stub
+    (a plain function shadows the class method, no monkeypatch needed)."""
+    module = _bare_module_with_trainer(sanity_checking)
+    calls = []
+    module._release_sanity_val_iterator = lambda: calls.append(True)
+
+    module.on_validation_end()
+
+    assert len(calls) == (1 if sanity_checking else 0)

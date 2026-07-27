@@ -209,10 +209,14 @@ class ConversationalLightningModule(ESPnetLightningModule):
             self._release_sanity_val_iterator()
 
     def _release_sanity_val_iterator(self) -> None:
-        """``CombinedLoader.reset()`` is Lightning's own worker-shutdown path."""
+        """``_DataFetcher.teardown()`` is Lightning's own worker-shutdown path:
+        it resets its own state and then calls ``reset()`` on the SAME
+        ``CombinedLoader`` object ``val_loop._combined_loader`` points at
+        (``val_loop.reset()`` sets up the fetcher with that exact loader), so
+        clearing the fetcher already clears the loader's iterator - no
+        separate ``val_loop._combined_loader.reset()`` call is needed.
+        """
         val_loop = self.trainer.fit_loop.epoch_loop.val_loop
         if val_loop._data_fetcher is not None:
             val_loop._data_fetcher.teardown()
             val_loop._data_fetcher = None
-        if val_loop._combined_loader is not None:
-            val_loop._combined_loader.reset()
