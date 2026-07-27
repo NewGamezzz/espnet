@@ -12,10 +12,17 @@ what the stock espnet3 config paths can express:
 - ``train_dataloader``/``val_dataloader``: a standard ``DataLoader`` around
   ``ConversationBatchSampler`` built once per fit.  Per-epoch batch
   reshuffling is delivered by ``ConversationBatchSampler.set_epoch``, which
-  Lightning calls with the completed-epoch count; the constructor's
-  ``epoch=self.current_epoch`` is only the initial value (relevant on resume,
-  where the loader may be built while ``current_epoch`` still reads the
-  restored epoch, before Lightning's ``set_epoch`` corrects it).  The
+  Lightning calls at the start of every epoch - except the first one after a
+  resume: ``FitLoop.run`` materializes the dataloader iterator (eagerly
+  consumed by worker prefetch) before ``set_epoch`` runs, so on resume the
+  constructor's ``epoch=`` value is what actually seeds the first epoch's
+  order, not a value ``set_epoch`` will still get to correct.  The
+  constructor therefore seeds the sampler from the fit loop's
+  processed-epoch count (``trainer.fit_loop.epoch_progress.current.processed``)
+  rather than ``self.current_epoch`` (which reads the completed-epoch count
+  espnet3's ``save_last`` checkpoint stores as one epoch behind at
+  resume time): that keeps the eagerly-materialized first iterator correct,
+  and ``set_epoch`` keeps every subsequent epoch correct.  The
   espnet3 iter_factory path cannot do this: ``DataLoaderBuilder._build_iter_factory``
   hardcodes ``build_iter(epoch, shuffle=False)``, freezing the batch order
   across epochs even when the config says ``shuffle: true``.
@@ -125,25 +132,43 @@ class ConversationalLightningModule(ESPnetLightningModule):
             "lr_scheduler": {"scheduler": scheduler, "interval": interval},
         }
 
+    def _initial_epoch(self) -> int:
+        """The epoch that should seed a freshly constructed sampler.
+
+        On a normal (non-resume) fit this is ``self.current_epoch`` (0).  On
+        resume, ``FitLoop.run`` materializes the train dataloader iterator
+        before Lightning's ``set_epoch`` propagation runs (see module
+        docstring), so the constructor value - not a later ``set_epoch`` call
+        - determines the first resumed epoch's batch order.  The fit loop's
+        processed-epoch count is the correct value there; ``self.current_epoch``
+        still reads the completed-epoch count at that point, which espnet3's
+        ``save_last`` checkpoint stores one epoch behind.
+        """
+        trainer = getattr(self, "_trainer", None)
+        if trainer is not None:
+            return int(trainer.fit_loop.epoch_progress.current.processed)
+        return self.current_epoch
+
     def _packed_dataloader(self, dataset, mode: str) -> torch.utils.data.DataLoader:
         dataset.use_espnet_collator = False  # collator takes raw sample dicts
         loader_config = OmegaConf.to_container(
             getattr(self.config.dataloader, mode), resolve=True
         )
+        initial_epoch = self._initial_epoch()
         sampler = ConversationBatchSampler(
             dataset,
             batch_bins=int(loader_config.pop("batch_bins")),
             min_batch_size=int(loader_config.pop("min_batch_size", 1)),
             shuffle=bool(loader_config.pop("shuffle", mode == "train")),
             seed=int(self.config.get("seed") or 0),
-            epoch=self.current_epoch,
+            epoch=initial_epoch,
         )
         logger.info(
             "[%s] ConversationBatchSampler: %d batches (initial epoch=%d; "
             "per-epoch reshuffle via set_epoch)",
             mode,
             len(sampler),
-            self.current_epoch,
+            initial_epoch,
         )
         return torch.utils.data.DataLoader(
             dataset,
