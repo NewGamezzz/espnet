@@ -41,7 +41,7 @@ def _read_lst(lst_path: Path):
 
 
 def build_manifest(lst_path, test_clean_root, out_tsv) -> int:
-    root = Path(test_clean_root)
+    root = Path(test_clean_root).resolve()
     out = Path(out_tsv)
     out.parent.mkdir(parents=True, exist_ok=True)
     rows = _read_lst(lst_path)
@@ -54,7 +54,7 @@ def build_manifest(lst_path, test_clean_root, out_tsv) -> int:
 
 
 def build_gt_wav_dir(lst_path, test_clean_root, out_dir) -> int:
-    root = Path(test_clean_root)
+    root = Path(test_clean_root).resolve()
     out = Path(out_dir)
     out.mkdir(parents=True, exist_ok=True)
     rows = _read_lst(lst_path)
