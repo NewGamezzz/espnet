@@ -11,7 +11,7 @@ CONFIG=${CONFIG:-conf/inference_f5_librispeech_pc.yaml}
 export HF_HOME=$DEV/f5_eval_assets/hf_cache
 export PYTHONPATH=$DEV/espnet_proj/espnet_f5_eval:$RECIPE
 source $DEV/f5_eval_assets/venv_infer/bin/activate
-cd $RECIPE
+cd "$RECIPE"
 
 # Real entry point (read from run.py in this recipe): stages are selected via
 # --stages, and a standalone inference config needs no --training_config as
@@ -42,6 +42,9 @@ if [ ${#wav_files[@]} -eq 0 ]; then
     echo "No generated wavs found under $SRC_WAV_DIR" >&2
     exit 1
 fi
+# Clear any stale symlinks from a prior partial run before collecting, so the
+# scorer never sees leftovers from a failed earlier attempt.
+rm -rf "$GEN_WAV_DIR"
 mkdir -p "$GEN_WAV_DIR"
 for f in "${wav_files[@]}"; do
     ln -sf "$f" "$GEN_WAV_DIR/$(basename "$f")"

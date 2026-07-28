@@ -14,6 +14,6 @@ DEV=/ocean/projects/cis210027p/ttrachu/development
 LS=/ocean/projects/cis210027p/shared/corpora/librispeech/LibriSpeech/test-clean
 export HF_HOME=$DEV/f5_eval_assets/hf_cache
 source $DEV/f5_eval_assets/venv_scoring/bin/activate
-cd $DEV/F5-TTS   # scorer resolves ../checkpoints/UniSpeech/... from CWD
+cd "$DEV/F5-TTS"   # scorer resolves ../checkpoints/UniSpeech/... from CWD
 python src/f5_tts/eval/eval_librispeech_test_clean.py -e wer -g "$GEN_WAV_DIR" -p "$LS" -n 1
 python src/f5_tts/eval/eval_librispeech_test_clean.py -e sim -g "$GEN_WAV_DIR" -p "$LS" -n 1

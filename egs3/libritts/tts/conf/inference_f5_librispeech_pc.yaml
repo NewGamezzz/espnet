@@ -47,10 +47,19 @@ model:
   #     before tokenizer/vocoder setup even runs.
   # Fix: point train_config at the training checkout's SOURCE recipe config
   # instead, which has the shape F5TTSInference expects (`model:` +
-  # `dataset.preprocessor:` blocks) -- verified structurally identical to
-  # this worktree's own egs3/libritts/tts/conf/training_f5_tts_small.yaml,
-  # and confirmed present at this exact path on PSC via
-  # `ssh psc ls -l .../training_f5_tts_small.yaml` (14593 bytes, exists).
+  # `dataset.preprocessor:` blocks) and confirmed present at this exact path
+  # on PSC via `ssh psc ls -l .../training_f5_tts_small.yaml` (14593 bytes,
+  # exists). CONTENT EQUIVALENCE VERIFIED on 2026-07-28: fetched both the
+  # dumped exp/train_f5_tts_small/config.yaml and this source
+  # training_f5_tts_small.yaml directly from PSC and compared every
+  # model/tokenizer/optimizer/scheduler field (dim, depth, heads, dim_head,
+  # ff_mult, text_dim, text_mask_padding, pe_attn_head, conv_layers, sigma,
+  # audio_drop_prob, cond_drop_prob, frac_lengths_mask, odeint_method,
+  # mel_spec_kwargs, feats_extract_conf, token_list, token_type, text_cleaner,
+  # g2p_type, optimizer, scheduler, exp_tag, best_model_criterion,
+  # dataloader batch_bins, trainer.accumulate_grad_batches) -- all matched
+  # exactly with no divergence; see task-5-report.md for the full
+  # field-by-field table.
   #
   # REMAINING CONCERN FOR TASK 6 (do not skip): that source config resolves
   # `token_list: ${data_dir}/tokens/char_tokens.txt` with `recipe_dir: .`, so
