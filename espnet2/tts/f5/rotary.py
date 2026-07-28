@@ -37,6 +37,13 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
 
 
 def apply_rotary_pos_emb(t: torch.Tensor, freqs: torch.Tensor, scale=1) -> torch.Tensor:
+    # x_transformers runs this under @autocast(enabled=False); keyed to the
+    # input's device so MPS/CPU AMP get the same fp32 guarantee as CUDA.
+    with torch.autocast(device_type=t.device.type, enabled=False):
+        return _apply_rotary_pos_emb(t, freqs, scale)
+
+
+def _apply_rotary_pos_emb(t: torch.Tensor, freqs: torch.Tensor, scale=1) -> torch.Tensor:
     rot_dim, seq_len, orig_dtype = freqs.shape[-1], t.shape[-2], t.dtype
 
     freqs = freqs[:, -seq_len:, :]
@@ -88,6 +95,13 @@ class RotaryEmbedding(nn.Module):
         return self.forward(t)
 
     def forward(self, t, offset=0):
+        # x_transformers runs this under @autocast(enabled=False): autocast
+        # lowers einsum to bf16/fp16, which cannot represent positions > 256
+        # exactly and silently corrupts phases in long utterances.
+        with torch.autocast(device_type=t.device.type, enabled=False):
+            return self._forward(t, offset=offset)
+
+    def _forward(self, t, offset=0):
         max_pos = t.max() + 1
 
         if t.ndim == 1:
