@@ -178,6 +178,12 @@ trainer:
   # longer leaks workers until the first real validation.
   num_sanity_val_steps: 2
   strategy: auto
+  # Load resume checkpoints with torch.load(mmap=True): plain loads
+  # materialize the full checkpoint on every rank's heap and glibc never
+  # returns the pages, pushing nodes past their page-reclaim threshold
+  # (resume-stall livelock, 2026-07-28 investigation).
+  plugins:
+    - _target_: egs3.conversational.tts.src.checkpoint_io.MmapCheckpointIO
   callbacks:
     - _target_: espnet3.components.callbacks.ema.EMACallback
       decay: 0.9999
