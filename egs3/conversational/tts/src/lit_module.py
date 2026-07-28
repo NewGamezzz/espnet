@@ -188,6 +188,20 @@ class ConversationalLightningModule(ESPnetLightningModule):
     def val_dataloader(self):
         return self._packed_dataloader(self.valid_dataset, "valid")
 
+    def on_train_start(self) -> None:
+        super().on_train_start()
+        # Return checkpoint-restore heap pages to the OS. Even with the
+        # mmap-based checkpoint load (src/checkpoint_io.py), restore-time
+        # allocations fragment the heap, and resident-anon bloat after a
+        # resume is what pushed nodes past their page-reclaim threshold in
+        # the 2026-07-28 resume-stall investigation.
+        try:
+            import ctypes
+
+            ctypes.CDLL("libc.so.6").malloc_trim(0)
+        except OSError:  # non-glibc platforms (e.g. macOS dev boxes)
+            pass
+
     def on_validation_end(self) -> None:
         """Shut down the sanity probe's dataloader workers.
 
