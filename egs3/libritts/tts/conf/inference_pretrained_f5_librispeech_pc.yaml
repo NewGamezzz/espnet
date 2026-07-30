@@ -5,33 +5,18 @@
 # official eval_librispeech_test_clean.py. See vault note
 # "Design - F5-TTS Small LibriSpeech-PC Eval".
 #
-# BRIEF-PREMISE CORRECTION: the task-5 brief said this file should clone its
-# model block from an existing `conf/inference_pretrained_f5.yaml`. That file
-# does not exist anywhere in this repo or its history (checked: `find` across
-# the worktree and `git log --all` for the path both come up empty). There is
-# also no existing recipe config anywhere in this repo that supplies F5's
-# official pinyin tokenizer (F5PinyinPreprocessor + Emilia_ZH_EN_pinyin
-# vocab.txt) -- egs3/libritts/tts/conf/training_f5_tts.yaml is our own
-# from-scratch F5TTS_Base architecture trained on LibriTTS with char
-# tokenization, not the official pretrained weights' pinyin vocab. This
-# config is therefore NOT submittable as-is: `train_config` below is a
-# placeholder path that Task 7 must create (a small recipe-shaped YAML with a
-# `model:` block matching F5TTS_Base's tts_conf and a
-# `dataset.preprocessor:` block using F5PinyinPreprocessor with a
-# `vocab_file` pointing at the downloaded Emilia_ZH_EN_pinyin/vocab.txt --
-# see espnet2/tts/f5/inference.py's `_build_tokenizer` for the exact shape
-# it expects: `dataset.preprocessor._target_` containing "F5PinyinPreprocessor"
-# or a `vocab_file` key). Record for Task 7: download the official
-# SWivid/F5-TTS "F5TTS_Base" checkpoint + its vocab.txt into this eval
-# checkout's downloads/, and author that train_config YAML alongside them.
+# Model block mirrors conf/training_pretrained_f5.yaml + the reference
+# sanity-test config (native_f5: true, F5TTS_Base arch via train_config,
+# official model_1200000.safetensors checkpoint, vocos vocoder, nfe_step 32 /
+# cfg_strength 2.0 / sway -1.0). Dataset/output blocks are the same
+# librispeech_pc split as conf/inference_f5_librispeech_pc.yaml (Task 4 Step
+# 5 shape).
 recipe_dir: .
 exp_tag: eval_librispeech_pc_pretrained_base
 exp_dir: ${recipe_dir}/exp/${exp_tag}
 data_dir: ${recipe_dir}/data
 inference_dir: ${exp_dir}/${self_name:}
 
-# Same dataset/output blocks as conf/inference_f5_librispeech_pc.yaml (Task 4
-# Step 5 shape).
 dataset:
   _target_: espnet3.components.data.data_organizer.DataOrganizer
   recipe_dir: ${recipe_dir}
@@ -48,20 +33,13 @@ parallel:
 
 model:
   _target_: espnet2.tts.f5.inference.F5TTSInference
-  # TODO(Task 7): author this file -- F5TTS_Base tts_conf (dim=1024, depth=22,
-  # heads=16, ff_mult=2, text_dim=512, conv_layers=4) + dataset.preprocessor
-  # using F5PinyinPreprocessor and the downloaded vocab_file (see the header
-  # comment above). Not yet created anywhere in this repo.
-  train_config: ${recipe_dir}/downloads/F5TTS_Base/train_config.yaml
-  # TODO(Task 7): download the official checkpoint from the SWivid/F5-TTS HF
-  # repo (F5TTS_Base/model_*.safetensors or .pt) into downloads/.
-  ckpt_path: ${recipe_dir}/downloads/F5TTS_Base/model.safetensors
-  use_ema: true
-  # Official checkpoint's CFM-level weights, not an espnet/Lightning ckpt --
-  # see espnet2/tts/f5/inference.py's `native_f5` docstring (loads straight
-  # into model.tts.cfm; tts_conf and token_list in train_config MUST match
-  # F5TTS_Base + Emilia_ZH_EN_pinyin/vocab.txt exactly).
+  # Rebuilds F5TTS_Base + the pinyin tokenizer from this stub config.
+  train_config: ${recipe_dir}/conf/training_pretrained_f5.yaml
+  # Official SWivid/F5-TTS checkpoint (.safetensors), downloaded via HF into
+  # pretrained/F5TTS_Base/ (Task 7 Step B).
+  ckpt_path: ${recipe_dir}/pretrained/F5TTS_Base/model_1200000.safetensors
   native_f5: true
+  use_ema: true
   vocoder_name: vocos
   vocoder_path: null
   target_sample_rate: 24000

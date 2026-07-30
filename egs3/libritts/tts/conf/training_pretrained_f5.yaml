@@ -1,0 +1,85 @@
+# =============================================================================
+# Train-config STUB for running the OFFICIAL pretrained F5-TTS through our
+# inference pipeline (conf/inference_pretrained_f5.yaml, native_f5: true).
+#
+# It is NOT used to train anything. F5TTSInference reads only `task`, `model`
+# (to rebuild the architecture) and `dataset.preprocessor` (to rebuild the
+# tokenizer) from here — so data/manifest/optimizer/trainer blocks are omitted.
+#
+# CRITICAL — must match the pretrained F5TTS_Base model:
+#   * tts_conf = F5TTS_Base (dim 1024 / depth 22 / heads 16 / text_dim 512 /
+#     conv_layers 4), vocos 100-mel @ 24 kHz.  (already set below)
+#   * token_list / vocab_file = F5's *shipped* Emilia_ZH_EN_pinyin/vocab.txt
+#     (2545 tokens). Do NOT rebuild it from LibriTTS — the indices must match the
+#     pretrained text embedding, or every word comes out garbled.
+#
+# Download F5's vocab.txt to ${pinyin_vocab}, e.g.:
+#   huggingface-cli download SWivid/F5-TTS \
+#     F5TTS_Base/vocab.txt --local-dir ./pretrained
+#   (or grab src/f5_tts/infer/examples/vocab.txt from the F5-TTS repo)
+# and the checkpoint (set as ckpt_path in the inference config), e.g.:
+#   huggingface-cli download SWivid/F5-TTS \
+#     F5TTS_Base/model_1200000.safetensors --local-dir ./pretrained
+# =============================================================================
+task: espnet2.tasks.tts.TTSTask
+
+recipe_dir: .
+
+sample_rate: 24000
+n_mel_channels: 100
+hop_length: 256
+win_length: 1024
+n_fft: 1024
+mel_spec_type: vocos
+
+# F5's shipped pinyin vocab (line number = token id, space at index 0, no <unk>).
+pinyin_vocab: ${recipe_dir}/pretrained/F5TTS_Base/vocab.txt
+
+# Only the tokenizer settings are read from here at inference time.
+dataset:
+  preprocessor:
+    _target_: espnet2.text.f5_preprocessor.F5PinyinPreprocessor
+    vocab_file: ${pinyin_vocab}
+    train: false
+
+model:
+  token_list: ${pinyin_vocab}        # idim = DiT text_num_embeds = 2545
+  token_type: char
+  odim: null
+  feats_extract: vocoder_mel
+  feats_extract_conf:
+    fs: ${sample_rate}
+    n_fft: ${n_fft}
+    hop_length: ${hop_length}
+    win_length: ${win_length}
+    n_mels: ${n_mel_channels}
+    mel_spec_type: ${mel_spec_type}
+  normalize: null
+  tts: f5tts
+  tts_conf:                          # F5TTS_Base — must match the pretrained model
+    # Values taken VERBATIM from F5's configs/F5TTS_Base.yaml (model.arch) for
+    # model_1200000. text_mask_padding and pe_attn_head change the FORWARD pass
+    # (text-pad masking + which heads get rotary PE) without changing any param
+    # names — so omitting them loads the weights cleanly but produces noise.
+    dim: 1024
+    depth: 22
+    heads: 16
+    dim_head: 64
+    ff_mult: 2
+    text_dim: 512
+    text_mask_padding: false          # F5TTS_Base.yaml: False (our default is True)
+    pe_attn_head: 1                   # F5TTS_Base.yaml: 1     (our default is None)
+    conv_layers: 4
+    sigma: 0.0
+    audio_drop_prob: 0.3
+    cond_drop_prob: 0.2
+    frac_lengths_mask: [0.7, 1.0]
+    odeint_method: euler
+    mel_spec_kwargs:
+      n_fft: ${n_fft}
+      hop_length: ${hop_length}
+      win_length: ${win_length}
+      n_mel_channels: ${n_mel_channels}
+      target_sample_rate: ${sample_rate}
+      mel_spec_type: ${mel_spec_type}
+  model_conf: {}
