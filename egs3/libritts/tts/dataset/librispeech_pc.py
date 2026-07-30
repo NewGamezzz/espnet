@@ -24,7 +24,6 @@ class LibriSpeechPCDataset(TorchDataset):
         self,
         manifest_path: str | Path,
         fs: int | None = 24000,
-        **_unused,
     ) -> None:
         self.fs = fs
         self.rows: list[tuple[str, str, str, str, str]] = []

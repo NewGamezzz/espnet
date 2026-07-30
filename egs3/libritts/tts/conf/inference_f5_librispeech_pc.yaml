@@ -4,6 +4,9 @@
 # eval_librispeech_test_clean.py. See vault note
 # "Design - F5-TTS Small LibriSpeech-PC Eval".
 recipe_dir: .
+# At the next checkpoint re-run, exp_tag and ckpt_path (below, in model:) must
+# be updated together - otherwise outputs from two different checkpoints will
+# land in the same exp dir and conflate.
 exp_tag: eval_librispeech_pc_small_step108192
 exp_dir: ${recipe_dir}/exp/${exp_tag}
 data_dir: ${recipe_dir}/data

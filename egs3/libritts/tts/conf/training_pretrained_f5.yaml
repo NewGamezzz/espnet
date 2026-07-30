@@ -1,16 +1,16 @@
 # =============================================================================
 # Train-config STUB for running the OFFICIAL pretrained F5-TTS through our
-# inference pipeline (conf/inference_pretrained_f5.yaml, native_f5: true).
+# inference pipeline (conf/inference_pretrained_f5_librispeech_pc.yaml, native_f5: true).
 #
 # It is NOT used to train anything. F5TTSInference reads only `task`, `model`
 # (to rebuild the architecture) and `dataset.preprocessor` (to rebuild the
-# tokenizer) from here — so data/manifest/optimizer/trainer blocks are omitted.
+# tokenizer) from here - so data/manifest/optimizer/trainer blocks are omitted.
 #
-# CRITICAL — must match the pretrained F5TTS_Base model:
+# CRITICAL - must match the pretrained F5TTS_Base model:
 #   * tts_conf = F5TTS_Base (dim 1024 / depth 22 / heads 16 / text_dim 512 /
 #     conv_layers 4), vocos 100-mel @ 24 kHz.  (already set below)
 #   * token_list / vocab_file = F5's *shipped* Emilia_ZH_EN_pinyin/vocab.txt
-#     (2545 tokens). Do NOT rebuild it from LibriTTS — the indices must match the
+#     (2545 tokens). Do NOT rebuild it from LibriTTS - the indices must match the
 #     pretrained text embedding, or every word comes out garbled.
 #
 # Download F5's vocab.txt to ${pinyin_vocab}, e.g.:
@@ -56,11 +56,11 @@ model:
     mel_spec_type: ${mel_spec_type}
   normalize: null
   tts: f5tts
-  tts_conf:                          # F5TTS_Base — must match the pretrained model
+  tts_conf:                          # F5TTS_Base - must match the pretrained model
     # Values taken VERBATIM from F5's configs/F5TTS_Base.yaml (model.arch) for
     # model_1200000. text_mask_padding and pe_attn_head change the FORWARD pass
     # (text-pad masking + which heads get rotary PE) without changing any param
-    # names — so omitting them loads the weights cleanly but produces noise.
+    # names - so omitting them loads the weights cleanly but produces noise.
     dim: 1024
     depth: 22
     heads: 16

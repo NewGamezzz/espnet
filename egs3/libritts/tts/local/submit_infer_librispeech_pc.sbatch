@@ -4,6 +4,10 @@
 #SBATCH -n 5
 #SBATCH -t 12:00:00
 #SBATCH -J ls_pc_infer
+# Validated submission pattern for faster allocation:
+#   sbatch -p GPU-shared,GPU-small --gpus=v100-32:1 ...
+# The joint GPU-shared,GPU-small QOS caps -t at 8h, so when using the joint
+# override pass -t 8:00:00 to replace the -t 12:00:00 above, which exceeds it.
 set -euo pipefail
 DEV=/ocean/projects/cis210027p/ttrachu/development
 RECIPE=$DEV/espnet_proj/espnet_f5_eval/egs3/libritts/tts
