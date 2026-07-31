@@ -95,3 +95,37 @@ libritts_builder:
     train: manifest/libritts_train.jsonl
     valid: manifest/libritts_valid.jsonl
   seed: 0
+
+candor_builder:
+  # CANDOR corpus root (read-only): candor_data/ + Candor_lhotse/manifests/.
+  # Resolution order at runtime: explicit argument > $CANDOR_ROOT > this value.
+  dataset_root: /work/hdd/bbjs/shared/Candor
+  manifests_subdir: Candor_lhotse/manifests
+  # Turn segmentation variant: cliffhanger (canonical) / audiophile / backbiter.
+  variant: cliffhanger
+  # One-time mp3 -> FLAC transcode target (libsndfile in the training envs has
+  # no MPEG support; mp3 also lacks sample-accurate seeks). ~240 GB for 942 h.
+  # Resolution order: explicit argument > $CANDOR_FLAC_DIR > this value.
+  flac_dir: /work/hdd/bbjs/ttrachu/dataset/candor_flac
+  ffmpeg: ffmpeg
+  transcode_workers: 16
+  sample_rate: 48000
+  # Windowing knobs: same VALUES as the SSSD builder section, own keys so the
+  # corpora can diverge later without touching each other.
+  merge_gap: 1.0
+  window_min: 10.0
+  window_max: 60.0
+  boundary_guard: 0.0
+  tail_min: 5.0
+  trim_to_turns: false
+  min_coverage: 0.0
+  snap_start_to_turn: false
+  split_ratios:
+    train: 0.96
+    valid: 0.02
+    test: 0.02
+  manifest_paths:
+    train: manifest/candor_train.jsonl
+    valid: manifest/candor_valid.jsonl
+    test: manifest/candor_test.jsonl
+  seed: 0

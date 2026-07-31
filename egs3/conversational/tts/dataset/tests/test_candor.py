@@ -146,3 +146,124 @@ def test_measured_durations_rejects_wrong_rate_or_channels(tmp_path):
     write_flac(flac_dir / "s1.flac", num_channels=1, duration_s=8.0, sr=48000)
     with pytest.raises(RuntimeError):
         candor.measured_durations(recs, flac_dir)
+
+
+import string
+
+from egs3.conversational.tts.dataset.candor_builder import CandorBuilder
+from egs3.conversational.tts.dataset.dataset import (
+    ConversationDataset,
+    read_window_manifest,
+)
+
+
+def fabricate_recipe(recipe_dir: Path) -> None:
+    tokens = [" "] + list(string.ascii_lowercase) + [".", ","] + ["<turn>", "<OTHER>"]
+    vocab = recipe_dir / "data/tokens/vocab.txt"
+    vocab.parent.mkdir(parents=True, exist_ok=True)
+    vocab.write_text("\n".join(tokens) + "\n", encoding="utf-8")
+
+
+def two_speaker_session(duration: float) -> list[dict]:
+    """Alternating turns on channels 0/1 covering most of the session."""
+    sups, t, ch = [], 1.0, 0
+    while t + 4.0 < duration - 1.0:
+        sups.append(
+            {
+                "start": round(t, 2),
+                "duration": 3.0,
+                "channel": ch,
+                "text": "hello there, how are you doing today",
+                "speaker": f"spk_{ch}",
+            }
+        )
+        t += 4.0
+        ch = 1 - ch
+    return sups
+
+
+def fabricate_candor(tmp_path, durations: dict[str, float]):
+    """Corpus manifests + PRE-TRANSCODED flacs (prepare_source not needed)."""
+    root = tmp_path / "Candor"
+    flac_dir = tmp_path / "candor_flac"
+    sessions = {cid: (dur, two_speaker_session(dur)) for cid, dur in durations.items()}
+    write_candor_manifests(root / "Candor_lhotse/manifests", sessions)
+    for cid, dur in durations.items():
+        write_flac(flac_dir / f"{cid}.flac", num_channels=2, duration_s=dur, sr=48000)
+    return root, flac_dir
+
+
+def test_candor_builder_end_to_end(tmp_path):
+    root, flac_dir = fabricate_candor(tmp_path, {f"conv-{i}": 40.0 for i in range(4)})
+    recipe = tmp_path / "recipe"
+    fabricate_recipe(recipe)
+    builder = CandorBuilder()
+    assert builder.is_source_prepared(dataset_root=root, flac_dir=flac_dir)
+    builder.build(recipe_dir=recipe, dataset_root=root, flac_dir=flac_dir, seed=0)
+    assert builder.is_built(recipe_dir=recipe)
+
+    records = []
+    for split in ("train", "valid", "test"):
+        path = recipe / f"data/manifest/candor_{split}.jsonl"
+        assert path.is_file()
+        try:
+            records.extend(read_window_manifest(path))
+        except RuntimeError:
+            pass  # tiny fixture: a split may legitimately be empty
+    assert records
+    for r in records:
+        assert r.num_channels == 2
+        assert r.sample_rate == 48000
+        assert r.t1 <= 40.0 + 1e-6
+        # normalized text: lowercase charset survives
+        assert all(t.text == t.text.lower() for t in r.turns)
+
+
+def test_candor_builder_uses_measured_duration_not_manifest(tmp_path):
+    root, flac_dir = fabricate_candor(tmp_path, {"conv-a": 20.0})
+    # corrupt the manifest duration upward: windows must still fit real audio
+    man = root / "Candor_lhotse/manifests"
+    sessions = {"conv-a": (500.0, two_speaker_session(20.0))}
+    write_candor_manifests(man, sessions)
+    recipe = tmp_path / "recipe"
+    fabricate_recipe(recipe)
+    CandorBuilder().build(
+        recipe_dir=recipe, dataset_root=root, flac_dir=flac_dir, seed=0
+    )
+    records = []
+    for split in ("train", "valid", "test"):
+        path = recipe / f"data/manifest/candor_{split}.jsonl"
+        try:
+            records.extend(read_window_manifest(path))
+        except RuntimeError:
+            pass
+    assert records
+    assert all(r.t1 <= 20.0 + 1e-3 for r in records)
+
+
+def test_candor_builder_requires_vocab(tmp_path):
+    root, flac_dir = fabricate_candor(tmp_path, {"conv-a": 40.0})
+    with pytest.raises(RuntimeError, match="SSSD build"):
+        CandorBuilder().build(
+            recipe_dir=tmp_path / "recipe",
+            dataset_root=root,
+            flac_dir=flac_dir,
+        )
+
+
+def test_candor_manifest_loads_through_conversation_dataset(tmp_path):
+    root, flac_dir = fabricate_candor(tmp_path, {f"conv-{i}": 40.0 for i in range(4)})
+    recipe = tmp_path / "recipe"
+    fabricate_recipe(recipe)
+    CandorBuilder().build(
+        recipe_dir=recipe, dataset_root=root, flac_dir=flac_dir, seed=0
+    )
+    dataset = ConversationDataset(
+        split="train",
+        manifest_path=recipe / "data/manifest/candor_train.jsonl",
+        dataset_root=flac_dir,
+        fs=24000,
+    )
+    sample = dataset[0]
+    assert sample["num_channels"] == 2
+    assert sample["speech"].shape[0] == 2  # 48 kHz stereo flac -> resampled rows
