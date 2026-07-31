@@ -28,9 +28,7 @@ def make_tree(root: Path, utts: dict[str, str]) -> None:
     for rel, text in utts.items():
         base = root / rel
         base.parent.mkdir(parents=True, exist_ok=True)
-        base.with_name(base.name + ".normalized.txt").write_text(
-            text, encoding="utf-8"
-        )
+        base.with_name(base.name + ".normalized.txt").write_text(text, encoding="utf-8")
         base.with_name(base.name + ".wav").write_bytes(b"\x00")
 
 
@@ -82,7 +80,9 @@ def test_utterance_record_shape(tmp_path):
         chapter="1241",
         text="Hello there.",
     )
-    record = utterance_record(entry, duration=2.5, sample_rate=24000, text="hello there.")
+    record = utterance_record(
+        entry, duration=2.5, sample_rate=24000, text="hello there."
+    )
     assert record.window_id == "libritts_103_1241_000000_000001"
     assert record.session_id == "libritts_103_1241"
     assert record.num_channels == 1
@@ -100,8 +100,11 @@ def test_subsample_to_hours_budget_and_determinism():
     items = [
         (
             UttEntry(
-                utt_id=f"u{i}", audio_relpath=f"u{i}.wav",
-                speaker="s", chapter="c", text="t",
+                utt_id=f"u{i}",
+                audio_relpath=f"u{i}.wav",
+                speaker="s",
+                chapter="c",
+                text="t",
             ),
             60.0,  # one minute each
         )
@@ -137,20 +140,13 @@ def fabricate_corpus(root: Path) -> None:
     for rel, (text, dur) in utts.items():
         base = root / rel
         base.parent.mkdir(parents=True, exist_ok=True)
-        base.with_name(base.name + ".normalized.txt").write_text(
-            text, encoding="utf-8"
-        )
+        base.with_name(base.name + ".normalized.txt").write_text(text, encoding="utf-8")
         write_wav(base.with_name(base.name + ".wav"), dur)
 
 
 def fabricate_recipe(recipe_dir: Path) -> None:
     """A recipe dir with a prebuilt extended vocab (SSSD build stand-in)."""
-    tokens = (
-        [" "]
-        + list(string.ascii_lowercase)
-        + [".", ","]
-        + ["<turn>", "<OTHER>"]
-    )
+    tokens = [" "] + list(string.ascii_lowercase) + [".", ","] + ["<turn>", "<OTHER>"]
     vocab = recipe_dir / "data/tokens/vocab.txt"
     vocab.parent.mkdir(parents=True, exist_ok=True)
     vocab.write_text("\n".join(tokens) + "\n", encoding="utf-8")
@@ -193,6 +189,18 @@ def test_builder_requires_vocab(tmp_path):
     fabricate_corpus(root)
     with pytest.raises(RuntimeError, match="SSSD build"):
         LibriTTSBuilder().build(recipe_dir=recipe, dataset_root=root)
+
+
+def test_builder_rejects_sample_rate_mismatch(tmp_path):
+    root, recipe = tmp_path / "LibriTTS", tmp_path / "recipe"
+    fabricate_corpus(root)
+    fabricate_recipe(recipe)
+    # Overwrite one utterance's wav at 48 kHz; config.yaml's libritts_builder
+    # pins sample_rate: 24000, so the builder must fail loudly rather than
+    # silently mixing rates into the manifest.
+    write_wav(root / "train-clean-100/1/10/1_10_000000_000001.wav", 2.0, sr=48000)
+    with pytest.raises(RuntimeError, match="sample rate"):
+        LibriTTSBuilder().build(recipe_dir=recipe, dataset_root=root, seed=0)
 
 
 def test_manifest_loads_through_conversation_dataset(tmp_path):
