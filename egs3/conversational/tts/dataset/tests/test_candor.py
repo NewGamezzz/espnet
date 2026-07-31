@@ -2,10 +2,16 @@
 
 import gzip
 import json
+import string
 from pathlib import Path
 
 import pytest
 
+from egs3.conversational.tts.dataset.candor_builder import CandorBuilder
+from egs3.conversational.tts.dataset.dataset import (
+    ConversationDataset,
+    read_window_manifest,
+)
 from egs3.conversational.tts.dataset.preprocessing import candor
 
 from .conftest import REPO_ROOT, write_flac  # noqa: F401  (sys.path setup)
@@ -109,6 +115,23 @@ def test_transcode_all_writes_skips_and_is_atomic(tmp_path, monkeypatch):
     assert candor.transcode_all(recs, root, flac_dir, workers=1) == 0
 
 
+def test_transcode_all_removes_stale_tmp_files(tmp_path, monkeypatch):
+    """A `.tmp` left behind by a killed prior run is always abandoned garbage
+    (a live run writes under a fresh PID-unique name), so transcode_all
+    clears the flac_dir of them before starting new jobs."""
+    _fake_ffmpeg(monkeypatch)
+    root = make_corpus(tmp_path, ["s1"])
+    write_candor_manifests(tmp_path / "m", {"s1": (30.0, [])})
+    recs = candor.load_candor_recordings(tmp_path / "m" / "candor_recordings.jsonl.gz")
+    flac_dir = tmp_path / "flac"
+    flac_dir.mkdir(parents=True)
+    stale = flac_dir / "s1.flac.12345.tmp"
+    stale.write_bytes(b"garbage from a killed prior run")
+    assert candor.transcode_all(recs, root, flac_dir, workers=1) == 1
+    assert not stale.exists()
+    assert (flac_dir / "s1.flac").is_file()
+
+
 def test_transcode_failure_leaves_no_final_file(tmp_path, monkeypatch):
     _fake_ffmpeg(monkeypatch, fail_for={"s1"})
     root = make_corpus(tmp_path, ["s1"])
@@ -146,15 +169,6 @@ def test_measured_durations_rejects_wrong_rate_or_channels(tmp_path):
     write_flac(flac_dir / "s1.flac", num_channels=1, duration_s=8.0, sr=48000)
     with pytest.raises(RuntimeError):
         candor.measured_durations(recs, flac_dir)
-
-
-import string
-
-from egs3.conversational.tts.dataset.candor_builder import CandorBuilder
-from egs3.conversational.tts.dataset.dataset import (
-    ConversationDataset,
-    read_window_manifest,
-)
 
 
 def fabricate_recipe(recipe_dir: Path) -> None:
@@ -217,6 +231,61 @@ def test_candor_builder_end_to_end(tmp_path):
         assert r.t1 <= 40.0 + 1e-6
         # normalized text: lowercase charset survives
         assert all(t.text == t.text.lower() for t in r.turns)
+
+
+def test_candor_builder_reports_speaker_overlap(tmp_path, capsys):
+    root, flac_dir = fabricate_candor(tmp_path, {f"conv-{i}": 40.0 for i in range(4)})
+    recipe = tmp_path / "recipe"
+    fabricate_recipe(recipe)
+    CandorBuilder().build(
+        recipe_dir=recipe, dataset_root=root, flac_dir=flac_dir, seed=0
+    )
+    out = capsys.readouterr().out
+    # All 4 tiny sessions land in train (round(4 * 0.02) == 0 for valid/test),
+    # each contributing the fixture's fixed spk_0/spk_1 pair; pin the non-zero
+    # train speaker count so the assertion cannot pass with a dead
+    # accumulator (an unaccumulated `speakers[split]` would print `train(0)`
+    # for every pair, same as the untouched valid/test splits).
+    assert "speaker overlap train(2)" in out
+
+
+def test_candor_builder_drops_out_of_range_turn(tmp_path):
+    """A supervision starting past the measured audio end clamps to a
+    negative-span turn (end <= start) in load_supervisions; the builder must
+    drop it rather than emit it into a window."""
+    duration = 40.0
+    sups = two_speaker_session(duration) + [
+        {
+            "start": 1000.0,
+            "duration": 5.0,
+            "channel": 0,
+            "text": "ghost beyond audio end",
+            "speaker": "spk_ghost",
+        }
+    ]
+    root = tmp_path / "Candor"
+    flac_dir = tmp_path / "candor_flac"
+    write_candor_manifests(
+        root / "Candor_lhotse/manifests", {"conv-oob": (duration, sups)}
+    )
+    write_flac(
+        flac_dir / "conv-oob.flac", num_channels=2, duration_s=duration, sr=48000
+    )
+    recipe = tmp_path / "recipe"
+    fabricate_recipe(recipe)
+    CandorBuilder().build(
+        recipe_dir=recipe, dataset_root=root, flac_dir=flac_dir, seed=0
+    )
+
+    records = []
+    for split in ("train", "valid", "test"):
+        path = recipe / f"data/manifest/candor_{split}.jsonl"
+        try:
+            records.extend(read_window_manifest(path))
+        except RuntimeError:
+            pass  # tiny fixture: a split may legitimately be empty
+    assert records  # build still succeeds
+    assert not any(t.speaker == "spk_ghost" for r in records for t in r.turns)
 
 
 def test_candor_builder_uses_measured_duration_not_manifest(tmp_path):

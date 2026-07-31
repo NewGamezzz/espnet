@@ -158,8 +158,10 @@ Batches do not need a homogeneous channel count; a duration-bucketed sampler sho
 utterances-as-windows (N=1 conversations; the exchange contract covers any
 branch count >= 1) plus CANDOR conversational windows.
 
-Build order (or just `python run.py --stages create_dataset`, which runs all
-three builders in this order):
+Build order (or just `python run.py --stages create_dataset --training_config
+conf/training_mixed.yaml`, which runs all three builders in this order;
+`run.py` defaults to `conf/training_poc.yaml`, whose `dataset:` entries are
+SSSD-only, so the plain no-flag invocation builds only SSSD):
 
 1. SSSD build (windows + extended vocab): `python -m egs3.conversational.tts.dataset.builder`
 2. LibriTTS manifests (reuses that vocab's charset):

@@ -17,11 +17,13 @@ exp_dir: ${recipe_dir}/exp/${exp_tag}
 pretrained_dir: ${recipe_dir}/downloads/F5TTS_Base
 
 # LibriTTS corpus root (single-speaker mix-in).
-# `run.py --stages create_dataset` now builds all three corpora: SSSD first
-# (entry order, which also writes the extended vocab), then the LibriTTS and
-# CANDOR builders, which both read that vocab. CANDOR's first run also runs
-# its prepare_source's mp3 -> FLAC transcode into candor_flac_root - a
-# compute job, not a quick manifest build.
+# `run.py --stages create_dataset --training_config conf/training_mixed.yaml`
+# now builds all three corpora: SSSD first (entry order, which also writes
+# the extended vocab), then the LibriTTS and CANDOR builders, which both read
+# that vocab. CANDOR's first run also runs its prepare_source's mp3 -> FLAC
+# transcode into candor_flac_root - a compute job, not a quick manifest
+# build. (run.py defaults --training_config to conf/training_poc.yaml, whose
+# dataset: entries are SSSD-only, so the flag above is required here.)
 # NOTE: placeholder path - confirm the real Delta location before training.
 libritts_root: /work/hdd/bbjs/ttrachu/dataset/LibriTTS
 
@@ -44,6 +46,10 @@ mel_spec_type: vocos
 create_dataset:
   recipe_dir: ${recipe_dir}
   base_vocab_path: ${pretrained_dir}/vocab.txt
+  # Only CandorBuilder reads this (the other builders ignore it via **_); ties
+  # the transcode target to the single candor_flac_root above instead of
+  # letting it drift from dataset/config.yaml's own candor_builder.flac_dir.
+  flac_dir: ${candor_flac_root}
 
 dataset:
   _target_: espnet3.components.data.data_organizer.DataOrganizer

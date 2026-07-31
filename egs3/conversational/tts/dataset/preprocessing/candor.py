@@ -50,10 +50,15 @@ def mp3_relpath(cid: str) -> str:
 def _transcode_one(job: tuple[str, str, str, str]) -> tuple[str, bool]:
     """(cid, mp3_path, flac_path, ffmpeg) -> (cid, newly_written).
 
-    Atomic: encodes to ``<name>.flac.tmp`` then ``os.replace``s onto the
-    final path, so a killed run never leaves a truncated ``.flac`` that the
-    skip-existing check would treat as done.  ``-f flac`` is explicit because
-    the ``.tmp`` suffix defeats ffmpeg's extension-based format inference.
+    Atomic: encodes to a PID-unique ``<name>.flac.<pid>.tmp`` then
+    ``os.replace``s onto the final path, so a killed run never leaves a
+    truncated ``.flac`` that the skip-existing check would treat as done.
+    The PID suffix matters because two concurrent transcode runs (e.g. two
+    overlapping compute jobs) would otherwise share one tmp path and could
+    interleave writes into it, and ``os.replace`` would then publish that
+    garbage as a permanently "done" final file.  ``-f flac`` is explicit
+    because the ``.tmp`` suffix defeats ffmpeg's extension-based format
+    inference.
     """
     cid, mp3_path, flac_path, ffmpeg = job
     mp3, flac = Path(mp3_path), Path(flac_path)
@@ -61,7 +66,7 @@ def _transcode_one(job: tuple[str, str, str, str]) -> tuple[str, bool]:
         return cid, False
     if not mp3.is_file():
         raise FileNotFoundError(f"CANDOR source audio not found: {mp3}")
-    tmp = flac.with_name(flac.name + ".tmp")
+    tmp = flac.with_name(f"{flac.name}.{os.getpid()}.tmp")
     subprocess.run(
         [
             ffmpeg,
@@ -94,6 +99,18 @@ def transcode_all(
     (also what the tests use, since a Pool would not see monkeypatches)."""
     flac_dir = Path(flac_dir)
     flac_dir.mkdir(parents=True, exist_ok=True)
+    # Any ``*.tmp`` here is assumed to be garbage abandoned by a killed prior
+    # run (this call is not expected to overlap another live transcode run
+    # against the same flac_dir); best-effort delete so it never accumulates
+    # as dead weight. If two transcode runs against the same flac_dir DO
+    # overlap, this can unlink the other run's in-flight tmp, which then
+    # fails loudly at its own os.replace -- a hard failure, never a silently
+    # published corrupt final file.
+    for stale in flac_dir.glob("*.tmp"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
     jobs = [
         (
             cid,

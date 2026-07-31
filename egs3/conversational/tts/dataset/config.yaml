@@ -109,7 +109,6 @@ candor_builder:
   flac_dir: /work/hdd/bbjs/ttrachu/dataset/candor_flac
   ffmpeg: ffmpeg
   transcode_workers: 16
-  sample_rate: 48000
   # Windowing knobs: same VALUES as the SSSD builder section, own keys so the
   # corpora can diverge later without touching each other.
   merge_gap: 1.0

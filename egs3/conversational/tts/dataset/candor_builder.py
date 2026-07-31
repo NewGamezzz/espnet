@@ -28,7 +28,7 @@ from .preprocessing.candor import (
     measured_durations,
     transcode_all,
 )
-from .preprocessing.sssd import load_supervisions, merge_turns
+from .preprocessing.sssd import load_supervisions, merge_turns, session_speakers
 from .preprocessing.text import normalize_text, vocab_charset
 from .preprocessing.windows import (
     WindowingStats,
@@ -164,12 +164,22 @@ class CandorBuilder(DatasetBuilder):
         stats = {split: WindowingStats() for split in records_by_split}
         spk_windows = {split: Counter() for split in records_by_split}
         spk_seconds = {split: defaultdict(float) for split in records_by_split}
+        speakers: dict[str, set[str]] = {split: set() for split in records_by_split}
         dropped_empty_turns = 0
+        dropped_out_of_range_turns = 0
         for sid in session_ids:
             split = session_split[sid]
+            speakers[split] |= session_speakers(supervisions[sid])
             turns = merge_turns(supervisions[sid], _CFG["merge_gap"])
             normalized = []
             for turn in turns:
+                # A supervision starting past the measured audio end clamps
+                # to a negative span in load_supervisions (duration = min(...,
+                # rec.duration - start) < 0); drop rather than emit a window
+                # turn whose end is at or before its own start.
+                if turn.end <= turn.start:
+                    dropped_out_of_range_turns += 1
+                    continue
                 text = normalize_text(turn.text, charset)
                 if not text:
                     dropped_empty_turns += 1
@@ -200,6 +210,10 @@ class CandorBuilder(DatasetBuilder):
         )
         print(f"  sessions: {len(session_ids)}")
         print(f"  turns dropped empty after normalization: {dropped_empty_turns}")
+        print(
+            "  turns dropped out-of-range (clamped end <= start): "
+            f"{dropped_out_of_range_turns}"
+        )
         for split, records in records_by_split.items():
             n = write_window_manifest(data_dir / _CFG["manifest_paths"][split], records)
             st = stats[split]
@@ -220,6 +234,12 @@ class CandorBuilder(DatasetBuilder):
                 for k in sorted(spk_windows[split])
             )
             print(f"    windows by active speakers: {by_spk or 'n=0'}")
+        for a, b in (("train", "valid"), ("train", "test"), ("valid", "test")):
+            shared = len(speakers[a] & speakers[b])
+            print(
+                f"  speaker overlap {a}({len(speakers[a])}) & {b}({len(speakers[b])}): "
+                f"{shared}"
+            )
 
 
 def main() -> None:
