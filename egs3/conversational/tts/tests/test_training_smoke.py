@@ -86,3 +86,36 @@ def test_ema_deepcopy_safety(ext_vocab_file):
 
     assert torch.equal(loss1, loss2)
     assert torch.equal(extras1["pred"], extras2["pred"])
+
+
+def test_training_smoke_mixed_counts(ext_vocab_file):
+    """One N=1 (LibriTTS-style) and one N=2 conversation in the same packed
+    batch: forward, loss, and gradients through TAC at branch count 1."""
+    torch.manual_seed(0)
+    model = build_tiny(ext_vocab_file)
+    randomize_params(model, seed=43)
+    model.train()
+    collator = PackedConversationCollator()
+    gen = torch.Generator().manual_seed(7)
+    samples = [
+        {
+            "window_id": "libritts_utt",
+            "num_channels": 1,
+            "speech": 0.1 * torch.randn(1, 6144, generator=gen),
+            "text": [torch.randint(0, 12, (30,), generator=gen)],
+        },
+        {
+            "window_id": "sssd_win",
+            "num_channels": 2,
+            "speech": 0.1 * torch.randn(2, 5120, generator=gen),
+            "text": [torch.randint(0, 12, (30,), generator=gen) for _ in range(2)],
+        },
+    ]
+    window_ids, batch = collator(samples)
+    assert batch["counts"] == [1, 2]
+    loss, stats, weight = model(**batch)
+    assert torch.isfinite(loss)
+    assert int(weight) == 2  # conversations, not rows
+    loss.backward()
+    gates = [m.exchange.g for m in model.modules() if isinstance(m, ExchangedBlock)]
+    assert all(g.grad is not None for g in gates)
