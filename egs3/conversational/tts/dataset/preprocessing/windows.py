@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import random
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -448,12 +449,20 @@ def from_json(d: dict) -> WindowRecord:
 def write_window_manifest(path, records) -> int:
     """Write records as one JSON object per line (the manifest format
     ``dataset.read_window_manifest`` reads back).  Shared by corpus builders
-    so every corpus emits the identical schema; returns the record count."""
+    so every corpus emits the identical schema; returns the record count.
+
+    Writes to a sibling ``.tmp`` path and ``os.replace``s it onto ``path`` so
+    a build killed mid-write (e.g. a login-node time limit) never leaves a
+    truncated file at ``path`` itself - builders' ``is_built`` is
+    existence-only and would otherwise treat that truncation as built.
+    """
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_suffix(path.suffix + ".tmp")
     n = 0
-    with path.open("w", encoding="utf-8") as f:
+    with tmp_path.open("w", encoding="utf-8") as f:
         for record in records:
             f.write(json.dumps(to_json(record)) + "\n")
             n += 1
+    os.replace(tmp_path, path)
     return n

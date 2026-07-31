@@ -157,9 +157,15 @@ class ConversationBatchSampler:
             self._packed = None
             self._component_batches = []
             offset = 0
-            for component in components:
+            for idx, component in enumerate(components):
                 costs = window_costs(component)
                 packed = pack_batches(costs, batch_bins, min_batch_size=min_batch_size)
+                if probs[idx] > 0 and len(packed) == 0:
+                    raise ValueError(
+                        f"component {idx} has weight {weights[idx]} > 0 but packed "
+                        "to zero batches (empty or truncated manifest?); fix the "
+                        "manifest or set its weight to 0.0 to exclude it"
+                    )
                 self._component_batches.append(
                     [[offset + i for i in batch] for batch in packed]
                 )

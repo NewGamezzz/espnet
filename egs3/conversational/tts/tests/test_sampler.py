@@ -584,3 +584,29 @@ def test_weights_validation():
         ConversationBatchSampler(combined([a, b]), batch_bins=bins, weights=[1.0, -0.1])
     with pytest.raises(ValueError):  # all zero
         ConversationBatchSampler(combined([a, b]), batch_bins=bins, weights=[0.0, 0.0])
+
+
+def test_weighted_empty_component_with_positive_weight_raises():
+    # An empty/truncated manifest packs to zero batches; with p_i > 0 the old
+    # epoch_len = min(n_i / p_i) collapsed to 0 and quotas floored to
+    # max(1, ...) = 1, silently shrinking the epoch to ~1 batch. This must
+    # raise instead, naming the offending component index.
+    a = fake_dataset([(10.0, 2)] * 6)
+    b = fake_dataset([])
+    bins = 2 * round(FS * 10.0)
+    with pytest.raises(ValueError, match=r"component 1"):
+        ConversationBatchSampler(combined([a, b]), batch_bins=bins, weights=[0.5, 0.5])
+
+
+def test_weighted_empty_component_with_zero_weight_is_excluded():
+    # Weight 0.0 on the empty component must still work: it is excluded from
+    # packing/quota entirely, so an empty manifest for a disabled corpus is
+    # not an error.
+    a = fake_dataset([(10.0, 2)] * 6)
+    b = fake_dataset([])
+    bins = 2 * round(FS * 10.0)
+    sampler = ConversationBatchSampler(
+        combined([a, b]), batch_bins=bins, weights=[1.0, 0.0]
+    )
+    solo = ConversationBatchSampler(a, batch_bins=bins)
+    assert sorted(map(tuple, sampler)) == sorted(map(tuple, solo))

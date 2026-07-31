@@ -164,7 +164,9 @@ branch count >= 1). Build order matters:
 
 `dataloader.train.weights` sets the fraction of optimizer steps per corpus
 (entry order = `dataset.train` order); `[1.0, 0.0]` reproduces SSSD-only
-training, and validation always runs the full combined valid set.
+training under this config's `min_active_speakers: 1`, not the POC
+baseline's `2` (`conf/training_poc.yaml`), and validation always runs the
+full combined valid set.
 See the design note "Design - LibriTTS Single-Speaker Mixing for
 Conversational F5" (vault) for the epoch-composition rule.
 
