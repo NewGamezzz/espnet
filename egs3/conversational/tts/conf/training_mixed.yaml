@@ -1,0 +1,230 @@
+exp_tag: train_mixed_sssd_libritts
+
+num_device: 1
+num_nodes: 1
+seed: 0
+
+recipe_dir: .
+data_dir: ${recipe_dir}/data
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+
+# Pretrained F5TTS_Base (SWivid/F5-TTS) checkpoint + the vocab shipped with
+# it (the base vocab step 2 extended). Download once:
+#   huggingface-cli download SWivid/F5-TTS F5TTS_Base/model_1200000.safetensors \
+#     --local-dir ${recipe_dir}/downloads
+#   huggingface-cli download SWivid/F5-TTS F5TTS_Base/vocab.txt \
+#     --local-dir ${recipe_dir}/downloads
+pretrained_dir: ${recipe_dir}/downloads/F5TTS_Base
+
+# LibriTTS corpus root (single-speaker mix-in). Manifests are built separately:
+#   python -m egs3.conversational.tts.dataset.libritts_builder --dataset-root <root>
+# (run AFTER the SSSD create_dataset stage; it reads the extended vocab).
+# NOTE: placeholder path - confirm the real Delta location before training.
+libritts_root: /work/hdd/bbjs/ttrachu/dataset/LibriTTS
+
+# Mel / audio front-end shared by feats_extract and the model (must stay
+# bit-compatible with the pretrained checkpoint and the vocos vocoder).
+sample_rate: 24000
+n_mel_channels: 100
+hop_length: 256
+win_length: 1024
+n_fft: 1024
+mel_spec_type: vocos
+
+# create_dataset stage -> SSSDBuilder (dataset/builder.py). dataset_root
+# resolution: explicit value > $SSSD_ROOT > dataset/config.yaml default.
+create_dataset:
+  recipe_dir: ${recipe_dir}
+  base_vocab_path: ${pretrained_dir}/vocab.txt
+
+dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  recipe_dir: ${recipe_dir}
+  # Entry order defines the corpus order that dataloader.train.weights and
+  # dataloader.valid (unweighted) refer to: [SSSD, LibriTTS].
+  train:
+    - data_src: conversational/tts
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        # Relaxed from 2 (ratified 2026-07-30): SSSD's own single-active
+        # windows are in-domain single-speaker data now that the mix
+        # includes LibriTTS anyway.
+        min_active_speakers: 1
+    - data_src: conversational/tts
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/libritts_train.jsonl
+        dataset_root: ${libritts_root}
+  # NOTE: valid/loss is NOT comparable to earlier SSSD-only runs (LibriTTS
+  # slice added AND min_active_speakers relaxed to 1).
+  valid:
+    - data_src: conversational/tts
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        min_active_speakers: 1
+    - data_src: conversational/tts
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/libritts_valid.jsonl
+        dataset_root: ${libritts_root}
+  # Runtime tokenization against the EXTENDED vocab (base + <turn>/<OTHER>).
+  preprocessor:
+    _target_: egs3.conversational.tts.dataset.preprocessor.ConversationalTextPreprocessor
+    train: true
+    token_list: ${data_dir}/tokens/vocab.txt
+
+# Model assembly (src/build_model.py): DiT with the extended vocab, native
+# F5TTS_Base weights with text-embedding surgery, TAC exchanges injected at
+# every block with zero-init gates.
+model:
+  _target_: egs3.conversational.tts.src.build_model.build_multibranch_f5
+  vocab_file: ${data_dir}/tokens/vocab.txt
+  vocab_meta: ${data_dir}/tokens/vocab_meta.json
+  pretrained_ckpt: ${pretrained_dir}/model_1200000.safetensors
+  pretrained_vocab: ${pretrained_dir}/vocab.txt
+  init_noise_scale: 0.02
+  init_seed: ${seed}
+  # F5TTS_Base architecture, copied verbatim from the libritts recipe's
+  # training_f5_tts.yaml (getting text_mask_padding or pe_attn_head wrong
+  # loads cleanly but produces noise).
+  arch:
+    dim: 1024
+    depth: 22
+    heads: 16
+    dim_head: 64
+    ff_mult: 2
+    text_dim: 512
+    text_mask_padding: false
+    pe_attn_head: 1
+    conv_layers: 4
+    dropout: 0.1
+  cfm:
+    sigma: 0.0
+    audio_drop_prob: 0.3
+    cond_drop_prob: 0.2
+    frac_lengths_mask: [0.7, 1.0]
+    odeint_method: euler
+  exchange:
+    type: tac
+    schedule:
+      "1-22": P+TAC
+    hidden: null            # TAC hidden dim; null = dim
+  feats_extract:
+    fs: ${sample_rate}
+    n_fft: ${n_fft}
+    hop_length: ${hop_length}
+    win_length: ${win_length}
+    n_mels: ${n_mel_channels}
+    mel_spec_type: ${mel_spec_type}
+
+# One AdamW over two param groups (src/lit_module.py): the injected
+# exchanges train faster than the pretrained trunk.
+optim:
+  _target_: torch.optim.AdamW
+  lr_exchange: 1.0e-4
+  lr_backbone: 1.0e-5
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+
+scheduler:
+  _target_: espnet2.schedulers.linear_warmup_decay.linear_warmup_decay
+  warmup_steps: 2000
+  total_steps: 200000
+scheduler_interval: step
+
+best_model_criterion:
+  - - valid/loss
+    - 1
+    - min
+
+# Standard PyTorch DataLoader around ConversationBatchSampler (built per
+# epoch by the recipe LightningModule; the espnet3 iter_factory path is not
+# used - it cannot reshuffle batches across epochs, see src/sampler.py).
+dataloader:
+  collate_fn:
+    _target_: egs3.conversational.tts.src.lit_module.PackedConversationCollator
+  train:
+    # Packed row budget in sample-rows: N x T_24k summed over the batch,
+    # padded to the longest window. A 60 s N=2 window costs 2.88M
+    # (~11,250 transformer rows at ~94 frames/s) - size batch_bins and OOM
+    # headroom for that ceiling. 3M ~= one such window per batch: 6M OOMs an
+    # A100-40G in fp32; the effective batch is kept via
+    # accumulate_grad_batches (halve one, double the other to retune).
+    batch_bins: 3000000
+    min_batch_size: 1      # conversations, not rows
+    shuffle: true
+    num_workers: 4
+    pin_memory: true
+    # Fraction of optimizer steps per corpus, aligned with dataset.train
+    # entry order [SSSD, LibriTTS]. Every batch is roughly equal compute
+    # (batch_bins), so this is also the fraction of gradient mass.
+    # [1.0, 0.0] reproduces SSSD-only training; null disables the knob
+    # (plain size-proportional concatenation - NOT recommended here).
+    weights: [0.5, 0.5]
+  valid:
+    batch_bins: ${dataloader.train.batch_bins}
+    min_batch_size: 1
+    shuffle: false
+    num_workers: 4
+    pin_memory: true
+
+trainer:
+  accelerator: auto
+  devices: ${num_device}
+  num_nodes: ${num_nodes}
+  # 4 GPUs * 7 accum * ~11,719 padded row-frames (batch_bins/256) ~= 328k
+  # row-frames/update, matching the single-channel baseline's 307,200-frame
+  # effective batch (its 960k-bin/8-accum V100 config). batch_bins cannot
+  # move instead: the largest 60 s N=2 window pins it at ~3M.
+  accumulate_grad_batches: 7
+  # fp32 cannot fit a single 60 s N=2 window's forward activations (~32 GB)
+  # on an A100-40G, and min_batch_size=1 makes that window the memory floor;
+  # bf16-mixed halves activations while keeping fp32 master weights.
+  precision: bf16-mixed
+  check_val_every_n_epoch: 1
+  # Validate (and therefore checkpoint: save_last + top-K on valid/loss)
+  # every quarter epoch, so wall-limit kills lose at most ~20 min of work
+  # and valid/loss gets plotted mid-epoch.
+  val_check_interval: 0.25
+  log_every_n_steps: 50
+  max_epochs: 1000
+  gradient_clip_val: 1.0
+  # Batch order reshuffles via ConversationBatchSampler.set_epoch (Lightning
+  # calls it each epoch); rebuilding loaders every epoch is not needed and,
+  # on resume, leaked a second generation of dataloader workers.
+  reload_dataloaders_every_n_epochs: 0
+  # Kept deliberately (not 0): the sanity probe fails fast on broken
+  # val/train paths at t=0. Its abandoned iterator's workers are shut down
+  # by ConversationalLightningModule.on_validation_end (gated on
+  # trainer.sanity_checking - on_sanity_check_end is Callback-only in
+  # Lightning 2.6.5 and never fires on a LightningModule), so this no
+  # longer leaks workers until the first real validation.
+  num_sanity_val_steps: 2
+  strategy: auto
+  # Load resume checkpoints with torch.load(mmap=True): plain loads
+  # materialize the full checkpoint on every rank's heap and glibc never
+  # returns the pages, pushing nodes past their page-reclaim threshold
+  # (resume-stall livelock, 2026-07-28 investigation).
+  plugins:
+    - _target_: egs3.conversational.tts.src.checkpoint_io.MmapCheckpointIO
+  callbacks:
+    - _target_: espnet3.components.callbacks.ema.EMACallback
+      decay: 0.9999
+  logger:
+    _target_: lightning.pytorch.loggers.WandbLogger
+    project: espnet3-conversational-f5
+    name: ${exp_tag}
+    save_dir: ${exp_dir}
+    log_model: false
+    id: ${exp_tag}
+    resume: allow
+
+fit: {}

@@ -152,6 +152,22 @@ Batches do not need a homogeneous channel count; a duration-bucketed sampler sho
 | `dataset.sample_rate` | `24000` | training rate (48 kHz source is downsampled 2:1) |
 | `dataset.text_pad_value` | `-1` | F5 text padding convention |
 
+## Mixed single-speaker + conversational training (LibriTTS)
+
+`conf/training_mixed.yaml` trains on SSSD windows plus LibriTTS-960
+utterances-as-windows (N=1 conversations; the exchange contract covers any
+branch count >= 1). Build order matters:
+
+1. SSSD build (windows + extended vocab): `python -m egs3.conversational.tts.dataset.builder`
+2. LibriTTS manifests (reuses that vocab's charset):
+   `python -m egs3.conversational.tts.dataset.libritts_builder --dataset-root <LibriTTS root>`
+
+`dataloader.train.weights` sets the fraction of optimizer steps per corpus
+(entry order = `dataset.train` order); `[1.0, 0.0]` reproduces SSSD-only
+training, and validation always runs the full combined valid set.
+See the design note "Design - LibriTTS Single-Speaker Mixing for
+Conversational F5" (vault) for the epoch-composition rule.
+
 ## Training (multi-branch CFM POC)
 
 `run.py --stages train --training_config conf/training_poc.yaml` fine-tunes pretrained F5TTS_Base on SSSD windows as a multi-branch CFM: every channel of a window is one packed transformer row, and the injected `branch_exchange` modules are the only cross-channel communication.
