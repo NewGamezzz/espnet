@@ -491,3 +491,96 @@ def test_sanity_check_end_releases_abandoned_val_iterator(tmp_path):
     # ... and the released loader still works: the first real validation
     # (check_val_every_n_epoch=1) rebuilt and iterated it successfully.
     assert module.real_validation_step_calls == 6
+
+
+# --------------------------------------------------------------------------
+# Per-corpus weighted batch interleaving (Task 3): weights=None must stay
+# byte-identical to the pre-existing global-packing path; weights=[...]
+# packs each CombinedDataset component separately and interleaves per-epoch
+# quotas drawn by seeded permutation.
+# --------------------------------------------------------------------------
+
+
+def combined(components):
+    return SimpleNamespace(datasets=components)
+
+
+def test_weights_none_multi_component_matches_global_packing():
+    a = fake_dataset([(10.0, 2)] * 4)
+    b = fake_dataset([(5.0, 1)] * 6)
+    merged = fake_dataset([(10.0, 2)] * 4 + [(5.0, 1)] * 6)
+    bins = 2 * round(FS * 30.0)
+    with_none = ConversationBatchSampler(combined([a, b]), batch_bins=bins)
+    flat = ConversationBatchSampler(merged, batch_bins=bins)
+    assert list(with_none) == list(flat)
+
+
+def test_weighted_quotas_and_composition():
+    # one 10 s N=2 window per batch at these bins
+    bins = 2 * round(FS * 10.0)
+    a = fake_dataset([(10.0, 2)] * 6)  # 6 batches
+    b = fake_dataset([(10.0, 2)] * 24)  # 24 batches
+    sampler = ConversationBatchSampler(
+        combined([a, b]), batch_bins=bins, weights=[0.5, 0.5], shuffle=True, seed=0
+    )
+    batches = list(sampler)
+    # L = min(6/0.5, 24/0.5) = 12 -> quotas [6, 6]
+    assert len(batches) == 12
+    a_indices = set(range(6))
+    from_a = [batch for batch in batches if set(batch) <= a_indices]
+    assert len(from_a) == 6  # ALL of the scarcer-relative-to-weight corpus
+    for batch in batches:  # corpus-pure batches
+        assert set(batch) <= a_indices or not (set(batch) & a_indices)
+
+
+def test_weighted_rotation_and_constant_length():
+    bins = 2 * round(FS * 10.0)
+    a = fake_dataset([(10.0, 2)] * 6)
+    b = fake_dataset([(10.0, 2)] * 24)
+    sampler = ConversationBatchSampler(
+        combined([a, b]), batch_bins=bins, weights=[0.5, 0.5], shuffle=True, seed=0
+    )
+
+    def epoch_b_batches(epoch):
+        sampler.set_epoch(epoch)
+        return sorted(tuple(batch) for batch in sampler if min(batch) >= 6)
+
+    sampler.set_epoch(0)
+    len0 = len(sampler)
+    sampler.set_epoch(1)
+    assert len(sampler) == len0  # constant epoch length
+    assert epoch_b_batches(0) != epoch_b_batches(1)  # B subset rotates
+    assert epoch_b_batches(0) == epoch_b_batches(0)  # deterministic per epoch
+
+
+def test_weight_zero_is_sole_corpus_training():
+    bins = 2 * round(FS * 10.0)
+    a = fake_dataset([(10.0, 2)] * 5)
+    b = fake_dataset([(12.0, 2)] * 7)
+    only_a = ConversationBatchSampler(
+        combined([a, b]), batch_bins=bins, weights=[1.0, 0.0]
+    )
+    solo = ConversationBatchSampler(a, batch_bins=bins)
+    assert sorted(map(tuple, only_a)) == sorted(map(tuple, solo))
+
+
+def test_three_component_weights():
+    bins = 2 * round(FS * 10.0)
+    comps = [fake_dataset([(10.0, 2)] * n) for n in (4, 8, 16)]
+    sampler = ConversationBatchSampler(
+        combined(comps), batch_bins=bins, weights=[0.25, 0.25, 0.5]
+    )
+    # L = min(4/.25, 8/.25, 16/.5) = 16 -> quotas [4, 4, 8]
+    assert len(list(sampler)) == 16
+
+
+def test_weights_validation():
+    a = fake_dataset([(10.0, 2)] * 2)
+    b = fake_dataset([(10.0, 2)] * 2)
+    bins = 2 * round(FS * 10.0)
+    with pytest.raises(ValueError):  # wrong length
+        ConversationBatchSampler(combined([a, b]), batch_bins=bins, weights=[1.0])
+    with pytest.raises(ValueError):  # negative
+        ConversationBatchSampler(combined([a, b]), batch_bins=bins, weights=[1.0, -0.1])
+    with pytest.raises(ValueError):  # all zero
+        ConversationBatchSampler(combined([a, b]), batch_bins=bins, weights=[0.0, 0.0])

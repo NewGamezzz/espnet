@@ -18,7 +18,10 @@ window costs ``total_rows * T_max`` sample-rows, and ``batch_bins`` is
 sized directly in those units (~94 mel frames per second per row at 24 kHz
 / hop 256).  Shapes come from window metadata alone; no audio is loaded.
 ``min_batch_size`` counts conversations, not rows, and mixed-N batches need
-no special casing because the budget is in N x T units.
+no special casing because the budget is in N x T units.  With the
+``weights`` knob (see ``ConversationBatchSampler``), each corpus component is
+packed under this same cost model independently, so batches never mix
+windows from different corpora.
 """
 
 from __future__ import annotations
@@ -100,6 +103,21 @@ class ConversationBatchSampler:
     bucketing is the point).  Under torch.distributed, tail batches are
     dropped so every rank sees the same batch count (the same policy as
     espnet3's iter_factory path), then the batches are strided by rank.
+
+    ``weights`` is an optional list of non-negative floats, one per
+    ``CombinedDataset`` component in config order (the ``dataloader.train.weights``
+    config knob), giving each corpus a target fraction of optimizer steps.
+    ``None`` (the default) keeps the legacy global-packing path: one
+    duration-bucketed pack over the concatenated inventory, byte-identical to
+    the sampler before this knob existed.  With weights, each component is
+    packed separately and normalized into probabilities ``p_i``; the epoch
+    length is ``L = min over p_i > 0 of (n_i / p_i)`` batches (the corpus that
+    is scarcest relative to its weight is fully covered every epoch, and no
+    corpus is ever asked for more batches than it has), each component's
+    per-epoch quota is ``max(1, round(p_i * L))`` batches (``0`` if
+    ``p_i == 0``, i.e. the corpus is excluded that epoch), and the quota
+    subset is drawn by seeded permutation (``RandomState(seed + epoch)``,
+    rotating which batches are picked across epochs).
     """
 
     def __init__(
@@ -110,13 +128,51 @@ class ConversationBatchSampler:
         shuffle: bool = False,
         seed: int = 0,
         epoch: int = 0,
+        weights: Sequence[float] | None = None,
     ) -> None:
         self.shuffle = shuffle
         self.seed = seed
         self.epoch = epoch
-        self._packed = pack_batches(
-            window_costs(dataset), batch_bins, min_batch_size=min_batch_size
-        )
+        if weights is None:
+            # Global packing over the concatenated inventory: byte-identical
+            # to the sampler before the weights knob existed.
+            self._packed = pack_batches(
+                window_costs(dataset), batch_bins, min_batch_size=min_batch_size
+            )
+            self._component_batches = None
+            self._quotas = None
+        else:
+            components = _component_datasets(dataset)
+            if len(weights) != len(components):
+                raise ValueError(
+                    f"{len(weights)} weights for {len(components)} dataset "
+                    "components; weights align with the config's train entries"
+                )
+            if any(w < 0 for w in weights) or sum(weights) <= 0:
+                raise ValueError(
+                    f"weights must be non-negative with a positive sum, got {weights}"
+                )
+            total = sum(weights)
+            probs = [w / total for w in weights]
+            self._packed = None
+            self._component_batches = []
+            offset = 0
+            for component in components:
+                costs = window_costs(component)
+                packed = pack_batches(costs, batch_bins, min_batch_size=min_batch_size)
+                self._component_batches.append(
+                    [[offset + i for i in batch] for batch in packed]
+                )
+                offset += len(costs)
+            # Epoch length: the scarcest-relative-to-weight corpus is fully
+            # covered every epoch and no corpus is asked for more batches
+            # than it has. Quotas are constant, so epoch length is constant.
+            epoch_len = min(
+                len(batches) / p
+                for batches, p in zip(self._component_batches, probs)
+                if p > 0
+            )
+            self._quotas = [max(1, round(p * epoch_len)) if p > 0 else 0 for p in probs]
         # Lightning's per-epoch epoch propagation (_set_sampler_epoch) only
         # looks at dataloader.sampler and dataloader.batch_sampler.sampler,
         # never at the batch sampler itself, so expose self under .sampler.
@@ -138,9 +194,23 @@ class ConversationBatchSampler:
         return 0, 1
 
     def _epoch_batches(self) -> list[list[int]]:
-        batches = list(self._packed)
-        if self.shuffle:
-            np.random.RandomState(self.seed + self.epoch).shuffle(batches)
+        if self._quotas is None:
+            batches = list(self._packed)
+            if self.shuffle:
+                np.random.RandomState(self.seed + self.epoch).shuffle(batches)
+        else:
+            # One RandomState drives both the per-corpus quota draw and the
+            # interleave shuffle, so every rank computes the same epoch.
+            rng = np.random.RandomState(self.seed + self.epoch)
+            batches = []
+            for comp_batches, quota in zip(self._component_batches, self._quotas):
+                if quota >= len(comp_batches):
+                    batches.extend(comp_batches)
+                else:
+                    picks = rng.permutation(len(comp_batches))[:quota]
+                    batches.extend(comp_batches[i] for i in picks)
+            if self.shuffle:
+                rng.shuffle(batches)
         rank, world_size = self._world_info()
         if world_size > 1:
             if len(batches) < world_size:
