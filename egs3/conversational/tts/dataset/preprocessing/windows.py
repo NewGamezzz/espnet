@@ -23,8 +23,10 @@ speech can cross a file edge (supervisions are clamped to the recording).
 from __future__ import annotations
 
 import dataclasses
+import json
 import random
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Sequence
 
 from .sssd import Recording, Turn, occupied_intervals
@@ -441,3 +443,17 @@ def from_json(d: dict) -> WindowRecord:
             for t in d["turns"]
         ),
     )
+
+
+def write_window_manifest(path, records) -> int:
+    """Write records as one JSON object per line (the manifest format
+    ``dataset.read_window_manifest`` reads back).  Shared by corpus builders
+    so every corpus emits the identical schema; returns the record count."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    n = 0
+    with path.open("w", encoding="utf-8") as f:
+        for record in records:
+            f.write(json.dumps(to_json(record)) + "\n")
+            n += 1
+    return n

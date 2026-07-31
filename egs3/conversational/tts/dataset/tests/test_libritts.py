@@ -1,9 +1,17 @@
 """LibriTTS scanning and utterance-as-window record construction."""
 
+import string
 from pathlib import Path
 
+import numpy as np
 import pytest
+import soundfile as sf
 
+from egs3.conversational.tts.dataset.dataset import (
+    ConversationDataset,
+    read_window_manifest,
+)
+from egs3.conversational.tts.dataset.libritts_builder import LibriTTSBuilder
 from egs3.conversational.tts.dataset.preprocessing.libritts import (
     UttEntry,
     scan_subset,
@@ -107,3 +115,100 @@ def test_subsample_to_hours_budget_and_determinism():
     assert {e.utt_id for e, _ in taken} != {e.utt_id for e, _ in other}
     # output is sorted by utt_id for stable manifest order
     assert [e.utt_id for e, _ in taken] == sorted(e.utt_id for e, _ in taken)
+
+
+def write_wav(path: Path, duration_s: float, sr: int = 24000) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    t = np.arange(round(sr * duration_s)) / sr
+    sf.write(str(path), 0.1 * np.sin(2 * np.pi * 440.0 * t), sr)
+
+
+def fabricate_corpus(root: Path) -> None:
+    """Minimal LibriTTS tree: all builder subsets present."""
+    utts = {
+        # train subsets: one keeper each, one too-short in clean-100
+        "train-clean-100/1/10/1_10_000000_000001": ("Hello there.", 2.0),
+        "train-clean-100/1/10/1_10_000000_000002": ("Too short.", 0.5),
+        "train-clean-360/2/20/2_20_000000_000001": ("Second subset.", 1.5),
+        "train-other-500/3/30/3_30_000000_000001": ("Third subset.", 1.2),
+        "dev-clean/4/40/4_40_000000_000001": ("Valid one.", 2.0),
+        "dev-clean/4/40/4_40_000000_000002": ("Valid two.", 1.1),
+    }
+    for rel, (text, dur) in utts.items():
+        base = root / rel
+        base.parent.mkdir(parents=True, exist_ok=True)
+        base.with_name(base.name + ".normalized.txt").write_text(
+            text, encoding="utf-8"
+        )
+        write_wav(base.with_name(base.name + ".wav"), dur)
+
+
+def fabricate_recipe(recipe_dir: Path) -> None:
+    """A recipe dir with a prebuilt extended vocab (SSSD build stand-in)."""
+    tokens = (
+        [" "]
+        + list(string.ascii_lowercase)
+        + [".", ","]
+        + ["<turn>", "<OTHER>"]
+    )
+    vocab = recipe_dir / "data/tokens/vocab.txt"
+    vocab.parent.mkdir(parents=True, exist_ok=True)
+    vocab.write_text("\n".join(tokens) + "\n", encoding="utf-8")
+
+
+def test_builder_end_to_end(tmp_path):
+    root, recipe = tmp_path / "LibriTTS", tmp_path / "recipe"
+    fabricate_corpus(root)
+    fabricate_recipe(recipe)
+    builder = LibriTTSBuilder()
+    assert builder.is_source_prepared(dataset_root=root)
+    assert not builder.is_built(recipe_dir=recipe)
+    builder.build(recipe_dir=recipe, dataset_root=root, seed=0)
+    assert builder.is_built(recipe_dir=recipe)
+
+    train = read_window_manifest(recipe / "data/manifest/libritts_train.jsonl")
+    # the 0.5 s utterance is dropped; the three subsets each contribute one
+    assert sorted(r.window_id for r in train) == [
+        "libritts_1_10_000000_000001",
+        "libritts_2_20_000000_000001",
+        "libritts_3_30_000000_000001",
+    ]
+    for r in train:
+        assert r.num_channels == 1
+        assert r.num_active_speakers == 1
+        assert r.t0 == 0.0 and r.t1 >= 1.0
+        assert r.turns[0].channel == 0
+        # normalized against the charset: lowercased, punctuation kept
+        assert r.turns[0].text == r.turns[0].text.lower()
+
+    valid = read_window_manifest(recipe / "data/manifest/libritts_valid.jsonl")
+    assert {r.window_id for r in valid} == {
+        "libritts_4_40_000000_000001",
+        "libritts_4_40_000000_000002",
+    }
+
+
+def test_builder_requires_vocab(tmp_path):
+    root, recipe = tmp_path / "LibriTTS", tmp_path / "recipe"
+    fabricate_corpus(root)
+    with pytest.raises(RuntimeError, match="SSSD build"):
+        LibriTTSBuilder().build(recipe_dir=recipe, dataset_root=root)
+
+
+def test_manifest_loads_through_conversation_dataset(tmp_path):
+    root, recipe = tmp_path / "LibriTTS", tmp_path / "recipe"
+    fabricate_corpus(root)
+    fabricate_recipe(recipe)
+    LibriTTSBuilder().build(recipe_dir=recipe, dataset_root=root, seed=0)
+    dataset = ConversationDataset(
+        split="train",
+        manifest_path=recipe / "data/manifest/libritts_train.jsonl",
+        dataset_root=root,
+        fs=24000,
+    )
+    sample = dataset[0]
+    assert sample["num_channels"] == 1
+    assert sample["speech"].shape[0] == 1
+    assert sample["speech"].shape[1] >= 24000  # >= 1 s at 24 kHz, no resample
+    assert sample["perm"].tolist() == [0]
+    assert sample["turns"][0].channel == 0

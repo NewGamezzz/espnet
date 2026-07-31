@@ -74,3 +74,24 @@ dataset:
   # F5 convention: the model does text + 1 and uses 0 as its internal filler,
   # so batches pad text ids with -1 (see espnet2/tts/f5/backbones/dit.py).
   text_pad_value: -1
+
+libritts_builder:
+  # Root of the LibriTTS corpus (read-only), containing train-clean-100/ etc.
+  # Resolution order at runtime: explicit argument > $LIBRITTS_ROOT > this value.
+  # NOTE: placeholder Delta path - CONFIRM the real location before the prep run.
+  dataset_root: /work/hdd/bbjs/ttrachu/dataset/LibriTTS
+  train_subsets:
+    - train-clean-100
+    - train-clean-360
+    - train-other-500
+  valid_subset: dev-clean
+  # Seeded subsample of the valid subset, in hours (keeps validation cheap).
+  valid_hours: 1.0
+  # Utterances shorter than this are dropped (ratified 2026-07-30).
+  min_duration: 1.0
+  # LibriTTS native rate; the builder fails loudly on any file that differs.
+  sample_rate: 24000
+  manifest_paths:
+    train: manifest/libritts_train.jsonl
+    valid: manifest/libritts_valid.jsonl
+  seed: 0
