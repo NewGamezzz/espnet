@@ -160,6 +160,7 @@ class ConversationalLightningModule(ESPnetLightningModule):
             getattr(self.config.dataloader, mode), resolve=True
         )
         initial_epoch = self._initial_epoch()
+        weights = loader_config.pop("weights", None)
         sampler = ConversationBatchSampler(
             dataset,
             batch_bins=int(loader_config.pop("batch_bins")),
@@ -167,6 +168,7 @@ class ConversationalLightningModule(ESPnetLightningModule):
             shuffle=bool(loader_config.pop("shuffle", mode == "train")),
             seed=int(self.config.get("seed") or 0),
             epoch=initial_epoch,
+            weights=weights,
         )
         logger.info(
             "[%s] ConversationBatchSampler: %d batches (initial epoch=%d; "

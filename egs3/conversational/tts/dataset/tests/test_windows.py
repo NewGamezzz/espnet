@@ -25,6 +25,7 @@ from egs3.conversational.tts.dataset.preprocessing.windows import (
     is_eligible_boundary,
     select_window_spans,
     to_json,
+    write_window_manifest,
 )
 
 MERGE_GAP = 1.0
@@ -581,9 +582,7 @@ class TestCoverageGuard:
         # Not passing the new knobs must equal passing their off values.
         rec = make_recording(120.0)
         turns = dialogue_turns(120.0)
-        a, sa = build_windows(
-            "s1", rec, turns, rng=random.Random("seed"), **WINDOW_KW
-        )
+        a, sa = build_windows("s1", rec, turns, rng=random.Random("seed"), **WINDOW_KW)
         b, sb = build_windows(
             "s1",
             rec,
@@ -600,9 +599,7 @@ class TestCoverageGuard:
         # 12 s of leading silence then a 6 s turn in a single tail window.
         rec = make_recording(20.0)
         turns = [turn(0, 12.0, 18.0)]
-        off, _ = build_windows(
-            "s1", rec, turns, rng=random.Random("s"), **WINDOW_KW
-        )
+        off, _ = build_windows("s1", rec, turns, rng=random.Random("s"), **WINDOW_KW)
         assert (off[0].t0, off[0].t1) == (0.0, 20.0)  # hole kept when off
         on, _ = build_windows(
             "s1", rec, turns, rng=random.Random("s"), trim_to_turns=True, **WINDOW_KW
@@ -694,7 +691,12 @@ class TestSnapStart:
         turns = dialogue_turns(120.0)
         a, sa = build_windows("s", rec, turns, rng=random.Random("k"), **WINDOW_KW)
         b, sb = build_windows(
-            "s", rec, turns, rng=random.Random("k"), snap_start_to_turn=False, **WINDOW_KW
+            "s",
+            rec,
+            turns,
+            rng=random.Random("k"),
+            snap_start_to_turn=False,
+            **WINDOW_KW,
         )
         assert a == b
         assert sa == sb
@@ -704,12 +706,20 @@ class TestSnapStart:
         # first turn and every later window on a turn too.
         rec = make_recording(80.0)
         turns = [
-            turn(0, 2.0, 6.0), turn(1, 7.0, 11.0), turn(0, 40.0, 44.0),
-            turn(1, 45.0, 49.0), turn(0, 60.0, 64.0),
+            turn(0, 2.0, 6.0),
+            turn(1, 7.0, 11.0),
+            turn(0, 40.0, 44.0),
+            turn(1, 45.0, 49.0),
+            turn(0, 60.0, 64.0),
         ]
         starts = {t.start for t in turns}
         on, _ = build_windows(
-            "s", rec, turns, rng=random.Random("s"), snap_start_to_turn=True, **WINDOW_KW
+            "s",
+            rec,
+            turns,
+            rng=random.Random("s"),
+            snap_start_to_turn=True,
+            **WINDOW_KW,
         )
         assert on
         assert on[0].t0 == 2.0  # skipped the 0-2 s lead-in silence
@@ -721,11 +731,18 @@ class TestSnapStart:
         # gap, and the skipped seconds are recorded in snapped_gap_sec.
         rec = make_recording(80.0)
         turns = [
-            turn(0, 2.0, 8.0), turn(1, 9.0, 15.0),      # early cluster
-            turn(0, 45.0, 51.0), turn(1, 52.0, 58.0),   # after a 30 s gap
+            turn(0, 2.0, 8.0),
+            turn(1, 9.0, 15.0),  # early cluster
+            turn(0, 45.0, 51.0),
+            turn(1, 52.0, 58.0),  # after a 30 s gap
         ]
         on, stats = build_windows(
-            "s", rec, turns, rng=random.Random("s"), snap_start_to_turn=True, **WINDOW_KW
+            "s",
+            rec,
+            turns,
+            rng=random.Random("s"),
+            snap_start_to_turn=True,
+            **WINDOW_KW,
         )
         assert on
         for w in on:
@@ -736,10 +753,74 @@ class TestSnapStart:
         rec = make_recording(120.0)
         turns = dialogue_turns(120.0)
         a, sa = build_windows(
-            "s", rec, turns, rng=random.Random("k"), snap_start_to_turn=True, **WINDOW_KW
+            "s",
+            rec,
+            turns,
+            rng=random.Random("k"),
+            snap_start_to_turn=True,
+            **WINDOW_KW,
         )
         b, sb = build_windows(
-            "s", rec, turns, rng=random.Random("k"), snap_start_to_turn=True, **WINDOW_KW
+            "s",
+            rec,
+            turns,
+            rng=random.Random("k"),
+            snap_start_to_turn=True,
+            **WINDOW_KW,
         )
         assert a == b
         assert sa == sb
+
+
+class TestWriteWindowManifestAtomicity:
+    """A killed build (e.g. a login-node time limit) must never leave a
+    truncated manifest at the final path, since builders' ``is_built`` is
+    existence-only and would then treat the truncated file as built."""
+
+    def test_successful_write_leaves_no_tmp_and_returns_count(self, tmp_path):
+        rec = make_recording(120.0)
+        turns = dialogue_turns(120.0)
+        records, _ = build_windows(
+            "sess1", rec, turns, rng=random.Random("s"), **WINDOW_KW
+        )
+        path = tmp_path / "manifest" / "train.jsonl"
+        n = write_window_manifest(path, records)
+        assert n == len(records)
+        assert path.is_file()
+        assert not path.with_suffix(path.suffix + ".tmp").exists()
+        assert len(path.read_text(encoding="utf-8").splitlines()) == len(records)
+
+    def test_failure_mid_write_does_not_create_or_overwrite_final_path(
+        self, tmp_path, monkeypatch
+    ):
+        rec = make_recording(120.0)
+        turns = dialogue_turns(120.0)
+        records, _ = build_windows(
+            "sess1", rec, turns, rng=random.Random("s"), **WINDOW_KW
+        )
+        assert len(records) >= 2  # need at least one record before the raise
+
+        path = tmp_path / "manifest" / "train.jsonl"
+        path.parent.mkdir(parents=True)
+        path.write_text("pre-existing final manifest\n", encoding="utf-8")
+
+        import egs3.conversational.tts.dataset.preprocessing.windows as windows_mod
+
+        calls = {"n": 0}
+        real_to_json = windows_mod.to_json
+
+        def flaky_to_json(record):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise RuntimeError("boom")
+            return real_to_json(record)
+
+        monkeypatch.setattr(windows_mod, "to_json", flaky_to_json)
+        with pytest.raises(RuntimeError, match="boom"):
+            write_window_manifest(path, records)
+
+        # The pre-existing final manifest survives untouched; the failed
+        # write only ever touched its sibling .tmp path (a truncated .tmp
+        # left behind by a hard kill is harmless: is_built only checks the
+        # final manifest path).
+        assert path.read_text(encoding="utf-8") == "pre-existing final manifest\n"

@@ -114,8 +114,10 @@ class ConversationDataset(TorchDataset):
         manifest_path = Path(manifest_path)
         if not manifest_path.is_file():
             raise FileNotFoundError(
-                f"window manifest not found: {manifest_path}. Run the SSSD "
-                "builder first (python -m egs3.conversational.tts.dataset.builder)."
+                f"window manifest not found: {manifest_path}. Run the "
+                "corresponding dataset builder first (SSSD: python -m "
+                "egs3.conversational.tts.dataset.builder; LibriTTS: python -m "
+                "egs3.conversational.tts.dataset.libritts_builder)."
             )
         self.records = read_window_manifest(manifest_path)
         if min_active_speakers > 1:

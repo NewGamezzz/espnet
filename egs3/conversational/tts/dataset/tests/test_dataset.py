@@ -352,3 +352,28 @@ class TestMinActiveSpeakersFilter:
                 permute_channels=False,
                 min_active_speakers=4,
             )
+
+
+def test_collate_mixed_channel_counts():
+    """N=1 (LibriTTS-style) and N=2 windows pack into one batch."""
+    samples = [
+        {
+            "window_id": "libritts_x",
+            "num_channels": 1,
+            "speech": torch.zeros(1, 2400),
+            "text": [torch.tensor([1, 2, 3])],
+        },
+        {
+            "window_id": "sssd_y",
+            "num_channels": 2,
+            "speech": torch.ones(2, 4800),
+            "text": [torch.tensor([4]), torch.tensor([5, 6])],
+        },
+    ]
+    batch = collate_conversations(samples, text_pad_value=-1)
+    assert batch["counts"] == [1, 2]
+    assert batch["speech"].shape == (3, 4800)
+    assert batch["speech_lengths"].tolist() == [2400, 4800, 4800]
+    assert batch["speech_mask"][0, 2400:].sum() == 0
+    assert batch["text"].shape == (3, 3)
+    assert batch["text"][1].tolist() == [4, -1, -1]
