@@ -202,6 +202,22 @@ def test_builder_end_to_end(tmp_path):
     }
 
 
+def test_builder_accepts_libritts_root_passthrough(tmp_path):
+    """The create_dataset stage passes the training config's libritts_root
+    (shared kwargs; other builders ignore it via **_) so the build root can
+    never drift from the dataloader's audio root."""
+    root, recipe = tmp_path / "LibriTTS", tmp_path / "recipe"
+    fabricate_corpus(root)
+    fabricate_recipe(recipe)
+    builder = LibriTTSBuilder()
+    assert builder.is_source_prepared(libritts_root=root)
+    builder.prepare_source(recipe_dir=recipe, libritts_root=root)
+    builder.build(recipe_dir=recipe, libritts_root=root, seed=0)
+    assert builder.is_built(recipe_dir=recipe)
+    train = read_window_manifest(recipe / "data/manifest/libritts_train.jsonl")
+    assert len(train) == 3
+
+
 def test_builder_requires_vocab(tmp_path):
     root, recipe = tmp_path / "LibriTTS", tmp_path / "recipe"
     fabricate_corpus(root)

@@ -46,9 +46,11 @@ mel_spec_type: vocos
 create_dataset:
   recipe_dir: ${recipe_dir}
   base_vocab_path: ${pretrained_dir}/vocab.txt
-  # Only CandorBuilder reads this (the other builders ignore it via **_); ties
-  # the transcode target to the single candor_flac_root above instead of
-  # letting it drift from dataset/config.yaml's own candor_builder.flac_dir.
+  # Per-corpus passthroughs (each read by exactly one builder, the others
+  # ignore them via **_): tie the stage's roots to the same keys the
+  # dataloader entries use instead of letting them drift from
+  # dataset/config.yaml's own libritts_builder/candor_builder values.
+  libritts_root: ${libritts_root}
   flac_dir: ${candor_flac_root}
 
 dataset:
