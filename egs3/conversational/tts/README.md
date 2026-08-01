@@ -318,6 +318,86 @@ Twelve summary keys, three per event type `e` in `{ipu, pause, gap, overlap}`:
 This family is the headline: it is what distinguishes a conversational model from N parallel TTS systems.
 Expected zero-gate pretrained signature: heavy unstructured overlap, few gaps, large W1 everywhere; fine-tuning should pull all twelve numbers toward the gt anchor's.
 
+## Evaluating on the CoVoMix2 test set
+
+The recipe can also generate from the public [CoVoMix2 dialogue test set](https://github.com/vivian556123/covomix2-dialogue-testset): 1000 written DailyDialog dialogues, each paired with two LibriSpeech `test-clean` acoustic prompts.
+This is a SECOND evaluation track, not a replacement for the SSSD one: it exists because its data points are clean and well defined (unambiguous per-turn references, no crosstalk, no spontaneous-speech transcription noise), which SSSD's overlapping conversational audio is not.
+
+```bash
+cd egs3/conversational/tts
+git clone https://github.com/vivian556123/covomix2-dialogue-testset downloads/covomix2-dialogue-testset
+# LibriSpeech test-clean is a separate dependency; the repo ships paths and
+# transcripts, never audio. On Delta it already exists:
+#   /work/hdd/bbjs/shared/corpora/librispeech/LibriSpeech
+
+python run.py --stages infer measure \
+    --inference_config conf/inference_covomix2.yaml \
+    --metrics_config   conf/metrics_covomix2.yaml
+```
+
+`mode: generate_external` dispatches to `src/external_inference.py` (via `ConversationalTTSSystem.infer`), a path entirely separate from `src/inference.py`.
+The SSSD modes are untouched by this feature, so the published `infer_generate*` numbers stay reproducible.
+Both configs must be passed to the `measure` invocation for the same overwrite-on-differ reason the `gt`/`resynth` anchors have (see above).
+
+### Duration is a reported hyperparameter here
+
+This test set ships no dialogue audio, so the generated duration cannot be measured - it must be predicted.
+That matters more than it sounds: total duration is the ONLY timing signal this model ever receives, since the masking scheme encodes turn order and never a timestamp.
+
+The estimator is F5-TTS's own rule (`utils_infer.py`: seconds-per-character measured on the reference, scaled by the generated text length), applied per speaker rather than averaged, and corrected toward the conversational target domain:
+
+```
+total_sec = Σ_spk chars_spk × (prompt_sec_spk / prompt_chars_spk) × scale / speed
+scale     = (SSSD articulation / LibriSpeech articulation) / SSSD density
+          = (0.0735 / 0.0690) / 0.954 = 1.117
+```
+
+All three constants are measured, not guessed, and are documented with their populations in `src/external_testset.py`.
+As a cross-check, `0.0690 × 1.117 = 0.0771` s/char against `0.0776` s/char measured directly as median(window duration / chars) over the same SSSD windows - two independent routes agreeing to 0.7%.
+Every meta JSON records the policy that produced it under `duration`, so a results table can never be read without it.
+
+Accuracy is bounded: predicting duration from character count carries 14.7% median relative error and 37.8% at p90, measured over the 49,179 two-speaker SSSD training windows.
+Most of that spread comes from speech DENSITY (the conversational silence-and-overlap budget), which a read-speech prompt carries no information about, so it is not reducible by a better rate estimate alone.
+
+### How to read the results
+
+- `wer_channel` / `wer_mix`, `sim_o_mean`, `utmos_*`: read directly. SIM-o is already prompt-referenced (it embeds `channels[k].prompt_wav` against `channels[k].gen_wav`), so it needs no ground truth.
+- Interaction keys: DURATION-CONDITIONED. A window predicted too long gets filled with silence, which moves pause and gap rates independently of the model. Sweep `duration.speed` at 0.9 / 1.0 / 1.1 and report the sensitivity rather than quoting a single number. Turn-taking is evaluated on the SSSD split, which has real turn times and a `gt` anchor.
+- There is no `gt` or `resynth` anchor here and no `gt/` output directory: this test set has no reference audio. `conf/metrics_covomix2.yaml` therefore uses `NoReferenceInteractionMetric`, a subclass that supplies an empty ground-truth event set so every `*_dur_w1` key returns `null` instead of raising. The shared `InteractionMetric` is left byte-identical.
+
+### What this does and does not buy
+
+It does NOT by itself make the numbers comparable to CoVoMix2's published table.
+That repo ships the STIMULI, not the SCORER: their SA-WER and diarization run through the Microsoft Fast Transcription API with WavLM-TDNN for SIM, so a Whisper + WavLM-SV score over the same prompts is a different measurement.
+Re-running their baselines locally closes the gap only partway - MoonCast and Sesame are open, but CoVoMix v1 states outright that trained models will not be released and CoVoMix2 has published only `covomix2-dataprep` and this test set, no weights.
+Quote their row as reported, never as reproduced.
+
+Two conditions change relative to the SSSD track, so a drop is not necessarily a regression:
+
+- SIM will fall. The SSSD prompts are turn-concatenated from the SAME session; LibriSpeech read-speech prompts into a spontaneous-finetuned model is a far harder zero-shot condition.
+- UTMOS is corpus-confounded. SSSD ground truth scores 2.21 because it is real spontaneous speech, while CoVoMix2 reports 3.10 on LibriSpeech-prompted DailyDialog. Those numbers must never be placed side by side.
+
+### Measured coverage
+
+Dialogues whose PREDICTED duration exceeds `selection.max_duration` (60 s, the training `window_max`) are excluded and the count is logged.
+Running the shipped loader and estimator over all 1000 dialogues, against the real extended vocab and the real LibriSpeech prompt durations (`scale: 1.117`, `speed: 1.0`):
+
+| | |
+|---|---|
+| dialogues loaded without a normalization failure | 1000 / 1000 |
+| predicted duration | p10 10.7 s, median 29.8 s, p90 75.3 s, max 203.7 s |
+| kept at `max_duration: 60` | **819 / 1000** |
+| kept at `max_duration: 45` | 699 / 1000 |
+| kept at `max_duration: 30` | 504 / 1000 |
+| characters after normalization | median 358, max 2022 |
+| turns per dialogue | median 7, max 26 |
+
+Every dialogue survives normalization against the extended vocab, and the F5 tokenizer's non-single-character guard never fires, so the whole set is loadable before any GPU time is spent.
+Report the kept count alongside any result: 819 of 1000 is not "the CoVoMix2 test set", and the excluded 181 are the LONG dialogues specifically, so the reported subset is biased short.
+
+One dialogue is extremely one-sided (per-channel character balance 0.05, against a median of 0.69), which makes its channel-1 reference text nearly empty.
+That is a property of DailyDialog, not a bug, but it is worth remembering when reading per-channel WER on small samples.
+
 ### Deferred to the next PR
 
 The following were cut in the 2026-07-15 PR #10 review to keep the battery lean and easy to review; they may return in a later PR:

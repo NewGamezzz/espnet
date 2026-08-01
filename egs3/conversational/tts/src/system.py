@@ -28,6 +28,11 @@ from espnet3.systems.base.system import BaseSystem
 
 logger = logging.getLogger(__name__)
 
+# ``src.external_inference.MODE``, duplicated as a literal so dispatching on
+# it never imports that module during an SSSD run. Pinned equal by
+# ``tests/test_external_testset.py::test_system_dispatch_literal_matches_mode``.
+EXTERNAL_MODE = "generate_external"
+
 
 class ConversationalTTSSystem(BaseSystem):
     """System with ``create_dataset`` (inherited SSSD builder), ``train``, a
@@ -37,15 +42,34 @@ class ConversationalTTSSystem(BaseSystem):
     whatever ``infer`` wrote, so no recipe-local override is needed here)."""
 
     def infer(self, *args, **kwargs):
-        """Run the multi-channel infer stage (``src/inference.py``)."""
-        self._reject_stage_args("infer", args, kwargs)
-        from egs3.conversational.tts.src.inference import run_inference
+        """Run the multi-channel infer stage.
 
+        ``mode`` selects the implementation: the SSSD modes (generate / gt /
+        resynth) go to ``src/inference.py`` exactly as before, and the
+        audio-free external test set goes to ``src/external_inference.py``.
+        The dispatch is additive and mode-gated - the SSSD path's behaviour
+        is unchanged for every pre-existing config.
+        """
+        self._reject_stage_args("infer", args, kwargs)
+        mode = getattr(self.inference_config, "mode", None)
         logger.info(
             "Inference start | inference_dir=%s mode=%s",
             getattr(self.inference_config, "inference_dir", None),
-            getattr(self.inference_config, "mode", None),
+            mode,
         )
+        # Compared as a literal, NOT imported from external_inference: an
+        # import here would pull that module (and its dependencies) into
+        # every SSSD run too. tests/test_external_testset.py pins the
+        # literal against external_inference.MODE so the two cannot drift.
+        if mode == EXTERNAL_MODE:
+            from egs3.conversational.tts.src.external_inference import (
+                run_external_inference,
+            )
+
+            return run_external_inference(self.inference_config)
+
+        from egs3.conversational.tts.src.inference import run_inference
+
         return run_inference(self.inference_config)
 
     def _ensure_directories(self) -> None:
