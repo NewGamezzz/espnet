@@ -36,6 +36,11 @@ mel_spec_type: vocos
 create_dataset:
   recipe_dir: ${recipe_dir}
   base_vocab_path: ${pretrained_dir}/vocab.txt
+  # Only LibriTTSBuilder reads this (the other builders ignore it via **_);
+  # ties the build root to the same libritts_root the dataloader entries use,
+  # instead of letting it drift from dataset/config.yaml's own
+  # libritts_builder.dataset_root.
+  libritts_root: ${libritts_root}
 
 dataset:
   _target_: espnet3.components.data.data_organizer.DataOrganizer

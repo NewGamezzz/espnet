@@ -40,7 +40,13 @@ _CFG, _SSSD_CFG = _load_configs()
 
 def resolve_libritts_root(explicit: str | Path | None = None) -> Path:
     """Corpus root resolution: explicit argument > ``$LIBRITTS_ROOT`` >
-    ``libritts_builder.dataset_root`` in config.yaml."""
+    ``libritts_builder.dataset_root`` in config.yaml.
+
+    The create_dataset stage passes the training config's ``libritts_root``
+    as the explicit argument (see ``conf/training_mixed.yaml``), so the root
+    the manifests are built against can never drift from the root the
+    dataloader opens audio under.
+    """
     if explicit is not None:
         return Path(explicit)
     if os.environ.get("LIBRITTS_ROOT"):
@@ -55,9 +61,10 @@ class LibriTTSBuilder(DatasetBuilder):
         self,
         recipe_dir: str | Path | None = None,
         dataset_root: str | Path | None = None,
+        libritts_root: str | Path | None = None,
         **_,
     ) -> bool:
-        root = resolve_libritts_root(dataset_root)
+        root = resolve_libritts_root(dataset_root or libritts_root)
         subsets = list(_CFG["train_subsets"]) + [_CFG["valid_subset"]]
         return all((root / subset).is_dir() for subset in subsets)
 
@@ -65,10 +72,13 @@ class LibriTTSBuilder(DatasetBuilder):
         self,
         recipe_dir: str | Path | None = None,
         dataset_root: str | Path | None = None,
+        libritts_root: str | Path | None = None,
         **_,
     ) -> None:
-        if not self.is_source_prepared(dataset_root=dataset_root):
-            root = resolve_libritts_root(dataset_root)
+        if not self.is_source_prepared(
+            dataset_root=dataset_root, libritts_root=libritts_root
+        ):
+            root = resolve_libritts_root(dataset_root or libritts_root)
             raise RuntimeError(
                 f"LibriTTS corpus not found at {root}. The corpus is externally "
                 "provisioned and read-only; point dataset_root (config), "
@@ -87,10 +97,11 @@ class LibriTTSBuilder(DatasetBuilder):
         self,
         recipe_dir: str | Path,
         dataset_root: str | Path | None = None,
+        libritts_root: str | Path | None = None,
         seed: int | None = None,
         **_,
     ) -> None:
-        root = resolve_libritts_root(dataset_root)
+        root = resolve_libritts_root(dataset_root or libritts_root)
         seed = int(seed if seed is not None else _CFG["seed"])
         data_dir = Path(recipe_dir).resolve() / _SSSD_CFG["data_path"]
 
