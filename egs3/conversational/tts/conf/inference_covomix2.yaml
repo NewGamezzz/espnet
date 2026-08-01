@@ -15,6 +15,21 @@
 # This config never touches the SSSD infer path: `mode: generate_external`
 # dispatches to a separate implementation, and conf/inference_conversational
 # .yaml is left alone so the existing infer_generate* runs stay reproducible.
+#
+# RUNTIME BUDGET (default = all 1000 dialogues, nothing filtered)
+# ---------------------------------------------------------------
+# Total predicted audio is 9.7 h (mean 35.0 s/dialogue).  The measured
+# effective RTF of the SSSD infer_generate_cfg3_finetune23k run was 1.45
+# (median per-window 1.34, max 4.39) on one A100, and RTF grows with length
+# because attention is quadratic in frames:
+#
+#   ~14 h on one GPU at RTF 1.45, ~19-24 h once the long tail is priced in.
+#
+# The 159 dialogues over 60 s are 16% of the count but 37% of the audio and
+# a larger share of the compute again.  The infer stage is single-GPU and
+# sequential, so budget one long job (gpuA100x4 allows 2-00:00:00) rather
+# than the 8 h chunks training uses.  For a smoke test set
+# `selection.num_dialogues` to something small and SAY SO when reporting.
 
 training_config: conf/training_poc.yaml
 exp_tag: eval_covomix2
@@ -59,20 +74,35 @@ duration:
   speed: 1.0
 
 selection:
-  # Dialogues whose PREDICTED duration exceeds the training window_max fall
-  # outside the fine-tuning regime (and F5's pretraining regime).  Excluded
-  # dialogues are counted and logged, never silently dropped.
+  # DEFAULT IS FULL COVERAGE: null/null generates all 1000 dialogues, so a
+  # result on this config is "the CoVoMix2 test set" with no subsetting
+  # caveat attached.
   #
   # Measured over all 1000 dialogues with the real vocab and real LibriSpeech
-  # prompt durations at scale 1.117 (predicted duration: median 29.8 s,
-  # p90 75.3 s, max 203.7 s):
-  #   max_duration 60 -> 819/1000 kept
-  #   max_duration 45 -> 699/1000
-  #   max_duration 30 -> 504/1000
-  # The excluded ones are the LONG dialogues specifically, so the reported
-  # subset is biased short - always publish the kept count with the result.
+  # prompt durations at scale 1.117, the predicted duration runs p10 10.7 s,
+  # median 29.8 s, p90 75.3 s, max 203.7 s.  Setting max_duration would keep:
+  #   60 s (the training window_max) -> 819/1000
+  #   45 s                           -> 699/1000
+  #   30 s                           -> 504/1000
+  # Excluded dialogues are counted and logged, never silently dropped, and
+  # since the excluded ones are the LONG ones specifically, any band makes
+  # the reported subset biased short.  That bias is the reason the default
+  # is full coverage.
+  #
+  # THE COST OF FULL COVERAGE - two things to know when reading the results:
+  #
+  # 1. Out of regime.  181 dialogues exceed the 60 s training window_max and
+  #    the longest is 203.7 s, 3.4x beyond it and well past F5's own
+  #    pretraining regime.  Rotary position extrapolation that far has never
+  #    been validated for this model, so degradation on the tail is expected
+  #    and is a property of the length, not of the fine-tuning.  Report the
+  #    metrics stratified by predicted duration (<=60 s vs beyond) so the
+  #    in-regime number stays readable next to the full-coverage one.
+  # 2. Runtime.  Attention is quadratic in frames, so the tail is far more
+  #    expensive than its share of the count.  See the header of this file
+  #    for the measured budget.
   min_duration: null
-  max_duration: 60.0
+  max_duration: null
   # null -> every dialogue that passes the band.
   #
   # Default to the full in-band set, NOT a 50-window sample: the SSSD runs

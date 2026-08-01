@@ -377,26 +377,33 @@ Two conditions change relative to the SSSD track, so a drop is not necessarily a
 - SIM will fall. The SSSD prompts are turn-concatenated from the SAME session; LibriSpeech read-speech prompts into a spontaneous-finetuned model is a far harder zero-shot condition.
 - UTMOS is corpus-confounded. SSSD ground truth scores 2.21 because it is real spontaneous speech, while CoVoMix2 reports 3.10 on LibriSpeech-prompted DailyDialog. Those numbers must never be placed side by side.
 
-### Measured coverage
+### Coverage and cost
 
-Dialogues whose PREDICTED duration exceeds `selection.max_duration` (60 s, the training `window_max`) are excluded and the count is logged.
-Running the shipped loader and estimator over all 1000 dialogues, against the real extended vocab and the real LibriSpeech prompt durations (`scale: 1.117`, `speed: 1.0`):
+**The default config generates all 1000 dialogues**, with no duration band and no subsampling, so a result on it is "the CoVoMix2 test set" with no subsetting caveat attached.
+
+Running the shipped loader and estimator over all 1000, against the real extended vocab and the real LibriSpeech prompt durations (`scale: 1.117`, `speed: 1.0`):
 
 | | |
 |---|---|
 | dialogues loaded without a normalization failure | 1000 / 1000 |
 | predicted duration | p10 10.7 s, median 29.8 s, p90 75.3 s, max 203.7 s |
-| kept at `max_duration: 60` | **819 / 1000** |
-| kept at `max_duration: 45` | 699 / 1000 |
-| kept at `max_duration: 30` | 504 / 1000 |
+| total predicted audio | 9.7 h (mean 35.0 s/dialogue) |
 | characters after normalization | median 358, max 2022 |
 | turns per dialogue | median 7, max 26 |
 
 Every dialogue survives normalization against the extended vocab, and the F5 tokenizer's non-single-character guard never fires, so the whole set is loadable before any GPU time is spent.
-Report the kept count alongside any result: 819 of 1000 is not "the CoVoMix2 test set", and the excluded 181 are the LONG dialogues specifically, so the reported subset is biased short.
+
+`selection.max_duration` is still available and would keep 819/1000 at 60 s, 699 at 45 s, 504 at 30 s.
+It defaults to `null` because the dialogues a band removes are the LONG ones specifically, which makes any banded subset biased short.
+
+Full coverage costs two things, both worth stating with the results.
+
+**Runtime.** The infer stage is single-GPU and sequential. At the SSSD run's measured effective RTF of 1.45 (median per-window 1.34, max 4.39 on one A100), 9.7 h of audio is roughly 14 h of wall clock, and 19-24 h once the long tail is priced in, since attention is quadratic in frames. Budget one long job - `gpuA100x4` allows `2-00:00:00` - rather than the 8 h chunks training uses. The 159 dialogues over 60 s are 16% of the count but 37% of the audio and a larger share of the compute again.
+
+**Regime.** 181 dialogues exceed the 60 s training `window_max`, and the longest is 203.7 s, 3.4x beyond it and well past F5's own pretraining regime. Rotary position extrapolation that far has never been validated for this model, so degradation on the tail should be expected as a property of the length rather than of the fine-tuning. Report the metrics **stratified by predicted duration** (<=60 s vs beyond) so the in-regime number stays readable next to the full-coverage one; every meta JSON carries `duration.predicted_sec`, so the split is a post-hoc filter over `meta.scp` and needs no second inference run.
 
 One dialogue is extremely one-sided (per-channel character balance 0.05, against a median of 0.69), which makes its channel-1 reference text nearly empty.
-That is a property of DailyDialog, not a bug, but it is worth remembering when reading per-channel WER on small samples.
+That is a property of DailyDialog, not a bug, but it is worth remembering when reading per-channel WER.
 
 ### Deferred to the next PR
 
