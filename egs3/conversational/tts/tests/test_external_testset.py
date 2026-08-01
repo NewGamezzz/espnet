@@ -37,6 +37,7 @@ from egs3.conversational.tts.src.external_inference import (
 )
 from egs3.conversational.tts.src.external_testset import (
     DEFAULT_DURATION_SCALE,
+    assign_shard,
     ExternalPrompt,
     ExternalRecord,
     _read_turns,
@@ -166,7 +167,7 @@ class TestSelection:
             self._records(4), durations, OmegaConf.create({"max_duration": 60.0})
         )
         assert got == [0, 1]
-        assert counts == {"n_out_of_band": 2, "n_not_sampled": 0}
+        assert counts == {"n_out_of_band": 2, "n_not_sampled": 0, "n_other_shards": 0}
 
     def test_min_and_max_both_applied(self):
         durations = [5.0, 20.0, 90.0]
@@ -187,7 +188,7 @@ class TestSelection:
         assert len(first) == 5
         assert first == sorted(first)
         # Not-sampled is NOT a failure count.
-        assert counts == {"n_out_of_band": 0, "n_not_sampled": 15}
+        assert counts == {"n_out_of_band": 0, "n_not_sampled": 15, "n_other_shards": 0}
 
     def test_band_and_subsample_counted_separately(self):
         # The two exclusion reasons mean opposite things; a single "skipped"
@@ -199,13 +200,13 @@ class TestSelection:
             OmegaConf.create({"max_duration": 16.5, "num_dialogues": 4, "seed": 0}),
         )
         assert len(got) == 4
-        assert counts == {"n_out_of_band": 3, "n_not_sampled": 13}
+        assert counts == {"n_out_of_band": 3, "n_not_sampled": 13, "n_other_shards": 0}
 
     def test_no_limits_keeps_everything(self):
         durations = [1.0, 2.0, 3.0]
         got, counts = select_records(self._records(3), durations, OmegaConf.create({}))
         assert got == [0, 1, 2]
-        assert counts == {"n_out_of_band": 0, "n_not_sampled": 0}
+        assert counts == {"n_out_of_band": 0, "n_not_sampled": 0, "n_other_shards": 0}
 
 
 # --------------------------------------------------------------------------- #
@@ -372,7 +373,12 @@ class TestExternalInfer:
         self, testset, tiny_model, tmp_path
     ):
         test_dir, stats, _ = self._run(testset, tiny_model, tmp_path / "infer")
-        assert stats == {"n_selected": 2, "n_skipped": 0, "n_not_sampled": 0}
+        assert stats == {
+            "n_selected": 2,
+            "n_skipped": 0,
+            "n_not_sampled": 0,
+            "n_other_shards": 0,
+        }
 
         assert (test_dir / "meta.scp").read_text("utf-8").splitlines() == [
             "000 meta/000.json",
@@ -628,3 +634,152 @@ def test_system_dispatch_literal_matches_mode():
     from egs3.conversational.tts.src.system import EXTERNAL_MODE
 
     assert EXTERNAL_MODE == MODE
+
+
+# --------------------------------------------------------------------------- #
+# Sharding
+# --------------------------------------------------------------------------- #
+class TestAssignShard:
+    def test_shards_partition_the_input_exactly(self):
+        durations = [float(i % 7 + 1) for i in range(50)]
+        indices = list(range(50))
+        union = []
+        for s in range(4):
+            union.extend(assign_shard(indices, durations, s, 4))
+        # Exact partition: every dialogue generated once and only once.
+        # Overlap would double-count in every pooled metric; a gap would
+        # silently shrink the evaluated set.
+        assert sorted(union) == indices
+
+    def test_single_shard_is_the_identity(self):
+        indices = [3, 1, 4, 1, 5]
+        assert assign_shard(indices, [1.0] * 10, 0, 1) == indices
+
+    def test_output_is_sorted_and_deterministic(self):
+        durations = [float((i * 37) % 91) for i in range(60)]
+        first = assign_shard(list(range(60)), durations, 2, 5)
+        second = assign_shard(list(range(60)), durations, 2, 5)
+        assert first == second == sorted(first)
+
+    def test_long_tail_is_spread_not_concentrated(self):
+        # Four very long dialogues among many short ones. Striping by
+        # index % 4 would put all four (indices 0, 4, 8, 12) in shard 0;
+        # length balancing must not.
+        durations = [200.0 if i % 4 == 0 and i < 16 else 5.0 for i in range(40)]
+        loads = [
+            sum(durations[i] for i in assign_shard(list(range(40)), durations, s, 4))
+            for s in range(4)
+        ]
+        assert max(loads) / min(loads) < 1.2
+        striped = sum(durations[i] for i in range(40) if i % 4 == 0)
+        assert max(loads) < striped  # strictly better than striping
+
+    def test_balanced_within_a_modest_factor_on_skewed_lengths(self):
+        # Shape of the real set: a heavy tail carrying much of the audio.
+        durations = [200.0] * 16 + [30.0] * 84
+        loads = [
+            sum(durations[i] for i in assign_shard(list(range(100)), durations, s, 4))
+            for s in range(4)
+        ]
+        assert max(loads) / min(loads) < 1.1
+
+    def test_invalid_shard_spec_raises(self):
+        with pytest.raises(ValueError, match="shard_count"):
+            assign_shard([0], [1.0], 0, 0)
+        with pytest.raises(ValueError, match="shard_index"):
+            assign_shard([0], [1.0], 4, 4)
+
+
+class TestShardedSelection:
+    def test_sharding_applies_after_band_and_subsample(self):
+        durations = [float(i) for i in range(20)]  # 17,18,19 out of band
+        base = OmegaConf.create({"max_duration": 16.5, "num_dialogues": 8, "seed": 0})
+        unsharded, _ = select_records(
+            [_record(["abc"], ["abc", "de"])] * 20, durations, base
+        )
+        union = []
+        for s in range(3):
+            cfg = OmegaConf.create({**base, "shard_index": s, "shard_count": 3})
+            got, counts = select_records(
+                [_record(["abc"], ["abc", "de"])] * 20, durations, cfg
+            )
+            union.extend(got)
+            assert counts["n_out_of_band"] == 3
+            assert counts["n_not_sampled"] == 9
+            assert counts["n_other_shards"] == 8 - len(got)
+        # The union of all shards is EXACTLY the unsharded selection.
+        assert sorted(union) == unsharded
+
+
+class TestShardedInfer:
+    def _cfg(self, testset, inference_dir, shard_index, shard_count):
+        return _external_config(
+            testset,
+            inference_dir,
+            selection={
+                "min_duration": None,
+                "max_duration": None,
+                "num_dialogues": None,
+                "seed": 0,
+                "shard_index": shard_index,
+                "shard_count": shard_count,
+            },
+        )
+
+    def _run_shard(self, testset, tiny_model, inference_dir, index, count):
+        return run_external_inference(
+            self._cfg(testset, inference_dir, index, count),
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+        )
+
+    def test_shards_write_own_scps_and_merge_to_the_full_set(
+        self, testset, tiny_model, tmp_path
+    ):
+        from egs3.conversational.tts.local.merge_shards import merge
+
+        inference_dir = tmp_path / "infer"
+        for s in range(2):
+            self._run_shard(testset, tiny_model, inference_dir, s, 2)
+
+        test_dir = inference_dir / "valid"
+        # Each shard wrote its own SCP; no plain meta.scp exists yet.
+        assert not (test_dir / "meta.scp").exists()
+        assert (test_dir / "meta.scp.0of2").is_file()
+        assert (test_dir / "meta.scp.1of2").is_file()
+
+        written = merge(test_dir)
+        assert written["meta"] == 2  # the fixture has two dialogues
+        ids = [
+            line.split(" ", 1)[0]
+            for line in (test_dir / "meta.scp").read_text("utf-8").splitlines()
+        ]
+        assert sorted(ids) == ["000", "001"]
+
+    def test_merge_refuses_a_partial_run(self, testset, tiny_model, tmp_path):
+        from egs3.conversational.tts.local.merge_shards import merge
+
+        inference_dir = tmp_path / "infer"
+        self._run_shard(testset, tiny_model, inference_dir, 0, 2)  # shard 1 absent
+
+        # A silently short meta.scp would score a subset while looking like a
+        # complete run - the exact failure this recipe tries not to have.
+        with pytest.raises(SystemExit, match="Refusing to write a partial merge"):
+            merge(inference_dir / "valid")
+        assert not (inference_dir / "valid" / "meta.scp").exists()
+
+    def test_merge_allows_partial_when_asked(self, testset, tiny_model, tmp_path):
+        from egs3.conversational.tts.local.merge_shards import merge
+
+        inference_dir = tmp_path / "infer"
+        self._run_shard(testset, tiny_model, inference_dir, 0, 2)
+        written = merge(inference_dir / "valid", allow_partial=True)
+        assert written["meta"] >= 1
+
+    def test_unsharded_run_writes_plain_names(self, testset, tiny_model, tmp_path):
+        inference_dir = tmp_path / "infer"
+        self._run_shard(testset, tiny_model, inference_dir, 0, 1)
+        test_dir = inference_dir / "valid"
+        assert (test_dir / "meta.scp").is_file()
+        assert not list(test_dir.glob("meta.scp.*"))

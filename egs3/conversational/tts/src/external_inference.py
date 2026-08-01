@@ -195,14 +195,17 @@ def run_external_inference(
         estimate_duration_sec(r, secs, duration_scale=duration_scale, speed=speed)
         for r, secs in zip(records, prompt_secs)
     ]
+    shard_count = int(cfg.selection.get("shard_count", 1) or 1)
+    shard_index = int(cfg.selection.get("shard_index", 0) or 0)
     indices, exclusions = select_records(records, predicted, cfg.selection)
     logger.info(
-        "external infer selection: %d/%d dialogues "
-        "(%d out of duration band, %d not sampled; scale=%.4f, speed=%.3f)",
+        "external infer selection: %d/%d dialogues (%d out of duration band, "
+        "%d not sampled, %d other shards; scale=%.4f, speed=%.3f)",
         len(indices),
         len(records),
         exclusions["n_out_of_band"],
         exclusions["n_not_sampled"],
+        exclusions["n_other_shards"],
         duration_scale,
         speed,
     )
@@ -337,18 +340,40 @@ def run_external_inference(
         )
         meta_lines.append(f"{wid} {meta_rel}")
 
-    _write_scp(test_dir / "meta.scp", meta_lines)
-    _write_scp(test_dir / "wav.scp", wav_lines)
-    _write_scp(test_dir / "prompt.scp", prompt_lines)
-    _write_scp(test_dir / "text.scp", text_lines)
-    _write_scp(test_dir / "mix.scp", mix_lines)
+    # Shards share the wav/prompt/mix/meta subdirectories safely - every
+    # filename is keyed by the unique dialogue id - but each writes its OWN
+    # SCPs, because an SCP is written wholesale and siblings would clobber
+    # each other. `local/merge_shards.py` concatenates them once every shard
+    # has finished; an unsharded run writes the plain names directly and
+    # needs no merge.
+    suffix = "" if shard_count == 1 else f".{shard_index}of{shard_count}"
+    for name, lines in (
+        ("meta", meta_lines),
+        ("wav", wav_lines),
+        ("prompt", prompt_lines),
+        ("text", text_lines),
+        ("mix", mix_lines),
+    ):
+        _write_scp(test_dir / f"{name}.scp{suffix}", lines)
 
-    logger.info("external infer done: %d generated -> %s", len(meta_lines), test_dir)
-    # n_skipped keeps the SSSD path's meaning - "could not be generated" -
-    # so it counts ONLY out-of-band dialogues; deliberately not-sampled ones
-    # are reported separately and never inflate a failure-shaped number.
+    logger.info(
+        "external infer done: %d generated -> %s%s",
+        len(meta_lines),
+        test_dir,
+        (
+            ""
+            if shard_count == 1
+            else f" (shard {shard_index}/{shard_count}; run "
+            f"local/merge_shards.py {test_dir} when all shards are done)"
+        ),
+    )
+    # n_skipped keeps the SSSD path's meaning - "could not be generated" - so
+    # it counts ONLY out-of-band dialogues; not-sampled and other-shard
+    # dialogues are reported separately and never inflate a failure-shaped
+    # number.
     return {
         "n_selected": len(meta_lines),
         "n_skipped": exclusions["n_out_of_band"],
         "n_not_sampled": exclusions["n_not_sampled"],
+        "n_other_shards": exclusions["n_other_shards"],
     }

@@ -113,6 +113,27 @@ selection:
   num_dialogues: null
   seed: 0
 
+  # Sharding, for splitting the ~14-24 h single-GPU run across parallel jobs
+  # or across the GPUs of one node.  Applied LAST, after the band and the
+  # subsample, so every shard sees the same population and the union of all
+  # shards is exactly the unsharded selection.
+  #
+  # Assignment is greedy longest-processing-time on predicted duration, not
+  # striping: the length distribution is skewed enough (159 dialogues over
+  # 60 s carry 37% of the audio) that a stripe can hand one shard most of
+  # the tail and that shard becomes the wall clock.  Every shard computes
+  # the same split independently - no coordination, no shared state.
+  #
+  # Each shard writes its own `<name>.scp.<i>of<n>` and shares the
+  # wav/prompt/mix/meta directories (filenames are keyed by dialogue id).
+  # When every shard is done:
+  #     python local/merge_shards.py <inference_dir>/<test_name>
+  # which refuses to write a partial merge unless --allow-partial is passed.
+  # Leave shard_count at 1 for a single run: the plain SCP names are written
+  # directly and no merge step is needed.
+  shard_index: 0
+  shard_count: 1
+
 sampling:
   steps: 32
   cfg_strength: 3.0
