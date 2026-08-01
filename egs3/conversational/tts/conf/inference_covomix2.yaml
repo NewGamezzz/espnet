@@ -18,12 +18,13 @@
 #
 # RUNTIME BUDGET (default = all 1000 dialogues, nothing filtered)
 # ---------------------------------------------------------------
-# Total predicted audio is 9.7 h (mean 35.0 s/dialogue).  The measured
+# Total predicted audio is 10.4 h (37,565 s, mean 37.6 s/dialogue), measured
+# by the shipped estimator over the real prompts - not extrapolated.  The measured
 # effective RTF of the SSSD infer_generate_cfg3_finetune23k run was 1.45
 # (median per-window 1.34, max 4.39) on one A100, and RTF grows with length
 # because attention is quadratic in frames:
 #
-#   ~14 h on one GPU at RTF 1.45, ~19-24 h once the long tail is priced in.
+#   ~15 h on one GPU at RTF 1.45, ~20-25 h once the long tail is priced in.
 #
 # The 159 dialogues over 60 s are 16% of the count but 37% of the audio and
 # a larger share of the compute again.  The infer stage is single-GPU and
@@ -113,8 +114,13 @@ selection:
   num_dialogues: null
   seed: 0
 
-  # Sharding, for splitting the ~14-24 h single-GPU run across parallel jobs
-  # or across the GPUs of one node.  Applied LAST, after the band and the
+  # Sharding, for splitting the ~15-25 h single-GPU run across parallel jobs
+  # or across the GPUs of one node.  Each shard is a separate process and
+  # pays the recipe's fixed startup cost (~12.5 min measured on Delta: pixi
+  # activation plus the espnet import off Lustre), so the useful shard count
+  # is lower than raw parallelism suggests - 4 shards spend ~50 min of
+  # aggregate overhead against ~20 h of work, 32 would spend over 6 h.
+  # Applied LAST, after the band and the
   # subsample, so every shard sees the same population and the union of all
   # shards is exactly the unsharded selection.
   #

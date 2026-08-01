@@ -387,7 +387,7 @@ Running the shipped loader and estimator over all 1000, against the real extende
 |---|---|
 | dialogues loaded without a normalization failure | 1000 / 1000 |
 | predicted duration | p10 10.7 s, median 29.8 s, p90 75.3 s, max 203.7 s |
-| total predicted audio | 9.7 h (mean 35.0 s/dialogue) |
+| total predicted audio | 10.4 h (37,565 s; mean 37.6 s/dialogue) |
 | characters after normalization | median 358, max 2022 |
 | turns per dialogue | median 7, max 26 |
 
@@ -400,7 +400,8 @@ Full coverage costs two things, both worth stating with the results.
 
 ### Sharding a long run
 
-`selection.shard_count` / `shard_index` split the selection across parallel jobs or across the GPUs of one node, so the ~14-24 h single-GPU run becomes ~4-6 h on four.
+`selection.shard_count` / `shard_index` split the selection across parallel jobs or across the GPUs of one node, so the ~15-25 h single-GPU run becomes ~4-7 h on four.
+Note that each shard is a separate process and pays the recipe's fixed startup cost (measured at ~12.5 min on Delta: pixi activation plus the espnet import off Lustre), so the useful shard count is lower than raw parallelism suggests - 4 shards spend ~50 min of aggregate overhead against ~20 h of work, while 32 would spend over 6 h.
 
 Sharding is applied last, after the band and the subsample, so every shard sees the same population and the union of all shards is exactly the unsharded selection.
 Assignment is greedy longest-processing-time on predicted duration rather than striping: the length distribution is skewed enough that `idx % shard_count` can hand one shard most of the tail, and that shard then becomes the wall clock.
@@ -417,7 +418,7 @@ It refuses to write a partial merge unless `--allow-partial` is passed, and fail
 A silently short `meta.scp` would score a subset while still looking like a complete run.
 An unsharded run (`shard_count: 1`, the default) writes the plain names directly and needs no merge.
 
-**Runtime.** The infer stage is single-GPU and sequential. At the SSSD run's measured effective RTF of 1.45 (median per-window 1.34, max 4.39 on one A100), 9.7 h of audio is roughly 14 h of wall clock, and 19-24 h once the long tail is priced in, since attention is quadratic in frames. Budget one long job - `gpuA100x4` allows `2-00:00:00` - rather than the 8 h chunks training uses. The 159 dialogues over 60 s are 16% of the count but 37% of the audio and a larger share of the compute again.
+**Runtime.** The infer stage is single-GPU and sequential. At the SSSD run's measured effective RTF of 1.45 (median per-window 1.34, max 4.39 on one A100), 10.4 h of audio is roughly 15 h of wall clock, and 20-25 h once the long tail is priced in, since attention is quadratic in frames. Budget one long job - `gpuA100x4` allows `2-00:00:00` - rather than the 8 h chunks training uses. The 159 dialogues over 60 s are 16% of the count but 37% of the audio and a larger share of the compute again.
 
 **Regime.** 181 dialogues exceed the 60 s training `window_max`, and the longest is 203.7 s, 3.4x beyond it and well past F5's own pretraining regime. Rotary position extrapolation that far has never been validated for this model, so degradation on the tail should be expected as a property of the length rather than of the fine-tuning. Report the metrics **stratified by predicted duration** (<=60 s vs beyond) so the in-regime number stays readable next to the full-coverage one; every meta JSON carries `duration.predicted_sec`, so the split is a post-hoc filter over `meta.scp` and needs no second inference run.
 

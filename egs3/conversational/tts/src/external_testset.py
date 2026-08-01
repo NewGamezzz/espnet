@@ -384,19 +384,27 @@ def select_records(
             selection.get("seed", 0),
         )
     n_sampled = len(eligible)
+    # Audio of the SELECTION, which is what a shard's share is a share OF.
+    # Measuring against the whole corpus instead would make a shard of a
+    # subsampled run look like a rounding error.
+    selected_sec = sum(durations[i] for i in eligible)
     shard_count = int(selection.get("shard_count", 1) or 1)
     shard_index = int(selection.get("shard_index", 0) or 0)
     eligible = assign_shard(eligible, durations, shard_index, shard_count)
     if shard_count > 1:
+        shard_sec = sum(durations[i] for i in eligible)
         logger.info(
-            "external test set: shard %d/%d takes %d of %d dialogues "
-            "(%.0f s of %.0f s predicted audio)",
+            "external test set: shard %d/%d takes %d of %d dialogues, "
+            "%.0f s of %.0f s selected predicted audio (%.0f%% - shards are "
+            "balanced on duration, so this is the load share, not the count "
+            "share)",
             shard_index,
             shard_count,
             len(eligible),
             n_sampled,
-            sum(durations[i] for i in eligible),
-            sum(durations[i] for i in range(len(durations))),
+            shard_sec,
+            selected_sec,
+            100.0 * shard_sec / selected_sec if selected_sec else 0.0,
         )
 
     return eligible, {
