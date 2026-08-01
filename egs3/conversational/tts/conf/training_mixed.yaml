@@ -1,4 +1,4 @@
-exp_tag: train_mixed_sssd_libritts
+exp_tag: train_mixed_sssd_libritts_candor
 
 num_device: 1
 num_nodes: 1
