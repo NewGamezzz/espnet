@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import os
+from concurrent.futures import ThreadPoolExecutor
 from importlib import resources
 from pathlib import Path
 
@@ -109,22 +110,34 @@ class LibriTTSBuilder(DatasetBuilder):
             ("train", list(_CFG["train_subsets"]), None),
             ("valid", [_CFG["valid_subset"]], float(_CFG["valid_hours"])),
         )
+        scan_workers = int(_CFG.get("scan_workers", 0)) or min(32, os.cpu_count() or 8)
         for split, subsets, hours_cap in splits:
+            entries = []
+            for subset in subsets:
+                entries.extend(scan_subset(root, subset))
+            # Header probes are tiny independent reads dominated by filesystem
+            # latency (hours if serial on a cold parallel filesystem); the
+            # thread pool keeps input order, so output stays deterministic.
+            with ThreadPoolExecutor(max_workers=scan_workers) as pool:
+                infos = list(
+                    pool.map(
+                        lambda entry: sf.info(str(root / entry.audio_relpath)),
+                        entries,
+                    )
+                )
             pairs = []  # (entry, duration)
             dropped_short = 0
-            for subset in subsets:
-                for entry in scan_subset(root, subset):
-                    info = sf.info(str(root / entry.audio_relpath))
-                    if info.samplerate != expected_rate:
-                        raise RuntimeError(
-                            f"{entry.audio_relpath}: sample rate "
-                            f"{info.samplerate} != expected {expected_rate}"
-                        )
-                    duration = info.frames / info.samplerate
-                    if duration < min_duration:
-                        dropped_short += 1
-                        continue
-                    pairs.append((entry, duration))
+            for entry, info in zip(entries, infos):
+                if info.samplerate != expected_rate:
+                    raise RuntimeError(
+                        f"{entry.audio_relpath}: sample rate "
+                        f"{info.samplerate} != expected {expected_rate}"
+                    )
+                duration = info.frames / info.samplerate
+                if duration < min_duration:
+                    dropped_short += 1
+                    continue
+                pairs.append((entry, duration))
             if hours_cap is not None:
                 pairs = subsample_to_hours(pairs, hours_cap, seed)
 
