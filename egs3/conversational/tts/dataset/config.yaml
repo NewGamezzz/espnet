@@ -101,17 +101,23 @@ candor_builder:
   # Resolution order at runtime: explicit argument > $CANDOR_ROOT > this value.
   dataset_root: /work/hdd/bbjs/shared/Candor
   manifests_subdir: Candor_lhotse/manifests
-  # Turn segmentation variant: cliffhanger (canonical) / audiophile / backbiter.
-  variant: cliffhanger
+  # Turn segmentation variant: cliffhanger / audiophile / backbiter.
+  # audiophile (silence-gap segmentation) chosen empirically 2026-08-01:
+  # cliffhanger sentence boundaries mostly have near-zero pauses, so with any
+  # merge_gap > 0 turns chain into unwindowable > window_max spans and ~75%
+  # of the timeline is dropped; audiophile + merge_gap 0.3 drops ~15%.
+  variant: audiophile
   # One-time mp3 -> FLAC transcode target (libsndfile in the training envs has
   # no MPEG support; mp3 also lacks sample-accurate seeks). ~240 GB for 942 h.
   # Resolution order: explicit argument > $CANDOR_FLAC_DIR > this value.
   flac_dir: /work/hdd/bbjs/ttrachu/dataset/candor_flac
   ffmpeg: ffmpeg
   transcode_workers: 16
-  # Windowing knobs: same VALUES as the SSSD builder section, own keys so the
-  # corpora can diverge later without touching each other.
-  merge_gap: 1.0
+  # Windowing knobs: same VALUES as the SSSD builder section except merge_gap
+  # (0.3 so window cuts fall in real >= 0.3s silences; audiophile segments are
+  # silence-delimited, and 1.0 chains them across the other channel's
+  # backchannels into oversized spans - see the variant note above).
+  merge_gap: 0.3
   window_min: 10.0
   window_max: 60.0
   boundary_guard: 0.0

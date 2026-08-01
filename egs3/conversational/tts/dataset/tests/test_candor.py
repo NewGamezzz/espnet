@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from egs3.conversational.tts.dataset.candor_builder import CandorBuilder
+from egs3.conversational.tts.dataset.candor_builder import _CFG, CandorBuilder
 from egs3.conversational.tts.dataset.dataset import (
     ConversationDataset,
     read_window_manifest,
@@ -44,15 +44,14 @@ def write_candor_manifests(
                 )
                 + "\n"
             )
-    with gzip.open(
-        manifest_dir / "candor_supervisions_cliffhanger.jsonl.gz", "wt"
-    ) as f:
+    variant = _CFG["variant"]
+    with gzip.open(manifest_dir / f"candor_supervisions_{variant}.jsonl.gz", "wt") as f:
         for cid, (_duration, sups) in sorted(sessions.items()):
             for i, sup in enumerate(sups):
                 f.write(
                     json.dumps(
                         {
-                            "id": f"{cid}-cliffhanger-{i:05d}-{sup['channel']}",
+                            "id": f"{cid}-{variant}-{i:05d}-{sup['channel']}",
                             "recording_id": cid,
                             "language": "English",
                             **sup,
