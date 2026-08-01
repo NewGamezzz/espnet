@@ -1,0 +1,60 @@
+##########################################################
+#  Conversational F5 - measure the CoVoMix2 test-set run  #
+##########################################################
+# Same battery and same backends as conf/metrics.yaml - every metric class
+# iterates `meta.scp` only, and the external infer stage writes the identical
+# meta contract, so nothing metric-side is special-cased here.  This file
+# exists to carry the matching `mode`, because run_utils propagates
+# inference_config's resolved `inference_dir` over this config's own
+# (overwrite-on-differ, see conf/metrics.yaml's header): scoring the external
+# run therefore requires passing BOTH matching configs:
+#
+#   python run.py --stages measure \
+#       --inference_config conf/inference_covomix2.yaml \
+#       --metrics_config conf/metrics_covomix2.yaml
+#
+# HOW TO READ THE RESULTS
+# -----------------------
+# This test set has no reference audio, so there is no ground-truth or
+# resynth anchor row here - run those on the SSSD split.
+#
+#   * wer_channel / wer_mix, sim_o_mean, utmos_* : read directly.  SIM-o is
+#     already prompt-referenced (it embeds channels[k].prompt_wav against
+#     channels[k].gen_wav), so it needs no ground truth.
+#   * InteractionMetric (ipu/pause/gap/overlap)  : DURATION-CONDITIONED.
+#     Total duration is the only timing signal the model receives, so a
+#     window predicted too long gets filled with silence, which moves pause
+#     and gap rates independently of the model.  It is kept in the battery to
+#     be swept (duration.speed 0.9/1.0/1.1) and reported WITH its duration
+#     policy, never quoted as a standalone model property.  Turn-taking is
+#     evaluated on the SSSD split, which has real turn times and a GT row.
+mode: generate_external
+inference_dir: ${exp_dir}/infer_${mode}
+
+dataset:
+  test:
+    - name: valid
+
+metrics:
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.asr.ConversationASRMetric
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.speaker.SpeakerSimilarityMetric
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.quality.QualityMetric
+    inputs:
+      meta: meta
+  # NoReference variant, not the shared InteractionMetric: this test set
+  # writes no gt_wav, and the parent scores every window twice (gen and gt)
+  # to compute its *_dur_w1 Wasserstein keys. The subclass supplies an empty
+  # ground-truth event set, so the count/duration keys are computed normally
+  # and every *_dur_w1 key comes back null instead of raising.
+  - metric:
+      _target_: >-
+        egs3.conversational.tts.src.metrics.interaction_no_reference.NoReferenceInteractionMetric
+    inputs:
+      meta: meta

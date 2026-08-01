@@ -47,6 +47,11 @@ _CANONICAL_ORDER = [
     "SpeakerSimilarityMetric",
     "QualityMetric",
     "InteractionMetric",
+    # External (audio-free) test-set runs emit this subclass instead of
+    # InteractionMetric, so it gets the adjacent slot rather than being
+    # appended alphabetically. Listing it changes nothing for existing
+    # metrics.json files, which never contain the name.
+    "NoReferenceInteractionMetric",
 ]
 
 # Declared order of the lean battery's summary keys (README.md's Metric
