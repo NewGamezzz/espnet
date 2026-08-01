@@ -1,0 +1,90 @@
+##########################################################
+#   Conversational F5 - infer on the CoVoMix2 test set    #
+##########################################################
+# Generate from the public CoVoMix2 dialogue test set
+# (https://github.com/vivian556123/covomix2-dialogue-testset): 1000 written
+# DailyDialog dialogues, each with two LibriSpeech test-clean acoustic
+# prompts.  See src/external_testset.py for the adapter and
+# src/external_inference.py for what differs from the SSSD path.
+#
+# Quick usage (from the recipe dir):
+#   python run.py --stages infer measure \
+#       --inference_config conf/inference_covomix2.yaml \
+#       --metrics_config conf/metrics_covomix2.yaml
+#
+# This config never touches the SSSD infer path: `mode: generate_external`
+# dispatches to a separate implementation, and conf/inference_conversational
+# .yaml is left alone so the existing infer_generate* runs stay reproducible.
+
+training_config: conf/training_poc.yaml
+exp_tag: eval_covomix2
+mode: generate_external
+device: cuda
+inference_dir: ${exp_dir}/infer_${mode}
+test_name: valid
+
+# null -> keep the assembled pretrained model (zero-init gates); a training
+# ckpt supersedes every pretrained weight.
+ckpt: null
+use_ema: true
+
+testset:
+  # Clone of vivian556123/covomix2-dialogue-testset (contains
+  # dailydialog-dialogue.json and transcriptions/).
+  root: downloads/covomix2-dialogue-testset
+  # Directory CONTAINING test-clean/ - the index's prompt paths are relative
+  # to it.  On Delta: /work/hdd/bbjs/shared/corpora/librispeech/LibriSpeech
+  librispeech_root: /work/hdd/bbjs/shared/corpora/librispeech/LibriSpeech
+  num_channels: 2
+
+# Duration policy.  This test set ships NO reference audio, so the generated
+# duration is predicted, and duration is the only timing signal this model
+# receives - it is a reported hyperparameter, recorded in every meta JSON.
+#
+# The rule is F5-TTS's own (seconds-per-character measured on the prompt,
+# scaled by generated text length; utils_infer.py), applied PER SPEAKER and
+# corrected by `scale`:
+#
+#   scale = (SSSD articulation / LibriSpeech articulation) / SSSD density
+#         = (0.0735 / 0.0690) / 0.954 = 1.117
+#
+# retargeting read-speech rate to spontaneous and adding the conversational
+# silence budget.  Set scale: 1.0 for F5's uncorrected rule.
+#
+# `speed` keeps F5's sense (larger = faster = shorter).  Sweep it at
+# 0.9 / 1.0 / 1.1 to MEASURE how much the interaction metrics depend on the
+# duration policy rather than assuming they don't.
+duration:
+  scale: 1.117
+  speed: 1.0
+
+selection:
+  # Dialogues whose PREDICTED duration exceeds the training window_max fall
+  # outside the fine-tuning regime (and F5's pretraining regime).  Excluded
+  # dialogues are counted and logged, never silently dropped.
+  #
+  # Measured over all 1000 dialogues with the real vocab and real LibriSpeech
+  # prompt durations at scale 1.117 (predicted duration: median 29.8 s,
+  # p90 75.3 s, max 203.7 s):
+  #   max_duration 60 -> 819/1000 kept
+  #   max_duration 45 -> 699/1000
+  #   max_duration 30 -> 504/1000
+  # The excluded ones are the LONG dialogues specifically, so the reported
+  # subset is biased short - always publish the kept count with the result.
+  min_duration: null
+  max_duration: 60.0
+  # null -> every dialogue that passes the band.
+  #
+  # Default to the full in-band set, NOT a 50-window sample: the SSSD runs
+  # showed that a 4.5-point WER move between checkpoints sits inside the
+  # noise at n=50, and this test set costs nothing per dialogue beyond GPU
+  # time (no corpus access, no reference audio to stage).  Set a small
+  # number here only for a smoke test, and say so when reporting it.
+  num_dialogues: null
+  seed: 0
+
+sampling:
+  steps: 32
+  cfg_strength: 3.0
+  sway_sampling_coef: -1.0
+  seed: 0
