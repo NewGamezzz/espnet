@@ -1,4 +1,4 @@
-exp_tag: train_mixed_sssd_libritts
+exp_tag: train_mixed_sssd_libritts_candor
 
 num_device: 1
 num_nodes: 1
@@ -16,11 +16,21 @@ exp_dir: ${recipe_dir}/exp/${exp_tag}
 #     --local-dir ${recipe_dir}/downloads
 pretrained_dir: ${recipe_dir}/downloads/F5TTS_Base
 
-# LibriTTS corpus root (single-speaker mix-in). Manifests are built separately:
-#   python -m egs3.conversational.tts.dataset.libritts_builder --dataset-root <root>
-# (run AFTER the SSSD create_dataset stage; it reads the extended vocab).
+# LibriTTS corpus root (single-speaker mix-in).
+# `run.py --stages create_dataset --training_config conf/training_mixed.yaml`
+# now builds all three corpora: SSSD first (entry order, which also writes
+# the extended vocab), then the LibriTTS and CANDOR builders, which both read
+# that vocab. CANDOR's first run also runs its prepare_source's mp3 -> FLAC
+# transcode into candor_flac_root - a compute job, not a quick manifest
+# build. (run.py defaults --training_config to conf/training_poc.yaml, whose
+# dataset: entries are SSSD-only, so the flag above is required here.)
 # NOTE: placeholder path - confirm the real Delta location before training.
 libritts_root: /work/hdd/bbjs/ttrachu/dataset/LibriTTS
+
+# CANDOR transcoded-FLAC root (the training entries' dataset_root; the
+# read-only corpus root and transcode settings live in dataset/config.yaml
+# under candor_builder:).
+candor_flac_root: /work/hdd/bbjs/ttrachu/dataset/candor_flac
 
 # Mel / audio front-end shared by feats_extract and the model (must stay
 # bit-compatible with the pretrained checkpoint and the vocos vocoder).
@@ -36,17 +46,18 @@ mel_spec_type: vocos
 create_dataset:
   recipe_dir: ${recipe_dir}
   base_vocab_path: ${pretrained_dir}/vocab.txt
-  # Only LibriTTSBuilder reads this (the other builders ignore it via **_);
-  # ties the build root to the same libritts_root the dataloader entries use,
-  # instead of letting it drift from dataset/config.yaml's own
-  # libritts_builder.dataset_root.
+  # Per-corpus passthroughs (each read by exactly one builder, the others
+  # ignore them via **_): tie the stage's roots to the same keys the
+  # dataloader entries use instead of letting them drift from
+  # dataset/config.yaml's own libritts_builder/candor_builder values.
   libritts_root: ${libritts_root}
+  flac_dir: ${candor_flac_root}
 
 dataset:
   _target_: espnet3.components.data.data_organizer.DataOrganizer
   recipe_dir: ${recipe_dir}
   # Entry order defines the corpus order that dataloader.train.weights and
-  # dataloader.valid (unweighted) refer to: [SSSD, LibriTTS].
+  # dataloader.valid (unweighted) refer to: [SSSD, LibriTTS, CANDOR].
   train:
     - data_src: conversational/tts
       data_src_args:
@@ -57,15 +68,23 @@ dataset:
         # windows are in-domain single-speaker data now that the mix
         # includes LibriTTS anyway.
         min_active_speakers: 1
-    - data_src: conversational/tts
+    - data_src: egs3.conversational.tts.dataset_libritts
       data_src_args:
         split: train
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
         manifest_path: ${data_dir}/manifest/libritts_train.jsonl
         dataset_root: ${libritts_root}
+    - data_src: egs3.conversational.tts.dataset_candor
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/candor_train.jsonl
+        dataset_root: ${candor_flac_root}
+        min_active_speakers: 1
   # NOTE: valid/loss is NOT comparable to earlier SSSD-only runs (LibriTTS
-  # slice added AND min_active_speakers relaxed to 1).
+  # and CANDOR slices added AND min_active_speakers relaxed to 1).
   valid:
     - data_src: conversational/tts
       data_src_args:
@@ -73,13 +92,21 @@ dataset:
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
         min_active_speakers: 1
-    - data_src: conversational/tts
+    - data_src: egs3.conversational.tts.dataset_libritts
       data_src_args:
         split: valid
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
         manifest_path: ${data_dir}/manifest/libritts_valid.jsonl
         dataset_root: ${libritts_root}
+    - data_src: egs3.conversational.tts.dataset_candor
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/candor_valid.jsonl
+        dataset_root: ${candor_flac_root}
+        min_active_speakers: 1
   # Runtime tokenization against the EXTENDED vocab (base + <turn>/<OTHER>).
   preprocessor:
     _target_: egs3.conversational.tts.dataset.preprocessor.ConversationalTextPreprocessor
@@ -169,11 +196,11 @@ dataloader:
     num_workers: 4
     pin_memory: true
     # Fraction of optimizer steps per corpus, aligned with dataset.train
-    # entry order [SSSD, LibriTTS]. Every batch is roughly equal compute
-    # (batch_bins), so this is also the fraction of gradient mass.
-    # [1.0, 0.0] reproduces SSSD-only training; null disables the knob
+    # entry order [SSSD, LibriTTS, CANDOR]. Every batch is roughly equal
+    # compute (batch_bins), so this is also the fraction of gradient mass.
+    # [1.0, 0.0, 0.0] reproduces SSSD-only training; null disables the knob
     # (plain size-proportional concatenation - NOT recommended here).
-    weights: [0.5, 0.5]
+    weights: [0.34, 0.33, 0.33]
   valid:
     batch_bins: ${dataloader.train.batch_bins}
     min_batch_size: 1

@@ -152,21 +152,31 @@ Batches do not need a homogeneous channel count; a duration-bucketed sampler sho
 | `dataset.sample_rate` | `24000` | training rate (48 kHz source is downsampled 2:1) |
 | `dataset.text_pad_value` | `-1` | F5 text padding convention |
 
-## Mixed single-speaker + conversational training (LibriTTS)
+## Mixed training (SSSD + LibriTTS + CANDOR)
 
 `conf/training_mixed.yaml` trains on SSSD windows plus LibriTTS-960
 utterances-as-windows (N=1 conversations; the exchange contract covers any
-branch count >= 1). Build order matters:
+branch count >= 1) plus CANDOR conversational windows.
+
+Build order (or just `python run.py --stages create_dataset --training_config
+conf/training_mixed.yaml`, which runs all three builders in this order;
+`run.py` defaults to `conf/training_poc.yaml`, whose `dataset:` entries are
+SSSD-only, so the plain no-flag invocation builds only SSSD):
 
 1. SSSD build (windows + extended vocab): `python -m egs3.conversational.tts.dataset.builder`
 2. LibriTTS manifests (reuses that vocab's charset):
    `python -m egs3.conversational.tts.dataset.libritts_builder --dataset-root <LibriTTS root>`
+3. CANDOR manifests (same vocab dependency; the first run transcodes
+   mp3 -> FLAC into `candor_builder.flac_dir`, ~240 GB / ~60 core-hours -
+   run it as a compute job):
+   `python -m egs3.conversational.tts.dataset.candor_builder`
 
-`dataloader.train.weights` sets the fraction of optimizer steps per corpus
-(entry order = `dataset.train` order); `[1.0, 0.0]` reproduces SSSD-only
-training under this config's `min_active_speakers: 1`, not the POC
-baseline's `2` (`conf/training_poc.yaml`), and validation always runs the
-full combined valid set.
+`dataloader.train.weights` covers three corpora now (entry order
+[SSSD, LibriTTS, CANDOR]) and sets the fraction of optimizer steps per
+corpus; a weight of `0.0` excludes a corpus from training. `[1.0, 0.0, 0.0]`
+reproduces SSSD-only training under this config's `min_active_speakers: 1`,
+not the POC baseline's `2` (`conf/training_poc.yaml`), and validation always
+runs the full combined valid set.
 See the design note "Design - LibriTTS Single-Speaker Mixing for
 Conversational F5" (vault) for the epoch-composition rule.
 

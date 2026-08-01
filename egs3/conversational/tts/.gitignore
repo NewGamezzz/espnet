@@ -1,8 +1,11 @@
 # The repo-root pattern `egs*/*/*/data*` (meant for recipe data dirs) also
-# matches this recipe's dataset/ PACKAGE, silently ignoring any new source
-# file under it.  Un-ignore the package; the run-time dirs (data/, downloads/,
-# exp/) stay covered by the root patterns.
+# matches this recipe's dataset/ PACKAGE and per-corpus data_src packages,
+# silently ignoring any new source file under them.  Un-ignore the package
+# and data_src packages; the run-time dirs (data/, downloads/, exp/) stay
+# covered by the root patterns.
 !dataset/
+!dataset_libritts/
+!dataset_candor/
 
 # README.md's anchor-mode recipe (gt/resynth) sed-generates mode-edited
 # copies of conf/inference_conversational.yaml and conf/metrics.yaml here.
