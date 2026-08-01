@@ -114,7 +114,7 @@ class LibriTTSBuilder(DatasetBuilder):
         for split, subsets, hours_cap in splits:
             entries = []
             for subset in subsets:
-                entries.extend(scan_subset(root, subset))
+                entries.extend(scan_subset(root, subset, workers=scan_workers))
             # Header probes are tiny independent reads dominated by filesystem
             # latency (hours if serial on a cold parallel filesystem); the
             # thread pool keeps input order, so output stays deterministic.

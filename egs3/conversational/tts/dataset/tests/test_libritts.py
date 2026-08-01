@@ -72,6 +72,24 @@ def test_scan_subset_missing_dir_raises(tmp_path):
         scan_subset(tmp_path, "train-clean-360")
 
 
+def test_scan_subset_threaded_matches_serial(tmp_path):
+    make_tree(
+        tmp_path,
+        {
+            f"train-clean-100/{spk}/{ch}/{spk}_{ch}_000000_00000{i}": f"utt {i}"
+            for spk, ch in (("103", "1241"), ("911", "128684"))
+            for i in range(5)
+        },
+    )
+    # orphan transcript exercises the skip path under threading too
+    orphan = tmp_path / "train-clean-100/103/1241/103_1241_000000_000009.normalized.txt"
+    orphan.write_text("no wav", encoding="utf-8")
+    serial = scan_subset(tmp_path, "train-clean-100")
+    threaded = scan_subset(tmp_path, "train-clean-100", workers=4)
+    assert threaded == serial
+    assert len(threaded) == 10
+
+
 def test_utterance_record_shape(tmp_path):
     entry = UttEntry(
         utt_id="103_1241_000000_000001",
