@@ -19,18 +19,21 @@
 # RUNTIME BUDGET (default = all 1000 dialogues, nothing filtered)
 # ---------------------------------------------------------------
 # Total predicted audio is 10.4 h (37,565 s, mean 37.6 s/dialogue), measured
-# by the shipped estimator over the real prompts - not extrapolated.  The measured
-# effective RTF of the SSSD infer_generate_cfg3_finetune23k run was 1.45
-# (median per-window 1.34, max 4.39) on one A100, and RTF grows with length
-# because attention is quadratic in frames:
+# by the shipped estimator over the real prompts - not extrapolated.  The
+# SEQUENTIAL run (one dialogue per ODE call, fp32) measured effective RTF
+# 1.45 on one A100 (SSSD infer_generate_cfg3_finetune23k), which priced the
+# full set at ~15-25 h; that cost was mostly GPU UNDERUTILIZATION - each of
+# the 32 CFG-doubled DiT forwards carried only one dialogue's 2 channels.
 #
-#   ~15 h on one GPU at RTF 1.45, ~20-25 h once the long tail is priced in.
-#
-# The 159 dialogues over 60 s are 16% of the count but 37% of the audio and
-# a larger share of the compute again.  The infer stage is single-GPU and
-# sequential, so budget one long job (gpuA100x4 allows 2-00:00:00) rather
-# than the 8 h chunks training uses.  For a smoke test set
-# `selection.num_dialogues` to something small and SAY SO when reporting.
+# The defaults below batch several dialogues into each ODE call (`batching`)
+# and run the transformer under bf16 autocast (`sampling.autocast_dtype`),
+# which multiplies per-forward rows by the mean batch size.  The batch-level
+# RTF is recorded in every meta JSON under `compute`; re-measure the wall
+# clock on the first Delta run before promising a number - the long tail
+# still runs alone (a >204 s dialogue fills the batch budget by itself) and
+# attention stays quadratic in frames.
+# For a smoke test set `selection.num_dialogues` to something small and SAY
+# SO when reporting.
 
 training_config: conf/training_poc.yaml
 exp_tag: eval_covomix2
@@ -120,11 +123,13 @@ selection:
   # activation plus the espnet import off Lustre), so the useful shard count
   # is lower than raw parallelism suggests - 4 shards spend ~50 min of
   # aggregate overhead against ~20 h of work, 32 would spend over 6 h.
-  # Applied LAST, after the band and the
-  # subsample, so every shard sees the same population and the union of all
-  # shards is exactly the unsharded selection.
+  # Applied LAST, after the band, the subsample AND the batch plan: shards
+  # take whole batches, so every shard sees the same batch plan and the
+  # union of all shards is bit-identical to an unsharded run (batch
+  # composition, and with it every noise draw, never depends on
+  # shard_count).
   #
-  # Assignment is greedy longest-processing-time on predicted duration, not
+  # Assignment is greedy longest-processing-time on padded batch audio, not
   # striping: the length distribution is skewed enough (159 dialogues over
   # 60 s carry 37% of the audio) that a stripe can hand one shard most of
   # the tail and that shard becomes the wall clock.  Every shard computes
@@ -140,8 +145,35 @@ selection:
   shard_index: 0
   shard_count: 1
 
+# How many dialogues share one ODE call.  The model's packed `counts` layout
+# carries several conversations per batch at training time already; the
+# exchanges mix strictly within a conversation, so batchmates cannot
+# contaminate each other, and padded rows attend exactly as padded training
+# batches did.  Dialogues are length-sorted before packing, so padding waste
+# stays small; a batch costs n_dialogues * longest_member_sec of PADDED
+# prompt+generated audio and grows while that stays under the budget.
+#
+# REPRODUCIBILITY: the sampler reseeds once per BATCH (the batch analogue of
+# the sequential path's per-dialogue reseed), so generated audio depends on
+# these knobs - changing them redraws equally-valid samples.  Results never
+# depend on shard_count (shards take whole batches).  Set both to null to
+# reproduce the sequential per-dialogue behaviour bit-for-bit.
+#
+# 240 s * 2 channels at 93.75 frames/s is ~45k padded rows-frames per ODE
+# call before CFG doubling - sized for one 40 GB A100 at steps=32; halve it
+# on OOM.  Mean predicted total is ~44 s, so a typical batch carries ~5
+# dialogues; the >204 s tail still runs alone.
+batching:
+  max_batch_audio_sec: 240.0
+  max_batch_dialogues: 16
+
 sampling:
   steps: 32
   cfg_strength: 3.0
   sway_sampling_coef: -1.0
   seed: 0
+  # bf16 autocast for the ODE transformer only (the vocoder stays fp32).
+  # The rotary embedding carries explicit autocast guards; training ran
+  # under bf16 autocast, so inference precision matches training.  Set to
+  # null for full fp32 (the pre-batching behaviour).
+  autocast_dtype: bfloat16

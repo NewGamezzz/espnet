@@ -44,7 +44,12 @@ class TextEmbedding(nn.Module):
 
         if conv_layers > 0:
             self.extra_modeling = True
-            self.precompute_max_pos = 8192  # 8192 is ~87.38s of 24khz audio; 4096 is ~43.69s of 24khz audio
+            # Initial size of the sinusoidal position table, NOT a hard cap:
+            # forward() grows the table on demand (in multiples of this) for
+            # longer sequences.  8192 is ~87.38s of 24khz audio.  The table
+            # is a pure function of the row index (no learned state, buffer
+            # non-persistent), so growth never changes existing positions.
+            self.precompute_max_pos = 8192
             self.register_buffer("freqs_cis", precompute_freqs_cis(text_dim, self.precompute_max_pos), persistent=False)
             self.text_blocks = nn.Sequential(
                 *[ConvNeXtV2Block(text_dim, text_dim * conv_mult) for _ in range(conv_layers)]
@@ -114,6 +119,14 @@ class TextEmbedding(nn.Module):
         # possible extra modeling
         if self.extra_modeling:
             # sinus pos emb; for variable seq lengths, only add positions within each sample's valid range.
+            if max_seq_len > self.freqs_cis.shape[0]:
+                # Sequence outruns the precomputed table: grow it (rounded up
+                # to a multiple of the initial size, so growth is amortized).
+                # Rows depend only on their own index, so every existing
+                # position keeps bit-identical values and outputs for
+                # already-supported lengths are unchanged.
+                grown = -(-max_seq_len // self.precompute_max_pos) * self.precompute_max_pos
+                self.freqs_cis = precompute_freqs_cis(self.freqs_cis.shape[1], grown).to(self.freqs_cis)
             freqs = self.freqs_cis[:max_seq_len, :]
             if valid_pos_mask is not None:
                 freqs = freqs.unsqueeze(0) * valid_pos_mask.unsqueeze(-1).to(freqs.dtype)
