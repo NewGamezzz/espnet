@@ -398,14 +398,25 @@ It defaults to `null` because the dialogues a band removes are the LONG ones spe
 
 Full coverage costs two things, both worth stating with the results.
 
+### Batched inference
+
+The dominant cost of the first runs was GPU underutilization, not audio volume: sequentially, every 32-step CFG-doubled ODE ran the DiT with only one dialogue's 2 channels as rows.
+`batching.max_batch_audio_sec` / `max_batch_dialogues` pack several dialogues into each ODE call using the same packed `counts` layout training uses; the injected exchanges mix strictly within a conversation, so batchmates cannot contaminate each other, and padded rows attend exactly as padded training batches did (`attn_mask_enabled` false).
+Dialogues are length-sorted before packing, so batchmates have near-equal lengths; a batch costs `n_dialogues * longest_member_sec` of padded prompt+generated audio against the budget, and a dialogue longer than the whole budget still runs as a singleton.
+`sampling.autocast_dtype: bfloat16` additionally runs the ODE transformer under bf16 autocast, matching the `precision: bf16-mixed` the model trained with; the vocoder stays fp32.
+
+Reproducibility semantics: the sampler reseeds once per batch (the batch analogue of the sequential path's per-dialogue reseed), so the generated audio depends on the batching knobs - changing them redraws equally-valid samples.
+Setting both budgets to `null` and `autocast_dtype: null` reproduces the sequential fp32 behaviour bit-for-bit.
+Every meta JSON records its batch under `compute` (`batch_id`, `batch_size`, `batch_elapsed_sec`, `autocast_dtype`), and `rtf` is the batch-level value shared by all members - wall clock is spent per batch, so a per-dialogue split would be fabricated.
+
 ### Sharding a long run
 
-`selection.shard_count` / `shard_index` split the selection across parallel jobs or across the GPUs of one node, so the ~15-25 h single-GPU run becomes ~4-7 h on four.
-Note that each shard is a separate process and pays the recipe's fixed startup cost (measured at ~12.5 min on Delta: pixi activation plus the espnet import off Lustre), so the useful shard count is lower than raw parallelism suggests - 4 shards spend ~50 min of aggregate overhead against ~20 h of work, while 32 would spend over 6 h.
+`selection.shard_count` / `shard_index` split the batch plan across parallel jobs or across the GPUs of one node.
+Note that each shard is a separate process and pays the recipe's fixed startup cost (measured at ~12.5 min on Delta: pixi activation plus the espnet import off Lustre), so the useful shard count is lower than raw parallelism suggests.
 
-Sharding is applied last, after the band and the subsample, so every shard sees the same population and the union of all shards is exactly the unsharded selection.
-Assignment is greedy longest-processing-time on predicted duration rather than striping: the length distribution is skewed enough that `idx % shard_count` can hand one shard most of the tail, and that shard then becomes the wall clock.
-Every shard computes the same split independently, so there is no coordination and no shared state, and re-running one shard reproduces its membership exactly.
+Sharding is applied last, after the band, the subsample and the batch plan: shards take whole batches, so every shard sees the same batch plan and the union of all shards is bit-identical to an unsharded run - batch composition, and with it every noise draw, never depends on `shard_count`.
+Assignment is greedy longest-processing-time on padded batch audio rather than striping: the length distribution is skewed enough that `idx % shard_count` can hand one shard most of the tail, and that shard then becomes the wall clock.
+Every shard computes the same plan independently, so there is no coordination and no shared state, and re-running one shard reproduces its membership exactly.
 
 Each shard shares the `wav/`, `prompt/`, `mix/` and `meta/` directories (filenames are keyed by the unique dialogue id) but writes its own `<name>.scp.<i>of<n>`, because an SCP is written wholesale and siblings would clobber each other.
 Merge once every shard has finished:
@@ -418,7 +429,7 @@ It refuses to write a partial merge unless `--allow-partial` is passed, and fail
 A silently short `meta.scp` would score a subset while still looking like a complete run.
 An unsharded run (`shard_count: 1`, the default) writes the plain names directly and needs no merge.
 
-**Runtime.** The infer stage is single-GPU and sequential. At the SSSD run's measured effective RTF of 1.45 (median per-window 1.34, max 4.39 on one A100), 10.4 h of audio is roughly 15 h of wall clock, and 20-25 h once the long tail is priced in, since attention is quadratic in frames. Budget one long job - `gpuA100x4` allows `2-00:00:00` - rather than the 8 h chunks training uses. The 159 dialogues over 60 s are 16% of the count but 37% of the audio and a larger share of the compute again.
+**Runtime.** The SEQUENTIAL fp32 path measured effective RTF 1.45 on one A100 (median per-window 1.34, max 4.39), pricing 10.4 h of audio at ~15-25 h of wall clock; the default batched + bf16 config exists to cut that multiplicatively (mean batch ~5 dialogues), but the actual wall clock has not been measured on Delta yet - read the batch-level `rtf` from the first run's meta JSONs before promising a number. The long tail batches poorly by construction (a >204 s dialogue fills the budget alone), and attention stays quadratic in frames: the 159 dialogues over 60 s are 16% of the count but 37% of the audio and a larger share of the compute again.
 
 **Regime.** 181 dialogues exceed the 60 s training `window_max`, and the longest is 203.7 s, 3.4x beyond it and well past F5's own pretraining regime. Rotary position extrapolation that far has never been validated for this model, so degradation on the tail should be expected as a property of the length rather than of the fine-tuning. Report the metrics **stratified by predicted duration** (<=60 s vs beyond) so the in-regime number stays readable next to the full-coverage one; every meta JSON carries `duration.predicted_sec`, so the split is a post-hoc filter over `meta.scp` and needs no second inference run.
 

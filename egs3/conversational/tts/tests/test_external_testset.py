@@ -43,6 +43,7 @@ from egs3.conversational.tts.src.external_testset import (
     _read_turns,
     estimate_duration_sec,
     load_covomix2_testset,
+    plan_batches,
     select_records,
 )
 from egs3.conversational.tts.src.metrics.interaction_no_reference import (
@@ -167,7 +168,7 @@ class TestSelection:
             self._records(4), durations, OmegaConf.create({"max_duration": 60.0})
         )
         assert got == [0, 1]
-        assert counts == {"n_out_of_band": 2, "n_not_sampled": 0, "n_other_shards": 0}
+        assert counts == {"n_out_of_band": 2, "n_not_sampled": 0}
 
     def test_min_and_max_both_applied(self):
         durations = [5.0, 20.0, 90.0]
@@ -188,7 +189,7 @@ class TestSelection:
         assert len(first) == 5
         assert first == sorted(first)
         # Not-sampled is NOT a failure count.
-        assert counts == {"n_out_of_band": 0, "n_not_sampled": 15, "n_other_shards": 0}
+        assert counts == {"n_out_of_band": 0, "n_not_sampled": 15}
 
     def test_band_and_subsample_counted_separately(self):
         # The two exclusion reasons mean opposite things; a single "skipped"
@@ -200,13 +201,13 @@ class TestSelection:
             OmegaConf.create({"max_duration": 16.5, "num_dialogues": 4, "seed": 0}),
         )
         assert len(got) == 4
-        assert counts == {"n_out_of_band": 3, "n_not_sampled": 13, "n_other_shards": 0}
+        assert counts == {"n_out_of_band": 3, "n_not_sampled": 13}
 
     def test_no_limits_keeps_everything(self):
         durations = [1.0, 2.0, 3.0]
         got, counts = select_records(self._records(3), durations, OmegaConf.create({}))
         assert got == [0, 1, 2]
-        assert counts == {"n_out_of_band": 0, "n_not_sampled": 0, "n_other_shards": 0}
+        assert counts == {"n_out_of_band": 0, "n_not_sampled": 0}
 
 
 # --------------------------------------------------------------------------- #
@@ -378,6 +379,9 @@ class TestExternalInfer:
             "n_skipped": 0,
             "n_not_sampled": 0,
             "n_other_shards": 0,
+            # No `batching` block in the config -> every dialogue is its own
+            # batch, the bit-exact sequential behaviour.
+            "n_batches": 2,
         }
 
         assert (test_dir / "meta.scp").read_text("utf-8").splitlines() == [
@@ -509,6 +513,65 @@ class TestExternalInfer:
         cfg = _external_config(testset, tmp_path / "infer", mode="generate")
         with pytest.raises(ValueError, match="expected mode"):
             run_external_inference(cfg, training_config=testset["training_config"])
+
+    def test_batched_run_keeps_the_per_dialogue_contract(
+        self, testset, tiny_model, tmp_path
+    ):
+        # Both fixture dialogues share ONE ODE call; every per-dialogue
+        # output (length, meta keys, layout) must be indistinguishable from
+        # the sequential run's contract.
+        test_dir, stats, _ = self._run(
+            testset,
+            tiny_model,
+            tmp_path / "infer",
+            batching={"max_batch_audio_sec": 10000.0, "max_batch_dialogues": 8},
+        )
+        assert stats["n_selected"] == 2
+        assert stats["n_batches"] == 1
+        for key in ("000", "001"):
+            meta = json.loads((test_dir / f"meta/{key}.json").read_text("utf-8"))
+            expected_frames = max(
+                1, round(meta["duration"]["predicted_sec"] * FS / HOP)
+            )
+            for ch in range(2):
+                data, sr = _read_wav(test_dir / f"wav/{key}_ch{ch}.wav")
+                assert sr == FS
+                # Batch padding must never leak into a dialogue's output:
+                # each is vocoded at its own exact length.
+                assert data.shape[0] == expected_frames * HOP
+            assert meta["compute"]["batch_size"] == 2
+            assert meta["compute"]["batch_id"] == 0
+            assert isinstance(meta["rtf"], float)
+
+    def test_dialogue_cap_splits_batches(self, testset, tiny_model, tmp_path):
+        _, stats, _ = self._run(
+            testset,
+            tiny_model,
+            tmp_path / "infer",
+            batching={"max_batch_audio_sec": 10000.0, "max_batch_dialogues": 1},
+        )
+        assert stats["n_batches"] == 2
+
+    def test_autocast_dtype_is_applied_and_recorded(
+        self, testset, tiny_model, tmp_path
+    ):
+        test_dir, stats, _ = self._run(
+            testset,
+            tiny_model,
+            tmp_path / "infer",
+            sampling={
+                "steps": 2,
+                "cfg_strength": 2.0,
+                "sway_sampling_coef": -1.0,
+                "seed": 0,
+                "autocast_dtype": "bfloat16",
+            },
+        )
+        assert stats["n_selected"] == 2
+        meta = json.loads((test_dir / "meta/000.json").read_text("utf-8"))
+        assert meta["compute"]["autocast_dtype"] == "bfloat16"
+        data, _ = _read_wav(test_dir / "wav/000_ch0.wav")
+        assert data.shape[0] > 0
 
 
 # --------------------------------------------------------------------------- #
@@ -690,25 +753,72 @@ class TestAssignShard:
             assign_shard([0], [1.0], 4, 4)
 
 
-class TestShardedSelection:
-    def test_sharding_applies_after_band_and_subsample(self):
+class TestPlanBatches:
+    def test_none_budgets_mean_singletons_in_input_order(self):
+        # The bit-exact sequential behaviour: no sorting, no packing.
+        assert plan_batches([3, 1, 2], [1.0, 2.0, 3.0, 4.0]) == [[3], [1], [2]]
+
+    def test_budget_packs_length_sorted_dialogues(self):
+        batches = plan_batches(
+            [0, 1, 2, 3], [10.0, 9.0, 5.0, 4.0], max_batch_audio_sec=20.0
+        )
+        assert batches == [[0, 1], [2, 3]]
+
+    def test_cost_is_padded_audio_not_the_sum(self):
+        # Pairing 10s with 1s costs 2*10=20 of PADDED audio, over a 15s
+        # budget - even though the sum of true lengths (11s) is under it.
+        assert plan_batches([0, 1], [10.0, 1.0], max_batch_audio_sec=15.0) == [
+            [0],
+            [1],
+        ]
+
+    def test_over_budget_dialogue_still_gets_a_singleton(self):
+        # The budget bounds batch growth; it never excludes work.
+        assert plan_batches([0, 1], [100.0, 1.0], max_batch_audio_sec=10.0) == [
+            [0],
+            [1],
+        ]
+
+    def test_dialogue_cap_applies_independently(self):
+        batches = plan_batches(
+            list(range(5)),
+            [1.0] * 5,
+            max_batch_audio_sec=100.0,
+            max_batch_dialogues=2,
+        )
+        assert [len(b) for b in batches] == [2, 2, 1]
+
+    def test_plan_is_independent_of_input_order(self):
+        a = plan_batches([4, 2, 0, 3, 1], [5.0] * 5, max_batch_audio_sec=10.0)
+        b = plan_batches([0, 1, 2, 3, 4], [5.0] * 5, max_batch_audio_sec=10.0)
+        assert a == b == [[0, 1], [2, 3], [4]]
+
+    def test_invalid_budgets_raise(self):
+        with pytest.raises(ValueError, match="max_batch_audio_sec"):
+            plan_batches([0], [1.0], max_batch_audio_sec=0.0)
+        with pytest.raises(ValueError, match="max_batch_dialogues"):
+            plan_batches([0], [1.0], max_batch_dialogues=0)
+
+
+class TestShardedBatchPlan:
+    def test_shards_take_whole_batches_and_union_is_the_full_plan(self):
         durations = [float(i) for i in range(20)]  # 17,18,19 out of band
         base = OmegaConf.create({"max_duration": 16.5, "num_dialogues": 8, "seed": 0})
-        unsharded, _ = select_records(
+        selected, counts = select_records(
             [_record(["abc"], ["abc", "de"])] * 20, durations, base
         )
+        assert counts == {"n_out_of_band": 3, "n_not_sampled": 9}
+
+        # The batch plan is computed over the FULL selection; shards take
+        # whole batches, so the union of all shards is exactly the plan and
+        # batch composition never depends on shard_count.
+        batches = plan_batches(selected, durations, max_batch_audio_sec=30.0)
+        costs = [len(b) * max(durations[i] for i in b) for b in batches]
         union = []
         for s in range(3):
-            cfg = OmegaConf.create({**base, "shard_index": s, "shard_count": 3})
-            got, counts = select_records(
-                [_record(["abc"], ["abc", "de"])] * 20, durations, cfg
-            )
-            union.extend(got)
-            assert counts["n_out_of_band"] == 3
-            assert counts["n_not_sampled"] == 9
-            assert counts["n_other_shards"] == 8 - len(got)
-        # The union of all shards is EXACTLY the unsharded selection.
-        assert sorted(union) == unsharded
+            for b in assign_shard(list(range(len(batches))), costs, s, 3):
+                union.extend(batches[b])
+        assert sorted(union) == selected
 
 
 class TestShardedInfer:
@@ -783,3 +893,20 @@ class TestShardedInfer:
         test_dir = inference_dir / "valid"
         assert (test_dir / "meta.scp").is_file()
         assert not list(test_dir.glob("meta.scp.*"))
+
+    def test_sharded_union_is_bit_identical_to_unsharded(
+        self, testset, tiny_model, tmp_path
+    ):
+        # The core reproducibility promise of shard-over-batches: batch
+        # composition and every noise draw are a function of the config
+        # only, so shard_count never changes a single generated sample.
+        unsharded_dir = tmp_path / "unsharded"
+        self._run_shard(testset, tiny_model, unsharded_dir, 0, 1)
+        sharded_dir = tmp_path / "sharded"
+        for s in range(2):
+            self._run_shard(testset, tiny_model, sharded_dir, s, 2)
+        wavs = sorted((unsharded_dir / "valid" / "wav").glob("*.wav"))
+        assert wavs  # the fixture generates something
+        for wav in wavs:
+            sharded = sharded_dir / "valid" / "wav" / wav.name
+            assert sharded.read_bytes() == wav.read_bytes()

@@ -26,6 +26,16 @@ What differs from the SSSD path
 * **No ``gt/`` outputs and no ``resynth`` mode.**  This test set ships no
   reference audio, so the ground-truth and vocoder-ceiling anchors are not
   available here; run those on the SSSD split.
+* **Dialogues are BATCHED into one ODE call** (``cfg.batching``): the packed
+  ``counts`` layout the model trains with carries several dialogues at once,
+  which is where the runtime went - sequentially, every 32-step CFG ODE ran
+  the DiT with only one dialogue's channels as rows.  Batches are planned
+  over the full selection and shards take whole batches, so outputs are
+  invariant to ``shard_count``; noise inside a multi-dialogue batch depends
+  on batch composition (the per-batch reseed generalizes the sequential
+  path's per-dialogue reseed), so changing the batching knobs redraws
+  equally-valid samples.  ``batching: {}`` (or null budgets) reproduces the
+  sequential run bit-for-bit.
 
 Everything else - the ``meta.scp`` contract, the per-channel/mix wav layout,
 the reference-text fields - is byte-identical in shape to the SSSD path, so
@@ -62,14 +72,17 @@ from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
 from egs3.conversational.tts.src.external_testset import (
     DEFAULT_DURATION_SCALE,
     ExternalRecord,
+    assign_shard,
     duration_meta,
     estimate_duration_sec,
     load_covomix2_testset,
+    plan_batches,
     select_records,
 )
 from egs3.conversational.tts.src.generation import (
+    GenerationItem,
     build_preprocessor,
-    generate_region,
+    generate_batch,
     load_model,
     load_vocoder,
     pad_branch_text,
@@ -198,16 +211,48 @@ def run_external_inference(
     shard_count = int(cfg.selection.get("shard_count", 1) or 1)
     shard_index = int(cfg.selection.get("shard_index", 0) or 0)
     indices, exclusions = select_records(records, predicted, cfg.selection)
+
+    # Batches are planned over the FULL selection, then shards take whole
+    # batches: batch composition (and with it every dialogue's noise draw)
+    # is a pure function of the config, never of shard membership, so the
+    # union of all shards is bit-identical to an unsharded run.
+    batching = cfg.get("batching", {}) or {}
+    max_batch_audio_sec = batching.get("max_batch_audio_sec")
+    max_batch_dialogues = batching.get("max_batch_dialogues")
+    # The ODE integrates prompt + generated region, padded to the batch's
+    # longest dialogue - that total, not the generated region alone, is what
+    # the batch budget must price.
+    total_secs = [sum(secs) + pred for secs, pred in zip(prompt_secs, predicted)]
+    batches = plan_batches(
+        indices,
+        total_secs,
+        max_batch_audio_sec=(
+            float(max_batch_audio_sec) if max_batch_audio_sec is not None else None
+        ),
+        max_batch_dialogues=(
+            int(max_batch_dialogues) if max_batch_dialogues is not None else None
+        ),
+    )
+    batch_costs = [len(b) * max(total_secs[i] for i in b) for b in batches]
+    shard_batch_ids = assign_shard(
+        list(range(len(batches))), batch_costs, shard_index, shard_count
+    )
+    n_mine = sum(len(batches[b]) for b in shard_batch_ids)
     logger.info(
         "external infer selection: %d/%d dialogues (%d out of duration band, "
-        "%d not sampled, %d other shards; scale=%.4f, speed=%.3f)",
-        len(indices),
+        "%d not sampled, %d other shards; scale=%.4f, speed=%.3f) in %d/%d "
+        "batches (budget %s s padded audio, cap %s dialogues)",
+        n_mine,
         len(records),
         exclusions["n_out_of_band"],
         exclusions["n_not_sampled"],
-        exclusions["n_other_shards"],
+        len(indices) - n_mine,
         duration_scale,
         speed,
+        len(shard_batch_ids),
+        len(batches),
+        max_batch_audio_sec,
+        max_batch_dialogues,
     )
 
     if model is None:
@@ -232,113 +277,151 @@ def run_external_inference(
     text_lines: list[str] = []
     mix_lines: list[str] = []
     samp = cfg.sampling
+    autocast_dtype = samp.get("autocast_dtype")
 
-    for idx in tqdm(indices, desc=f"infer[{MODE}]", unit="dialogue"):
-        record = records[idx]
-        n = record.num_channels
+    progress = tqdm(
+        shard_batch_ids, desc=f"infer[{MODE}]", unit="batch", total=len(shard_batch_ids)
+    )
+    for batch_id in progress:
+        batch_indices = batches[batch_id]
+        prepared: list[dict[str, Any]] = []
+        for idx in batch_indices:
+            record = records[idx]
+            n = record.num_channels
 
-        prompt_wavs = [_load_prompt_wav(p.audio_path, fs) for p in record.prompts]
-        blocks = _prompt_blocks(prompt_wavs, n)
-        prompt_raw = torch.cat(blocks, dim=1)  # (N, P)
-        prompt_frames = prompt_raw.shape[1] // hop
-        prompt_samples = prompt_frames * hop
-        prompt_trimmed = prompt_raw[:, :prompt_samples]
+            prompt_wavs = [_load_prompt_wav(p.audio_path, fs) for p in record.prompts]
+            blocks = _prompt_blocks(prompt_wavs, n)
+            prompt_raw = torch.cat(blocks, dim=1)  # (N, P)
+            prompt_frames = prompt_raw.shape[1] // hop
+            prompt_samples = prompt_frames * hop
+            prompt_trimmed = prompt_raw[:, :prompt_samples]
 
-        gen_frames = max(1, round(predicted[idx] * fs / hop))
-        # The generated region is zeros: nothing is known about it, and the
-        # ODE conditions only on the first `prompt_frames`.
-        speech = torch.cat(
-            [prompt_trimmed, torch.zeros(n, gen_frames * hop)], dim=1
-        ).to(device)
-        total_frames = prompt_frames + gen_frames
+            gen_frames = max(1, round(predicted[idx] * fs / hop))
+            # The generated region is zeros: nothing is known about it, and
+            # the ODE conditions only on the first `prompt_frames`.
+            speech = torch.cat(
+                [prompt_trimmed, torch.zeros(n, gen_frames * hop)], dim=1
+            ).to(device)
 
-        sample = {
-            "turns": _prompt_turns(record) + list(record.turns),
-            "num_channels": n,
-        }
-        sample = preprocessor(record.dialogue_id, sample)
-        text = pad_branch_text(sample, device)
+            sample = {
+                "turns": _prompt_turns(record) + list(record.turns),
+                "num_channels": n,
+            }
+            sample = preprocessor(record.dialogue_id, sample)
+            text = pad_branch_text(sample, device)
 
-        gen_wavs, elapsed = generate_region(
+            prepared.append(
+                {
+                    "idx": idx,
+                    "record": record,
+                    "blocks": blocks,
+                    "prompt_frames": prompt_frames,
+                    "prompt_samples": prompt_samples,
+                    "gen_frames": gen_frames,
+                    "item": GenerationItem(
+                        speech=speech,
+                        text=text,
+                        prompt_frames=prompt_frames,
+                        total_frames=prompt_frames + gen_frames,
+                    ),
+                }
+            )
+
+        gen_wav_list, elapsed = generate_batch(
             model,
             vocoder,
-            speech,
-            text,
-            prompt_frames,
-            total_frames,
+            [p["item"] for p in prepared],
             steps=int(samp.steps),
             cfg_strength=float(samp.cfg_strength),
             sway_sampling_coef=float(samp.sway_sampling_coef),
             seed=samp.get("seed"),
+            autocast_dtype=autocast_dtype,
         )
-        gen_seconds = gen_wavs.shape[1] / fs
-        rtf = float(elapsed / gen_seconds) if gen_seconds > 0 else None
+        batch_gen_sec = sum(w.shape[1] for w in gen_wav_list) / fs
+        # Wall clock is spent on the batch as a whole, so RTF is a batch
+        # quantity; every member records the same value (plus the batch
+        # context under "compute") rather than a fabricated per-dialogue
+        # split of the elapsed time.
+        rtf = float(elapsed / batch_gen_sec) if batch_gen_sec > 0 else None
 
-        wid = record.dialogue_id
-        ref_texts = _reference_texts(record.turns, n)
-        channels = []
-        for ch in range(n):
-            gen_rel = f"wav/{wid}_ch{ch}.wav"
-            prompt_rel = f"prompt/{wid}_ch{ch}.wav"
-            write_wav(test_dir / gen_rel, gen_wavs[ch], fs)
-            write_wav(test_dir / prompt_rel, blocks[ch][ch], fs)
-            channels.append(
-                {
-                    "gen_wav": gen_rel,
-                    "prompt_wav": prompt_rel,
-                    "ref_text": ref_texts[ch],
-                }
-            )
-            wav_lines.append(f"{wid}_ch{ch} {gen_rel}")
-            prompt_lines.append(f"{wid}_ch{ch} {prompt_rel}")
-            text_lines.append(f"{wid}_ch{ch} {ref_texts[ch]}")
+        for prep, gen_wavs in zip(prepared, gen_wav_list):
+            idx = prep["idx"]
+            record = prep["record"]
+            blocks = prep["blocks"]
+            n = record.num_channels
 
-        mix_rel = f"mix/{wid}.wav"
-        write_wav(test_dir / mix_rel, gen_wavs.sum(dim=0).cpu() / n, fs)
-        mix_lines.append(f"{wid} {mix_rel}")
+            wid = record.dialogue_id
+            ref_texts = _reference_texts(record.turns, n)
+            channels = []
+            for ch in range(n):
+                gen_rel = f"wav/{wid}_ch{ch}.wav"
+                prompt_rel = f"prompt/{wid}_ch{ch}.wav"
+                write_wav(test_dir / gen_rel, gen_wavs[ch], fs)
+                write_wav(test_dir / prompt_rel, blocks[ch][ch], fs)
+                channels.append(
+                    {
+                        "gen_wav": gen_rel,
+                        "prompt_wav": prompt_rel,
+                        "ref_text": ref_texts[ch],
+                    }
+                )
+                wav_lines.append(f"{wid}_ch{ch} {gen_rel}")
+                prompt_lines.append(f"{wid}_ch{ch} {prompt_rel}")
+                text_lines.append(f"{wid}_ch{ch} {ref_texts[ch]}")
 
-        meta = {
-            "window_id": wid,
-            "session_id": wid,
-            "mode": MODE,
-            "testset": "covomix2-dialogue-testset",
-            "sample_rate": fs,
-            "num_channels": n,
-            "window_duration_sec": round(gen_frames * hop / fs, 6),
-            "duration": duration_meta(duration_scale, speed, predicted[idx]),
-            "has_reference_audio": False,
-            "turn_times": "ordinal",
-            "rtf": rtf,
-            "mix_wav": mix_rel,
-            "prompt": {
-                "total_sec": round(prompt_samples / fs, 6),
-                "total_frames": prompt_frames,
+            mix_rel = f"mix/{wid}.wav"
+            write_wav(test_dir / mix_rel, gen_wavs.sum(dim=0).cpu() / n, fs)
+            mix_lines.append(f"{wid} {mix_rel}")
+
+            meta = {
+                "window_id": wid,
+                "session_id": wid,
+                "mode": MODE,
+                "testset": "covomix2-dialogue-testset",
+                "sample_rate": fs,
+                "num_channels": n,
+                "window_duration_sec": round(prep["gen_frames"] * hop / fs, 6),
+                "duration": duration_meta(duration_scale, speed, predicted[idx]),
+                "has_reference_audio": False,
+                "turn_times": "ordinal",
+                "rtf": rtf,
+                "compute": {
+                    # The plan-level batch id, shard-invariant by design.
+                    "batch_id": batch_id,
+                    "batch_size": len(prepared),
+                    "batch_elapsed_sec": round(float(elapsed), 6),
+                    "autocast_dtype": autocast_dtype,
+                },
+                "mix_wav": mix_rel,
+                "prompt": {
+                    "total_sec": round(prep["prompt_samples"] / fs, 6),
+                    "total_frames": prep["prompt_frames"],
+                    "turns": [
+                        {
+                            "channel": p.channel,
+                            "text": p.text,
+                            "audio_path": str(p.audio_path),
+                            "duration_sec": round(prompt_secs[idx][p.channel], 6),
+                        }
+                        for p in record.prompts
+                    ],
+                },
+                "channels": channels,
                 "turns": [
                     {
-                        "channel": p.channel,
-                        "text": p.text,
-                        "audio_path": str(p.audio_path),
-                        "duration_sec": round(prompt_secs[idx][p.channel], 6),
+                        "channel": int(t.channel),
+                        "text": t.text,
+                        "start": t.start,
+                        "end": t.end,
                     }
-                    for p in record.prompts
+                    for t in record.turns
                 ],
-            },
-            "channels": channels,
-            "turns": [
-                {
-                    "channel": int(t.channel),
-                    "text": t.text,
-                    "start": t.start,
-                    "end": t.end,
-                }
-                for t in record.turns
-            ],
-        }
-        meta_rel = f"meta/{wid}.json"
-        (test_dir / meta_rel).write_text(
-            json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
-        )
-        meta_lines.append(f"{wid} {meta_rel}")
+            }
+            meta_rel = f"meta/{wid}.json"
+            (test_dir / meta_rel).write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+            )
+            meta_lines.append(f"{wid} {meta_rel}")
 
     # Shards share the wav/prompt/mix/meta subdirectories safely - every
     # filename is keyed by the unique dialogue id - but each writes its OWN
@@ -375,5 +458,6 @@ def run_external_inference(
         "n_selected": len(meta_lines),
         "n_skipped": exclusions["n_out_of_band"],
         "n_not_sampled": exclusions["n_not_sampled"],
-        "n_other_shards": exclusions["n_other_shards"],
+        "n_other_shards": len(indices) - n_mine,
+        "n_batches": len(shard_batch_ids),
     }

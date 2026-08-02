@@ -14,11 +14,14 @@ training path.
 
 from __future__ import annotations
 
+import contextlib
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 import torch
+import torch.nn.functional as F
 import torchaudio
 
 from espnet2.fileio.sound_scp import soundfile_read
@@ -178,6 +181,122 @@ def generate_region(
         )
         gen_mel = mel[:, prompt_frames:, :].to(torch.float32)  # drop the prompt
         wavs = vocoder.decode(gen_mel.permute(0, 2, 1)).cpu()  # (N, T_gen)
+    elapsed = time.perf_counter() - start
+    return wavs, elapsed
+
+
+@dataclass
+class GenerationItem:
+    """One dialogue's inputs to a batched ODE call.
+
+    ``speech`` is the raw per-channel conditioning wave ``(N, T_wav)`` -
+    prompt followed by a zero generated region - and ``text`` the padded
+    per-channel token ids ``(N, T_text)`` (pad -1).  ``prompt_frames`` /
+    ``total_frames`` delimit the infilled region exactly as in
+    :func:`generate_region`.
+    """
+
+    speech: torch.Tensor
+    text: torch.Tensor
+    prompt_frames: int
+    total_frames: int
+
+
+def _autocast(device: torch.device, dtype: str | None):
+    """Autocast context for the ODE, or a no-op when ``dtype`` is ``None``.
+
+    The vocoder is deliberately kept OUTSIDE this context by the callers:
+    reduced precision is validated for the transformer (the rotary embedding
+    carries explicit autocast guards) but not for Vocos' ISTFT head.
+    """
+    if dtype is None:
+        return contextlib.nullcontext()
+    return torch.autocast(device_type=device.type, dtype=getattr(torch, dtype))
+
+
+def generate_batch(
+    model,
+    vocoder,
+    items: list[GenerationItem],
+    *,
+    steps: int,
+    cfg_strength: float,
+    sway_sampling_coef: float,
+    seed: int | None,
+    autocast_dtype: str | None = None,
+) -> tuple[list[torch.Tensor], float]:
+    """Run ONE multi-branch ODE over several dialogues packed row-wise.
+
+    The packed layout is the training-time one: all dialogues' channels are
+    row-stacked, ``counts`` groups rows into conversations, and the injected
+    exchanges mix strictly within a conversation (``conv_id`` blocks), so
+    dialogues cannot contaminate each other.  Per-row ``lens`` carry each
+    dialogue's prompt length and per-row ``duration`` its total frames; rows
+    beyond a dialogue's duration are padding whose output is discarded.
+    Padded rows attend exactly as padded training batches did
+    (``attn_mask_enabled`` false), so batching is in-distribution - callers
+    keep padding waste low by batching length-sorted dialogues.
+
+    ``seed`` seeds the RNG ONCE for the whole batch (the per-batch analogue
+    of ``generate_region``'s per-call seeding): a batch of one is
+    bit-identical to the sequential path, while noise inside a larger batch
+    depends on batch composition - which the caller keeps a pure function of
+    config, never of shard membership.
+
+    Returns one ``(N, T_gen)`` generated-region wave per item (vocoded per
+    dialogue at its exact length, outside autocast) and the wall-clock
+    seconds spent on the whole batch.
+    """
+    if not items:
+        return [], 0.0
+    device = items[0].speech.device
+    counts = [item.speech.shape[0] for item in items]
+    max_samples = max(item.speech.shape[1] for item in items)
+    max_tokens = max(item.text.shape[1] for item in items)
+    cond = torch.cat(
+        [F.pad(item.speech, (0, max_samples - item.speech.shape[1])) for item in items]
+    )
+    text = torch.cat(
+        [
+            F.pad(item.text, (0, max_tokens - item.text.shape[1]), value=-1)
+            for item in items
+        ]
+    )
+    lens = torch.cat(
+        [
+            torch.full((n,), item.prompt_frames, device=device, dtype=torch.long)
+            for item, n in zip(items, counts)
+        ]
+    )
+    duration = torch.cat(
+        [
+            torch.full((n,), item.total_frames, device=device, dtype=torch.long)
+            for item, n in zip(items, counts)
+        ]
+    )
+    start = time.perf_counter()
+    with torch.inference_mode():
+        with _autocast(device, autocast_dtype):
+            mel, _ = model.cfm.sample(
+                cond=cond,
+                text=text,
+                duration=duration,
+                counts=counts,
+                lens=lens,
+                steps=steps,
+                cfg_strength=cfg_strength,
+                sway_sampling_coef=sway_sampling_coef,
+                seed=seed,
+            )
+        mel = mel.to(torch.float32)
+        wavs = []
+        offset = 0
+        for item, n in zip(items, counts):
+            gen_mel = mel[
+                offset : offset + n, item.prompt_frames : item.total_frames, :
+            ]
+            wavs.append(vocoder.decode(gen_mel.permute(0, 2, 1)).cpu())
+            offset += n
     elapsed = time.perf_counter() - start
     return wavs, elapsed
 
