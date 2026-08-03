@@ -429,3 +429,15 @@ class TestReductionAndDeterminism:
             scp = tmp_path / f"s{shard_index}/valid/meta.scp.{shard_index}of2"
             seen += [ln.split()[0] for ln in scp.read_text("utf-8").splitlines()]
         assert sorted(seen) == ["000", "001"]
+
+
+# --------------------------------------------------------------------------- #
+# System dispatch
+# --------------------------------------------------------------------------- #
+def test_system_dispatch_literal_matches_mode():
+    # system.py compares a literal so an SSSD run never imports this module;
+    # this test pins the two names together (same doctrine as the external
+    # path's pin test).
+    from egs3.conversational.tts.src.system import CHUNKED_MODE as SYSTEM_LITERAL
+
+    assert SYSTEM_LITERAL == CHUNKED_MODE
