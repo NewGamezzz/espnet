@@ -1,0 +1,124 @@
+"""Tests for the chunked external infer stage (src/chunked_inference.py).
+
+Reuses the external-path fixtures: the fabricated CoVoMix2 tree, the tiny
+random-init DiT, and FakeVocoder.  Duration expectations are written out
+longhand (explicit per-speaker rates) so a shared bug in the formula under
+test cannot pass both sides - same doctrine as test_external_testset.py.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from egs3.conversational.tts.src.chunked_inference import (
+    estimate_turn_secs,
+    split_turns,
+)
+from egs3.conversational.tts.src.external_testset import (
+    estimate_duration_sec,
+    load_covomix2_testset,
+)
+
+from .test_build_model import build_tiny  # noqa: F401  (fixture reuse)
+from .test_external_testset import _write_testset
+
+
+@pytest.fixture
+def testset(tmp_path):
+    return _write_testset(tmp_path)
+
+
+@pytest.fixture
+def tiny_model(testset):
+    return build_tiny(testset["vocab"])
+
+
+def _records(testset):
+    return load_covomix2_testset(
+        testset["testset_root"], testset["librispeech_root"], testset["vocab"]
+    )
+
+
+# --------------------------------------------------------------------------- #
+# split_turns (pure)
+# --------------------------------------------------------------------------- #
+class TestSplitTurns:
+    def test_fixed_turn_count_partitions_with_remainder(self):
+        assert split_turns([1.0] * 5, turns=2) == [(0, 2), (2, 4), (4, 5)]
+
+    def test_turn_count_one_is_per_turn(self):
+        assert split_turns([1.0, 2.0, 3.0], turns=1) == [(0, 1), (1, 2), (2, 3)]
+
+    def test_target_sec_packs_greedily(self):
+        # 10+10 <= 25, adding the third would exceed -> new chunk.
+        assert split_turns([10.0, 10.0, 10.0], target_sec=25.0) == [(0, 2), (2, 3)]
+
+    def test_oversized_single_turn_still_gets_own_chunk(self):
+        # A 30 s turn exceeds the 25 s target on its own: never split inside
+        # a turn, never merged with a neighbour.
+        assert split_turns([30.0, 5.0], target_sec=25.0) == [(0, 1), (1, 2)]
+
+    def test_ranges_partition_the_turns(self):
+        for kwargs in ({"turns": 2}, {"target_sec": 3.5}):
+            ranges = split_turns([1.0, 2.0, 3.0, 0.5, 4.0], **kwargs)
+            flat = [i for a, b in ranges for i in range(a, b)]
+            assert flat == list(range(5))
+
+    def test_exactly_one_policy_required(self):
+        with pytest.raises(ValueError, match="exactly one"):
+            split_turns([1.0])
+        with pytest.raises(ValueError, match="exactly one"):
+            split_turns([1.0], turns=2, target_sec=25.0)
+
+    def test_bad_values_raise(self):
+        with pytest.raises(ValueError):
+            split_turns([1.0], turns=0)
+        with pytest.raises(ValueError):
+            split_turns([1.0], target_sec=0.0)
+        with pytest.raises(ValueError, match="no turns"):
+            split_turns([], turns=2)
+
+
+# --------------------------------------------------------------------------- #
+# estimate_turn_secs (pure)
+# --------------------------------------------------------------------------- #
+class TestEstimateTurnSecs:
+    def test_per_turn_secs_use_the_speakers_own_rate(self, testset):
+        record = _records(testset)[0]  # "000": 3 turns, channels 0, 1, 0
+        prompt_secs = [1.0, 2.0]
+        # Longhand: rate_ch = prompt_sec / prompt_chars (utf-8 bytes).
+        rate0 = 1.0 / len(record.prompts[0].text.encode("utf-8"))
+        rate1 = 2.0 / len(record.prompts[1].text.encode("utf-8"))
+        got = estimate_turn_secs(record, prompt_secs, duration_scale=1.0, speed=1.0)
+        expected = [
+            len(record.turns[0].text.encode("utf-8")) * rate0,
+            len(record.turns[1].text.encode("utf-8")) * rate1,
+            len(record.turns[2].text.encode("utf-8")) * rate0,
+        ]
+        assert got == pytest.approx(expected)
+
+    def test_sums_to_the_whole_dialogue_estimate(self, testset):
+        for record in _records(testset):
+            prompt_secs = [1.5, 0.75]
+            per_turn = estimate_turn_secs(
+                record, prompt_secs, duration_scale=1.117, speed=1.2
+            )
+            whole = estimate_duration_sec(
+                record, prompt_secs, duration_scale=1.117, speed=1.2
+            )
+            assert sum(per_turn) == pytest.approx(whole)
+
+    def test_wrong_prompt_count_raises(self, testset):
+        record = _records(testset)[0]
+        with pytest.raises(ValueError, match="prompt durations"):
+            estimate_turn_secs(record, [1.0], duration_scale=1.0, speed=1.0)
+
+    def test_degenerate_prompt_raises(self, testset):
+        record = _records(testset)[0]
+        with pytest.raises(ValueError, match="degenerate"):
+            estimate_turn_secs(record, [0.0, 1.0], duration_scale=1.0, speed=1.0)
+
+    def test_bad_speed_raises(self, testset):
+        record = _records(testset)[0]
+        with pytest.raises(ValueError, match="speed"):
+            estimate_turn_secs(record, [1.0, 1.0], duration_scale=1.0, speed=0.0)
