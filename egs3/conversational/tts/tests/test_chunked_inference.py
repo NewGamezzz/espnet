@@ -35,8 +35,20 @@ from egs3.conversational.tts.src.external_testset import (
     load_covomix2_testset,
 )
 
+from espnet3.systems.base.metric import measure
+
 from .test_build_model import build_tiny  # noqa: F401  (fixture reuse)
-from .test_external_testset import _external_config, _write_testset
+from .test_e2e_eval import (
+    ASR_SUMMARY_KEYS,
+    INTERACTION_SUMMARY_KEYS,
+    QUALITY_SUMMARY_KEYS,
+    SPEAKER_SUMMARY_KEYS,
+)
+from .test_external_testset import (
+    _external_config,
+    _external_metrics_config,
+    _write_testset,
+)
 from .test_inference import FS, HOP, FakeVocoder, _read_wav
 
 
@@ -429,6 +441,36 @@ class TestReductionAndDeterminism:
             scp = tmp_path / f"s{shard_index}/valid/meta.scp.{shard_index}of2"
             seen += [ln.split()[0] for ln in scp.read_text("utf-8").splitlines()]
         assert sorted(seen) == ["000", "001"]
+
+
+# --------------------------------------------------------------------------- #
+# Measure battery on chunked output
+# --------------------------------------------------------------------------- #
+class TestChunkedMeasure:
+    def test_full_battery_runs_on_chunked_output(self, testset, tiny_model, tmp_path):
+        inference_dir = tmp_path / "infer"
+        run_chunked_inference(
+            _chunked_config(testset, inference_dir, {"turns": 2}),
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+        )
+        results = measure(_external_metrics_config(inference_dir))
+
+        # The chunked meta contract is layout-identical to the external
+        # path's, so the measure stage runs unchanged - same assertion as
+        # TestExternalMeasure.
+        for suffix, expected in (
+            ("ConversationASRMetric", ASR_SUMMARY_KEYS),
+            ("SpeakerSimilarityMetric", SPEAKER_SUMMARY_KEYS),
+            ("QualityMetric", QUALITY_SUMMARY_KEYS),
+            ("NoReferenceInteractionMetric", INTERACTION_SUMMARY_KEYS),
+        ):
+            matches = [k for k in results if k.endswith(suffix)]
+            assert len(matches) == 1, f"expected one {suffix} entry, got {matches}"
+            summary = results[matches[0]]["valid"]
+            assert not expected - set(summary)
+            assert all(isinstance(v, float) or v is None for v in summary.values())
 
 
 # --------------------------------------------------------------------------- #

@@ -1,0 +1,201 @@
+################################################################
+#  Conversational F5 - CHUNKED infer on the CoVoMix2 test set  #
+################################################################
+# Generate from the public CoVoMix2 dialogue test set
+# (https://github.com/vivian556123/covomix2-dialogue-testset): 1000 written
+# DailyDialog dialogues, each with two LibriSpeech test-clean acoustic
+# prompts.  See src/external_testset.py for the adapter and
+# src/external_inference.py for what differs from the SSSD path.
+#
+# Quick usage (from the recipe dir):
+#   python run.py --stages infer measure \
+#       --inference_config conf/inference_covomix2_chunked.yaml \
+#       --metrics_config conf/metrics_covomix2.yaml
+#
+# CHUNKED VARIANT: splits every dialogue at turn boundaries and generates
+# chunk k conditioned on chunk k-1's generated audio + text, keeping every
+# ODE call in the short-generation regime (see src/chunked_inference.py's
+# module docstring, and PLAN-chunked-gen.md for the design).
+#
+# DETERMINISM: unlike generate_external, outputs here are a function of the
+# config INCLUDING selection.shard_count (chunk chains cannot cross shards,
+# so batches are planned per shard).  Rerunning a shard is bit-identical;
+# changing shard_count redraws equally-valid samples.  Treat shard_count as
+# a sampling knob and keep it fixed within an eval.
+#
+# This config never touches the SSSD infer path: `mode: generate_external`
+# dispatches to a separate implementation, and conf/inference_conversational
+# .yaml is left alone so the existing infer_generate* runs stay reproducible.
+#
+# RUNTIME BUDGET (default = all 1000 dialogues, nothing filtered)
+# ---------------------------------------------------------------
+# Total predicted audio is 10.4 h (37,565 s, mean 37.6 s/dialogue), measured
+# by the shipped estimator over the real prompts - not extrapolated.  The
+# SEQUENTIAL run (one dialogue per ODE call, fp32) measured effective RTF
+# 1.45 on one A100 (SSSD infer_generate_cfg3_finetune23k), which priced the
+# full set at ~15-25 h; that cost was mostly GPU UNDERUTILIZATION - each of
+# the 32 CFG-doubled DiT forwards carried only one dialogue's 2 channels.
+#
+# The defaults below batch several dialogues into each ODE call (`batching`)
+# and run the transformer under bf16 autocast (`sampling.autocast_dtype`),
+# which multiplies per-forward rows by the mean batch size.  The batch-level
+# RTF is recorded in every meta JSON under `compute`; re-measure the wall
+# clock on the first Delta run before promising a number - the long tail
+# still runs alone (a >204 s dialogue fills the batch budget by itself) and
+# attention stays quadratic in frames.
+# For a smoke test set `selection.num_dialogues` to something small and SAY
+# SO when reporting.
+
+training_config: conf/training_poc.yaml
+exp_tag: eval_covomix2
+mode: generate_external_chunked
+device: cuda
+inference_dir: ${exp_dir}/infer_${mode}
+test_name: valid
+
+# null -> keep the assembled pretrained model (zero-init gates); a training
+# ckpt supersedes every pretrained weight.
+ckpt: null
+use_ema: true
+
+testset:
+  # Clone of vivian556123/covomix2-dialogue-testset (contains
+  # dailydialog-dialogue.json and transcriptions/).
+  root: downloads/covomix2-dialogue-testset
+  # Directory CONTAINING test-clean/ - the index's prompt paths are relative
+  # to it.  On Delta: /work/hdd/bbjs/shared/corpora/librispeech/LibriSpeech
+  librispeech_root: /work/hdd/bbjs/shared/corpora/librispeech/LibriSpeech
+  num_channels: 2
+
+# Duration policy.  This test set ships NO reference audio, so the generated
+# duration is predicted, and duration is the only timing signal this model
+# receives - it is a reported hyperparameter, recorded in every meta JSON.
+#
+# The rule is F5-TTS's own (seconds-per-character measured on the prompt,
+# scaled by generated text length; utils_infer.py), applied PER SPEAKER and
+# corrected by `scale`:
+#
+#   scale = (SSSD articulation / LibriSpeech articulation) / SSSD density
+#         = (0.0735 / 0.0690) / 0.954 = 1.117
+#
+# retargeting read-speech rate to spontaneous and adding the conversational
+# silence budget.  Set scale: 1.0 for F5's uncorrected rule.
+#
+# `speed` keeps F5's sense (larger = faster = shorter).  Sweep it at
+# 0.9 / 1.0 / 1.1 to MEASURE how much the interaction metrics depend on the
+# duration policy rather than assuming they don't.
+duration:
+  scale: 1.117
+  speed: 1.0
+
+selection:
+  # DEFAULT IS FULL COVERAGE: null/null generates all 1000 dialogues, so a
+  # result on this config is "the CoVoMix2 test set" with no subsetting
+  # caveat attached.
+  #
+  # Measured over all 1000 dialogues with the real vocab and real LibriSpeech
+  # prompt durations at scale 1.117, the predicted duration runs p10 10.7 s,
+  # median 29.8 s, p90 75.3 s, max 203.7 s.  Setting max_duration would keep:
+  #   60 s (the training window_max) -> 819/1000
+  #   45 s                           -> 699/1000
+  #   30 s                           -> 504/1000
+  # Excluded dialogues are counted and logged, never silently dropped, and
+  # since the excluded ones are the LONG ones specifically, any band makes
+  # the reported subset biased short.  That bias is the reason the default
+  # is full coverage.
+  #
+  # THE COST OF FULL COVERAGE - two things to know when reading the results:
+  #
+  # 1. Out of regime.  181 dialogues exceed the 60 s training window_max and
+  #    the longest is 203.7 s, 3.4x beyond it and well past F5's own
+  #    pretraining regime.  Rotary position extrapolation that far has never
+  #    been validated for this model, so degradation on the tail is expected
+  #    and is a property of the length, not of the fine-tuning.  Report the
+  #    metrics stratified by predicted duration (<=60 s vs beyond) so the
+  #    in-regime number stays readable next to the full-coverage one.
+  # 2. Runtime.  Attention is quadratic in frames, so the tail is far more
+  #    expensive than its share of the count.  See the header of this file
+  #    for the measured budget.
+  min_duration: null
+  max_duration: null
+  # null -> every dialogue that passes the band.
+  #
+  # Default to the full in-band set, NOT a 50-window sample: the SSSD runs
+  # showed that a 4.5-point WER move between checkpoints sits inside the
+  # noise at n=50, and this test set costs nothing per dialogue beyond GPU
+  # time (no corpus access, no reference audio to stage).  Set a small
+  # number here only for a smoke test, and say so when reporting it.
+  num_dialogues: null
+  seed: 0
+
+  # Sharding, for splitting the ~15-25 h single-GPU run across parallel jobs
+  # or across the GPUs of one node.  Each shard is a separate process and
+  # pays the recipe's fixed startup cost (~12.5 min measured on Delta: pixi
+  # activation plus the espnet import off Lustre), so the useful shard count
+  # is lower than raw parallelism suggests - 4 shards spend ~50 min of
+  # aggregate overhead against ~20 h of work, 32 would spend over 6 h.
+  # Applied LAST, after the band, the subsample AND the batch plan: shards
+  # take whole batches, so every shard sees the same batch plan and the
+  # union of all shards is bit-identical to an unsharded run (batch
+  # composition, and with it every noise draw, never depends on
+  # shard_count).
+  #
+  # Assignment is greedy longest-processing-time on padded batch audio, not
+  # striping: the length distribution is skewed enough (159 dialogues over
+  # 60 s carry 37% of the audio) that a stripe can hand one shard most of
+  # the tail and that shard becomes the wall clock.  Every shard computes
+  # the same split independently - no coordination, no shared state.
+  #
+  # Each shard writes its own `<name>.scp.<i>of<n>` and shares the
+  # wav/prompt/mix/meta directories (filenames are keyed by dialogue id).
+  # When every shard is done:
+  #     python local/merge_shards.py <inference_dir>/<test_name>
+  # which refuses to write a partial merge unless --allow-partial is passed.
+  # Leave shard_count at 1 for a single run: the plain SCP names are written
+  # directly and no merge step is needed.
+  shard_index: 0
+  shard_count: 1
+
+# How many dialogues share one ODE call.  The model's packed `counts` layout
+# carries several conversations per batch at training time already; the
+# exchanges mix strictly within a conversation, so batchmates cannot
+# contaminate each other, and padded rows attend exactly as padded training
+# batches did.  Dialogues are length-sorted before packing, so padding waste
+# stays small; a batch costs n_dialogues * longest_member_sec of PADDED
+# prompt+generated audio and grows while that stays under the budget.
+#
+# REPRODUCIBILITY: the sampler reseeds once per BATCH (the batch analogue of
+# the sequential path's per-dialogue reseed), so generated audio depends on
+# these knobs - changing them redraws equally-valid samples.  Results never
+# depend on shard_count (shards take whole batches).  Set both to null to
+# reproduce the sequential per-dialogue behaviour bit-for-bit.
+#
+# 240 s * 2 channels at 93.75 frames/s is ~45k padded rows-frames per ODE
+# call before CFG doubling - sized for one 40 GB A100 at steps=32; halve it
+# on OOM.  Mean predicted total is ~44 s, so a typical batch carries ~5
+# dialogues; the >204 s tail still runs alone.
+batching:
+  max_batch_audio_sec: 240.0
+  max_batch_dialogues: 16
+
+sampling:
+  steps: 32
+  cfg_strength: 3.0
+  sway_sampling_coef: -1.0
+  seed: 0
+  # bf16 autocast for the ODE transformer only (the vocoder stays fp32).
+  # The rotary embedding carries explicit autocast guards; training ran
+  # under bf16 autocast, so inference precision matches training.  Set to
+  # null for full fp32 (the pre-batching behaviour).
+  autocast_dtype: bfloat16
+
+# Chunk policy - exactly ONE of the two keys may be non-null.
+#   turns: 2       -> every chunk is two consecutive turns (both speakers
+#                     present in every chunk; smallest grounded steps).
+#   target_sec: 25 -> pack whole turns until the predicted chunk duration
+#                     would exceed 25 s (fewer seams, longer calls).
+# A single turn longer than the target still becomes its own chunk,
+# flagged `oversized` in meta and counted in the log.
+chunk:
+  turns: null
+  target_sec: 25.0
