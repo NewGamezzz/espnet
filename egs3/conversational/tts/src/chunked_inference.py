@@ -161,8 +161,20 @@ def split_turns(
 def call_turns(
     record: ExternalRecord, ranges: Sequence[tuple[int, int]], k: int
 ) -> list[Turn]:
-    """Turns conditioning ODE call ``k`` (implemented in the next task)."""
-    raise NotImplementedError
+    """Turns conditioning ODE call ``k``.
+
+    Call 0 is today's external layout: the per-channel prompt turns followed
+    by chunk 0's turns.  Call k > 0 covers exactly the audio span of the
+    call - chunk k-1 (the continuation prompt) then chunk k - which keeps
+    the ``<turn>``/``<OTHER>`` budget consistent with the conditioning audio
+    by construction.  Ranges are contiguous, so this is one slice.
+    """
+    if k == 0:
+        a, b = ranges[0]
+        return _prompt_turns(record) + list(record.turns[a:b])
+    prev_start = ranges[k - 1][0]
+    end = ranges[k][1]
+    return list(record.turns[prev_start:end])
 
 
 def run_chunked_inference(

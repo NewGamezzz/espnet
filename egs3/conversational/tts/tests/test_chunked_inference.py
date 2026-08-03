@@ -10,10 +10,17 @@ from __future__ import annotations
 
 import pytest
 
+from egs3.conversational.tts.dataset.preprocessing.text import (
+    OTHER_TOKEN,
+    TURN_TOKEN,
+    build_branch_texts,
+)
 from egs3.conversational.tts.src.chunked_inference import (
+    call_turns,
     estimate_turn_secs,
     split_turns,
 )
+from egs3.conversational.tts.src.external_inference import _prompt_turns
 from egs3.conversational.tts.src.external_testset import (
     estimate_duration_sec,
     load_covomix2_testset,
@@ -122,3 +129,35 @@ class TestEstimateTurnSecs:
         record = _records(testset)[0]
         with pytest.raises(ValueError, match="speed"):
             estimate_turn_secs(record, [1.0, 1.0], duration_scale=1.0, speed=0.0)
+
+
+# --------------------------------------------------------------------------- #
+# call_turns (pure)
+# --------------------------------------------------------------------------- #
+class TestCallTurns:
+    def test_first_call_is_prompt_turns_plus_first_chunk(self, testset):
+        record = _records(testset)[0]
+        ranges = [(0, 2), (2, 3)]
+        got = call_turns(record, ranges, 0)
+        assert got[: len(record.prompts)] == _prompt_turns(record)
+        assert got[len(record.prompts) :] == list(record.turns[0:2])
+
+    def test_later_call_is_previous_chunk_plus_current(self, testset):
+        record = _records(testset)[0]
+        ranges = [(0, 2), (2, 3)]
+        assert call_turns(record, ranges, 1) == list(record.turns[0:3])
+
+    def test_token_budget_matches_the_masking_scheme(self, testset):
+        # The <turn>/<OTHER> budget of call k's branch text, hand-computed:
+        # branch i gets one <turn> per turn, then the turn's characters if it
+        # owns the turn, else one <OTHER> per character.
+        record = _records(testset)[0]
+        ranges = [(0, 2), (2, 3)]
+        turns = call_turns(record, ranges, 1)
+        branches = build_branch_texts(turns, record.num_channels)
+        for ch, branch in enumerate(branches):
+            assert branch.count(TURN_TOKEN) == len(turns)
+            expected_other = sum(len(t.text) for t in turns if t.channel != ch)
+            assert branch.count(OTHER_TOKEN) == expected_other
+            own = [tok for tok in branch if tok not in (TURN_TOKEN, OTHER_TOKEN)]
+            assert len(own) == sum(len(t.text) for t in turns if t.channel == ch)
