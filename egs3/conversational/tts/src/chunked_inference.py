@@ -412,9 +412,7 @@ def run_chunked_inference(
             active,
             round_costs,
             max_batch_audio_sec=(
-                float(max_batch_audio_sec)
-                if max_batch_audio_sec is not None
-                else None
+                float(max_batch_audio_sec) if max_batch_audio_sec is not None else None
             ),
             max_batch_dialogues=(
                 int(max_batch_dialogues) if max_batch_dialogues is not None else None

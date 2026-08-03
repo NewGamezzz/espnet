@@ -251,7 +251,9 @@ class TestChunkedInfer:
         assert meta1["chunking"]["n_chunks"] == 1
 
     def test_wave_is_the_concat_of_chunk_regions(self, testset, tiny_model, tmp_path):
-        test_dir, _, _ = self._run(testset, tiny_model, tmp_path / "infer", {"turns": 2})
+        test_dir, _, _ = self._run(
+            testset, tiny_model, tmp_path / "infer", {"turns": 2}
+        )
         meta = json.loads((test_dir / "meta/000.json").read_text("utf-8"))
         total_frames = sum(c["gen_frames"] for c in meta["chunking"]["chunks"])
         wav, sr = _read_wav(test_dir / "wav/000_ch0.wav")
@@ -331,7 +333,9 @@ class TestChunkedInfer:
         gen_region = item.speech[:, item.prompt_frames * HOP :]
         assert torch.equal(gen_region, torch.zeros_like(gen_region))
 
-    def test_rounds_reseed_differently(self, testset, tiny_model, tmp_path, monkeypatch):
+    def test_rounds_reseed_differently(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
         import egs3.conversational.tts.src.chunked_inference as ci
 
         seeds = []
