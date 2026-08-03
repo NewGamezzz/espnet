@@ -8,7 +8,11 @@ test cannot pass both sides - same doctrine as test_external_testset.py.
 
 from __future__ import annotations
 
+import json
+
 import pytest
+import torch
+from omegaconf import OmegaConf
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
     OTHER_TOKEN,
@@ -16,8 +20,10 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
     build_branch_texts,
 )
 from egs3.conversational.tts.src.chunked_inference import (
+    MODE as CHUNKED_MODE,
     call_turns,
     estimate_turn_secs,
+    run_chunked_inference,
     split_turns,
 )
 from egs3.conversational.tts.src.external_inference import _prompt_turns
@@ -27,7 +33,8 @@ from egs3.conversational.tts.src.external_testset import (
 )
 
 from .test_build_model import build_tiny  # noqa: F401  (fixture reuse)
-from .test_external_testset import _write_testset
+from .test_external_testset import _external_config, _write_testset
+from .test_inference import FS, HOP, FakeVocoder, _read_wav
 
 
 @pytest.fixture
@@ -161,3 +168,165 @@ class TestCallTurns:
             assert branch.count(OTHER_TOKEN) == expected_other
             own = [tok for tok in branch if tok not in (TURN_TOKEN, OTHER_TOKEN)]
             assert len(own) == sum(len(t.text) for t in turns if t.channel == ch)
+
+
+# --------------------------------------------------------------------------- #
+# End-to-end chunked infer stage
+# --------------------------------------------------------------------------- #
+def _chunked_config(testset, inference_dir, chunk, **overrides):
+    cfg = _external_config(testset, inference_dir, **overrides)
+    cfg.mode = CHUNKED_MODE
+    cfg.chunk = OmegaConf.create(chunk)
+    return cfg
+
+
+class TestChunkedInfer:
+    def _run(self, testset, tiny_model, inference_dir, chunk, **overrides):
+        cfg = _chunked_config(testset, inference_dir, chunk, **overrides)
+        stats = run_chunked_inference(
+            cfg,
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+        )
+        return inference_dir / "valid", stats, cfg
+
+    def test_output_contract_and_chunking_meta(self, testset, tiny_model, tmp_path):
+        # DIALOGUES: "000" has 3 turns -> 2 chunks at turns=2; "001" has 2
+        # turns -> 1 chunk.  Two rounds total, three ODE calls.
+        test_dir, stats, _ = self._run(
+            testset, tiny_model, tmp_path / "infer", {"turns": 2}
+        )
+        assert stats == {
+            "n_selected": 2,
+            "n_skipped": 0,
+            "n_not_sampled": 0,
+            "n_other_shards": 0,
+            "n_rounds": 2,
+            "n_batches": 3,  # no batching block -> every call is a singleton
+        }
+        assert (test_dir / "meta.scp").read_text("utf-8").splitlines() == [
+            "000 meta/000.json",
+            "001 meta/001.json",
+        ]
+        for name in ("wav.scp", "prompt.scp", "text.scp", "mix.scp"):
+            assert (test_dir / name).is_file()
+        assert not (test_dir / "gt").exists()
+
+        meta = json.loads((test_dir / "meta/000.json").read_text("utf-8"))
+        assert meta["mode"] == CHUNKED_MODE
+        assert meta["has_reference_audio"] is False
+        assert meta["turn_times"] == "ordinal"
+        assert meta["rtf"] is None
+        chunking = meta["chunking"]
+        assert chunking["policy"] == {"turns": 2}
+        assert chunking["n_chunks"] == 2
+        assert chunking["oversized"] == [False, False]
+        assert [(c["turn_start"], c["turn_end"]) for c in chunking["chunks"]] == [
+            (0, 2),
+            (2, 3),
+        ]
+        assert [c["round"] for c in chunking["chunks"]] == [0, 1]
+        for c in chunking["chunks"]:
+            assert c["gen_frames"] >= 1
+            assert c["batch_size"] == 1
+            assert c["batch_elapsed_sec"] > 0
+
+        meta1 = json.loads((test_dir / "meta/001.json").read_text("utf-8"))
+        assert meta1["chunking"]["n_chunks"] == 1
+
+    def test_wave_is_the_concat_of_chunk_regions(self, testset, tiny_model, tmp_path):
+        test_dir, _, _ = self._run(testset, tiny_model, tmp_path / "infer", {"turns": 2})
+        meta = json.loads((test_dir / "meta/000.json").read_text("utf-8"))
+        total_frames = sum(c["gen_frames"] for c in meta["chunking"]["chunks"])
+        wav, sr = _read_wav(test_dir / "wav/000_ch0.wav")
+        assert sr == FS
+        assert wav.shape[0] == total_frames * HOP
+        assert meta["window_duration_sec"] == pytest.approx(total_frames * HOP / FS)
+        mix, _ = _read_wav(test_dir / "mix/000.wav")
+        assert mix.shape[0] == total_frames * HOP
+
+    def test_target_sec_policy_flags_oversized_chunks(
+        self, testset, tiny_model, tmp_path
+    ):
+        # A microscopic target makes every turn its own chunk and every
+        # chunk oversized - exercises both the split and the flag.
+        test_dir, stats, _ = self._run(
+            testset, tiny_model, tmp_path / "infer", {"target_sec": 0.001}
+        )
+        meta = json.loads((test_dir / "meta/000.json").read_text("utf-8"))
+        assert meta["chunking"]["policy"] == {"target_sec": 0.001}
+        assert meta["chunking"]["n_chunks"] == 3
+        assert meta["chunking"]["oversized"] == [True, True, True]
+        assert stats["n_rounds"] == 3
+
+    def test_missing_chunk_block_is_rejected(self, testset, tiny_model, tmp_path):
+        cfg = _external_config(testset, tmp_path / "infer")
+        cfg.mode = CHUNKED_MODE
+        with pytest.raises(ValueError, match="chunk"):
+            run_chunked_inference(
+                cfg,
+                training_config=testset["training_config"],
+                model=tiny_model,
+                vocoder=FakeVocoder(),
+            )
+
+    def test_wrong_mode_is_rejected(self, testset, tiny_model, tmp_path):
+        cfg = _chunked_config(testset, tmp_path / "infer", {"turns": 2})
+        cfg.mode = "generate_external"
+        with pytest.raises(ValueError, match="expected mode"):
+            run_chunked_inference(
+                cfg,
+                training_config=testset["training_config"],
+                model=tiny_model,
+                vocoder=FakeVocoder(),
+            )
+
+    def test_round_k_conditions_on_round_k_minus_one(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        # Capture every GenerationItem handed to generate_batch and check
+        # the round-1 call's prompt equals a round-0 generated wave.
+        import egs3.conversational.tts.src.chunked_inference as ci
+
+        captured = []
+        real = ci.generate_batch
+
+        def spy(model, vocoder, items, **kwargs):
+            out = real(model, vocoder, items, **kwargs)
+            captured.append((items, kwargs, out))
+            return out
+
+        monkeypatch.setattr(ci, "generate_batch", spy)
+        self._run(testset, tiny_model, tmp_path / "infer", {"turns": 2})
+
+        # Three singleton calls; the round-1 call is the last one.
+        round1_items, _, _ = captured[-1]
+        item = round1_items[0]
+        for items, kwargs, out in captured[:-1]:
+            wavs = out[0][0]
+            frames = wavs.shape[1] // HOP
+            if item.prompt_frames == frames:
+                prompt = item.speech[:, : frames * HOP].cpu()
+                if torch.equal(prompt, wavs[:, : frames * HOP]):
+                    break
+        else:
+            pytest.fail("round-1 prompt does not match any round-0 output")
+        # And the generated region is zeros.
+        gen_region = item.speech[:, item.prompt_frames * HOP :]
+        assert torch.equal(gen_region, torch.zeros_like(gen_region))
+
+    def test_rounds_reseed_differently(self, testset, tiny_model, tmp_path, monkeypatch):
+        import egs3.conversational.tts.src.chunked_inference as ci
+
+        seeds = []
+        real = ci.generate_batch
+
+        def spy(model, vocoder, items, **kwargs):
+            seeds.append(kwargs["seed"])
+            return real(model, vocoder, items, **kwargs)
+
+        monkeypatch.setattr(ci, "generate_batch", spy)
+        self._run(testset, tiny_model, tmp_path / "infer", {"turns": 2})
+        # Config seed is 0; round 0 calls use 0, the round-1 call uses 1.
+        assert sorted(seeds) == [0, 0, 1]
