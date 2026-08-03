@@ -26,7 +26,10 @@ from egs3.conversational.tts.src.chunked_inference import (
     run_chunked_inference,
     split_turns,
 )
-from egs3.conversational.tts.src.external_inference import _prompt_turns
+from egs3.conversational.tts.src.external_inference import (
+    _prompt_turns,
+    run_external_inference,
+)
 from egs3.conversational.tts.src.external_testset import (
     estimate_duration_sec,
     load_covomix2_testset,
@@ -330,3 +333,99 @@ class TestChunkedInfer:
         self._run(testset, tiny_model, tmp_path / "infer", {"turns": 2})
         # Config seed is 0; round 0 calls use 0, the round-1 call uses 1.
         assert sorted(seeds) == [0, 0, 1]
+
+
+# --------------------------------------------------------------------------- #
+# Reduction property and determinism
+# --------------------------------------------------------------------------- #
+class TestReductionAndDeterminism:
+    def test_single_chunk_reduces_to_the_unchunked_path(
+        self, testset, tiny_model, tmp_path
+    ):
+        # chunk.turns >= max turn count -> one call per dialogue whose
+        # conditioning (prompt blocks + all turns' text) and round-0 seed
+        # (base + 0) are identical to generate_external's -> bit-equal audio.
+        ext_cfg = _external_config(testset, tmp_path / "ext")
+        run_external_inference(
+            ext_cfg,
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+        )
+        chk_cfg = _chunked_config(testset, tmp_path / "chk", {"turns": 99})
+        run_chunked_inference(
+            chk_cfg,
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+        )
+        for rel in (
+            "wav/000_ch0.wav",
+            "wav/000_ch1.wav",
+            "wav/001_ch0.wav",
+            "wav/001_ch1.wav",
+            "mix/000.wav",
+            "mix/001.wav",
+        ):
+            ext, _ = _read_wav(tmp_path / "ext/valid" / rel)
+            chk, _ = _read_wav(tmp_path / "chk/valid" / rel)
+            assert (ext == chk).all(), rel
+
+    def test_rerunning_a_shard_is_bit_identical(self, testset, tiny_model, tmp_path):
+        outs = []
+        for run_dir in ("a", "b"):
+            cfg = _chunked_config(
+                testset,
+                tmp_path / run_dir,
+                {"turns": 2},
+                selection={
+                    "min_duration": None,
+                    "max_duration": None,
+                    "num_dialogues": None,
+                    "seed": 0,
+                    "shard_index": 0,
+                    "shard_count": 2,
+                },
+            )
+            stats = run_chunked_inference(
+                cfg,
+                training_config=testset["training_config"],
+                model=tiny_model,
+                vocoder=FakeVocoder(),
+            )
+            outs.append((tmp_path / run_dir / "valid", stats))
+        (dir_a, stats_a), (dir_b, stats_b) = outs
+        assert stats_a == stats_b
+        assert stats_a["n_other_shards"] == 1  # 2 dialogues, 2 shards
+        scp_a = (dir_a / "wav.scp.0of2").read_text("utf-8")
+        assert scp_a == (dir_b / "wav.scp.0of2").read_text("utf-8")
+        rel = scp_a.splitlines()[0].split()[1]
+        wav_a, _ = _read_wav(dir_a / rel)
+        wav_b, _ = _read_wav(dir_b / rel)
+        assert (wav_a == wav_b).all(), rel
+
+    def test_shards_partition_the_dialogues(self, testset, tiny_model, tmp_path):
+        seen = []
+        for shard_index in (0, 1):
+            cfg = _chunked_config(
+                testset,
+                tmp_path / f"s{shard_index}",
+                {"turns": 2},
+                selection={
+                    "min_duration": None,
+                    "max_duration": None,
+                    "num_dialogues": None,
+                    "seed": 0,
+                    "shard_index": shard_index,
+                    "shard_count": 2,
+                },
+            )
+            run_chunked_inference(
+                cfg,
+                training_config=testset["training_config"],
+                model=tiny_model,
+                vocoder=FakeVocoder(),
+            )
+            scp = tmp_path / f"s{shard_index}/valid/meta.scp.{shard_index}of2"
+            seen += [ln.split()[0] for ln in scp.read_text("utf-8").splitlines()]
+        assert sorted(seen) == ["000", "001"]
