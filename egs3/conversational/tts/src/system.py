@@ -33,6 +33,10 @@ logger = logging.getLogger(__name__)
 # ``tests/test_external_testset.py::test_system_dispatch_literal_matches_mode``.
 EXTERNAL_MODE = "generate_external"
 
+# ``src.chunked_inference.MODE``, duplicated as a literal for the same
+# reason; pinned by ``tests/test_chunked_inference.py``.
+CHUNKED_MODE = "generate_external_chunked"
+
 
 class ConversationalTTSSystem(BaseSystem):
     """System with ``create_dataset`` (inherited SSSD builder), ``train``, a
@@ -45,10 +49,11 @@ class ConversationalTTSSystem(BaseSystem):
         """Run the multi-channel infer stage.
 
         ``mode`` selects the implementation: the SSSD modes (generate / gt /
-        resynth) go to ``src/inference.py`` exactly as before, and the
-        audio-free external test set goes to ``src/external_inference.py``.
-        The dispatch is additive and mode-gated - the SSSD path's behaviour
-        is unchanged for every pre-existing config.
+        resynth) go to ``src/inference.py`` exactly as before, the audio-free
+        external test set goes to ``src/external_inference.py``, and its
+        chunked variant to ``src/chunked_inference.py``.  The dispatch is
+        additive and mode-gated - the SSSD path's behaviour is unchanged for
+        every pre-existing config.
         """
         self._reject_stage_args("infer", args, kwargs)
         mode = getattr(self.inference_config, "mode", None)
@@ -67,6 +72,13 @@ class ConversationalTTSSystem(BaseSystem):
             )
 
             return run_external_inference(self.inference_config)
+
+        if mode == CHUNKED_MODE:
+            from egs3.conversational.tts.src.chunked_inference import (
+                run_chunked_inference,
+            )
+
+            return run_chunked_inference(self.inference_config)
 
         from egs3.conversational.tts.src.inference import run_inference
 
