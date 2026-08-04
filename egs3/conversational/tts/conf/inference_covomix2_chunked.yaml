@@ -189,13 +189,24 @@ sampling:
   # null for full fp32 (the pre-batching behaviour).
   autocast_dtype: bfloat16
 
-# Chunk policy - exactly ONE of the two keys may be non-null.
+# Chunk policy - exactly ONE of turns / target_sec may be non-null.
 #   turns: 2       -> every chunk is two consecutive turns (both speakers
 #                     present in every chunk; smallest grounded steps).
 #   target_sec: 25 -> pack whole turns until the predicted chunk duration
 #                     would exceed 25 s (fewer seams, longer calls).
 # A single turn longer than the target still becomes its own chunk,
 # flagged `oversized` in meta and counted in the log.
+#
+# cross_fade_sec is an independent SEAM knob, not a policy: each chunk join
+# is blended with an equal-power (cos/sin) cross-fade of this length instead
+# of a hard concat.  It acts at assembly only - conditioning uses the raw
+# chunk audio, so the sampled audio is identical at every setting and only
+# the written wavs differ.  Each seam shortens the output by this amount
+# (window_duration_sec in meta is measured on the written wav and reflects
+# it).  0.0 reproduces the hard-concat runs bit-for-bit; 0.1 is the seam
+# experiment motivated by the sweep's UTMOS gap (mix 2.85 unchunked vs 2.17
+# chunked at step40136) - the seam discontinuity is the suspected cause.
 chunk:
   turns: null
   target_sec: 25.0
+  cross_fade_sec: 0.1

@@ -22,6 +22,7 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
 from egs3.conversational.tts.src.chunked_inference import (
     MODE as CHUNKED_MODE,
     call_turns,
+    crossfade_concat,
     estimate_turn_secs,
     run_chunked_inference,
     split_turns,
@@ -188,6 +189,59 @@ class TestCallTurns:
 # --------------------------------------------------------------------------- #
 # End-to-end chunked infer stage
 # --------------------------------------------------------------------------- #
+# --------------------------------------------------------------------------- #
+# crossfade_concat (pure)
+# --------------------------------------------------------------------------- #
+class TestCrossfadeConcat:
+    def test_zero_fade_is_plain_concat(self):
+        torch.manual_seed(0)
+        chunks = [torch.randn(2, 100), torch.randn(2, 80)]
+        out = crossfade_concat(chunks, 0)
+        assert torch.equal(out, torch.cat(chunks, dim=1))
+
+    def test_output_shrinks_by_one_fade_per_seam(self):
+        torch.manual_seed(1)
+        chunks = [torch.randn(2, 100), torch.randn(2, 80), torch.randn(2, 60)]
+        out = crossfade_concat(chunks, 10)
+        assert out.shape == (2, 100 + 80 + 60 - 2 * 10)
+
+    def test_seam_uses_equal_power_gains(self):
+        # ones->zeros isolates the falling gain, zeros->ones the rising one;
+        # cos/sin at midpoint samples keeps summed POWER constant across the
+        # seam (two different noise draws are uncorrelated, so linear gains
+        # would dip -3 dB at the middle of every seam).
+        f = 8
+        ones, zeros = torch.ones(1, 40), torch.zeros(1, 40)
+        down = crossfade_concat([ones, zeros], f)[0, 40 - f : 40]
+        up = crossfade_concat([zeros, ones], f)[0, 40 - f : 40]
+        t = (torch.arange(f) + 0.5) / f
+        assert torch.allclose(down, torch.cos(t * torch.pi / 2))
+        assert torch.allclose(up, torch.sin(t * torch.pi / 2))
+        assert torch.allclose(down**2 + up**2, torch.ones(f))
+
+    def test_untouched_regions_are_bit_identical(self):
+        torch.manual_seed(2)
+        a, b = torch.randn(2, 100), torch.randn(2, 80)
+        out = crossfade_concat([a, b], 10)
+        assert torch.equal(out[:, :90], a[:, :90])
+        assert torch.equal(out[:, 100:], b[:, 10:])
+
+    def test_fade_clamps_to_the_shorter_chunk(self):
+        torch.manual_seed(3)
+        a, b = torch.randn(1, 4), torch.randn(1, 30)
+        out = crossfade_concat([a, b], 100)
+        assert out.shape == (1, 4 + 30 - 4)
+
+    def test_single_chunk_passes_through(self):
+        torch.manual_seed(4)
+        a = torch.randn(2, 50)
+        assert torch.equal(crossfade_concat([a], 10), a)
+
+    def test_negative_fade_raises(self):
+        with pytest.raises(ValueError, match="fade"):
+            crossfade_concat([torch.ones(1, 4)], -1)
+
+
 def _chunked_config(testset, inference_dir, chunk, **overrides):
     cfg = _external_config(testset, inference_dir, **overrides)
     cfg.mode = CHUNKED_MODE
@@ -276,6 +330,68 @@ class TestChunkedInfer:
         assert meta["chunking"]["n_chunks"] == 3
         assert meta["chunking"]["oversized"] == [True, True, True]
         assert stats["n_rounds"] == 3
+
+    def test_cross_fade_shortens_output_and_is_recorded(
+        self, testset, tiny_model, tmp_path
+    ):
+        # One hop of fade: <= every chunk (gen_frames >= 1), so no clamping
+        # and the expected length is exact.  Dialogue "000" has 2 chunks at
+        # turns=2 -> one seam; "001" has 1 chunk -> no seam.
+        fade_sec = HOP / FS
+        test_dir, _, _ = self._run(
+            testset,
+            tiny_model,
+            tmp_path / "infer",
+            {"turns": 2, "cross_fade_sec": fade_sec},
+        )
+        meta = json.loads((test_dir / "meta/000.json").read_text("utf-8"))
+        chunking = meta["chunking"]
+        assert chunking["policy"] == {"turns": 2}  # seam knob is not a policy
+        assert chunking["cross_fade_sec"] == pytest.approx(fade_sec)
+        total_frames = sum(c["gen_frames"] for c in chunking["chunks"])
+        n_seams = chunking["n_chunks"] - 1
+        expected = total_frames * HOP - n_seams * HOP
+        for ch in range(2):
+            wav, _ = _read_wav(test_dir / f"wav/000_ch{ch}.wav")
+            assert wav.shape[0] == expected
+        mix, _ = _read_wav(test_dir / "mix/000.wav")
+        assert mix.shape[0] == expected
+        assert meta["window_duration_sec"] == pytest.approx(expected / FS)
+
+        meta1 = json.loads((test_dir / "meta/001.json").read_text("utf-8"))
+        assert meta1["chunking"]["cross_fade_sec"] == pytest.approx(fade_sec)
+        frames1 = sum(c["gen_frames"] for c in meta1["chunking"]["chunks"])
+        wav1, _ = _read_wav(test_dir / "wav/001_ch0.wav")
+        assert wav1.shape[0] == frames1 * HOP
+
+    def test_zero_cross_fade_is_bit_identical_to_hard_concat(
+        self, testset, tiny_model, tmp_path
+    ):
+        hard_dir, _, _ = self._run(testset, tiny_model, tmp_path / "hard", {"turns": 2})
+        zero_dir, _, _ = self._run(
+            testset,
+            tiny_model,
+            tmp_path / "zero",
+            {"turns": 2, "cross_fade_sec": 0.0},
+        )
+        meta = json.loads((hard_dir / "meta/000.json").read_text("utf-8"))
+        assert meta["chunking"]["cross_fade_sec"] == 0.0
+        for rel in ("wav/000_ch0.wav", "wav/000_ch1.wav", "mix/000.wav"):
+            hard, _ = _read_wav(hard_dir / rel)
+            zero, _ = _read_wav(zero_dir / rel)
+            assert (hard == zero).all(), rel
+
+    def test_negative_cross_fade_is_rejected(self, testset, tiny_model, tmp_path):
+        cfg = _chunked_config(
+            testset, tmp_path / "infer", {"turns": 2, "cross_fade_sec": -0.1}
+        )
+        with pytest.raises(ValueError, match="cross_fade_sec"):
+            run_chunked_inference(
+                cfg,
+                training_config=testset["training_config"],
+                model=tiny_model,
+                vocoder=FakeVocoder(),
+            )
 
     def test_missing_chunk_block_is_rejected(self, testset, tiny_model, tmp_path):
         cfg = _external_config(testset, tmp_path / "infer")

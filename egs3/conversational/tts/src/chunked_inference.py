@@ -19,8 +19,16 @@ Chunk policy (config ``chunk:``, exactly one key):
   exceed S; a single turn longer than S still becomes its own oversized
   chunk (flagged in meta and counted in the log), never split inside.
 
-Seams are hard concats: chunk k starts strictly after chunk k-1's audio, so
-cross-seam overlap is structurally impossible - watch ``overlap_per_min``.
+Seams: ``chunk.cross_fade_sec`` blends each join with an equal-power
+cross-fade (:func:`crossfade_concat`); 0.0 (the default) keeps the original
+hard concat bit-for-bit.  The fade is assembly-only - conditioning always
+uses chunk k-1's RAW generated audio, so the sampled audio itself is
+identical at every fade setting and only the written wavs differ.  Each seam
+shortens the output by the fade length, so ``window_duration_sec`` (measured
+on the written wav) is ``(n_chunks - 1) * cross_fade_sec`` short of the
+predicted duration.  Chunk k still starts strictly after chunk k-1's turns,
+so cross-seam turn overlap stays structurally impossible - watch
+``overlap_per_min``.
 
 DETERMINISM CONTRACT - a documented departure from ``generate_external``:
 sharding is BY DIALOGUE (a chunk chain cannot cross shards), and each shard
@@ -158,6 +166,36 @@ def split_turns(
     return ranges
 
 
+def crossfade_concat(
+    chunk_wavs: Sequence[torch.Tensor], fade_samples: int
+) -> torch.Tensor:
+    """Concat ``(channels, samples)`` chunks with an equal-power cross-fade.
+
+    At every seam the last ``fade_samples`` of the left chunk overlap the
+    first ``fade_samples`` of the right one under cos/sin gains sampled at
+    window midpoints, so per-sample ``g_down**2 + g_up**2 == 1`` exactly:
+    adjacent chunks come from different noise draws and are therefore
+    uncorrelated, and uncorrelated signals add in POWER - linear gains would
+    dip the seam loudness by 3 dB at its midpoint.  The fade clamps to the
+    shorter neighbour, ``fade_samples=0`` reduces to ``torch.cat`` (the hard
+    concat), and every sample outside a seam is bit-identical to its chunk.
+    """
+    if fade_samples < 0:
+        raise ValueError(f"fade_samples must be >= 0, got {fade_samples}")
+    out = chunk_wavs[0]
+    for nxt in chunk_wavs[1:]:
+        f = min(int(fade_samples), out.shape[1], nxt.shape[1])
+        if f == 0:
+            out = torch.cat([out, nxt], dim=1)
+            continue
+        t = (torch.arange(f, dtype=out.dtype, device=out.device) + 0.5) / f
+        g_down = torch.cos(t * torch.pi / 2)
+        g_up = torch.sin(t * torch.pi / 2)
+        seam = out[:, out.shape[1] - f :] * g_down + nxt[:, :f] * g_up
+        out = torch.cat([out[:, : out.shape[1] - f], seam, nxt[:, f:]], dim=1)
+    return out
+
+
 def call_turns(
     record: ExternalRecord, ranges: Sequence[tuple[int, int]], k: int
 ) -> list[Turn]:
@@ -215,7 +253,13 @@ def _plan_dialogue(
     )
 
 
-def _validated_chunk_cfg(cfg) -> dict[str, Any]:
+def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float]:
+    """Return ``(policy, cross_fade_sec)`` from the config's ``chunk`` block.
+
+    The policy stays exactly one of ``turns`` / ``target_sec``;
+    ``cross_fade_sec`` is an independent seam knob (0.0 = today's hard
+    concat, and the default, so existing configs reproduce bit-for-bit).
+    """
     raw = cfg.get("chunk")
     if raw is None:
         raise ValueError(
@@ -223,16 +267,19 @@ def _validated_chunk_cfg(cfg) -> dict[str, Any]:
             "({turns: N} or {target_sec: S})"
         )
     chunk_cfg = OmegaConf.to_container(raw, resolve=True)
-    unknown = set(chunk_cfg) - {"turns", "target_sec"}
+    unknown = set(chunk_cfg) - {"turns", "target_sec", "cross_fade_sec"}
     if unknown:
         raise ValueError(f"unknown chunk keys: {sorted(unknown)}")
+    cross_fade_sec = float(chunk_cfg.pop("cross_fade_sec", None) or 0.0)
+    if cross_fade_sec < 0:
+        raise ValueError(f"chunk.cross_fade_sec must be >= 0, got {cross_fade_sec}")
     set_keys = [k for k, v in chunk_cfg.items() if v is not None]
     if len(set_keys) != 1:
         raise ValueError(
             "exactly one of chunk.turns / chunk.target_sec must be set, "
             f"got {chunk_cfg}"
         )
-    return {k: chunk_cfg[k] for k in set_keys}
+    return {k: chunk_cfg[k] for k in set_keys}, cross_fade_sec
 
 
 def run_chunked_inference(
@@ -251,7 +298,7 @@ def run_chunked_inference(
     mode = cfg.get("mode")
     if mode != MODE:
         raise ValueError(f"expected mode {MODE!r}, got {mode!r}")
-    chunk_cfg = _validated_chunk_cfg(cfg)
+    chunk_cfg, cross_fade_sec = _validated_chunk_cfg(cfg)
 
     if training_config is None:
         train_path = Path(cfg.training_config)
@@ -468,7 +515,7 @@ def run_chunked_inference(
         n = record.num_channels
         wid = record.dialogue_id
         st = state[idx]
-        gen_full = torch.cat(st["chunk_wavs"], dim=1)
+        gen_full = crossfade_concat(st["chunk_wavs"], round(cross_fade_sec * fs))
         ref_texts = _reference_texts(record.turns, n)
         channels = []
         for ch in range(n):
@@ -509,6 +556,7 @@ def run_chunked_inference(
             "compute": {"autocast_dtype": autocast_dtype},
             "chunking": {
                 "policy": chunk_cfg,
+                "cross_fade_sec": cross_fade_sec,
                 "n_chunks": plan.n_chunks,
                 "oversized": list(plan.oversized),
                 "chunks": st["chunk_meta"],
