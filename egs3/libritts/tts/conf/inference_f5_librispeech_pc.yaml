@@ -1,0 +1,109 @@
+# Paper-protocol eval: LibriSpeech-PC test-clean cross-sentence (1127 pairs,
+# same-speaker prompts) from the F5-TTS repo's .lst, generated with our
+# trained small model and scored EXTERNALLY by the official
+# eval_librispeech_test_clean.py. See vault note
+# "Design - F5-TTS Small LibriSpeech-PC Eval".
+recipe_dir: .
+# At the next checkpoint re-run, exp_tag and ckpt_path (below, in model:) must
+# be updated together - otherwise outputs from two different checkpoints will
+# land in the same exp dir and conflate.
+exp_tag: eval_librispeech_pc_small_step108192
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+data_dir: ${recipe_dir}/data
+inference_dir: ${exp_dir}/${self_name:}
+
+dataset:
+  # Shape verified in Task 4 Step 5 against
+  # espnet3/components/data/dataset_module.py: a `data_src` dotted path is
+  # import_module'd and `Dataset` (aliased to LibriSpeechPCDataset in
+  # dataset/librispeech_pc.py) is instantiated with `**data_src_args`, i.e.
+  # LibriSpeechPCDataset(manifest_path=..., fs=24000). The manifest is built
+  # on PSC by Task 6 at ${data_dir}/librispeech_pc/manifest.tsv.
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  recipe_dir: ${recipe_dir}
+  test:
+    - name: librispeech_pc
+      data_src: egs3.libritts.tts.dataset.librispeech_pc
+      data_src_args:
+        manifest_path: ${data_dir}/librispeech_pc/manifest.tsv
+        fs: 24000
+
+parallel:
+  env: local
+  n_workers: 1
+
+model:
+  _target_: espnet2.tts.f5.inference.F5TTSInference
+  # DEVIATION from the value originally proposed for this field (the dumped
+  # exp/train_f5_tts_small/config.yaml on the training checkout). CONFIRMED
+  # (not suspected) unsafe by reading code + the actual PSC file:
+  #   - espnet3/utils/task_utils.py:65-77 (`save_espnet_config`, the function
+  #     that writes exp/<tag>/config.yaml) pops the `model` key entirely and
+  #     merges its fields into the config ROOT, and does the same for
+  #     `dataset.preprocessor`. The dumped file therefore has NO top-level
+  #     `model:` key (verified directly:
+  #     `ssh psc 'grep -n "^model:" .../exp/train_f5_tts_small/config.yaml'`
+  #     -> no match; `token_list` sits at the file root instead).
+  #   - espnet2/tts/f5/inference.py:178 does `get_espnet_model(task,
+  #     cfg["model"])` (bracket access, not `.get`), so loading the dumped
+  #     file raises `KeyError: 'model'` immediately in F5TTSInference.__init__,
+  #     before tokenizer/vocoder setup even runs.
+  # Fix: point train_config at the training checkout's SOURCE recipe config
+  # instead, which has the shape F5TTSInference expects (`model:` +
+  # `dataset.preprocessor:` blocks) and confirmed present at this exact path
+  # on PSC via `ssh psc ls -l .../training_f5_tts_small.yaml` (14593 bytes,
+  # exists). CONTENT EQUIVALENCE VERIFIED on 2026-07-28: fetched both the
+  # dumped exp/train_f5_tts_small/config.yaml and this source
+  # training_f5_tts_small.yaml directly from PSC and compared every
+  # model/tokenizer/optimizer/scheduler field (dim, depth, heads, dim_head,
+  # ff_mult, text_dim, text_mask_padding, pe_attn_head, conv_layers, sigma,
+  # audio_drop_prob, cond_drop_prob, frac_lengths_mask, odeint_method,
+  # mel_spec_kwargs, feats_extract_conf, token_list, token_type, text_cleaner,
+  # g2p_type, optimizer, scheduler, exp_tag, best_model_criterion,
+  # dataloader batch_bins, trainer.accumulate_grad_batches) -- all matched
+  # exactly with no divergence; see task-5-report.md for the full
+  # field-by-field table.
+  #
+  # REMAINING CONCERN FOR TASK 6 (do not skip): that source config resolves
+  # `token_list: ${data_dir}/tokens/char_tokens.txt` with `recipe_dir: .`, so
+  # after OmegaConf resolves it, the literal string is the RELATIVE path
+  # "./data/tokens/char_tokens.txt". `TokenIDConverter.__init__` opens this
+  # string directly as a file (espnet2/text/token_id_converter.py:21,
+  # `token_list.open("r", ...)`) -- it does NOT resolve it relative to the
+  # training checkout. `InferenceProvider.build_model`
+  # (espnet3/systems/base/inference_provider.py:262-271) chdir's to THIS
+  # inference config's `recipe_dir` (the EVAL checkout root, i.e. wherever
+  # this file's `recipe_dir: .` points once the sbatch `cd`s into the eval
+  # recipe) before instantiating `model`, so the tokens file must exist at
+  # <eval recipe_dir>/data/tokens/char_tokens.txt, i.e.
+  # egs3/libritts/tts/data/tokens/char_tokens.txt in the EVAL checkout, not
+  # just in the training checkout. Confirmed present on the training
+  # checkout at
+  # .../espnet_f5_libritts/egs3/libritts/tts/data/tokens/char_tokens.txt (100
+  # bytes) via the same ssh check above -- Task 6 must copy/symlink that file
+  # into the eval checkout at the path above before submitting, or model
+  # construction will fail with FileNotFoundError.
+  train_config: /ocean/projects/cis210027p/ttrachu/development/espnet_proj/espnet_f5_libritts/egs3/libritts/tts/conf/training_f5_tts_small.yaml
+  ckpt_path: /ocean/projects/cis210027p/ttrachu/development/espnet_proj/espnet_f5_libritts/egs3/libritts/tts/exp/train_f5_tts_small/backup_step108192.ckpt
+  use_ema: true
+  vocoder_name: vocos
+  vocoder_path: null
+  target_sample_rate: 24000
+  nfe_step: 32
+  cfg_strength: 2.0
+  sway_sampling_coef: -1.0
+  speed: 1.0
+  seed: 0
+
+input_key: [text, ref_speech, ref_text]
+batch_size: null
+output_fn: src.inference.build_output
+output_artifacts:
+  wav:
+    type: wav
+    sample_rate: 24000
+
+provider:
+  _target_: espnet3.systems.base.inference_provider.InferenceProvider
+runner:
+  _target_: espnet3.systems.base.inference_runner.InferenceRunner
