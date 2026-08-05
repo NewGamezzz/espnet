@@ -26,13 +26,9 @@ python run.py --stages collect_stats --training_config conf/training_f5_tts_smal
 python run.py --stages train --training_config conf/training_f5_tts_small.yaml
 ```
 
-For the larger model, substitute `conf/training_f5_tts.yaml` in the training
-commands above.
-That substitution only changes what gets trained: it does not change which
-architecture the inference configs below rebuild, since each of them pins its
-own `model.train_config` regardless of what `--training_config` you pass at
-inference time.
-See the limitation note at the end of Section 3.
+`conf/training_f5_tts_small.yaml` is the recipe's only training config and its
+default: the F5TTS_Small architecture (dim 768, depth 18, heads 12), targeting
+the LibriTTS rows of arXiv 2410.06885 Table 9.
 
 ## 2. Build the LibriSpeech-PC eval manifest
 
@@ -63,20 +59,15 @@ with no experiment identity of its own.
 
 To evaluate in-domain on the LibriTTS `valid`/`test` splits with cross-speaker
 prompts instead, swap in `conf/inference_f5_libritts.yaml`.
-Its `model.train_config` is hardcoded to `conf/training_f5_tts.yaml`, the base
-architecture, so it expects a checkpoint trained with that config, not the
-default small model from Section 1.
+Both inference configs pin the same `conf/training_f5_tts_small.yaml`, so
+either one loads a checkpoint from Section 1 without further edits.
 
-**Limitation:** `--training_config` only propagates `exp_tag` and `exp_dir`
-into the inference config (`espnet3/utils/run_utils.py`'s
-`_TRAINING_CONTEXT_KEYS`); it never overrides `model.train_config`.
-`conf/inference_f5.yaml` is pinned to `conf/training_f5_tts_small.yaml` (small);
-`conf/inference_f5_libritts.yaml` is pinned to `conf/training_f5_tts.yaml`
-(base). As shipped, each inference config rebuilds one fixed architecture, so
-running a given eval protocol against the other model size means editing that
-inference config's `model.train_config` field yourself, not passing a
-different `--training_config`. Check this before you burn a GPU hour on a
-checkpoint that will fail to load.
+If you add a training config for a different architecture, note that
+`--training_config` only propagates `exp_tag` and `exp_dir` into the inference
+config (`espnet3/utils/run_utils.py`'s `_TRAINING_CONTEXT_KEYS`); it never
+overrides `model.train_config`. Point the inference config's own
+`model.train_config` at the matching training config, or the checkpoint will
+fail to load with a shape mismatch.
 
 ## 4. Score
 

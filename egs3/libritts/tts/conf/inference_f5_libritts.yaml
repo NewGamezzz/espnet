@@ -37,7 +37,7 @@ parallel:
 
 model:
   _target_: espnet2.tts.f5.inference.F5TTSInference
-  train_config: ${recipe_dir}/conf/training_f5_tts.yaml
+  train_config: ${recipe_dir}/conf/training_f5_tts_small.yaml
   ckpt_path: ${exp_dir}/last.ckpt
   use_ema: true
   vocoder_name: vocos

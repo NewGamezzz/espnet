@@ -12,10 +12,8 @@
 #
 # Architecture (Table 3 "F5-TTS" row + upstream F5TTS_Small.yaml): dim=768,
 # depth=18, heads=12, ff_mult=2, conv_layers=4, text_dim=512. dim_head=64
-# unchanged (768/12 = 1024/16 = 64, same as the Base model in
-# training_f5_tts.yaml). text_mask_padding/pe_attn_head match upstream's
-# F5TTS_Small.yaml exactly (same flags training_f5_tts.yaml already applies
-# for the Base model).
+# is 768/12, which is the same 64 the Base model gets from 1024/16.
+# text_mask_padding/pe_attn_head match upstream's F5TTS_Small.yaml exactly.
 #
 # Batch size (Sec. B.7: "despite a batch size of 307,200 audio frames (0.91
 # hours) as base models" -- i.e. the SAME global batch as the Base model, NOT

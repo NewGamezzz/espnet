@@ -90,8 +90,7 @@ def main(args) -> None:
 
     # Each config is merged over the shared `egs3.TEMPLATE.tts` default (kept
     # deliberately near-empty, see egs3/TEMPLATE/tts/conf/*.yaml), not over
-    # another recipe config. The recipe ships multiple *independent* full
-    # configs (e.g. training_f5_tts.yaml and training_f5_tts_small.yaml);
+    # another recipe config. Recipe configs are *independent* full configs, so
     # merging one over another would deep-merge incompatible blocks (e.g.
     # model.tts_conf), and merging a config over itself is a no-op that hides
     # the intended default values entirely. `default_package` is left unset so

@@ -68,6 +68,21 @@ def test_libritts_config_keeps_cross_speaker_protocol():
         assert entry["data_src_args"]["ref_mode"] == "cross_speaker"
 
 
+@pytest.mark.parametrize("name", INFERENCE_CONFIGS)
+def test_inference_config_train_config_exists(name):
+    """Every inference config must point at a training config that is present.
+
+    `--training_config` never overrides an inference config's own
+    `model.train_config`, so a stale value here is not caught at the CLI: it
+    surfaces as a checkpoint shape mismatch part way into a GPU job. Deleting a
+    training config without repointing its referrers has already happened once.
+    """
+    train_config = _raw(name)["model"]["train_config"]
+    assert train_config.startswith("${recipe_dir}/")
+    resolved = RECIPE / train_config.removeprefix("${recipe_dir}/")
+    assert resolved.is_file(), f"{name} points at missing {train_config}"
+
+
 def test_librispeech_pc_side_config_is_gone():
     assert not (RECIPE / "conf" / "inference_f5_librispeech_pc.yaml").exists()
     assert not (
