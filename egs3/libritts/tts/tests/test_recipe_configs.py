@@ -110,13 +110,28 @@ CLUSTER_MARKERS = (
 )
 
 # Generated or downloaded trees that are not part of the recipe source.
-GENERATED_DIRS = {"data", "exp", "downloads", "pretrained", "__pycache__"}
+GENERATED_DIRS = {
+    "data",
+    "exp",
+    "downloads",
+    "pretrained",
+    "__pycache__",
+    "venv",
+    "wandb",
+    "lightning_logs",
+}
 
 
 def test_recipe_source_has_no_cluster_specific_content():
     offenders = []
     for path in sorted(RECIPE.rglob("*")):
-        if not path.is_file() or path.suffix not in {".yaml", ".py", ".sh", ".md"}:
+        if not path.is_file() or path.suffix not in {
+            ".yaml",
+            ".py",
+            ".sh",
+            ".md",
+            ".sbatch",
+        }:
             continue
         relative = path.relative_to(RECIPE)
         if GENERATED_DIRS.intersection(relative.parts):
@@ -126,7 +141,7 @@ def test_recipe_source_has_no_cluster_specific_content():
         # otherwise fail this test on a developer's own checkout.
         if any(part.startswith(".") for part in relative.parts):
             continue
-        if path.name == Path(__file__).name:
+        if path.resolve() == Path(__file__).resolve():
             continue  # this file necessarily contains the markers it checks
         text = path.read_text(encoding="utf-8", errors="ignore")
         offenders.extend(
@@ -136,7 +151,7 @@ def test_recipe_source_has_no_cluster_specific_content():
 
 
 def test_submission_scripts_are_gone():
-    assert list((RECIPE / "local").glob("*.sbatch")) == []
+    assert list(RECIPE.rglob("*.sbatch")) == []
     assert not (RECIPE / "local" / "pooled_wer_from_jsonl.py").exists()
 
 
