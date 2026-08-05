@@ -84,8 +84,8 @@ Unlike the other F5-TTS inference configs, `conf/inference_pretrained_f5.yaml`
 sets its own non-empty `exp_tag` (`eval_librispeech_pc_pretrained_base`), so it
 does not need `--training_config`.
 
-**Limitation:** `--training_config` only propagates `exp_tag`, `exp_dir`, and
-`inference_dir` into the inference config (`espnet3/utils/run_utils.py`'s
+**Limitation:** `--training_config` only propagates `exp_tag` and `exp_dir`
+into the inference config (`espnet3/utils/run_utils.py`'s
 `_TRAINING_CONTEXT_KEYS`); it never overrides `model.train_config`.
 `conf/inference_f5.yaml` is pinned to `conf/training_f5_tts_small.yaml` (small);
 `conf/inference_f5_libritts.yaml` is pinned to `conf/training_f5_tts.yaml`
