@@ -19,7 +19,6 @@ dataset:
         split: valid
         manifest_path: ${data_dir}/manifests_filtered/valid.tsv
         load_speech: false
-        load_xvector: false
         inference: true
         ref_mode: cross_speaker
         ref_seed: 0
@@ -28,7 +27,6 @@ dataset:
         split: test
         manifest_path: ${data_dir}/manifests_filtered/test.tsv
         load_speech: false
-        load_xvector: false
         inference: true
         ref_mode: cross_speaker
         ref_seed: 0

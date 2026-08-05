@@ -14,8 +14,8 @@ class RemoveLongShortProvider(EnvironmentProvider):
     """Provider for the ``remove_long_short`` stage.
 
     Builds the manifest entries and duration bounds shared by
-    ``RemoveLongShortRunner`` workers. Unlike ``XVectorProvider``, no model
-    needs to be loaded here since duration filtering only reads WAV headers.
+    ``RemoveLongShortRunner`` workers. No model needs to be loaded here since
+    duration filtering only reads WAV headers.
     """
 
     def __init__(self, config: DictConfig, params: Dict[str, Any] | None = None):
@@ -71,9 +71,7 @@ class RemoveLongShortProvider(EnvironmentProvider):
                 "remove_long_short stage."
             )
 
-        entries, n_dropped_empty = RemoveLongShortProvider._load_entries(
-            manifest_path
-        )
+        entries, n_dropped_empty = RemoveLongShortProvider._load_entries(manifest_path)
 
         return {
             "entries": entries,

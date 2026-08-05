@@ -1,4 +1,4 @@
-# F5-TTS scoring config. VITS scores through conf/metrics_vits.yaml instead.
+# F5-TTS scoring config.
 #
 # Scoring aligned with the official F5-TTS eval_librispeech_test_clean.py and
 # eval_utmos.py, as closely as VERSA allows.

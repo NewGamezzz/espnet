@@ -93,13 +93,11 @@ dataset:
     - data_src_args:
         split: train
         manifest_path: ${remove_long_short.save_path}/train.tsv
-        load_xvector: false
         fs: ${sample_rate}    # ensure consistent sampling rate via resampling in the dataset
   valid:
     - data_src_args:
         split: valid
         manifest_path: ${remove_long_short.save_path}/valid.tsv
-        load_xvector: false
         fs: ${sample_rate}    # ensure consistent sampling rate via resampling in the dataset
   # espnet2 CommonPreprocessor: char tokenization (F5 native vocab) + raw speech.
   # The mel is produced inside the model by feats_extract: vocoder_mel.
@@ -143,7 +141,7 @@ parallel:
   n_workers: 1
 
 # espnet2 task args (consumed by get_espnet_model -> TTSTask.build_model ->
-# ESPnetTTSModel). Same shape as the VITS recipe's `model:` block.
+# ESPnetTTSModel). Same shape as any other espnet2 TTS `model:` block.
 model:
   token_list: ${data_dir}/tokens/char_tokens.txt
   token_type: char

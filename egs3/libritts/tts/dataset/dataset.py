@@ -72,24 +72,19 @@ def _safe_duration(wav_path: Path) -> float:
 
 
 class LibriTTSDataset(TorchDataset):
-    """LibriTTS dataset returning text/speech/spembs samples.
+    """LibriTTS dataset returning text/speech samples.
 
-    The output keys match what VITS via ``GANTTSTask`` consumes:
+    The output keys are:
       - ``text``  : raw transcript string (tokenized later by ``CommonPreprocessor``)
       - ``speech``: float32 waveform
-      - ``spembs``: float32 speaker embedding (x-vector) loaded from a ``.pt`` file
-    
-    The dataset cosumnes a following argument during initialization:
+
+    The dataset consumes the following arguments during initialization:
         - ``split``: A string key for the dataset split
         - ``recipe_dir``: Optional path to the recipe root, used to resolve the default
         - ``manifest_path``: Optional path to the manifest TSV file. If not supplied, the dataset
             will look for the default manifest path for the given split in the recipe's data directory.
         - ``load_speech``: Whether to load the speech waveform from disk. If False
             the sample will not include the "speech" key. Default: True.
-        - ``load_xvector``: Whether to load the speaker embedding (x-vector) from
-            disk. If False the sample will not include the "spembs" key. Default: True.
-        - ``xvector_dir``: Optional path to the directory containing x-vector .pt files
-            (one per utterance, named {utt_id}.pt). Required if ``load_xvector`` is True.
         - ``fs``: Optional target sampling rate for the speech waveform. If supplied,
             the waveform will be resampled to this rate after loading. Default: None (no resampling).
         - ``inference``: If True, the dataset will include additional metadata in each
@@ -106,8 +101,6 @@ class LibriTTSDataset(TorchDataset):
         recipe_dir: str | Path | None = None,
         manifest_path: str | Path | None = None,
         load_speech: bool = True,
-        load_xvector: bool = True,
-        xvector_dir: str | Path | None = None,
         fs: int | None = None,
         inference: bool = False,
         ref_mode: str | None = None,
@@ -117,7 +110,6 @@ class LibriTTSDataset(TorchDataset):
     ) -> None:
         self.split = split
         self.load_speech = load_speech
-        self.load_xvector = load_xvector
         self.inference = inference
         self.fs = fs
         if ref_mode not in (None, "same_speaker", "cross_speaker"):
@@ -135,22 +127,6 @@ class LibriTTSDataset(TorchDataset):
             else Path(__file__).resolve().parents[1]
         )
         self.data_dir = recipe_root / _BUILDER_CFG["data_path"]
-
-        if self.load_xvector:
-            if xvector_dir is None:
-                raise ValueError(
-                    "xvector_dir must be supplied when load_xvector is True. "
-                    "Pass it via data_src_args in training.yaml, e.g. "
-                    "xvector_dir: ${xvector.save_path}/${xvector.spk_embed_tag}_train"
-                )
-            self.xvector_dir = Path(xvector_dir)
-            if not self.xvector_dir.is_dir():
-                raise FileNotFoundError(
-                    f"xvector_dir does not exist: {self.xvector_dir}. "
-                    "Run compute_xvectors stage first."
-                )
-        else:
-            self.xvector_dir = None
 
         builder = LibriTTSBuilder()
         if not builder.is_built(recipe_dir=recipe_root):
@@ -231,9 +207,7 @@ class LibriTTSDataset(TorchDataset):
             if choice is None:
                 # No in-range candidate (e.g. duration filter too strict): fall
                 # back to any other utterance so inference still runs.
-                pool = [j for j in allowed if j != i] or [
-                    j for j in range(n) if j != i
-                ]
+                pool = [j for j in allowed if j != i] or [j for j in range(n) if j != i]
                 choice = rng.choice(pool) if pool else i
             ref_idx.append(choice)
         return ref_idx
@@ -249,17 +223,15 @@ class LibriTTSDataset(TorchDataset):
             sample["speech"] = np.asarray(speech, dtype=np.float32)
             if self.fs is not None and speech_fs != self.fs:
                 # Resample if a target sampling rate is specified and different from the original.
-                sample["speech"] = torchaudio.functional.resample(
-                    torch.from_numpy(sample["speech"]), orig_freq=speech_fs, new_freq=self.fs
-                ).numpy().astype(np.float32)
-        if self.load_xvector:
-            pt_path = self.xvector_dir / f"{entry.utt_id}.pt"
-            if not pt_path.is_file():
-                raise FileNotFoundError(f"X-vector missing: {pt_path}")
-            spembs = torch.load(str(pt_path), map_location="cpu")
-            if isinstance(spembs, torch.Tensor):
-                spembs = spembs.numpy()
-            sample["spembs"] = np.asarray(spembs, dtype=np.float32).squeeze()
+                sample["speech"] = (
+                    torchaudio.functional.resample(
+                        torch.from_numpy(sample["speech"]),
+                        orig_freq=speech_fs,
+                        new_freq=self.fs,
+                    )
+                    .numpy()
+                    .astype(np.float32)
+                )
         if self._ref_idx is not None:
             ref_entry = self._entries[self._ref_idx[int(idx)]]
             ref_speech, _ = sf.read(str(ref_entry.wav_path))

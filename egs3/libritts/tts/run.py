@@ -67,7 +67,6 @@ def build_parser(stages: Sequence[str]) -> argparse.ArgumentParser:
 
 
 DEFAULT_STAGES = [
-    "compute_xvectors",
     "remove_long_short",
     "create_token_list",
     "create_dataset",
@@ -89,8 +88,8 @@ def main(args) -> None:
     # Each config is merged over the shared `egs3.TEMPLATE.tts` default (kept
     # deliberately near-empty, see egs3/TEMPLATE/tts/conf/*.yaml), not over
     # another recipe config. The recipe ships multiple *independent* full
-    # configs (e.g. VITS training.yaml and F5 training_f5_tts.yaml); merging
-    # one over another would deep-merge incompatible blocks (e.g.
+    # configs (e.g. training_f5_tts.yaml and training_f5_tts_small.yaml);
+    # merging one over another would deep-merge incompatible blocks (e.g.
     # model.tts_conf), and merging a config over itself is a no-op that hides
     # the intended default values entirely. `default_package` is left unset so
     # `load_and_merge_config` auto-infers `egs3.TEMPLATE.tts` from the config
@@ -133,7 +132,6 @@ def main(args) -> None:
     )
 
     pretrain_stages = {
-        "compute_xvectors",
         "remove_long_short",
         "create_token_list",
         "create_dataset",
