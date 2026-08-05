@@ -80,6 +80,8 @@ DEFAULT_STAGES = [
 ALL_STAGES = DEFAULT_STAGES
 DEFAULT_TRAINING_CONFIG = "training.yaml"
 DEFAULT_INFERENCE_CONFIG = "inference.yaml"
+# F5-TTS scoring config which scores only librispeech_pc.
+# VITS runs must pass --metrics_config conf/metrics_vits.yaml explicitly.
 DEFAULT_METRICS_CONFIG = "metrics.yaml"
 
 
