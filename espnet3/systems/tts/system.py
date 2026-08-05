@@ -15,8 +15,6 @@ import lightning as L
 import torch
 from hydra.utils import instantiate
 from omegaconf import DictConfig, OmegaConf
-from src.remove_long_short_provider import RemoveLongShortProvider
-from src.remove_long_short_runner import RemoveLongShortRunner
 
 from espnet2.text.build_tokenizer import build_tokenizer
 from espnet2.text.cleaner import TextCleaner
@@ -24,6 +22,8 @@ from espnet3.components.modeling.lightning_module import ESPnetLightningModule
 from espnet3.components.trainers.trainer import ESPnet3LightningTrainer
 from espnet3.parallel.parallel import set_parallel
 from espnet3.systems.base.system import BaseSystem
+from espnet3.systems.tts.remove_long_short_provider import RemoveLongShortProvider
+from espnet3.systems.tts.remove_long_short_runner import RemoveLongShortRunner
 from espnet3.utils.task_utils import get_espnet_model, save_espnet_config
 
 logger = logging.getLogger(__name__)
