@@ -75,3 +75,25 @@ def test_librispeech_pc_side_config_is_gone():
     assert not (
         RECIPE / "conf" / "inference_pretrained_f5_librispeech_pc.yaml"
     ).exists()
+
+
+def test_metrics_config_matches_official_protocol():
+    cfg = _raw("metrics.yaml")
+    assert [entry["name"] for entry in cfg["dataset"]["test"]] == ["librispeech_pc"]
+
+    score_config = cfg["metrics"][0]["metric"]["score_config"]
+    by_name = {entry["name"]: entry for entry in score_config}
+
+    # WER: faster-whisper large-v3, beam 5, float16 - engine-identical to the
+    # official eval_librispeech_test_clean.py.
+    wer = by_name["fwhisper_wer"]
+    assert wer["model_tag"] == "large-v3"
+    assert wer["beam_size"] == 5
+    assert wer["compute_type"] == "float16"
+    assert wer["text_cleaner"] == "whisper_basic"
+
+    # UTMOS only: dnsmos is not part of the official protocol.
+    assert by_name["pseudo_mos"]["predictor_types"] == ["utmos"]
+
+    # SIM: documented deviation, VERSA can only load ESPnet-SPK checkpoints.
+    assert by_name["speaker"]["model_tag"] == "espnet/voxcelebs12_ecapa_wavlm_joint"
