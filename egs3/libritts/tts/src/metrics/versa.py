@@ -126,26 +126,32 @@ class VersaMetric(BaseMetric):
         return averages
 
     @staticmethod
+    def _find_prefix(scores: Dict[str, float], metric: str) -> str | None:
+        """Return ``'<prefix>_<metric>_'`` when all four edit ops are present.
+
+        VERSA emits WER/CER as four per-utterance counts (delete, insert,
+        replace, equal) under a backend-specific prefix, e.g.
+        ``fwhisper_wer_delete``. Returns ``None`` when the group is absent or
+        incomplete.
+        """
+        for key in scores:
+            if key.endswith(f"_{metric}_delete"):
+                prefix = key[: -(len(metric) + 8)]  # strip '_<metric>_delete'
+                ops = [
+                    f"{prefix}_{metric}_{op}"
+                    for op in ("delete", "insert", "replace", "equal")
+                ]
+                if all(op in scores for op in ops):
+                    return f"{prefix}_{metric}_"
+        return None
+
+    @staticmethod
     def summarize(scores: Dict[str, float], test_name: str = "") -> None:
         """Log a formatted summary of VERSA scores."""
-        header = f"VERSA scores — {test_name}" if test_name else "VERSA scores"
+        header = f"VERSA scores - {test_name}" if test_name else "VERSA scores"
 
-        # Detect prefixes for WER/CER component groups (e.g. espnet_wer_, whisper_wer_)
-        def _find_prefix(metric: str) -> str | None:
-            """Return '<prefix>_<metric>_' if all four ops are present, else None."""
-            for k in scores:
-                if k.endswith(f"_{metric}_delete"):
-                    prefix = k[: -(len(metric) + 8)]  # strip '_<metric>_delete'
-                    ops = [
-                        f"{prefix}_{metric}_{op}"
-                        for op in ("delete", "insert", "replace", "equal")
-                    ]
-                    if all(op in scores for op in ops):
-                        return f"{prefix}_{metric}_"
-            return None
-
-        wer_prefix = _find_prefix("wer")
-        cer_prefix = _find_prefix("cer")
+        wer_prefix = VersaMetric._find_prefix(scores, "wer")
+        cer_prefix = VersaMetric._find_prefix(scores, "cer")
         wer_keys = [k for k in scores if wer_prefix and k.startswith(wer_prefix)]
         cer_keys = [k for k in scores if cer_prefix and k.startswith(cer_prefix)]
         main_keys = [k for k in scores if k not in wer_keys and k not in cer_keys]
@@ -183,6 +189,14 @@ class VersaMetric(BaseMetric):
 
     @staticmethod
     def _aggregate(result_file: Path) -> Dict[str, float]:
+        """Aggregate per-utterance VERSA records into corpus-level scores.
+
+        Most keys are returned as the plain per-utterance mean. WER and CER
+        are the exception: they are returned as a pooled PERCENTAGE under
+        ``<prefix><metric>`` (e.g. ``fwhisper_wer`` -> ``3.45`` meaning
+        3.45%), computed from the pooled edit-op counts rather than the mean
+        of per-utterance rates.
+        """
         sums: Dict[str, float] = {}
         counts: Dict[str, int] = {}
         with result_file.open() as f:
@@ -195,4 +209,22 @@ class VersaMetric(BaseMetric):
                     if isinstance(value, (int, float)) and not isinstance(value, bool):
                         sums[key] = sums.get(key, 0.0) + float(value)
                         counts[key] = counts.get(key, 0) + 1
-        return {key: round(sums[key] / counts[key], 4) for key in sums}
+        averages = {key: round(sums[key] / counts[key], 4) for key in sums}
+
+        # Corpus-level WER/CER: pool the raw error counts across every
+        # utterance, then divide once. Averaging per-utterance rates instead
+        # would let short utterances dominate. Emitted as a PERCENTAGE, to
+        # match how summarize() prints it (e.g. 3.45 means 3.45%).
+        for metric in ("wer", "cer"):
+            prefix = VersaMetric._find_prefix(sums, metric)
+            if prefix is None:
+                continue
+            total = sum(
+                sums[f"{prefix}{op}"] for op in ("delete", "insert", "replace", "equal")
+            )
+            if total <= 0:
+                continue
+            errors = total - sums[f"{prefix}equal"]
+            averages[prefix.rstrip("_")] = round(errors / total * 100, 4)
+
+        return averages
