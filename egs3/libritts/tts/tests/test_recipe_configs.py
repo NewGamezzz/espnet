@@ -95,8 +95,29 @@ def test_metrics_config_matches_official_protocol():
     # UTMOS only: dnsmos is not part of the official protocol.
     assert by_name["pseudo_mos"]["predictor_types"] == ["utmos"]
 
-    # SIM: documented deviation, VERSA can only load ESPnet-SPK checkpoints.
+    # SIM: documented deviation. VERSA cannot load the official UniSpeech
+    # wavlm_large_finetune.pth, which is a raw ECAPA_TDNN_SMALL state dict
+    # rather than a HuggingFace AutoModelForAudioXVector repo, so the recipe
+    # uses the nearest ESPnet-SPK model instead.
     assert by_name["speaker"]["model_tag"] == "espnet/voxcelebs12_ecapa_wavlm_joint"
+
+
+def test_vits_metrics_config_scores_valid_and_test():
+    """VITS scores its own splits through its own config.
+
+    conf/metrics.yaml is scoped to librispeech_pc for F5-TTS, so VITS needs a
+    separate config rather than a hand-edit of the shared one.
+    """
+    cfg = _raw("metrics_vits.yaml")
+    assert [entry["name"] for entry in cfg["dataset"]["test"]] == ["valid", "test"]
+
+    score_config = cfg["metrics"][0]["metric"]["score_config"]
+    by_name = {entry["name"]: entry for entry in score_config}
+    # openai-whisper, not faster-whisper: VITS has no reason to require the
+    # extra fwhisper install that conf/metrics.yaml documents.
+    assert "whisper_wer" in by_name
+    assert "fwhisper_wer" not in by_name
+    assert by_name["pseudo_mos"]["predictor_types"] == ["utmos", "dnsmos"]
 
 
 # Substrings that would tie this recipe to one specific cluster account.

@@ -120,9 +120,10 @@ against the numbers published in the paper.
 
 ## VITS
 
-`conf/metrics.yaml` scores the `librispeech_pc` test set by default.
-Before running `measure` below, edit its `dataset.test` list to name the
-`valid` and `test` sets instead, or the command will score the wrong split.
+VITS scores through `conf/metrics_vits.yaml`, which covers the `valid` and
+`test` splits.
+`conf/metrics.yaml` is the F5-TTS config and is scoped to `librispeech_pc`, so
+do not point the VITS `measure` stage at it.
 
 ```bash
 python run.py --stages create_dataset      --training_config conf/training.yaml
@@ -136,9 +137,8 @@ python run.py --stages infer \
     --training_config conf/training.yaml \
     --inference_config conf/inference.yaml
 
-# Edit conf/metrics.yaml's dataset.test to valid/test before running this.
 python run.py --stages measure \
     --training_config conf/training.yaml \
     --inference_config conf/inference.yaml \
-    --metrics_config conf/metrics.yaml
+    --metrics_config conf/metrics_vits.yaml
 ```

@@ -1,3 +1,5 @@
+# F5-TTS scoring config. VITS scores through conf/metrics_vits.yaml instead.
+#
 # Scoring aligned with the official F5-TTS eval_librispeech_test_clean.py and
 # eval_utmos.py, as closely as VERSA allows.
 #
@@ -25,13 +27,20 @@
 #   SIM   official: ECAPA_TDNN_SMALL(feat_dim=1024, feat_type="wavlm_large")
 #                   with UniSpeech's wavlm_large_finetune.pth, cosine
 #                   similarity at 16 kHz.
-#         here:     KNOWN DEVIATION. VERSA's speaker metric builds its model
-#                   exclusively through espnet2.bin.spk_inference.Speech2Embedding
-#                   (see versa/utterance_metrics/speaker.py), so it can load
-#                   only ESPnet-SPK checkpoints and CANNOT load the official
-#                   UniSpeech model at all. voxcelebs12_ecapa_wavlm_joint is
-#                   the nearest match, sharing the ECAPA architecture and
-#                   WavLM-large front-end but trained differently.
+#         here:     KNOWN DEVIATION. VERSA's speaker metric chooses a backend
+#                   from the model tag (resolve_speaker_backend in
+#                   versa/utterance_metrics/speaker.py): an "espnet/" tag
+#                   loads through espnet2.bin.spk_inference.Speech2Embedding,
+#                   and any other tag through HuggingFace
+#                   AutoModelForAudioXVector. The official
+#                   wavlm_large_finetune.pth fits NEITHER backend, because of
+#                   what that file is: a raw ECAPA_TDNN_SMALL state dict, not
+#                   a HuggingFace AutoModelForAudioXVector repo. So VERSA
+#                   still cannot load the official checkpoint, even though it
+#                   is not restricted to ESPnet-SPK models.
+#                   voxcelebs12_ecapa_wavlm_joint is the nearest match,
+#                   sharing the ECAPA architecture and WavLM-large front-end
+#                   but trained differently.
 #                   CONSEQUENCE: SIM here tracks relative quality across
 #                   checkpoints correctly, but its absolute scale is NOT
 #                   comparable to arXiv 2410.06885 Table 9. Paper-comparable
