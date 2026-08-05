@@ -154,7 +154,18 @@ class VersaMetric(BaseMetric):
         cer_prefix = VersaMetric._find_prefix(scores, "cer")
         wer_keys = [k for k in scores if wer_prefix and k.startswith(wer_prefix)]
         cer_keys = [k for k in scores if cer_prefix and k.startswith(cer_prefix)]
-        main_keys = [k for k in scores if k not in wer_keys and k not in cer_keys]
+        # _aggregate() may have added a pooled "<prefix>wer"/"<prefix>cer" scalar
+        # (no trailing underscore) alongside the per-op counts above. It is
+        # already reported, labeled with its unit, in the components block
+        # below, so keep it out of the unlabeled main_keys section.
+        pooled_keys = {
+            prefix.rstrip("_") for prefix in (wer_prefix, cer_prefix) if prefix
+        }
+        main_keys = [
+            k
+            for k in scores
+            if k not in wer_keys and k not in cer_keys and k not in pooled_keys
+        ]
 
         lines = [header, "-" * 40]
         for k in main_keys:

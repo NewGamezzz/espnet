@@ -1,6 +1,8 @@
 """Tests for the VERSA wrapper's score aggregation."""
 
 import json
+import logging
+import re
 
 import pytest
 
@@ -96,3 +98,31 @@ def test_find_prefix_requires_all_four_ops():
         "fwhisper_wer_equal": 9,
     }
     assert VersaMetric._find_prefix(complete, "wer") == "fwhisper_wer_"
+
+
+def test_summarize_reports_pooled_wer_exactly_once(caplog):
+    """The pooled ``fwhisper_wer`` scalar must be reported exactly once.
+
+    It belongs in the labeled WER components block, not a second time in
+    the unlabeled main section. Before the fix, ``main_keys`` missed the
+    pooled key (it lacks the trailing underscore that ``wer_prefix``
+    carries), so it leaked into the generic
+    ``f"  {k:<25s} {scores[k]:.4f}"`` line as well.
+    """
+    scores = {
+        "fwhisper_wer_delete": 1.0,
+        "fwhisper_wer_insert": 0.0,
+        "fwhisper_wer_replace": 0.0,
+        "fwhisper_wer_equal": 1.0,
+        "fwhisper_wer": 50.0,
+    }
+    with caplog.at_level(logging.INFO, logger="src.metrics.versa"):
+        VersaMetric.summarize(scores, test_name="unit-test")
+
+    # Match "fwhisper_wer" only when NOT immediately followed by "_", so the
+    # per-op keys (fwhisper_wer_delete, ...) don't count toward this total.
+    # The labeled components-block header ("[fwhisper_wer]:") is expected to
+    # match once; a second match would mean the pooled key also leaked into
+    # the unlabeled main section.
+    occurrences = re.findall(r"fwhisper_wer(?!_)", caplog.text)
+    assert len(occurrences) == 1
