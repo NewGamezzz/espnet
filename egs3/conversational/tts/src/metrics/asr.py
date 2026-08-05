@@ -32,6 +32,19 @@ faster-whisper's own internal VAD filtering is what now guards against
 whisper's well-known silence-hallucination failure mode, replacing the
 manual VAD/IPU segmentation this recipe used to do by hand.
 
+The real backend decodes with ``condition_on_previous_text=False``: with
+conditioning ON (faster-whisper's default), a silent or garbled span
+poisons the decoder state for everything AFTER it, and whisper silently
+drops the rest of the file -- on chunked CoVoMix2 dialogues this deleted
+whole final chunks that were verifiably spoken (three of the four "total
+final-chunk deletions" debugged 2026-08-05 were exactly this).  VAD guards
+the silence-hallucination mode; conditioning-off guards the derail mode;
+they are complementary, not redundant.  COMPARABILITY: wer numbers scored
+before this change (conditioning ON) are systematically inflated on long
+multi-chunk dialogues -- re-score, do not mix.  Pass
+``condition_on_previous_text: true`` to the transcriber in a metrics config
+to reproduce the old behaviour exactly.
+
 The injected ``normalizer`` (default: whisper's ``EnglishTextNormalizer``)
 is applied to BOTH the hypothesis and reference text of every utterance
 (channel or mix) before counting -- normalization must be symmetric, or the
@@ -102,7 +115,11 @@ class FasterWhisperTranscriber:
     """Real default transcriber: faster-whisper ``large-v3``, transcribed in
     ONE call per file with ``vad_filter=True`` (faster-whisper's own internal
     VAD filtering -- the anti-silence-hallucination defense for this lean
-    battery, replacing the old manual per-IPU segmentation).
+    battery, replacing the old manual per-IPU segmentation) and
+    ``condition_on_previous_text=False`` (the anti-derail defense: with
+    conditioning on, one silent/garbled span makes whisper silently drop the
+    rest of a long file; see the module docstring for the comparability
+    consequences).
 
     ``faster_whisper`` is imported inside :meth:`_load`, invoked from the
     first :meth:`__call__`, never at module scope or in ``__init__`` --
@@ -116,12 +133,14 @@ class FasterWhisperTranscriber:
         device: str = "cpu",
         compute_type: str = "float32",
         language: str = "en",
+        condition_on_previous_text: bool = False,
         **model_kwargs: Any,
     ) -> None:
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
         self.language = language
+        self.condition_on_previous_text = condition_on_previous_text
         self.model_kwargs = model_kwargs
         self._model = None
 
@@ -140,11 +159,12 @@ class FasterWhisperTranscriber:
     def __call__(self, wav: np.ndarray, sr: int) -> str:
         self._load()
         segments_iter, _info = self._model.transcribe(
-            wav, language=self.language, vad_filter=True
+            wav,
+            language=self.language,
+            vad_filter=True,
+            condition_on_previous_text=self.condition_on_previous_text,
         )
-        return " ".join(
-            seg.text.strip() for seg in segments_iter if seg.text.strip()
-        )
+        return " ".join(seg.text.strip() for seg in segments_iter if seg.text.strip())
 
 
 class WhisperEnglishNormalizer:
