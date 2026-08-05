@@ -40,23 +40,16 @@ parallel:
 
 model:
   _target_: espnet2.tts.f5.inference.F5TTSInference
-  # Must be the SOURCE recipe config, not the dumped exp/<tag>/config.yaml:
-  # espnet3/utils/task_utils.py's save_espnet_config pops the `model` key and
-  # merges its fields into the config root, while espnet2/tts/f5/inference.py
-  # does cfg["model"] directly, so the dumped file raises KeyError: 'model'.
   train_config: ${recipe_dir}/conf/training_f5_tts_small.yaml
   ckpt_path: ${exp_dir}/last.ckpt
   use_ema: true
-  # Vocos mel vocoder (24 kHz, 100-mel), matching the F5 "vocos" front-end.
   vocoder_name: vocos
   vocoder_path: null
   target_sample_rate: 24000
-  # Sampling hyperparameters, matching the official eval defaults.
   nfe_step: 32
   cfg_strength: 2.0
   sway_sampling_coef: -1.0
   speed: 1.0
-  # Fixed so repeated eval runs of the same checkpoint are reproducible.
   seed: 0
 
 input_key: [text, ref_speech, ref_text]
