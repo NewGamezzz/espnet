@@ -65,10 +65,14 @@ def build_parser(stages: Sequence[str]) -> argparse.ArgumentParser:
     return parser
 
 
+# Order matters: resolve_stages() returns stages in THIS order regardless of
+# the order they were requested in, so a stage must be listed after whatever
+# produces its inputs. create_dataset writes the manifests that
+# remove_long_short and create_token_list read, so it has to come first.
 DEFAULT_STAGES = [
+    "create_dataset",
     "remove_long_short",
     "create_token_list",
-    "create_dataset",
     "collect_stats",
     "train",
     "infer",
