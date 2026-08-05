@@ -1,16 +1,11 @@
-# Paper-protocol eval: LibriSpeech-PC test-clean cross-sentence (1127 pairs,
-# same-speaker prompts), generated with the OFFICIAL pretrained SWivid/F5-TTS
-# "F5TTS_Base" checkpoint (as a sanity baseline against our own trained small
-# model in conf/inference_f5_librispeech_pc.yaml) and scored EXTERNALLY by the
-# official eval_librispeech_test_clean.py. See vault note
-# "Design - F5-TTS Small LibriSpeech-PC Eval".
+# Sanity anchor: the same LibriSpeech-PC test-clean cross-sentence protocol as
+# conf/inference_f5.yaml, but generated with the OFFICIAL pretrained
+# SWivid/F5-TTS "F5TTS_Base" checkpoint instead of a locally trained model.
+# Running this alongside the default config tells you whether a bad score is
+# your model or your harness.
 #
-# Model block mirrors conf/training_pretrained_f5.yaml + the reference
-# sanity-test config (native_f5: true, F5TTS_Base arch via train_config,
-# official model_1200000.safetensors checkpoint, vocos vocoder, nfe_step 32 /
-# cfg_strength 2.0 / sway -1.0). Dataset/output blocks are the same
-# librispeech_pc split as conf/inference_f5_librispeech_pc.yaml (Task 4 Step
-# 5 shape).
+# Fetch the checkpoint into pretrained/F5TTS_Base/ from the SWivid/F5-TTS
+# Hugging Face repo before running.
 recipe_dir: .
 exp_tag: eval_librispeech_pc_pretrained_base
 exp_dir: ${recipe_dir}/exp/${exp_tag}

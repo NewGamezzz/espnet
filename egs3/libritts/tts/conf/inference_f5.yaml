@@ -1,3 +1,20 @@
+# Default F5-TTS eval: LibriSpeech-PC test-clean cross-sentence, the protocol
+# used by arXiv 2410.06885 (1127 same-speaker prompt/target pairs from the
+# F5-TTS repo's librispeech_pc_test_clean_cross_sentence.lst).
+#
+# Build the manifest first:
+#   python local/prepare_librispeech_pc.py \
+#       --lst <path>/librispeech_pc_test_clean_cross_sentence.lst \
+#       --test_clean_root <path>/LibriSpeech/test-clean \
+#       --out_tsv data/librispeech_pc/manifest.tsv
+#
+# exp_tag is intentionally empty so this config inherits experiment identity
+# from the training config. That means run.py must always be given
+# --training_config alongside --inference_config; see
+# espnet3/utils/run_utils.py's validate_experiment_context.
+#
+# For the in-domain LibriTTS cross-speaker eval instead, use
+# conf/inference_f5_libritts.yaml.
 recipe_dir: .
 
 exp_tag:
@@ -5,41 +22,17 @@ exp_dir: ${recipe_dir}/exp/${exp_tag}
 data_dir: ${recipe_dir}/data
 inference_dir: ${exp_dir}/${self_name:}
 
-# No preprocessor: the F5 inference model needs the raw target text + raw
-# reference waveform, and does its own tokenization / mel extraction internally.
-# ref_mode selects a reference utterance per target from the same split:
-#   cross_speaker -> a different speaker's utterance (zero-shot voice cloning)
-#   same_speaker  -> a different utterance of the same speaker (cross-sentence)
-# The reference transcript (ref_text) is returned alongside ref_speech, as F5
-# conditions on ref_text + target text.
+# Every row of the manifest pins its own prompt, reproducing the paper's fixed
+# pairing rather than sampling a reference like the LibriTTS config does.
 dataset:
   _target_: espnet3.components.data.data_organizer.DataOrganizer
   recipe_dir: ${recipe_dir}
   test:
-    - name: valid
+    - name: librispeech_pc
+      data_src: egs3.libritts.tts.dataset.librispeech_pc
       data_src_args:
-        split: valid
-        manifest_path: ${data_dir}/manifests_filtered/valid.tsv
-        load_speech: false
-        load_xvector: false
-        inference: true
-        ref_mode: cross_speaker
-        ref_seed: 0
-        # Pick SHORT whole utterances as the voice prompt (exact transcript, no
-        # clipping). Keeps the prompt from dominating short targets.
-        ref_min_sec: 1.0
-        ref_max_sec: 4.0
-    - name: test
-      data_src_args:
-        split: test
-        manifest_path: ${data_dir}/manifests_filtered/test.tsv
-        load_speech: false
-        load_xvector: false
-        inference: true
-        ref_mode: cross_speaker
-        ref_seed: 0
-        ref_min_sec: 1.0
-        ref_max_sec: 4.0
+        manifest_path: ${data_dir}/librispeech_pc/manifest.tsv
+        fs: 24000
 
 parallel:
   env: local
@@ -47,25 +40,25 @@ parallel:
 
 model:
   _target_: espnet2.tts.f5.inference.F5TTSInference
-  # Rebuilds ESPnetTTSModel(F5TTS) via the espnet2 task and matches training
-  # tokenization, both read from this training config.
-  train_config: ${recipe_dir}/conf/training_f5_tts.yaml
+  # Must be the SOURCE recipe config, not the dumped exp/<tag>/config.yaml:
+  # espnet3/utils/task_utils.py's save_espnet_config pops the `model` key and
+  # merges its fields into the config root, while espnet2/tts/f5/inference.py
+  # does cfg["model"] directly, so the dumped file raises KeyError: 'model'.
+  train_config: ${recipe_dir}/conf/training_f5_tts_small.yaml
   ckpt_path: ${exp_dir}/last.ckpt
   use_ema: true
-  # Vocos mel vocoder (24 kHz, 100-mel) — matches the F5 "vocos" mel front-end.
+  # Vocos mel vocoder (24 kHz, 100-mel), matching the F5 "vocos" front-end.
   vocoder_name: vocos
   vocoder_path: null
   target_sample_rate: 24000
-  # Sampling hyperparameters.
+  # Sampling hyperparameters, matching the official eval defaults.
   nfe_step: 32
   cfg_strength: 2.0
   sway_sampling_coef: -1.0
   speed: 1.0
-  seed: null
+  # Fixed so repeated eval runs of the same checkpoint are reproducible.
+  seed: 0
 
-# Cross-speaker protocol: synthesize `text` in the voice of `ref_speech`, using
-# its transcript `ref_text`. For self-reference reconstruction instead, drop the
-# dataset ref_mode and use `input_key: [text, speech]`.
 input_key: [text, ref_speech, ref_text]
 batch_size: null
 output_fn: src.inference.build_output
