@@ -103,12 +103,14 @@ class TTSSystem(BaseSystem):
         rls_cfg = self.training_config.get("remove_long_short", None)
         if rls_cfg is None:
             raise RuntimeError(
-                "training_config.remove_long_short must be set for remove_long_short stage."
+                "training_config.remove_long_short must be set for "
+                "remove_long_short stage."
             )
         save_path_str = rls_cfg.get("save_path", None)
         if save_path_str is None:
             raise RuntimeError(
-                "training_config.remove_long_short.save_path must be set for remove_long_short stage."
+                "training_config.remove_long_short.save_path must be set "
+                "for remove_long_short stage."
             )
         save_path = Path(save_path_str)
 
@@ -151,7 +153,9 @@ class TTSSystem(BaseSystem):
             filtered_manifest_path = save_path / manifest_path.name
             if not manifest_path.exists():
                 raise RuntimeError(
-                    f"Manifest file not found for split '{split}': {manifest_path}. Please generate the manifest file using the create_dataset stage and ensure the path is correct."
+                    f"Manifest file not found for split '{split}': "
+                    f"{manifest_path}. Please generate the manifest file using "
+                    "the create_dataset stage and ensure the path is correct."
                 )
 
             entries, n_dropped_empty = RemoveLongShortProvider._load_entries(
@@ -220,7 +224,8 @@ class TTSSystem(BaseSystem):
             )
 
         logger.info(
-            f"Long-short utterance removal completed. Filtered manifests saved to: {save_path}"
+            "Long-short utterance removal completed. Filtered manifests "
+            f"saved to: {save_path}"
         )
 
     def create_token_list(self, *args, **kwargs):
@@ -246,12 +251,14 @@ class TTSSystem(BaseSystem):
         tl_cfg = self.training_config.get("create_token_list", None)
         if tl_cfg is None:
             raise RuntimeError(
-                "training_config.create_token_list must be set for create_token_list stage."
+                "training_config.create_token_list must be set for "
+                "create_token_list stage."
             )
         save_path_str = tl_cfg.get("save_path", None)
         if save_path_str is None:
             raise RuntimeError(
-                "training_config.create_token_list.save_path must be set for create_token_list stage."
+                "training_config.create_token_list.save_path must be set "
+                "for create_token_list stage."
             )
         filename = tl_cfg.get("filename", None)
         if filename is None:
@@ -269,7 +276,9 @@ class TTSSystem(BaseSystem):
 
         if not manifest_path.exists():
             raise RuntimeError(
-                f"Manifest file not found for token list creation: {manifest_path}. Please ensure the manifest file is generated and the path is correct."
+                f"Manifest file not found for token list creation: "
+                f"{manifest_path}. Please ensure the manifest file is "
+                "generated and the path is correct."
             )
 
         # Optional custom vocab builder (e.g. F5 pinyin, prepare_emilia-style):
