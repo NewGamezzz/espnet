@@ -32,7 +32,13 @@ python run.py --stages train --training_config conf/training_f5_tts_small.yaml
 ```
 
 `compute_xvectors` is not needed for F5-TTS; it belongs to the VITS path only.
-For the larger model, substitute `conf/training_f5_tts.yaml` throughout.
+For the larger model, substitute `conf/training_f5_tts.yaml` in the training
+commands above.
+That substitution only changes what gets trained: it does not change which
+architecture the inference configs below rebuild, since each of them pins its
+own `model.train_config` regardless of what `--training_config` you pass at
+inference time.
+See the limitation note at the end of Section 3.
 
 ### 2. Build the LibriSpeech-PC eval manifest
 
@@ -63,9 +69,31 @@ with no experiment identity of its own.
 
 To evaluate in-domain on the LibriTTS `valid`/`test` splits with cross-speaker
 prompts instead, swap in `conf/inference_f5_libritts.yaml`.
+Its `model.train_config` is hardcoded to `conf/training_f5_tts.yaml`, the base
+architecture, so it expects a checkpoint trained with that config, not the
+default small model from Section 1.
+
 To generate the same LibriSpeech-PC set from the official pretrained
-`F5TTS_Base` checkpoint as a harness sanity check, use
-`conf/inference_pretrained_f5.yaml`.
+`F5TTS_Base` checkpoint as a harness sanity check, run:
+
+```bash
+python run.py --stages infer --inference_config conf/inference_pretrained_f5.yaml
+```
+
+Unlike the other F5-TTS inference configs, `conf/inference_pretrained_f5.yaml`
+sets its own non-empty `exp_tag` (`eval_librispeech_pc_pretrained_base`), so it
+does not need `--training_config`.
+
+**Limitation:** `--training_config` only propagates `exp_tag`, `exp_dir`, and
+`inference_dir` into the inference config (`espnet3/utils/run_utils.py`'s
+`_TRAINING_CONTEXT_KEYS`); it never overrides `model.train_config`.
+`conf/inference_f5.yaml` is pinned to `conf/training_f5_tts_small.yaml` (small);
+`conf/inference_f5_libritts.yaml` is pinned to `conf/training_f5_tts.yaml`
+(base). As shipped, each inference config rebuilds one fixed architecture, so
+running a given eval protocol against the other model size means editing that
+inference config's `model.train_config` field yourself, not passing a
+different `--training_config`. Check this before you burn a GPU hour on a
+checkpoint that will fail to load.
 
 ### 4. Score
 
@@ -92,6 +120,10 @@ against the numbers published in the paper.
 
 ## VITS
 
+`conf/metrics.yaml` scores the `librispeech_pc` test set by default.
+Before running `measure` below, edit its `dataset.test` list to name the
+`valid` and `test` sets instead, or the command will score the wrong split.
+
 ```bash
 python run.py --stages create_dataset      --training_config conf/training.yaml
 python run.py --stages compute_xvectors    --training_config conf/training.yaml
@@ -104,12 +136,9 @@ python run.py --stages infer \
     --training_config conf/training.yaml \
     --inference_config conf/inference.yaml
 
+# Edit conf/metrics.yaml's dataset.test to valid/test before running this.
 python run.py --stages measure \
     --training_config conf/training.yaml \
     --inference_config conf/inference.yaml \
     --metrics_config conf/metrics.yaml
 ```
-
-Note that `conf/metrics.yaml` scores the `librispeech_pc` test set by default.
-Scoring VITS output requires editing its `dataset.test` list to name the
-`valid` and `test` sets instead.
