@@ -32,6 +32,34 @@ faster-whisper's own internal VAD filtering is what now guards against
 whisper's well-known silence-hallucination failure mode, replacing the
 manual VAD/IPU segmentation this recipe used to do by hand.
 
+The real backend departs from faster-whisper's defaults in two measured
+ways (both debugged 2026-08-05 on the chunked CoVoMix2 eval, where whole
+final chunks that were verifiably spoken -- one near-verbatim -- scored as
+100% deletions):
+
+* ``vad_parameters={"threshold": 0.15}`` -- the PRIMARY fix.  Silero VAD's
+  default 0.5 speech threshold classifies degraded-but-intelligible TTS
+  audio as non-speech and deletes it BEFORE decoding; the deleted final
+  chunks got 0.0-1.9 s of their region marked as speech at 0.5.  At 0.15
+  the intelligible ones are admitted (36 deletions -> 3 on the cleanest
+  case) with no measured corpus-level insertion cost, while genuine
+  non-speech (degenerate noise) stays rejected at every threshold tried.
+  Keeping ``vad_filter=True`` is deliberate: decoding without VAD
+  hallucinates on the long silent spans these channels always contain.
+* ``condition_on_previous_text=False`` -- hardening against whisper's
+  long-form derail mode (one bad span poisons the decoder state for the
+  rest of the file).  Measured alone it moved pooled WER only slightly
+  (13.05% -> 12.84% on the chunked step40136 run); the VAD threshold is
+  what recovers the deleted speech.
+
+COMPARABILITY: wer numbers scored before this change are systematically
+inflated wherever generated audio degrades acoustically (long multi-chunk
+dialogues especially) -- re-score, do not mix.  Pass ``vad_threshold: 0.5``
+and ``condition_on_previous_text: true`` to the transcriber in a metrics
+config to reproduce the old behaviour exactly.  Measured effect of both
+together on the 150-dialogue chunked step40136 run: wer_channel 13.05% ->
+12.16%, final-chunk-ordinal WER 39.7% -> 32.9%.
+
 The injected ``normalizer`` (default: whisper's ``EnglishTextNormalizer``)
 is applied to BOTH the hypothesis and reference text of every utterance
 (channel or mix) before counting -- normalization must be symmetric, or the
@@ -102,7 +130,12 @@ class FasterWhisperTranscriber:
     """Real default transcriber: faster-whisper ``large-v3``, transcribed in
     ONE call per file with ``vad_filter=True`` (faster-whisper's own internal
     VAD filtering -- the anti-silence-hallucination defense for this lean
-    battery, replacing the old manual per-IPU segmentation).
+    battery, replacing the old manual per-IPU segmentation), a LOWERED VAD
+    speech threshold (``vad_threshold``, default 0.15 -- Silero's default
+    0.5 deletes degraded-but-intelligible TTS speech before decoding), and
+    ``condition_on_previous_text=False`` (hardening against whisper's
+    long-form derail mode).  See the module docstring for the measurements
+    behind each choice and the comparability consequences.
 
     ``faster_whisper`` is imported inside :meth:`_load`, invoked from the
     first :meth:`__call__`, never at module scope or in ``__init__`` --
@@ -116,12 +149,16 @@ class FasterWhisperTranscriber:
         device: str = "cpu",
         compute_type: str = "float32",
         language: str = "en",
+        condition_on_previous_text: bool = False,
+        vad_threshold: float = 0.15,
         **model_kwargs: Any,
     ) -> None:
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
         self.language = language
+        self.condition_on_previous_text = condition_on_previous_text
+        self.vad_threshold = vad_threshold
         self.model_kwargs = model_kwargs
         self._model = None
 
@@ -140,11 +177,13 @@ class FasterWhisperTranscriber:
     def __call__(self, wav: np.ndarray, sr: int) -> str:
         self._load()
         segments_iter, _info = self._model.transcribe(
-            wav, language=self.language, vad_filter=True
+            wav,
+            language=self.language,
+            vad_filter=True,
+            vad_parameters={"threshold": self.vad_threshold},
+            condition_on_previous_text=self.condition_on_previous_text,
         )
-        return " ".join(
-            seg.text.strip() for seg in segments_iter if seg.text.strip()
-        )
+        return " ".join(seg.text.strip() for seg in segments_iter if seg.text.strip())
 
 
 class WhisperEnglishNormalizer:

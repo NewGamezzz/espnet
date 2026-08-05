@@ -170,6 +170,59 @@ class TestBackendLaziness:
 
 
 # --------------------------------------------------------------------------- #
+# decode settings actually passed to faster-whisper, pinned as a contract
+# (each was chosen against a measured failure on the chunked CoVoMix2 eval,
+# debugged 2026-08-05):
+#   * vad_parameters threshold 0.15 -- Silero's default 0.5 classifies
+#     degraded-but-intelligible TTS speech as non-speech and silently
+#     deletes it before decoding (whole spoken final chunks scored as 100%
+#     deletions).
+#   * condition_on_previous_text False -- hardening against whisper's
+#     long-form derail mode, where one bad span poisons the decoder state
+#     for the rest of the file.
+# --------------------------------------------------------------------------- #
+class _RecordingModel:
+    """Stands in for faster_whisper.WhisperModel: records transcribe kwargs."""
+
+    def __init__(self):
+        self.calls = []
+
+    def transcribe(self, wav, **kwargs):
+        self.calls.append(kwargs)
+        return iter(()), None
+
+
+class TestTranscriberDecodeSettings:
+    def _call(self, transcriber):
+        model = _RecordingModel()
+        transcriber._model = model  # pre-loaded: _load() becomes a no-op
+        transcriber(np.zeros(16000, dtype=np.float32), 16000)
+        assert len(model.calls) == 1
+        return model.calls[0]
+
+    def test_conditioning_on_previous_text_is_off_by_default(self):
+        kwargs = self._call(FasterWhisperTranscriber())
+        assert kwargs["condition_on_previous_text"] is False
+
+    def test_conditioning_can_be_reenabled_to_reproduce_old_scoring(self):
+        kwargs = self._call(FasterWhisperTranscriber(condition_on_previous_text=True))
+        assert kwargs["condition_on_previous_text"] is True
+
+    def test_vad_filter_and_language_stay_pinned(self):
+        kwargs = self._call(FasterWhisperTranscriber())
+        assert kwargs["vad_filter"] is True
+        assert kwargs["language"] == "en"
+
+    def test_vad_threshold_is_lowered_by_default(self):
+        kwargs = self._call(FasterWhisperTranscriber())
+        assert kwargs["vad_parameters"] == {"threshold": 0.15}
+
+    def test_vad_threshold_is_overridable(self):
+        kwargs = self._call(FasterWhisperTranscriber(vad_threshold=0.5))
+        assert kwargs["vad_parameters"] == {"threshold": 0.5}
+
+
+# --------------------------------------------------------------------------- #
 # full __call__ round trip against a fabricated inference_dir, matching
 # src/inference.py's current meta contract (module docstring): top-level
 # mix_wav, channels[ch].{gen_wav,prompt_wav,gt_wav,ref_text}, turns.
@@ -325,9 +378,7 @@ class TestCallRoundTripMixOrdering:
         # __call__ / _score_window path, not the pure _mix_reference helper.
         inference_dir = tmp_path / "infer"
         test_dir = inference_dir / "valid"
-        _write_window(
-            test_dir, "sess_w00000", "alpha", "beta", turn_starts=[5.0, 1.0]
-        )
+        _write_window(test_dir, "sess_w00000", "alpha", "beta", turn_starts=[5.0, 1.0])
         _write_meta_scp(test_dir, ["sess_w00000"])
 
         transcriber = _QueueTranscriber(
@@ -361,9 +412,7 @@ class TestCallRoundTripNormalization:
         _write_meta_scp(test_dir, ["sess_w00000"])
 
         transcriber = _QueueTranscriber(["hello world", "hello world"])
-        metric = ConversationASRMetric(
-            transcriber=transcriber, normalizer=str.lower
-        )
+        metric = ConversationASRMetric(transcriber=transcriber, normalizer=str.lower)
         data = {"meta": test_dir / "meta.scp"}
 
         summary = metric(data, "valid", inference_dir)
@@ -427,9 +476,7 @@ class TestCallRoundTripEdgeCases:
                     "ref_text": "gamma delta",
                 },
             ],
-            "turns": [
-                {"channel": 1, "text": "gamma delta", "start": 1.5, "end": 2.5}
-            ],
+            "turns": [{"channel": 1, "text": "gamma delta", "start": 1.5, "end": 2.5}],
         }
         (test_dir / "meta").mkdir(parents=True, exist_ok=True)
         (test_dir / "meta/sess_w00000.json").write_text(
