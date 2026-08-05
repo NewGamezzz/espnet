@@ -30,6 +30,30 @@ predicted duration.  Chunk k still starts strictly after chunk k-1's turns,
 so cross-seam turn overlap stays structurally impossible - watch
 ``overlap_per_min``.
 
+Conditioning hygiene (the mirror image of the cross-fade contract: it
+transforms what call k SEES, never what is written): measured on the
+CoVoMix2 eval, conditioning each chunk on raw generated audio compounds two
+biases - active-frame RMS grows ~+50% per hop (flat in the unchunked
+control) and non-speech "junk" on idle channels is inherited and never
+recovers (escalation 0.83 vs 0.35, junk fraction 0.04 -> 0.50 by chunk 5).
+Two independent ``chunk`` knobs break the two feedback loops, both default
+OFF so existing configs reproduce bit-for-bit:
+
+* ``cond_silence_gate: true`` - zero every conditioning sample outside
+  Silero-detected speech regions (:func:`silence_gate`), so an idle
+  channel conditions the next hop as true silence instead of seed noise.
+  ``cond_gate_threshold`` (default 0.15, the eval metric's setting - low
+  on purpose: keep degraded-but-real speech, cut only confident junk)
+  requires the gate to be on.
+* ``cond_loudness_norm: true`` - rescale each conditioning channel to the
+  active-frame RMS of that channel's REAL prompt (:func:`match_active_rms`,
+  anchor computed once at round 0), so gain drift cannot compound however
+  long the chain runs.
+
+Gate runs before normalization so junk cannot skew the RMS estimate.  Per
+round the applied ``gains`` / ``gated_frac`` are recorded under the chunk's
+``conditioning`` meta key (absent at round 0 and when both knobs are off).
+
 DETERMINISM CONTRACT - a documented departure from ``generate_external``:
 sharding is BY DIALOGUE (a chunk chain cannot cross shards), and each shard
 plans its round batches over its own dialogues, so outputs are a pure
@@ -196,6 +220,150 @@ def crossfade_concat(
     return out
 
 
+ACTIVE_RMS_FRAME_SEC = 0.02
+ACTIVE_RMS_THRESHOLD = 1e-3
+DEFAULT_GATE_THRESHOLD = 0.15
+COND_GAIN_CLAMP = (0.1, 10.0)
+
+
+def active_rms(wav: torch.Tensor, fs: int) -> float | None:
+    """Mean RMS over the ACTIVE 20 ms frames of a 1-D wave, or ``None``.
+
+    Plain RMS would be diluted by however much of the signal is silence, so
+    a mostly-idle channel would demand a huge gain to "match" a continuous
+    prompt; framewise gating (RMS > 1e-3, same floor the eval analysis
+    used) prices only the speech itself.  ``None`` means no active frame -
+    the caller must not derive a gain from nothing.
+    """
+    frame = int(fs * ACTIVE_RMS_FRAME_SEC)
+    n = wav.shape[0] // frame
+    if n == 0:
+        return None
+    rms = wav[: n * frame].reshape(n, frame).pow(2).mean(dim=1).sqrt()
+    active = rms > ACTIVE_RMS_THRESHOLD
+    if not bool(active.any()):
+        return None
+    return float(rms[active].mean())
+
+
+def _silero_speech_regions(
+    wav: torch.Tensor, fs: int, threshold: float
+) -> list[tuple[int, int]]:
+    """Speech spans of a 1-D wave as ``(start, end)`` sample ranges at
+    ``fs``, from the Silero VAD bundled with faster-whisper (resampled to
+    its native 16 kHz and mapped back)."""
+    try:
+        from faster_whisper.vad import VadOptions, get_speech_timestamps
+    except ImportError as exc:  # pragma: no cover - env-dependent
+        raise RuntimeError(
+            "chunk.cond_silence_gate needs the Silero VAD bundled with "
+            "faster-whisper; install faster-whisper or inject a "
+            "speech_regions_fn"
+        ) from exc
+    import torchaudio.functional as AF
+
+    wav16 = AF.resample(wav.detach().cpu().float(), fs, 16000).numpy()
+    spans = get_speech_timestamps(wav16, vad_options=VadOptions(threshold=threshold))
+    scale = fs / 16000.0
+    return [(int(s["start"] * scale), int(s["end"] * scale)) for s in spans]
+
+
+def silence_gate(
+    wav: torch.Tensor,
+    fs: int,
+    *,
+    threshold: float,
+    speech_regions_fn=None,
+) -> tuple[torch.Tensor, list[float]]:
+    """Zero every sample outside detected speech regions, per channel.
+
+    ``wav`` is ``(channels, samples)``; returns ``(gated, zeroed_frac)``
+    with the input untouched.  ``speech_regions_fn(ch_wav, fs, threshold)``
+    defaults to Silero via faster-whisper; tests inject a fake.  A channel
+    with no speech at all becomes true silence - exactly what the model
+    should have produced for an idle channel, and the state that stops the
+    junk feedback loop.
+    """
+    fn = speech_regions_fn or _silero_speech_regions
+    total = wav.shape[1]
+    gated = torch.zeros_like(wav)
+    zeroed = []
+    for ch in range(wav.shape[0]):
+        mask = torch.zeros(total, dtype=torch.bool, device=wav.device)
+        for a, b in fn(wav[ch], fs, threshold):
+            mask[max(0, int(a)) : min(total, int(b))] = True
+        gated[ch] = torch.where(mask, wav[ch], torch.zeros((), dtype=wav.dtype))
+        zeroed.append(1.0 - float(mask.float().mean()) if total else 0.0)
+    return gated, zeroed
+
+
+def match_active_rms(
+    wav: torch.Tensor,
+    targets: Sequence[float | None],
+    fs: int,
+    *,
+    clamp: tuple[float, float] = COND_GAIN_CLAMP,
+) -> tuple[torch.Tensor, list[float]]:
+    """Scale each channel so its active-frame RMS matches ``targets[ch]``.
+
+    A ``None`` target or an all-silent channel passes through at gain 1.0;
+    gains clamp to ``clamp`` so a degenerate estimate can never blast or
+    kill a channel.  Returns ``(scaled, gains)`` without touching the
+    input.
+    """
+    out = wav.clone()
+    gains = []
+    for ch in range(wav.shape[0]):
+        target = targets[ch]
+        current = active_rms(wav[ch], fs)
+        if target is None or current is None:
+            gains.append(1.0)
+            continue
+        gain = min(max(target / current, clamp[0]), clamp[1])
+        out[ch] = wav[ch] * gain
+        gains.append(float(gain))
+    return out, gains
+
+
+@dataclass(frozen=True)
+class CondHygiene:
+    """Conditioning-hygiene knobs from the ``chunk`` block (defaults off)."""
+
+    silence_gate: bool = False
+    gate_threshold: float = DEFAULT_GATE_THRESHOLD
+    loudness_norm: bool = False
+
+    @property
+    def enabled(self) -> bool:
+        return self.silence_gate or self.loudness_norm
+
+
+def _apply_cond_hygiene(
+    wav: torch.Tensor,
+    *,
+    fs: int,
+    cond: CondHygiene,
+    targets: Sequence[float | None] | None,
+    speech_regions_fn,
+) -> tuple[torch.Tensor, dict[str, list[float]]]:
+    """Gate first (junk must not skew the RMS estimate), then normalize."""
+    info: dict[str, list[float]] = {}
+    if cond.silence_gate:
+        wav, zeroed = silence_gate(
+            wav,
+            fs,
+            threshold=cond.gate_threshold,
+            speech_regions_fn=speech_regions_fn,
+        )
+        info["gated_frac"] = [round(f, 6) for f in zeroed]
+    if cond.loudness_norm:
+        if targets is None:
+            targets = [None] * wav.shape[0]
+        wav, gains = match_active_rms(wav, targets, fs)
+        info["gains"] = [round(g, 6) for g in gains]
+    return wav, info
+
+
 def call_turns(
     record: ExternalRecord, ranges: Sequence[tuple[int, int]], k: int
 ) -> list[Turn]:
@@ -253,12 +421,14 @@ def _plan_dialogue(
     )
 
 
-def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float]:
-    """Return ``(policy, cross_fade_sec)`` from the config's ``chunk`` block.
+def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene]:
+    """Return ``(policy, cross_fade_sec, cond)`` from the ``chunk`` block.
 
     The policy stays exactly one of ``turns`` / ``target_sec``;
-    ``cross_fade_sec`` is an independent seam knob (0.0 = today's hard
-    concat, and the default, so existing configs reproduce bit-for-bit).
+    ``cross_fade_sec`` is an independent seam knob and the conditioning-
+    hygiene knobs (``cond_silence_gate``, ``cond_gate_threshold``,
+    ``cond_loudness_norm``) are independent conditioning knobs - all
+    default off, so existing configs reproduce bit-for-bit.
     """
     raw = cfg.get("chunk")
     if raw is None:
@@ -267,19 +437,41 @@ def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float]:
             "({turns: N} or {target_sec: S})"
         )
     chunk_cfg = OmegaConf.to_container(raw, resolve=True)
-    unknown = set(chunk_cfg) - {"turns", "target_sec", "cross_fade_sec"}
+    unknown = set(chunk_cfg) - {
+        "turns",
+        "target_sec",
+        "cross_fade_sec",
+        "cond_silence_gate",
+        "cond_gate_threshold",
+        "cond_loudness_norm",
+    }
     if unknown:
         raise ValueError(f"unknown chunk keys: {sorted(unknown)}")
     cross_fade_sec = float(chunk_cfg.pop("cross_fade_sec", None) or 0.0)
     if cross_fade_sec < 0:
         raise ValueError(f"chunk.cross_fade_sec must be >= 0, got {cross_fade_sec}")
+    gate_on = bool(chunk_cfg.pop("cond_silence_gate", False) or False)
+    threshold_raw = chunk_cfg.pop("cond_gate_threshold", None)
+    norm_on = bool(chunk_cfg.pop("cond_loudness_norm", False) or False)
+    if threshold_raw is not None and not gate_on:
+        raise ValueError("chunk.cond_gate_threshold requires cond_silence_gate: true")
+    threshold = (
+        DEFAULT_GATE_THRESHOLD if threshold_raw is None else float(threshold_raw)
+    )
+    if not 0.0 < threshold < 1.0:
+        raise ValueError(
+            f"chunk.cond_gate_threshold must be in (0, 1), got {threshold}"
+        )
+    cond = CondHygiene(
+        silence_gate=gate_on, gate_threshold=threshold, loudness_norm=norm_on
+    )
     set_keys = [k for k, v in chunk_cfg.items() if v is not None]
     if len(set_keys) != 1:
         raise ValueError(
             "exactly one of chunk.turns / chunk.target_sec must be set, "
             f"got {chunk_cfg}"
         )
-    return {k: chunk_cfg[k] for k in set_keys}, cross_fade_sec
+    return {k: chunk_cfg[k] for k in set_keys}, cross_fade_sec, cond
 
 
 def run_chunked_inference(
@@ -288,17 +480,20 @@ def run_chunked_inference(
     training_config=None,
     model=None,
     vocoder=None,
+    speech_regions_fn=None,
 ) -> dict[str, Any]:
     """Execute the chunked external infer stage; return counts.
 
     Same injection seams as ``run_external_inference`` so tests drive this
-    CPU-only with the tiny random-init DiT and a fake vocoder.
+    CPU-only with the tiny random-init DiT and a fake vocoder;
+    ``speech_regions_fn`` additionally lets tests fake the VAD behind
+    ``chunk.cond_silence_gate``.
     """
     cfg = inference_config
     mode = cfg.get("mode")
     if mode != MODE:
         raise ValueError(f"expected mode {MODE!r}, got {mode!r}")
-    chunk_cfg, cross_fade_sec = _validated_chunk_cfg(cfg)
+    chunk_cfg, cross_fade_sec, cond = _validated_chunk_cfg(cfg)
 
     if training_config is None:
         train_path = Path(cfg.training_config)
@@ -421,6 +616,7 @@ def run_chunked_inference(
         for idx in active:
             record = records[idx]
             n = record.num_channels
+            cond_info: dict[str, list[float]] = {}
             if rnd == 0:
                 prompt_wavs = [
                     _load_prompt_wav(p.audio_path, fs) for p in record.prompts
@@ -428,8 +624,22 @@ def run_chunked_inference(
                 blocks = _prompt_blocks(prompt_wavs, n)
                 prompt_raw = torch.cat(blocks, dim=1)
                 state[idx]["blocks"] = blocks
+                if cond.loudness_norm:
+                    # Gain anchor: each channel's REAL prompt, so the level
+                    # can never drift however many hops the chain runs.
+                    state[idx]["cond_targets"] = [
+                        active_rms(blocks[ch][ch], fs) for ch in range(n)
+                    ]
             else:
                 prompt_raw = state[idx]["prev_wav"]
+                if cond.enabled:
+                    prompt_raw, cond_info = _apply_cond_hygiene(
+                        prompt_raw,
+                        fs=fs,
+                        cond=cond,
+                        targets=state[idx].get("cond_targets"),
+                        speech_regions_fn=speech_regions_fn,
+                    )
             prompt_frames = prompt_raw.shape[1] // hop
             prompt_trimmed = prompt_raw[:, : prompt_frames * hop]
             if rnd == 0:
@@ -452,6 +662,7 @@ def run_chunked_inference(
                     total_frames=prompt_frames + gen_frames,
                 ),
                 "gen_frames": gen_frames,
+                "cond_info": cond_info,
             }
             round_costs[idx] = (prompt_frames + gen_frames) * hop / fs
 
@@ -491,19 +702,20 @@ def run_chunked_inference(
                 a, b = plans[idx].ranges[rnd]
                 state[idx]["prev_wav"] = gen_wavs
                 state[idx]["chunk_wavs"].append(gen_wavs)
-                state[idx]["chunk_meta"].append(
-                    {
-                        "round": rnd,
-                        "turn_start": a,
-                        "turn_end": b,
-                        "predicted_sec": round(plans[idx].chunk_secs[rnd], 6),
-                        "gen_frames": prepared_inputs[idx]["gen_frames"],
-                        "batch_id": batch_id,
-                        "batch_size": len(batch_indices),
-                        "batch_elapsed_sec": round(float(elapsed), 6),
-                        "batch_rtf": batch_rtf,
-                    }
-                )
+                chunk_entry = {
+                    "round": rnd,
+                    "turn_start": a,
+                    "turn_end": b,
+                    "predicted_sec": round(plans[idx].chunk_secs[rnd], 6),
+                    "gen_frames": prepared_inputs[idx]["gen_frames"],
+                    "batch_id": batch_id,
+                    "batch_size": len(batch_indices),
+                    "batch_elapsed_sec": round(float(elapsed), 6),
+                    "batch_rtf": batch_rtf,
+                }
+                if prepared_inputs[idx]["cond_info"]:
+                    chunk_entry["conditioning"] = prepared_inputs[idx]["cond_info"]
+                state[idx]["chunk_meta"].append(chunk_entry)
 
     meta_lines: list[str] = []
     wav_lines: list[str] = []
@@ -557,6 +769,9 @@ def run_chunked_inference(
             "chunking": {
                 "policy": chunk_cfg,
                 "cross_fade_sec": cross_fade_sec,
+                "cond_silence_gate": cond.silence_gate,
+                "cond_gate_threshold": cond.gate_threshold,
+                "cond_loudness_norm": cond.loudness_norm,
                 "n_chunks": plan.n_chunks,
                 "oversized": list(plan.oversized),
                 "chunks": st["chunk_meta"],

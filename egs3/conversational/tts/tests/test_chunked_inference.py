@@ -564,6 +564,261 @@ class TestReductionAndDeterminism:
 
 
 # --------------------------------------------------------------------------- #
+# Conditioning hygiene: silence gate + loudness normalization
+# --------------------------------------------------------------------------- #
+def _rms_frames(wav_1d: torch.Tensor, fs: int) -> torch.Tensor:
+    """Longhand 20 ms frame RMS, duplicated here so a shared bug in the
+    production framing cannot pass both sides (same doctrine as the
+    duration tests)."""
+    frame = fs // 50
+    n = wav_1d.shape[0] // frame
+    return wav_1d[: n * frame].reshape(n, frame).pow(2).mean(dim=1).sqrt()
+
+
+def _expected_active_rms(wav_1d: torch.Tensor, fs: int) -> float | None:
+    rms = _rms_frames(wav_1d, fs)
+    active = rms > 1e-3
+    if not bool(active.any()):
+        return None
+    return float(rms[active].mean())
+
+
+class TestActiveRms:
+    def test_ignores_silent_frames(self):
+        from egs3.conversational.tts.src.chunked_inference import active_rms
+
+        wav = torch.zeros(FS)
+        wav[: FS // 2] = 0.5
+        assert active_rms(wav, FS) == pytest.approx(0.5, abs=1e-6)
+
+    def test_all_silent_returns_none(self):
+        from egs3.conversational.tts.src.chunked_inference import active_rms
+
+        assert active_rms(torch.full((FS,), 1e-5), FS) is None
+
+
+class TestSilenceGate:
+    def test_zeros_outside_speech_regions(self):
+        from egs3.conversational.tts.src.chunked_inference import silence_gate
+
+        wav = torch.randn(2, 1000)
+        calls = []
+
+        def regions(ch_wav, fs, threshold):
+            calls.append((ch_wav.shape, fs, threshold))
+            return [(100, 400)] if len(calls) == 1 else []
+
+        gated, frac = silence_gate(wav, FS, threshold=0.2, speech_regions_fn=regions)
+        assert calls == [((1000,), FS, 0.2), ((1000,), FS, 0.2)]
+        assert torch.equal(gated[0, 100:400], wav[0, 100:400])
+        assert torch.equal(gated[0, :100], torch.zeros(100))
+        assert torch.equal(gated[0, 400:], torch.zeros(600))
+        assert torch.equal(gated[1], torch.zeros(1000))
+        assert frac == [pytest.approx(0.7), pytest.approx(1.0)]
+
+    def test_input_is_not_mutated(self):
+        from egs3.conversational.tts.src.chunked_inference import silence_gate
+
+        wav = torch.ones(1, 100)
+        original = wav.clone()
+        silence_gate(wav, FS, threshold=0.15, speech_regions_fn=lambda *a: [])
+        assert torch.equal(wav, original)
+
+    @pytest.mark.skipif(
+        __import__("importlib").util.find_spec("faster_whisper") is not None,
+        reason="faster-whisper installed; the fallback error cannot trigger",
+    )
+    def test_default_vad_missing_dependency_is_a_clear_error(self):
+        from egs3.conversational.tts.src.chunked_inference import silence_gate
+
+        with pytest.raises(RuntimeError, match="faster-whisper"):
+            silence_gate(torch.zeros(1, 100), FS, threshold=0.15)
+
+
+class TestMatchActiveRms:
+    def test_scales_channel_to_target(self):
+        from egs3.conversational.tts.src.chunked_inference import match_active_rms
+
+        wav = torch.full((1, FS), 0.2)
+        out, gains = match_active_rms(wav, [0.4], FS)
+        assert gains == [pytest.approx(2.0, abs=1e-6)]
+        assert torch.allclose(out, torch.full((1, FS), 0.4), atol=1e-6)
+
+    def test_silent_channel_and_none_target_pass_through(self):
+        from egs3.conversational.tts.src.chunked_inference import match_active_rms
+
+        wav = torch.stack([torch.zeros(FS), torch.full((FS,), 0.2)])
+        out, gains = match_active_rms(wav, [0.5, None], FS)
+        assert gains == [1.0, 1.0]
+        assert torch.equal(out, wav)
+
+    def test_gain_is_clamped(self):
+        from egs3.conversational.tts.src.chunked_inference import match_active_rms
+
+        wav = torch.full((1, FS), 0.01)
+        out, gains = match_active_rms(wav, [0.5], FS)
+        assert gains == [pytest.approx(10.0)]
+        assert torch.allclose(out, torch.full((1, FS), 0.1), atol=1e-6)
+
+
+class TestCondConfigValidation:
+    def test_threshold_without_gate_is_rejected(self, testset, tiny_model, tmp_path):
+        cfg = _chunked_config(
+            testset,
+            tmp_path / "infer",
+            {"turns": 2, "cond_gate_threshold": 0.3},
+        )
+        with pytest.raises(
+            ValueError, match="cond_gate_threshold requires cond_silence_gate"
+        ):
+            run_chunked_inference(
+                cfg,
+                training_config=testset["training_config"],
+                model=tiny_model,
+                vocoder=FakeVocoder(),
+            )
+
+    def test_unknown_keys_still_rejected(self, testset, tiny_model, tmp_path):
+        cfg = _chunked_config(
+            testset, tmp_path / "infer", {"turns": 2, "cond_loudness_nrom": True}
+        )
+        with pytest.raises(ValueError, match="unknown chunk keys"):
+            run_chunked_inference(
+                cfg,
+                training_config=testset["training_config"],
+                model=tiny_model,
+                vocoder=FakeVocoder(),
+            )
+
+
+class TestConditioningHygiene:
+    """The transform applies to what round k+1 SEES, never to what is
+    WRITTEN - the mirror image of the cross-fade contract."""
+
+    CHUNK = {
+        "turns": 2,
+        "cond_silence_gate": True,
+        "cond_loudness_norm": True,
+    }
+
+    def _speech_first_half(self, ch_wav, fs, threshold):
+        return [(0, ch_wav.shape[0] // 2)]
+
+    def _run_spied(self, testset, tiny_model, tmp_path, monkeypatch, chunk):
+        import egs3.conversational.tts.src.chunked_inference as ci
+
+        captured = []
+        real = ci.generate_batch
+
+        def spy(model, vocoder, items, **kwargs):
+            out = real(model, vocoder, items, **kwargs)
+            captured.append((items, out))
+            return out
+
+        monkeypatch.setattr(ci, "generate_batch", spy)
+        cfg = _chunked_config(testset, tmp_path / "infer", chunk)
+        run_chunked_inference(
+            cfg,
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+            speech_regions_fn=self._speech_first_half,
+        )
+        return tmp_path / "infer" / "valid", captured
+
+    def test_round1_prompt_is_gated_and_normalized(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        test_dir, captured = self._run_spied(
+            testset, tiny_model, tmp_path, monkeypatch, self.CHUNK
+        )
+        round1_items, _ = captured[-1]
+        item = round1_items[0]
+        prompt = item.speech[:, : item.prompt_frames * HOP].cpu()
+
+        # Locate the raw round-0 output this prompt was derived from.
+        raw = None
+        for items, out in captured[:-1]:
+            wavs = out[0][0]
+            if wavs.shape[1] // HOP == item.prompt_frames:
+                raw = wavs
+        assert raw is not None
+
+        # Longhand expected transform: zero the non-speech half, then scale
+        # each channel to the REAL prompt's active-frame RMS.
+        expected = raw.clone()
+        expected[:, expected.shape[1] // 2 :] = 0.0
+        for ch in range(expected.shape[0]):
+            ref, sr = _read_wav(test_dir / f"prompt/000_ch{ch}.wav")
+            assert sr == FS
+            target = _expected_active_rms(torch.as_tensor(ref, dtype=torch.float32), FS)
+            got = _expected_active_rms(expected[ch], FS)
+            if target is None or got is None:
+                continue
+            gain = min(max(target / got, 0.1), 10.0)
+            expected[ch] *= gain
+        trimmed = expected[:, : item.prompt_frames * HOP]
+        assert torch.allclose(prompt, trimmed, atol=1e-5)
+        # The transform must actually bite in this setup: the second half is
+        # zeroed, so prompt != raw.
+        assert not torch.equal(prompt, raw[:, : item.prompt_frames * HOP])
+
+    def test_written_wav_keeps_the_raw_chunk_audio(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        test_dir, captured = self._run_spied(
+            testset, tiny_model, tmp_path, monkeypatch, self.CHUNK
+        )
+        meta = json.loads((test_dir / "meta/000.json").read_text("utf-8"))
+        chunk0_samples = meta["chunking"]["chunks"][0]["gen_frames"] * HOP
+        raw0 = None
+        for items, out in captured:
+            wavs = out[0][0]
+            if wavs.shape[1] == chunk0_samples:
+                raw0 = wavs
+        assert raw0 is not None
+        for ch in range(raw0.shape[0]):
+            data, _ = _read_wav(test_dir / f"wav/000_ch{ch}.wav")
+            written = torch.as_tensor(data[:chunk0_samples], dtype=torch.float32)
+            assert torch.allclose(written, raw0[ch], atol=2e-4)
+
+    def test_meta_records_the_knobs_and_per_round_stats(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        test_dir, _ = self._run_spied(
+            testset, tiny_model, tmp_path, monkeypatch, self.CHUNK
+        )
+        meta = json.loads((test_dir / "meta/000.json").read_text("utf-8"))
+        chunking = meta["chunking"]
+        assert chunking["cond_silence_gate"] is True
+        assert chunking["cond_gate_threshold"] == 0.15
+        assert chunking["cond_loudness_norm"] is True
+        chunks = chunking["chunks"]
+        assert "conditioning" not in chunks[0]
+        cond = chunks[1]["conditioning"]
+        assert len(cond["gains"]) == meta["num_channels"]
+        assert len(cond["gated_frac"]) == meta["num_channels"]
+        assert all(0.0 <= f <= 1.0 for f in cond["gated_frac"])
+        assert all(g > 0 for g in cond["gains"])
+
+    def test_defaults_keep_the_knobs_off_in_meta(self, testset, tiny_model, tmp_path):
+        cfg = _chunked_config(testset, tmp_path / "infer", {"turns": 2})
+        run_chunked_inference(
+            cfg,
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+        )
+        meta = json.loads(
+            (tmp_path / "infer" / "valid" / "meta/000.json").read_text("utf-8")
+        )
+        chunking = meta["chunking"]
+        assert chunking["cond_silence_gate"] is False
+        assert chunking["cond_loudness_norm"] is False
+        assert all("conditioning" not in c for c in chunking["chunks"])
+
+
+# --------------------------------------------------------------------------- #
 # Measure battery on chunked output
 # --------------------------------------------------------------------------- #
 class TestChunkedMeasure:
