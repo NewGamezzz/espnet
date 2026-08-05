@@ -128,6 +128,7 @@ CLUSTER_MARKERS = (
     "GPU-small",
     "v100-32",
     "#SBATCH",
+    "/jet/home",
 )
 
 # Generated or downloaded trees that are not part of the recipe source.
@@ -143,6 +144,21 @@ GENERATED_DIRS = {
 }
 
 
+def _is_recipe_source(relative: Path) -> bool:
+    """Return False for paths that are not part of the recipe source tree.
+
+    Skips generated or downloaded trees, plus dotfiles and dot-directories:
+    local-only agent config such as .claude/ is untracked scratch, not recipe
+    source, and would otherwise fail these sweeps on a developer's own
+    checkout.
+    """
+    if GENERATED_DIRS.intersection(relative.parts):
+        return False
+    if any(part.startswith(".") for part in relative.parts):
+        return False
+    return True
+
+
 def test_recipe_source_has_no_cluster_specific_content():
     offenders = []
     for path in sorted(RECIPE.rglob("*")):
@@ -155,12 +171,7 @@ def test_recipe_source_has_no_cluster_specific_content():
         }:
             continue
         relative = path.relative_to(RECIPE)
-        if GENERATED_DIRS.intersection(relative.parts):
-            continue
-        # Skip dotfiles and dot-directories: local-only agent config such as
-        # .claude/ is untracked scratch, not recipe source, and would
-        # otherwise fail this test on a developer's own checkout.
-        if any(part.startswith(".") for part in relative.parts):
+        if not _is_recipe_source(relative):
             continue
         if path.resolve() == Path(__file__).resolve():
             continue  # this file necessarily contains the markers it checks
@@ -172,7 +183,14 @@ def test_recipe_source_has_no_cluster_specific_content():
 
 
 def test_submission_scripts_are_gone():
-    assert list(RECIPE.rglob("*.sbatch")) == []
+    # Same skip rules as the content scan: a stashed submission script under
+    # exp/ is not recipe source and must not fail this sweep.
+    stray = [
+        path
+        for path in RECIPE.rglob("*.sbatch")
+        if _is_recipe_source(path.relative_to(RECIPE))
+    ]
+    assert stray == []
     assert not (RECIPE / "local" / "pooled_wer_from_jsonl.py").exists()
 
 

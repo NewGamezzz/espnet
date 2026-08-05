@@ -31,7 +31,7 @@ model:
   # Rebuilds F5TTS_Base + the pinyin tokenizer from this stub config.
   train_config: ${recipe_dir}/conf/training_pretrained_f5.yaml
   # Official SWivid/F5-TTS checkpoint (.safetensors), downloaded via HF into
-  # pretrained/F5TTS_Base/ (Task 7 Step B).
+  # pretrained/F5TTS_Base/.
   ckpt_path: ${recipe_dir}/pretrained/F5TTS_Base/model_1200000.safetensors
   native_f5: true
   use_ema: true
