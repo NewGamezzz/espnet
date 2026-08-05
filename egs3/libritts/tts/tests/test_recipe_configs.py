@@ -97,3 +97,49 @@ def test_metrics_config_matches_official_protocol():
 
     # SIM: documented deviation, VERSA can only load ESPnet-SPK checkpoints.
     assert by_name["speaker"]["model_tag"] == "espnet/voxcelebs12_ecapa_wavlm_joint"
+
+
+# Substrings that would tie this recipe to one specific cluster account.
+CLUSTER_MARKERS = (
+    "/ocean/projects",
+    "cis210027p",
+    "GPU-shared",
+    "GPU-small",
+    "v100-32",
+    "#SBATCH",
+)
+
+# Generated or downloaded trees that are not part of the recipe source.
+GENERATED_DIRS = {"data", "exp", "downloads", "pretrained", "__pycache__"}
+
+
+def test_recipe_source_has_no_cluster_specific_content():
+    offenders = []
+    for path in sorted(RECIPE.rglob("*")):
+        if not path.is_file() or path.suffix not in {".yaml", ".py", ".sh", ".md"}:
+            continue
+        relative = path.relative_to(RECIPE)
+        if GENERATED_DIRS.intersection(relative.parts):
+            continue
+        # Skip dotfiles and dot-directories: local-only agent config such as
+        # .claude/ is untracked scratch, not recipe source, and would
+        # otherwise fail this test on a developer's own checkout.
+        if any(part.startswith(".") for part in relative.parts):
+            continue
+        if path.name == Path(__file__).name:
+            continue  # this file necessarily contains the markers it checks
+        text = path.read_text(encoding="utf-8", errors="ignore")
+        offenders.extend(
+            f"{relative}: {marker}" for marker in CLUSTER_MARKERS if marker in text
+        )
+    assert offenders == [], "Cluster-specific content found: " + "; ".join(offenders)
+
+
+def test_submission_scripts_are_gone():
+    assert list((RECIPE / "local").glob("*.sbatch")) == []
+    assert not (RECIPE / "local" / "pooled_wer_from_jsonl.py").exists()
+
+
+def test_manifest_and_download_helpers_are_kept():
+    assert (RECIPE / "local" / "prepare_librispeech_pc.py").is_file()
+    assert (RECIPE / "local" / "download_libritts.sh").is_file()
