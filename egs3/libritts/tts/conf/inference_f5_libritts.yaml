@@ -57,7 +57,7 @@ model:
   train_config: ${recipe_dir}/conf/training_f5_tts.yaml
   ckpt_path: ${exp_dir}/last.ckpt
   use_ema: true
-  # Vocos mel vocoder (24 kHz, 100-mel) — matches the F5 "vocos" mel front-end.
+  # Vocos mel vocoder (24 kHz, 100-mel), matching the F5 "vocos" mel front-end.
   vocoder_name: vocos
   vocoder_path: null
   target_sample_rate: 24000
