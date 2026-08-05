@@ -175,25 +175,31 @@ class VersaMetric(BaseMetric):
             lines.append(f"  WER components (%) [{wer_prefix.rstrip('_')}]:")
             for k in wer_keys:
                 lines.append(f"    {k.removeprefix(wer_prefix):<21s} {scores[k]:.1f}")
-            total = sum(
-                scores[f"{wer_prefix}{op}"]
-                for op in ("delete", "insert", "replace", "equal")
+            # Denominator is the REFERENCE length (delete + replace + equal).
+            # Insertions are errors but are not reference tokens, so they
+            # belong in the numerator only.
+            ref_len = sum(
+                scores[f"{wer_prefix}{op}"] for op in ("delete", "replace", "equal")
             )
-            err = total - scores.get(f"{wer_prefix}equal", 0.0)
-            if total > 0:
-                lines.append(f"    {'WER':<21s} {err / total * 100:.2f}%")
+            err = sum(
+                scores[f"{wer_prefix}{op}"] for op in ("delete", "replace", "insert")
+            )
+            if ref_len > 0:
+                lines.append(f"    {'WER':<21s} {err / ref_len * 100:.2f}%")
 
         if cer_keys and cer_prefix:
             lines.append(f"  CER components (%) [{cer_prefix.rstrip('_')}]:")
             for k in cer_keys:
                 lines.append(f"    {k.removeprefix(cer_prefix):<21s} {scores[k]:.1f}")
-            total = sum(
-                scores[f"{cer_prefix}{op}"]
-                for op in ("delete", "insert", "replace", "equal")
+            # Same reference-length denominator as WER above.
+            ref_len = sum(
+                scores[f"{cer_prefix}{op}"] for op in ("delete", "replace", "equal")
             )
-            err = total - scores.get(f"{cer_prefix}equal", 0.0)
-            if total > 0:
-                lines.append(f"    {'CER':<21s} {err / total * 100:.2f}%")
+            err = sum(
+                scores[f"{cer_prefix}{op}"] for op in ("delete", "replace", "insert")
+            )
+            if ref_len > 0:
+                lines.append(f"    {'CER':<21s} {err / ref_len * 100:.2f}%")
 
         lines.append("-" * 40)
         logger.info("\n".join(lines))
@@ -207,6 +213,14 @@ class VersaMetric(BaseMetric):
         ``<prefix><metric>`` (e.g. ``fwhisper_wer`` -> ``3.45`` meaning
         3.45%), computed from the pooled edit-op counts rather than the mean
         of per-utterance rates.
+
+        The pooled rate is ``(delete + replace + insert) / (delete + replace +
+        equal) * 100``. The denominator is the REFERENCE length, which does
+        not include insertions; insertions are errors but are not reference
+        tokens. This matches VERSA's own definition, which asserts
+        ``delete + replace + equal == len(ref_words)`` in
+        ``versa/corpus_metrics/fwhisper_wer.py``. A rate above 100% is
+        therefore possible and correct when insertions dominate.
         """
         sums: Dict[str, float] = {}
         counts: Dict[str, int] = {}
@@ -222,20 +236,27 @@ class VersaMetric(BaseMetric):
                         counts[key] = counts.get(key, 0) + 1
         averages = {key: round(sums[key] / counts[key], 4) for key in sums}
 
-        # Corpus-level WER/CER: pool the raw error counts across every
-        # utterance, then divide once. Averaging per-utterance rates instead
-        # would let short utterances dominate. Emitted as a PERCENTAGE, to
-        # match how summarize() prints it (e.g. 3.45 means 3.45%).
+        # Corpus-level WER/CER: pool the raw counts across every utterance,
+        # then divide once. Averaging per-utterance rates instead would let
+        # short utterances dominate. The denominator is the pooled REFERENCE
+        # length (delete + replace + equal), never the alignment length, so
+        # insertions raise the numerator without inflating the denominator.
+        # Emitted as a PERCENTAGE, to match how summarize() prints it
+        # (e.g. 3.45 means 3.45%).
         for metric in ("wer", "cer"):
             prefix = VersaMetric._find_prefix(sums, metric)
             if prefix is None:
                 continue
-            total = sum(
-                sums[f"{prefix}{op}"] for op in ("delete", "insert", "replace", "equal")
+            ref_len = sum(
+                sums[f"{prefix}{op}"] for op in ("delete", "replace", "equal")
             )
-            if total <= 0:
+            if ref_len <= 0:
+                # Empty reference across the whole corpus: the rate is
+                # undefined, so emit nothing rather than divide by zero.
                 continue
-            errors = total - sums[f"{prefix}equal"]
-            averages[prefix.rstrip("_")] = round(errors / total * 100, 4)
+            errors = sum(
+                sums[f"{prefix}{op}"] for op in ("delete", "replace", "insert")
+            )
+            averages[prefix.rstrip("_")] = round(errors / ref_len * 100, 4)
 
         return averages
