@@ -170,11 +170,16 @@ class TestBackendLaziness:
 
 
 # --------------------------------------------------------------------------- #
-# decode settings actually passed to faster-whisper: long channel files
-# derail whisper's conditioned long-form decoding after silent/garbled spans
-# (chunked CoVoMix2 dialogues lost whole spoken final chunks to it, debugged
-# 2026-08-05), so conditioning on previous text must be OFF by default and
-# the whole kwarg set is pinned here as a contract.
+# decode settings actually passed to faster-whisper, pinned as a contract
+# (each was chosen against a measured failure on the chunked CoVoMix2 eval,
+# debugged 2026-08-05):
+#   * vad_parameters threshold 0.15 -- Silero's default 0.5 classifies
+#     degraded-but-intelligible TTS speech as non-speech and silently
+#     deletes it before decoding (whole spoken final chunks scored as 100%
+#     deletions).
+#   * condition_on_previous_text False -- hardening against whisper's
+#     long-form derail mode, where one bad span poisons the decoder state
+#     for the rest of the file.
 # --------------------------------------------------------------------------- #
 class _RecordingModel:
     """Stands in for faster_whisper.WhisperModel: records transcribe kwargs."""
@@ -207,6 +212,14 @@ class TestTranscriberDecodeSettings:
         kwargs = self._call(FasterWhisperTranscriber())
         assert kwargs["vad_filter"] is True
         assert kwargs["language"] == "en"
+
+    def test_vad_threshold_is_lowered_by_default(self):
+        kwargs = self._call(FasterWhisperTranscriber())
+        assert kwargs["vad_parameters"] == {"threshold": 0.15}
+
+    def test_vad_threshold_is_overridable(self):
+        kwargs = self._call(FasterWhisperTranscriber(vad_threshold=0.5))
+        assert kwargs["vad_parameters"] == {"threshold": 0.5}
 
 
 # --------------------------------------------------------------------------- #
