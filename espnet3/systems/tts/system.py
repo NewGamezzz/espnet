@@ -1,4 +1,4 @@
-"""TTS system implementation
+"""TTS system implementation.
 
 This module adds new stages on top of the base system: removing long-short
 utterances and creating token lists, plus the training and stats-collection
@@ -73,17 +73,27 @@ class TTSSystem(BaseSystem):
     def remove_long_short(self, *args, **kwargs):
         """Remove long-short utterances based on duration thresholds.
 
-        This stage processes manifest files to filter out utterances that are too short or too long based on specified duration thresholds. It reads WAV headers via soundfile to check audio durations (in parallel, via RemoveLongShortProvider/Runner) and saves filtered manifests for downstream stages.
+        This stage processes manifest files to filter out utterances that
+        are too short or too long based on specified duration thresholds.
+        It reads WAV headers via soundfile to check audio durations (in
+        parallel, via RemoveLongShortProvider/Runner) and saves filtered
+        manifests for downstream stages.
 
         Configuration should include:
-            training_config.remove_long_short.min_wav_duration: Minimum duration in seconds
-            training_config.remove_long_short.max_wav_duration: Maximum duration in seconds
-            training_config.remove_long_short.save_path: Directory to save filtered manifests
-            training_config.remove_long_short.splits: List of splits to process (train, valid, test)
-            training_config.remove_long_short.manifest_paths: Optional dict of split to manifest path (default: data/manifest/{split}.tsv)
+            training_config.remove_long_short.min_wav_duration: Minimum
+                duration in seconds
+            training_config.remove_long_short.max_wav_duration: Maximum
+                duration in seconds
+            training_config.remove_long_short.save_path: Directory to save
+                filtered manifests
+            training_config.remove_long_short.splits: List of splits to
+                process (train, valid, test)
+            training_config.remove_long_short.manifest_paths: Optional dict
+                of split to manifest path (default: data/manifest/{split}.tsv)
 
         Raises:
-            RuntimeError: If required configuration is missing or manifest files not found.
+            RuntimeError: If required configuration is missing or manifest
+                files not found.
         """
         self._reject_stage_args("remove_long_short", args, kwargs)
         logger.info(
@@ -216,14 +226,19 @@ class TTSSystem(BaseSystem):
     def create_token_list(self, *args, **kwargs):
         """Create token list from training data.
 
-        This stage processes the training manifest to extract unique tokens from the text transcriptions and saves them to a token list file.
+        This stage processes the training manifest to extract unique
+        tokens from the text transcriptions and saves them to a token
+        list file.
 
         Configuration should include:
-            training_config.create_token_list.save_path: Path to save the token list file
-            training_config.create_token_list.manifest_path: Path to the training manifest file (default: data/manifest/train.tsv)
+            training_config.create_token_list.save_path: Path to save
+                the token list file
+            training_config.create_token_list.manifest_path: Path to the
+                training manifest file (default: data/manifest/train.tsv)
 
         Raises:
-            RuntimeError: If required configuration is missing or manifest file not found.
+            RuntimeError: If required configuration is missing or
+                manifest file not found.
         """
         self._reject_stage_args("create_token_list", args, kwargs)
         logger.info("TTSSystem.create_token_list(): starting token list creation")
@@ -292,7 +307,8 @@ class TTSSystem(BaseSystem):
             )
             return
 
-        # Declare text processing parameters with defaults (matching espnet2 defaults where applicable)
+        # Declare text processing parameters with defaults (matching
+        # espnet2 defaults where applicable)
         cleaner = tl_cfg.get("cleaner", None)
         token_type = tl_cfg.get("token_type", "char")
         bpemodel = tl_cfg.get("bpemodel", None)

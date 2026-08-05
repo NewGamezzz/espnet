@@ -82,12 +82,12 @@ class RemoveLongShortProvider(EnvironmentProvider):
 
     @staticmethod
     def _load_entries(manifest_path) -> Tuple[List[Tuple[str, str, str]], int]:
-        """Parse a TSV manifest into kept entries + count of empty-text drops.
+        r"""Parse a TSV manifest into kept entries + count of empty-text drops.
 
         Mirrors espnet2's ``NF != 1`` filter: rows without text are dropped
         here so they never reach duration filtering.
 
-        Each line is expected to be ``utt_id\\twav_path\\ttext\\tspeaker_id``.
+        Each line is expected to be ``utt_id\twav_path\ttext\tspeaker_id``.
         Blank lines are skipped.
 
         Returns:
