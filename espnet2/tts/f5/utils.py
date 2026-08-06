@@ -10,11 +10,6 @@ pipeline (see ``create_token_list`` stage) and feeds integer token ids to the
 model, so those helpers are unused here.
 """
 
-# The ``float["b n d"]`` / ``int["b"]`` annotations below are jaxtyping-style
-# shape documentation carried over from upstream F5-TTS. Linters parse the shape
-# strings as forward references, so the F722/F821 they raise are false positives.
-# They are suppressed per line rather than per file, because flake8's file-level
-# form has no code list and would switch off every other check in this module.
 # ruff: noqa: F722 F821
 
 from __future__ import annotations

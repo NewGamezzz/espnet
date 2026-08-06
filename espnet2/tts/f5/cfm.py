@@ -7,11 +7,6 @@ nw - raw wave length
 d - dimension
 """
 
-# The ``float["b n d"]`` / ``int["b"]`` annotations below are jaxtyping-style
-# shape documentation carried over from upstream F5-TTS. Linters parse the shape
-# strings as forward references, so the F722/F821 they raise are false positives.
-# They are suppressed per line rather than per file, because flake8's file-level
-# form has no code list and would switch off every other check in this module.
 # ruff: noqa: F722 F821
 
 from __future__ import annotations
@@ -265,8 +260,6 @@ class CFM(nn.Module):
             inp = inp.permute(0, 2, 1)
             assert inp.shape[-1] == self.num_channels
 
-        # ``_σ1`` is an intentional throwaway from this tuple unpack, kept so the
-        # statement stays identical to upstream F5-TTS.
         batch, seq_len, dtype, device, _σ1 = (  # noqa: F841
             *inp.shape[:2],
             inp.dtype,
