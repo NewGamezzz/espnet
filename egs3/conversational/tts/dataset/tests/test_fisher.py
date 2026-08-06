@@ -85,3 +85,91 @@ def test_clean_supervisions_partitions_and_collects_spans():
     assert kept[1].start == 5.0 and kept[1].duration == 2.0
     assert spans == [(3.0, 4.0), (8.0, 9.0)]
     assert n_benign == 1
+
+
+def write_fisher_recordings(
+    path: Path, recs: dict[str, float], *, swap_sources=False, mutate=None
+) -> None:
+    """recs: id -> duration_s. Real corpus layout/fields; sources point at a
+    machine-specific scratch prefix on purpose. ``mutate`` edits each record
+    dict before writing (for malformed-input tests)."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt") as f:
+        for rid, duration in sorted(recs.items()):
+            shard = rid.split("_")[-1][:3]
+            sources = [
+                {
+                    "type": "file",
+                    "channels": [0],
+                    "source": f"/scratch/elsewhere/fisher_wavs_sidon_24k/{shard}/{rid}-A.flac",
+                },
+                {
+                    "type": "file",
+                    "channels": [1],
+                    "source": f"/scratch/elsewhere/fisher_wavs_sidon_24k/{shard}/{rid}-B.flac",
+                },
+            ]
+            if swap_sources:
+                sources = sources[::-1]
+            record = {
+                "id": rid,
+                "sources": sources,
+                "sampling_rate": 24000,
+                "num_samples": round(duration * 24000),
+                "duration": duration,
+                "channel_ids": [0, 1],
+            }
+            if mutate:
+                mutate(record)
+            f.write(json.dumps(record) + "\n")
+
+
+def test_load_fisher_recordings_merged_relpath(tmp_path):
+    path = tmp_path / "recordings.jsonl.gz"
+    write_fisher_recordings(path, {"fe_03_00001": 608.484})
+    recs = fisher.load_fisher_recordings(path)
+    rec = recs["fe_03_00001"]
+    # points at the MERGED stereo flac, sharded like the source; never the
+    # scratch-absolute mono paths
+    assert rec.audio_relpath == "000/fe_03_00001.flac"
+    assert (rec.sample_rate, rec.num_channels) == (24000, 2)
+    assert rec.duration == 608.484
+
+
+def test_load_fisher_recordings_source_order_is_channel_driven(tmp_path):
+    path = tmp_path / "recordings.jsonl.gz"
+    write_fisher_recordings(path, {"fe_03_00001": 10.0}, swap_sources=True)
+    rec = fisher.load_fisher_recordings(path)["fe_03_00001"]
+    a, b = fisher.channel_source_relpaths(rec)
+    assert a == "fisher_wavs_sidon_24k/000/fe_03_00001-A.flac"
+    assert b == "fisher_wavs_sidon_24k/000/fe_03_00001-B.flac"
+
+
+@pytest.mark.parametrize(
+    "mutate,match",
+    [
+        (lambda r: r["sources"].pop(), "2 sources"),
+        (lambda r: r["sources"][0]["channels"].append(1), "single-channel"),
+        (
+            lambda r: r["sources"][1].__setitem__("channels", [0]),
+            "channels",
+        ),
+        (
+            lambda r: r["sources"][0].__setitem__(
+                "source", "/x/000/fe_03_00001-B.flac"
+            ),
+            "-A.flac",
+        ),
+        (
+            lambda r: r["sources"][1].__setitem__(
+                "source", "/x/999/fe_03_00001-B.flac"
+            ),
+            "shard",
+        ),
+    ],
+)
+def test_load_fisher_recordings_rejects_malformed(tmp_path, mutate, match):
+    path = tmp_path / "recordings.jsonl.gz"
+    write_fisher_recordings(path, {"fe_03_00001": 10.0}, mutate=mutate)
+    with pytest.raises(ValueError, match=match):
+        fisher.load_fisher_recordings(path)

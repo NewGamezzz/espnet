@@ -88,3 +88,70 @@ def clean_fisher_supervisions(
         else:
             kept.append(dataclasses.replace(s, text=res.text))
     return kept, spans, n_benign
+
+
+def load_fisher_recordings(path: str | Path) -> dict[str, Recording]:
+    """Parse the sidon recordings manifest into ``Recording`` objects.
+
+    Each call has exactly two single-channel sources (A = channel 0,
+    B = channel 1, per the documented layout; verified per record from the
+    ``channels`` fields, never assumed from listing order).  Only the
+    trailing ``<shard>/<name>`` of each source path is trusted;
+    ``audio_relpath`` is the MERGED stereo file ``<shard>/<id>.flac``,
+    relative to the merged-FLAC dir (the training entries' ``dataset_root``).
+    """
+    recordings: dict[str, Recording] = {}
+    for rec in _iter_jsonl_gz(Path(path)):
+        rid = rec["id"]
+        sources = rec["sources"]
+        if len(sources) != 2:
+            raise ValueError(
+                f"recording {rid!r} has {len(sources)} sources; the sidon "
+                "manifests carry 2 sources (one mono file per channel)"
+            )
+        by_channel: dict[int, Path] = {}
+        for src in sources:
+            channels = src["channels"]
+            if len(channels) != 1:
+                raise ValueError(
+                    f"recording {rid!r}: expected single-channel sources, "
+                    f"got channels={channels}"
+                )
+            if channels[0] in by_channel:
+                raise ValueError(f"recording {rid!r}: duplicate channels {channels[0]}")
+            by_channel[channels[0]] = Path(src["source"])
+        if set(by_channel) != {0, 1}:
+            raise ValueError(
+                f"recording {rid!r}: sources cover channels {sorted(by_channel)}, "
+                "need exactly {0, 1}"
+            )
+        expected = {0: f"{rid}-A.flac", 1: f"{rid}-B.flac"}
+        for ch, src_path in by_channel.items():
+            if src_path.name != expected[ch]:
+                raise ValueError(
+                    f"recording {rid!r}: channel {ch} source is "
+                    f"{src_path.name!r}, expected {expected[ch]!r} "
+                    "(A/B naming must match the channel fields)"
+                )
+        shards = {p.parent.name for p in by_channel.values()}
+        if len(shards) != 1:
+            raise ValueError(f"recording {rid!r}: sources in different shards {shards}")
+        recordings[rid] = Recording(
+            id=rid,
+            audio_relpath=f"{shards.pop()}/{rid}.flac",
+            sample_rate=int(rec["sampling_rate"]),
+            num_channels=2,
+            duration=float(rec["duration"]),
+        )
+    return recordings
+
+
+def channel_source_relpaths(rec: Recording) -> tuple[str, str]:
+    """Mono source files (channel 0, channel 1) per the documented layout,
+    relative to the corpus root."""
+    relpath = Path(rec.audio_relpath)
+    shard, rid = relpath.parent.name, relpath.stem
+    return (
+        f"{SIDON_AUDIO_SUBDIR}/{shard}/{rid}-A.flac",
+        f"{SIDON_AUDIO_SUBDIR}/{shard}/{rid}-B.flac",
+    )
