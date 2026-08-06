@@ -18,3 +18,11 @@ def test_candor_data_src_resolves():
     module = load_dataset_module(data_src="egs3.conversational.tts.dataset_candor")
     assert module.Dataset is ConversationDataset
     assert module.DatasetBuilder is CandorBuilder
+
+
+def test_fisher_data_src_resolves():
+    from egs3.conversational.tts.dataset.fisher_builder import FisherBuilder
+
+    module = load_dataset_module(data_src="egs3.conversational.tts.dataset_fisher")
+    assert module.Dataset is ConversationDataset
+    assert module.DatasetBuilder is FisherBuilder
