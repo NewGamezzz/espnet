@@ -153,11 +153,14 @@ fisher_builder:
   flac_dir: /work/hdd/bbjs/ttrachu/dataset/fisher_flac
   ffmpeg: ffmpeg
   merge_workers: 16
-  # Windowing knobs: same VALUES as the SSSD builder section. merge_gap 1.0
-  # assumes human LDC timestamps (Fisher's are); PENDING the diag_merge_gap
-  # sweep on Delta before the real build - CANDOR's cliffhanger variant
-  # silently dropped 74.7% of its timeline at this setting.
-  merge_gap: 1.0
+  # Windowing knobs: same VALUES as the SSSD builder section except
+  # merge_gap. 0.2 chosen from the measured Delta sweep 2026-08-06
+  # (jobs/diag_merge_gap_fisher.py): Fisher's oversized-span drop has no
+  # plateau - 49.4% of the timeline at 1.0, 20.8% at 0.3, 15.4% at 0.2,
+  # with a 5.6% cross-channel-overlap floor at 0.0. 0.2 keeps ~1,350 h
+  # windowable and window cuts still fall in real >= 0.2 s same-channel
+  # silences (Thanapat's pick, same decision process as CANDOR's 0.3).
+  merge_gap: 0.2
   window_min: 10.0
   window_max: 60.0
   boundary_guard: 0.0
