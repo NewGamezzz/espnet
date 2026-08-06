@@ -55,8 +55,8 @@
 # config on resume, but then calls `load_state_dict()` on it from the
 # checkpoint, and torch's LRScheduler.load_state_dict does a full
 # `self.__dict__.update(...)` -- silently overwriting the freshly-built
-# LinearLR/SequentialLR's `total_iters`/`milestones` back to the OLD
-# checkpoint values. Net effect: the new total_steps is a no-op on resume,
+# LinearWarmupDecayLR's `warmup_steps`/`total_steps`/`decay_steps` back to the
+# OLD checkpoint values. Net effect: the new total_steps is a no-op on resume,
 # and the LR keeps following the OLD 600K-step decay curve. Extending past
 # 600K needs either excluding scheduler state from the checkpoint restore or
 # manually patching the resumed scheduler -- not implemented here.
@@ -185,9 +185,9 @@ optimizer:
   weight_decay: 0.01
 
 scheduler:
-  # F5-TTS schedule: linear warmup then linear decay to ~0 (SequentialLR).
+  # F5-TTS schedule: linear warmup then linear decay to ~0.
   # total_steps MUST match the planned run (epochs * updates_per_epoch).
-  _target_: espnet2.schedulers.linear_warmup_decay.linear_warmup_decay
+  _target_: espnet2.schedulers.linear_warmup_decay.LinearWarmupDecayLR
   warmup_steps: 20000
   total_steps: 600000
 scheduler_interval: step
