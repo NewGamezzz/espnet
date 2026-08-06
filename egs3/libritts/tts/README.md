@@ -10,7 +10,7 @@ scheduler.
 ## 1. Prepare data and train
 
 ```bash
-# Download LibriTTS and build per-split TSV manifests (run once)
+# Download the corpora and build every manifest (run once)
 python run.py --stages create_dataset --training_config conf/training_f5_tts_small.yaml
 
 # Filter utterances by duration
@@ -30,12 +30,29 @@ python run.py --stages train --training_config conf/training_f5_tts_small.yaml
 default: the F5TTS_Small architecture (dim 768, depth 18, heads 12), targeting
 the LibriTTS rows of arXiv 2410.06885 Table 9.
 
-## 2. Build the LibriSpeech-PC eval manifest
+`create_dataset` prepares both the training data and the eval data, so no
+manual preparation step is needed anywhere in this recipe. It downloads:
 
-The default eval set is LibriSpeech-PC test-clean cross-sentence, the protocol
-used by arXiv 2410.06885: 1127 same-speaker prompt/target pairs.
-It needs two external inputs, the pair list from the F5-TTS repo and a
-LibriSpeech `test-clean` tree:
+- **LibriTTS** (OpenSLR 60), the five subsets listed in
+  `dataset/config.yaml`, and writes `data/manifest/{train,valid,test}.tsv`.
+- **LibriSpeech `test-clean`** (OpenSLR **12**, a different corpus) plus the
+  cross-sentence pair list from the F5-TTS repo, and writes
+  `data/librispeech_pc/manifest.tsv` - the eval manifest that
+  `conf/inference_f5.yaml` reads.
+
+Budget for the LibriSpeech side on top of LibriTTS: about 350 MB downloaded
+and about 350 MB extracted, so roughly 700 MB, since the tarball is kept in
+`downloads/` after extraction (flac barely compresses, so the extracted tree
+is about the size of the archive). The pair list is a 220 KB text file pinned
+to a specific F5-TTS commit, so the eval set cannot shift under you.
+
+Everything is idempotent: extracted subsets carry a `.complete` marker and the
+pair list is skipped when present, so re-running `create_dataset` transfers
+nothing.
+
+If the corpora already exist on your cluster, `local/prepare_librispeech_pc.py`
+remains available as a standalone CLI for building the eval manifest against a
+read-only tree:
 
 ```bash
 python local/prepare_librispeech_pc.py \
@@ -44,7 +61,7 @@ python local/prepare_librispeech_pc.py \
     --out_tsv data/librispeech_pc/manifest.tsv
 ```
 
-## 3. Synthesize
+## 2. Synthesize
 
 ```bash
 python run.py --stages infer \
@@ -69,7 +86,7 @@ overrides `model.train_config`. Point the inference config's own
 `model.train_config` at the matching training config, or the checkpoint will
 fail to load with a shape mismatch.
 
-## 4. Score
+## 3. Score
 
 ```bash
 python run.py --stages measure \
