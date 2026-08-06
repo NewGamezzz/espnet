@@ -64,7 +64,10 @@ def _chunk_text(text: str, max_chars: int) -> List[str]:
 def _cross_fade(
     waves: List[np.ndarray], cross_fade_duration: float, sample_rate: int
 ) -> np.ndarray:
-    """Concatenate waves with a linear cross-fade. Ported from F5 infer_batch_process."""
+    """Concatenate waves with a linear cross-fade.
+
+    Ported from F5 infer_batch_process.
+    """
     if not waves:
         return np.zeros(1, dtype=np.float32)
     if len(waves) == 1:
@@ -106,7 +109,6 @@ class F5TTSInference:
         speed: float = 1.0,
         target_rms: float = 0.1,
         cross_fade_duration: float = 0.15,
-        max_ref_sec: Optional[float] = None,
         native_f5: bool = False,
         seed: Optional[int] = None,
     ):
@@ -123,12 +125,6 @@ class F5TTSInference:
             target_sample_rate: Output/vocoder sample rate.
             nfe_step / cfg_strength / sway_sampling_coef / speed / seed:
                 Sampling hyperparameters forwarded to ``CFM.sample``.
-            max_ref_sec: If set, clip the reference audio to at most this many
-                seconds (and trim ``ref_text`` proportionally). F5 trains with a
-                high mask ratio (``frac_lengths_mask`` ~0.7-1.0), so a reference
-                that is long relative to the target pushes generation
-                out-of-distribution; capping the reference keeps the target the
-                dominant (masked) part. ``None`` disables clipping.
             native_f5: Load an OFFICIAL SWivid/F5-TTS checkpoint (``.pt`` or
                 ``.safetensors``) instead of an espnet/Lightning ckpt. The weights
                 are loaded straight into the ported CFM (``model.tts.cfm``), so
@@ -145,7 +141,6 @@ class F5TTSInference:
         self.speed = speed
         self.target_rms = target_rms
         self.cross_fade_duration = cross_fade_duration
-        self.max_ref_sec = max_ref_sec
         self.seed = seed
 
         cfg = OmegaConf.to_container(OmegaConf.load(train_config), resolve=True)
@@ -162,7 +157,9 @@ class F5TTSInference:
 
     # ------------------------------------------------------------------ build
 
-    def _build_model(self, cfg: dict, ckpt_path: str, use_ema: bool, native_f5: bool = False):
+    def _build_model(
+        self, cfg: dict, ckpt_path: str, use_ema: bool, native_f5: bool = False
+    ):
         task = cfg.get("task")
         if not task:
             raise ValueError("train_config must set `task` (the espnet2 TTS task).")
@@ -182,7 +179,7 @@ class F5TTSInference:
         if use_ema and "ema_model_state_dict" in ckpt:
             prefix = "ema_model."
             state_dict = {
-                k[len(prefix):]: v
+                k[len(prefix) :]: v
                 for k, v in ckpt["ema_model_state_dict"].items()
                 if k.startswith(prefix)
             }
@@ -319,28 +316,6 @@ class F5TTSInference:
             wav = self.vocoder(mel)
         return wav.squeeze().detach().cpu()
 
-    def _clip_reference(self, audio: torch.Tensor, ref_text: str):
-        """Cap the reference to ``max_ref_sec`` and trim ``ref_text`` to match.
-
-        ``audio`` is ``[1, T]``. When the reference is longer than the cap, keep
-        its first ``max_ref_sec`` seconds and the proportional character prefix of
-        ``ref_text`` (cut back to a word boundary so we don't split a word), so the
-        reference audio and transcript stay roughly aligned.
-        """
-        if self.max_ref_sec is None or self.max_ref_sec <= 0:
-            return audio, ref_text
-        max_samples = int(self.max_ref_sec * self.target_sample_rate)
-        if audio.shape[-1] <= max_samples:
-            return audio, ref_text
-        keep_frac = max_samples / audio.shape[-1]
-        audio = audio[:, :max_samples]
-        n_keep = max(1, int(len(ref_text) * keep_frac))
-        clipped = ref_text[:n_keep]
-        space = clipped.rfind(" ")
-        if space > 0:
-            clipped = clipped[:space]
-        return audio, clipped.strip()
-
     @torch.no_grad()
     def infer_one(
         self,
@@ -359,8 +334,6 @@ class F5TTSInference:
             audio = audio.unsqueeze(0)
         if audio.shape[0] > 1:
             audio = audio.mean(dim=0, keepdim=True)
-        # Cap an over-long reference (keeps the target the dominant masked part).
-        audio, ref_text = self._clip_reference(audio, ref_text)
         rms = torch.sqrt(torch.mean(torch.square(audio)))
         if rms < self.target_rms:
             audio = audio * self.target_rms / rms
