@@ -10,13 +10,17 @@ pipeline (see ``create_token_list`` stage) and feeds integer token ids to the
 model, so those helpers are unused here.
 """
 
+# The ``float["b n d"]`` / ``int["b"]`` annotations below are jaxtyping-style
+# shape documentation carried over from upstream F5-TTS. Linters parse the shape
+# strings as forward references, so the F722/F821 they raise are false positives.
+# They are suppressed per line rather than per file, because flake8's file-level
+# form has no code list and would switch off every other check in this module.
 # ruff: noqa: F722 F821
 
 from __future__ import annotations
 
 import torch
 from torch.nn.utils.rnn import pad_sequence
-
 
 # helpers
 
@@ -42,7 +46,9 @@ def is_package_available(package_name: str) -> bool:
 # tensor helpers
 
 
-def lens_to_mask(t: int["b"], length: int | None = None) -> bool["b n"]:
+def lens_to_mask(
+    t: int["b"], length: int | None = None  # noqa: F722,F821
+) -> bool["b n"]:  # noqa: F722,F821
     if not exists(length):
         length = t.amax()
 
@@ -50,7 +56,9 @@ def lens_to_mask(t: int["b"], length: int | None = None) -> bool["b n"]:
     return seq[None, :] < t[:, None]
 
 
-def mask_from_start_end_indices(seq_len: int["b"], start: int["b"], end: int["b"]):
+def mask_from_start_end_indices(
+    seq_len: int["b"], start: int["b"], end: int["b"]  # noqa: F722,F821
+):
     max_seq_len = seq_len.max().item()
     seq = torch.arange(max_seq_len, device=start.device).long()
     start_mask = seq[None, :] >= start[:, None]
@@ -58,7 +66,9 @@ def mask_from_start_end_indices(seq_len: int["b"], start: int["b"], end: int["b"
     return start_mask & end_mask
 
 
-def mask_from_frac_lengths(seq_len: int["b"], frac_lengths: float["b"]):
+def mask_from_frac_lengths(
+    seq_len: int["b"], frac_lengths: float["b"]  # noqa: F722,F821
+):
     lengths = (frac_lengths * seq_len).long()
     max_start = seq_len - lengths
 
@@ -69,7 +79,9 @@ def mask_from_frac_lengths(seq_len: int["b"], frac_lengths: float["b"]):
     return mask_from_start_end_indices(seq_len, start, end)
 
 
-def maybe_masked_mean(t: float["b n d"], mask: bool["b n"] = None) -> float["b d"]:
+def maybe_masked_mean(
+    t: float["b n d"], mask: bool["b n"] = None  # noqa: F722,F821
+) -> float["b d"]:  # noqa: F722,F821
     if not exists(mask):
         return t.mean(dim=1)
 
@@ -81,7 +93,9 @@ def maybe_masked_mean(t: float["b n d"], mask: bool["b n"] = None) -> float["b d
 
 
 # simple utf-8 tokenizer, since paper went character based
-def list_str_to_tensor(text: list[str], padding_value=-1) -> int["b nt"]:
+def list_str_to_tensor(
+    text: list[str], padding_value=-1
+) -> int["b nt"]:  # noqa: F722,F821
     list_tensors = [torch.tensor([*bytes(t, "UTF-8")]) for t in text]  # ByT5 style
     text = pad_sequence(list_tensors, padding_value=padding_value, batch_first=True)
     return text
@@ -92,7 +106,7 @@ def list_str_to_idx(
     text: list[str] | list[list[str]],
     vocab_char_map: dict[str, int],  # {char: idx}
     padding_value=-1,
-) -> int["b nt"]:
+) -> int["b nt"]:  # noqa: F722,F821
     list_idx_tensors = [
         torch.tensor([vocab_char_map.get(c, 0) for c in t]) for t in text
     ]  # pinyin or char style

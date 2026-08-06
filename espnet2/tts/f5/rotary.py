@@ -28,7 +28,9 @@ def apply_rotary_pos_emb(t: torch.Tensor, freqs: torch.Tensor, scale=1) -> torch
         return _apply_rotary_pos_emb(t, freqs, scale)
 
 
-def _apply_rotary_pos_emb(t: torch.Tensor, freqs: torch.Tensor, scale=1) -> torch.Tensor:
+def _apply_rotary_pos_emb(
+    t: torch.Tensor, freqs: torch.Tensor, scale=1
+) -> torch.Tensor:
     rot_dim, seq_len, orig_dtype = freqs.shape[-1], t.shape[-2], t.dtype
 
     freqs = freqs[:, -seq_len:, :]
