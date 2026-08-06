@@ -147,6 +147,18 @@ def test_load_fisher_recordings_source_order_is_channel_driven(tmp_path):
     assert b == "fisher_wavs_sidon_24k/000/fe_03_00001-B.flac"
 
 
+def _break_shard_root(r):
+    # No shard directory at all: parent.name is "" when the source sits
+    # directly under the filesystem root.
+    r["sources"][0]["source"] = "/fe_03_00001-A.flac"
+    r["sources"][1]["source"] = "/fe_03_00001-B.flac"
+
+
+def _break_shard_dotdot(r):
+    r["sources"][0]["source"] = "/x/../fe_03_00001-A.flac"
+    r["sources"][1]["source"] = "/x/../fe_03_00001-B.flac"
+
+
 @pytest.mark.parametrize(
     "mutate,match",
     [
@@ -168,12 +180,48 @@ def test_load_fisher_recordings_source_order_is_channel_driven(tmp_path):
             ),
             "shard",
         ),
+        (
+            lambda r: r.__setitem__("num_samples", r["num_samples"] + 1),
+            "num_samples",
+        ),
+        (_break_shard_root, "valid directory"),
+        (_break_shard_dotdot, "valid directory"),
     ],
 )
 def test_load_fisher_recordings_rejects_malformed(tmp_path, mutate, match):
     path = tmp_path / "recordings.jsonl.gz"
     write_fisher_recordings(path, {"fe_03_00001": 10.0}, mutate=mutate)
     with pytest.raises(ValueError, match=match):
+        fisher.load_fisher_recordings(path)
+
+
+def test_load_fisher_recordings_rejects_duplicate_id(tmp_path):
+    path = tmp_path / "recordings.jsonl.gz"
+    write_fisher_recordings(path, {"fe_03_00001": 10.0})
+    # write_fisher_recordings keys by dict, so a duplicate id can't be
+    # expressed through its `recs` mapping; append a second record by hand.
+    duplicate = {
+        "id": "fe_03_00001",
+        "sources": [
+            {
+                "type": "file",
+                "channels": [0],
+                "source": "/scratch/elsewhere/fisher_wavs_sidon_24k/000/fe_03_00001-A.flac",
+            },
+            {
+                "type": "file",
+                "channels": [1],
+                "source": "/scratch/elsewhere/fisher_wavs_sidon_24k/000/fe_03_00001-B.flac",
+            },
+        ],
+        "sampling_rate": 24000,
+        "num_samples": round(10.0 * 24000),
+        "duration": 10.0,
+        "channel_ids": [0, 1],
+    }
+    with gzip.open(path, "at") as f:
+        f.write(json.dumps(duplicate) + "\n")
+    with pytest.raises(ValueError, match="duplicate"):
         fisher.load_fisher_recordings(path)
 
 

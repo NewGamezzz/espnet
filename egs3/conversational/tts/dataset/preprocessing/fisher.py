@@ -103,11 +103,27 @@ def load_fisher_recordings(path: str | Path) -> dict[str, Recording]:
     recordings: dict[str, Recording] = {}
     for rec in _iter_jsonl_gz(Path(path)):
         rid = rec["id"]
+        if rid in recordings:
+            raise ValueError(f"duplicate recording id {rid!r} in manifest {path}")
         sources = rec["sources"]
         if len(sources) != 2:
             raise ValueError(
                 f"recording {rid!r} has {len(sources)} sources; the sidon "
                 "manifests carry 2 sources (one mono file per channel)"
+            )
+        # The frozen Recording interface has no num_samples field, so
+        # merge_all's frame check has to reconstruct sample counts from
+        # duration; catch drift between the manifest's two fields here,
+        # before the ~350-400 GB merge job can abort partway on it.
+        duration = float(rec["duration"])
+        sample_rate = int(rec["sampling_rate"])
+        num_samples = int(rec["num_samples"])
+        expected_samples = round(duration * sample_rate)
+        if expected_samples != num_samples:
+            raise ValueError(
+                f"recording {rid!r}: duration {duration} * sample_rate "
+                f"{sample_rate} rounds to {expected_samples} samples, but "
+                f"manifest num_samples is {num_samples}"
             )
         by_channel: dict[int, Path] = {}
         for src in sources:
@@ -136,12 +152,18 @@ def load_fisher_recordings(path: str | Path) -> dict[str, Recording]:
         shards = {p.parent.name for p in by_channel.values()}
         if len(shards) != 1:
             raise ValueError(f"recording {rid!r}: sources in different shards {shards}")
+        shard = shards.pop()
+        if not shard or shard in (".", ".."):
+            raise ValueError(
+                f"recording {rid!r}: source shard {shard!r} is not a valid "
+                "directory name (would let audio_relpath escape the flac dir)"
+            )
         recordings[rid] = Recording(
             id=rid,
-            audio_relpath=f"{shards.pop()}/{rid}.flac",
-            sample_rate=int(rec["sampling_rate"]),
+            audio_relpath=f"{shard}/{rid}.flac",
+            sample_rate=sample_rate,
             num_channels=2,
-            duration=float(rec["duration"]),
+            duration=duration,
         )
     return recordings
 
