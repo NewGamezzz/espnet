@@ -131,14 +131,80 @@ def _load_prompt_wav(path: Path, target_fs: int) -> torch.Tensor:
     return wav
 
 
+ACTIVE_RMS_FRAME_SEC = 0.02
+ACTIVE_RMS_THRESHOLD = 1e-3
+ROOM_TONE_FALLBACK_RMS = 6e-4  # SSSD idle-channel median floor, measured
+PROMPT_FILLS = ("zeros", "room_tone")
+
+
+def tile_to(snippet: torch.Tensor, length: int) -> torch.Tensor:
+    """Repeat a 1-D snippet to exactly ``length`` samples (empty -> zeros)."""
+    if snippet.numel() == 0:
+        return torch.zeros(length, dtype=snippet.dtype)
+    reps = -(-length // snippet.shape[0])
+    return snippet.repeat(reps)[:length]
+
+
+def room_tone(wav: torch.Tensor, fs: int) -> torch.Tensor:
+    """A deterministic room-tone snippet from a 1-D prompt wave.
+
+    Measured on SSSD training audio, an idle channel is never digital
+    silence: median 20 ms frame RMS 5.7e-4, and only 0.8% of frames are
+    exactly zero.  Filling silence with literal zeros is therefore
+    out-of-domain conditioning.  This returns the prompt's own sub-floor
+    frames (RMS <= 1e-3) in temporal order - the recording's real noise
+    floor, speaker-consistent and RNG-free.  A prompt with no quiet frame
+    falls back to its quietest frame rescaled to the measured floor.
+    """
+    frame = int(fs * ACTIVE_RMS_FRAME_SEC)
+    n = wav.shape[0] // frame
+    if n == 0:
+        return wav[:0]
+    frames = wav[: n * frame].reshape(n, frame)
+    rms = frames.pow(2).mean(dim=1).sqrt()
+    quiet = rms <= ACTIVE_RMS_THRESHOLD
+    if bool(quiet.any()):
+        return frames[quiet].reshape(-1)
+    i = int(rms.argmin())
+    return frames[i] * (ROOM_TONE_FALLBACK_RMS / float(rms[i]))
+
+
 def _prompt_blocks(
-    prompt_wavs: list[torch.Tensor], num_channels: int
+    prompt_wavs: list[torch.Tensor],
+    num_channels: int,
+    *,
+    fill: str = "zeros",
+    fs: int | None = None,
 ) -> list[torch.Tensor]:
     """One full-width ``(N, T_k)`` block per channel: that channel's prompt on
-    its own row, silence elsewhere (see the module docstring)."""
+    its own row, silence elsewhere (see the module docstring).
+
+    ``fill`` selects what "silence" means on the off rows: ``"zeros"`` (the
+    default - bit-identical to the original construction) or
+    ``"room_tone"``, which tiles each off channel with ITS OWN prompt's
+    room tone (:func:`room_tone`, needs ``fs``) so the model conditions on
+    the in-domain noise floor instead of never-seen digital silence.
+    """
+    if fill not in PROMPT_FILLS:
+        raise ValueError(f"prompt fill must be one of {PROMPT_FILLS}, got {fill!r}")
+    if fill == "room_tone" and fs is None:
+        raise ValueError("fill='room_tone' requires fs")
+    tones = [room_tone(w, fs) for w in prompt_wavs] if fill == "room_tone" else None
     blocks = []
     for ch, wav in enumerate(prompt_wavs):
-        block = torch.zeros(num_channels, wav.shape[0], dtype=wav.dtype)
+        if tones is None:
+            block = torch.zeros(num_channels, wav.shape[0], dtype=wav.dtype)
+        else:
+            block = torch.stack(
+                [
+                    (
+                        tile_to(tones[c], wav.shape[0]).to(wav.dtype)
+                        if c < len(tones)
+                        else torch.zeros(wav.shape[0], dtype=wav.dtype)
+                    )
+                    for c in range(num_channels)
+                ]
+            )
         block[ch] = wav
         blocks.append(block)
     return blocks

@@ -39,12 +39,15 @@ recovers (escalation 0.83 vs 0.35, junk fraction 0.04 -> 0.50 by chunk 5).
 Two independent ``chunk`` knobs break the two feedback loops, both default
 OFF so existing configs reproduce bit-for-bit:
 
-* ``cond_silence_gate: true`` - zero every conditioning sample outside
+* ``cond_silence_gate: true`` - replace every conditioning sample outside
   Silero-detected speech regions (:func:`silence_gate`), so an idle
-  channel conditions the next hop as true silence instead of seed noise.
-  ``cond_gate_threshold`` (default 0.15, the eval metric's setting - low
-  on purpose: keep degraded-but-real speech, cut only confident junk)
-  requires the gate to be on.
+  channel stops seeding the junk feedback loop.  ``cond_gate_threshold``
+  (default 0.15, the eval metric's setting - low on purpose: keep
+  degraded-but-real speech, cut only confident junk) and
+  ``cond_gate_fill`` (what replaces non-speech: ``room_tone``, the
+  default - the channel's own prompt's noise floor - or ``zeros``, the v1
+  behavior that measurably cost ~0.9 pt WER because training idle
+  channels are never digitally silent) both require the gate to be on.
 * ``cond_loudness_norm: true`` - rescale each conditioning channel to the
   active-frame RMS of that channel's REAL prompt (:func:`match_active_rms`,
   anchor computed once at round 0), so gain drift cannot compound however
@@ -53,6 +56,12 @@ OFF so existing configs reproduce bit-for-bit:
 Gate runs before normalization so junk cannot skew the RMS estimate.  Per
 round the applied ``gains`` / ``gated_frac`` are recorded under the chunk's
 ``conditioning`` meta key (absent at round 0 and when both knobs are off).
+
+The same OOD-silence problem exists at round 0: ``_prompt_blocks`` fills
+the off rows of each prompt block with digital zeros.  The top-level
+``prompt_fill`` config key (``zeros``, the default - bit-identical - or
+``room_tone``) selects the fill there; it is recorded in the meta under
+``prompt.fill``.
 
 DETERMINISM CONTRACT - a documented departure from ``generate_external``:
 sharding is BY DIALOGUE (a chunk chain cannot cross shards), and each shard
@@ -79,10 +88,15 @@ from tqdm import tqdm
 
 from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
 from egs3.conversational.tts.src.external_inference import (
+    ACTIVE_RMS_FRAME_SEC,
+    ACTIVE_RMS_THRESHOLD,
+    PROMPT_FILLS,
     _load_prompt_wav,
     _probe_duration_sec,
     _prompt_blocks,
     _prompt_turns,
+    room_tone,
+    tile_to,
 )
 from egs3.conversational.tts.src.external_testset import (
     DEFAULT_DURATION_SCALE,
@@ -220,9 +234,9 @@ def crossfade_concat(
     return out
 
 
-ACTIVE_RMS_FRAME_SEC = 0.02
-ACTIVE_RMS_THRESHOLD = 1e-3
+# ACTIVE_RMS_* live in external_inference (shared with room_tone).
 DEFAULT_GATE_THRESHOLD = 0.15
+DEFAULT_GATE_FILL = "room_tone"
 COND_GAIN_CLAMP = (0.1, 10.0)
 
 
@@ -274,27 +288,35 @@ def silence_gate(
     *,
     threshold: float,
     speech_regions_fn=None,
+    fill: Sequence[torch.Tensor] | None = None,
 ) -> tuple[torch.Tensor, list[float]]:
-    """Zero every sample outside detected speech regions, per channel.
+    """Replace every sample outside detected speech regions, per channel.
 
-    ``wav`` is ``(channels, samples)``; returns ``(gated, zeroed_frac)``
+    ``wav`` is ``(channels, samples)``; returns ``(gated, gated_frac)``
     with the input untouched.  ``speech_regions_fn(ch_wav, fs, threshold)``
-    defaults to Silero via faster-whisper; tests inject a fake.  A channel
-    with no speech at all becomes true silence - exactly what the model
-    should have produced for an idle channel, and the state that stops the
-    junk feedback loop.
+    defaults to Silero via faster-whisper; tests inject a fake.  Non-speech
+    is replaced by ``fill[ch]`` tiled across the channel (the in-domain
+    room tone of that channel's real prompt), or by zeros when ``fill`` is
+    None - v1 behavior, kept because it measurably COSTS WER: training
+    idle channels are never digitally silent, so zeros are out-of-domain
+    conditioning.  Either way an idle channel stops seeding the junk
+    feedback loop.
     """
     fn = speech_regions_fn or _silero_speech_regions
     total = wav.shape[1]
     gated = torch.zeros_like(wav)
-    zeroed = []
+    replaced = []
     for ch in range(wav.shape[0]):
         mask = torch.zeros(total, dtype=torch.bool, device=wav.device)
         for a, b in fn(wav[ch], fs, threshold):
             mask[max(0, int(a)) : min(total, int(b))] = True
-        gated[ch] = torch.where(mask, wav[ch], torch.zeros((), dtype=wav.dtype))
-        zeroed.append(1.0 - float(mask.float().mean()) if total else 0.0)
-    return gated, zeroed
+        if fill is not None:
+            base = tile_to(fill[ch], total).to(dtype=wav.dtype, device=wav.device)
+        else:
+            base = torch.zeros((), dtype=wav.dtype, device=wav.device)
+        gated[ch] = torch.where(mask, wav[ch], base)
+        replaced.append(1.0 - float(mask.float().mean()) if total else 0.0)
+    return gated, replaced
 
 
 def match_active_rms(
@@ -331,6 +353,7 @@ class CondHygiene:
 
     silence_gate: bool = False
     gate_threshold: float = DEFAULT_GATE_THRESHOLD
+    gate_fill: str = DEFAULT_GATE_FILL
     loudness_norm: bool = False
 
     @property
@@ -344,18 +367,20 @@ def _apply_cond_hygiene(
     fs: int,
     cond: CondHygiene,
     targets: Sequence[float | None] | None,
+    fill: Sequence[torch.Tensor] | None,
     speech_regions_fn,
 ) -> tuple[torch.Tensor, dict[str, list[float]]]:
     """Gate first (junk must not skew the RMS estimate), then normalize."""
     info: dict[str, list[float]] = {}
     if cond.silence_gate:
-        wav, zeroed = silence_gate(
+        wav, replaced = silence_gate(
             wav,
             fs,
             threshold=cond.gate_threshold,
             speech_regions_fn=speech_regions_fn,
+            fill=fill,
         )
-        info["gated_frac"] = [round(f, 6) for f in zeroed]
+        info["gated_frac"] = [round(f, 6) for f in replaced]
     if cond.loudness_norm:
         if targets is None:
             targets = [None] * wav.shape[0]
@@ -443,6 +468,7 @@ def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene]:
         "cross_fade_sec",
         "cond_silence_gate",
         "cond_gate_threshold",
+        "cond_gate_fill",
         "cond_loudness_norm",
     }
     if unknown:
@@ -452,9 +478,12 @@ def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene]:
         raise ValueError(f"chunk.cross_fade_sec must be >= 0, got {cross_fade_sec}")
     gate_on = bool(chunk_cfg.pop("cond_silence_gate", False) or False)
     threshold_raw = chunk_cfg.pop("cond_gate_threshold", None)
+    gate_fill_raw = chunk_cfg.pop("cond_gate_fill", None)
     norm_on = bool(chunk_cfg.pop("cond_loudness_norm", False) or False)
     if threshold_raw is not None and not gate_on:
         raise ValueError("chunk.cond_gate_threshold requires cond_silence_gate: true")
+    if gate_fill_raw is not None and not gate_on:
+        raise ValueError("chunk.cond_gate_fill requires cond_silence_gate: true")
     threshold = (
         DEFAULT_GATE_THRESHOLD if threshold_raw is None else float(threshold_raw)
     )
@@ -462,8 +491,16 @@ def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene]:
         raise ValueError(
             f"chunk.cond_gate_threshold must be in (0, 1), got {threshold}"
         )
+    gate_fill = DEFAULT_GATE_FILL if gate_fill_raw is None else str(gate_fill_raw)
+    if gate_fill not in PROMPT_FILLS:
+        raise ValueError(
+            f"chunk.cond_gate_fill must be one of {PROMPT_FILLS}, got {gate_fill!r}"
+        )
     cond = CondHygiene(
-        silence_gate=gate_on, gate_threshold=threshold, loudness_norm=norm_on
+        silence_gate=gate_on,
+        gate_threshold=threshold,
+        gate_fill=gate_fill,
+        loudness_norm=norm_on,
     )
     set_keys = [k for k, v in chunk_cfg.items() if v is not None]
     if len(set_keys) != 1:
@@ -494,6 +531,11 @@ def run_chunked_inference(
     if mode != MODE:
         raise ValueError(f"expected mode {MODE!r}, got {mode!r}")
     chunk_cfg, cross_fade_sec, cond = _validated_chunk_cfg(cfg)
+    prompt_fill = str(cfg.get("prompt_fill", "zeros") or "zeros")
+    if prompt_fill not in PROMPT_FILLS:
+        raise ValueError(
+            f"prompt_fill must be one of {PROMPT_FILLS}, got {prompt_fill!r}"
+        )
 
     if training_config is None:
         train_path = Path(cfg.training_config)
@@ -621,7 +663,7 @@ def run_chunked_inference(
                 prompt_wavs = [
                     _load_prompt_wav(p.audio_path, fs) for p in record.prompts
                 ]
-                blocks = _prompt_blocks(prompt_wavs, n)
+                blocks = _prompt_blocks(prompt_wavs, n, fill=prompt_fill, fs=fs)
                 prompt_raw = torch.cat(blocks, dim=1)
                 state[idx]["blocks"] = blocks
                 if cond.loudness_norm:
@@ -629,6 +671,13 @@ def run_chunked_inference(
                     # can never drift however many hops the chain runs.
                     state[idx]["cond_targets"] = [
                         active_rms(blocks[ch][ch], fs) for ch in range(n)
+                    ]
+                if cond.silence_gate and cond.gate_fill == "room_tone":
+                    # In-domain silence for the gate: each channel's own
+                    # prompt's noise floor (zeros are out-of-domain and
+                    # measurably cost WER).
+                    state[idx]["cond_fill"] = [
+                        room_tone(blocks[ch][ch], fs) for ch in range(n)
                     ]
             else:
                 prompt_raw = state[idx]["prev_wav"]
@@ -638,6 +687,7 @@ def run_chunked_inference(
                         fs=fs,
                         cond=cond,
                         targets=state[idx].get("cond_targets"),
+                        fill=state[idx].get("cond_fill"),
                         speech_regions_fn=speech_regions_fn,
                     )
             prompt_frames = prompt_raw.shape[1] // hop
@@ -771,6 +821,7 @@ def run_chunked_inference(
                 "cross_fade_sec": cross_fade_sec,
                 "cond_silence_gate": cond.silence_gate,
                 "cond_gate_threshold": cond.gate_threshold,
+                "cond_gate_fill": cond.gate_fill,
                 "cond_loudness_norm": cond.loudness_norm,
                 "n_chunks": plan.n_chunks,
                 "oversized": list(plan.oversized),
@@ -780,6 +831,7 @@ def run_chunked_inference(
             "prompt": {
                 "total_sec": round(st["prompt_frames0"] * hop / fs, 6),
                 "total_frames": st["prompt_frames0"],
+                "fill": prompt_fill,
                 "turns": [
                     {
                         "channel": p.channel,
