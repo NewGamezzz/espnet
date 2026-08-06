@@ -25,17 +25,6 @@ class LinearWarmupDecayLR(_LRScheduler, AbsBatchStepScheduler):
     matching how upstream computes ``decay_updates = total_updates -
     warmup_updates``. Once ``total_steps`` is passed the learning rate is
     clamped at ``end_factor * base_lr``; it never rises again.
-
-    The emitted learning rates are bit-identical to the ``SequentialLR`` of two
-    ``LinearLR`` phases that this class replaces, so the recurrences below
-    deliberately mirror ``LinearLR.get_lr`` (a multiplicative update applied to
-    the current ``param_group["lr"]``) rather than the algebraically equivalent
-    closed form, whose rounding differs.
-
-    Note that, exactly as for the ``SequentialLR`` it replaces, the recurrence
-    reads the live ``param_group["lr"]``, so resuming requires the optimizer
-    state to be restored as well; the scheduler state alone is not enough.
-
     """
 
     @typechecked
