@@ -213,8 +213,7 @@ class FisherBuilder(DatasetBuilder):
             surviving = []
             for record in records:
                 if any(
-                    record.t0 < b and a < record.t1
-                    for a, b in unintelligible_spans
+                    record.t0 < b and a < record.t1 for a, b in unintelligible_spans
                 ):
                     stats[split].n_windows -= 1
                     dropped_unintelligible_windows[split] += 1

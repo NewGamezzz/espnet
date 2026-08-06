@@ -76,10 +76,10 @@ def test_clean_double_bracket_skip_tag():
 def test_clean_supervisions_partitions_and_collects_spans():
     sups = [
         sup("hello there", start=0.0, duration=2.0),
-        sup("[laughter]", start=2.0, duration=0.5),          # benign drop
-        sup("(( ))", start=3.0, duration=1.0),                # span
-        sup("so [noise] anyway", start=5.0, duration=2.0),    # kept, cleaned
-        sup("call 911 now", start=8.0, duration=1.0),         # span (digits)
+        sup("[laughter]", start=2.0, duration=0.5),  # benign drop
+        sup("(( ))", start=3.0, duration=1.0),  # span
+        sup("so [noise] anyway", start=5.0, duration=2.0),  # kept, cleaned
+        sup("call 911 now", start=8.0, duration=1.0),  # span (digits)
     ]
     kept, spans, n_benign = fisher.clean_fisher_supervisions(sups)
     assert [s.text for s in kept] == ["hello there", "so anyway"]
@@ -213,9 +213,7 @@ def _fake_ffmpeg_merge(monkeypatch, fail_for=None, wrong_frames_for=None):
 
 def test_merge_all_writes_skips_and_is_atomic(tmp_path, monkeypatch):
     _fake_ffmpeg_merge(monkeypatch)
-    root, recs = make_fisher_corpus(
-        tmp_path, {"fe_03_00001": 8.0, "fe_03_00002": 8.0}
-    )
+    root, recs = make_fisher_corpus(tmp_path, {"fe_03_00001": 8.0, "fe_03_00002": 8.0})
     flac_dir = tmp_path / "flac"
     assert fisher.merge_all(recs, root, flac_dir, workers=1) == 2
     assert (flac_dir / "000/fe_03_00001.flac").is_file()
