@@ -1,40 +1,35 @@
 """TTS system implementation.
 
 This module adds new stages on top of the base system: removing long-short
-utterances and creating token lists, plus the training and stats-collection
-stages used by the F5-TTS recipe.
+utterances and creating token lists, plus the stats-collection stage used by
+the F5-TTS recipe.
 """
 
 import logging
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict
 
 import lightning as L
 import torch
-from hydra.utils import instantiate
-from omegaconf import DictConfig, OmegaConf
+from omegaconf import OmegaConf
 
 from espnet2.text.build_tokenizer import build_tokenizer
 from espnet2.text.cleaner import TextCleaner
-from espnet3.components.modeling.lightning_module import ESPnetLightningModule
-from espnet3.components.trainers.trainer import ESPnet3LightningTrainer
 from espnet3.parallel.parallel import set_parallel
 from espnet3.systems.base.system import BaseSystem
+
+# ``_build_trainer`` / ``_ensure_directories`` are deliberately reused from the
+# base training module rather than re-implemented here, so trainer assembly and
+# directory layout cannot silently diverge between systems. Importing these
+# underscore-prefixed helpers across modules is fine: ``espnet3.systems.base``
+# and ``espnet3.systems.tts`` are sibling subpackages of the same package, and
+# the names are private to ``espnet3.systems``, not to a single module.
+from espnet3.systems.base.training import _build_trainer, _ensure_directories
 from espnet3.systems.tts.remove_long_short_provider import RemoveLongShortProvider
 from espnet3.systems.tts.remove_long_short_runner import RemoveLongShortRunner
-from espnet3.utils.task_utils import get_espnet_model, save_espnet_config
 
 logger = logging.getLogger(__name__)
-
-
-def _instantiate_model(config: DictConfig) -> Any:
-    task = config.get("task")
-    if task:
-        model_config = OmegaConf.to_container(config.model, resolve=True)
-        return get_espnet_model(task, model_config)
-    return instantiate(config.model)
 
 
 class TTSSystem(BaseSystem):
@@ -402,26 +397,16 @@ class TTSSystem(BaseSystem):
         else:
             logger.warning("create_token_list: manifest contained no tokens.")
 
-    def _ensure_directories(self) -> None:
-        config = self.training_config
-        Path(config.exp_dir).mkdir(parents=True, exist_ok=True)
-        if hasattr(config, "stats_dir"):
-            Path(config.stats_dir).mkdir(parents=True, exist_ok=True)
-
-    def _build_trainer(self) -> ESPnet3LightningTrainer:
-        config = self.training_config
-        model = _instantiate_model(config)
-        lit_model = ESPnetLightningModule(model, config)
-        return ESPnet3LightningTrainer(
-            model=lit_model,
-            exp_dir=config.exp_dir,
-            config=config.trainer,
-            best_model_criterion=config.best_model_criterion,
-        )
-
     def _prepare_training_runtime(self) -> None:
+        """Set up directories, parallelism, seeding and matmul precision.
+
+        The base training module inlines this same sequence inside its
+        ``collect_stats`` / ``train`` functions instead of exposing it as a
+        reusable helper, so there is nothing to delegate to beyond
+        ``_ensure_directories``.
+        """
         config = self.training_config
-        self._ensure_directories()
+        _ensure_directories(config)
 
         if config.get("parallel"):
             set_parallel(config.parallel)
@@ -438,21 +423,49 @@ class TTSSystem(BaseSystem):
         delegates to the trainer's ``collect_stats`` method.  Positional and
         keyword stage arguments are rejected to avoid silent misconfiguration.
 
+        This override exists solely so that ``model.normalize`` /
+        ``model.normalize_conf`` survive into the trainer.  It is load-bearing;
+        see the Notes below before replacing it with the inherited stage.
+
         Args:
             *args: Must be empty.  Passing any positional argument raises
-                ``ValueError`` via ``_reject_stage_args``.
+                ``TypeError`` via ``_reject_stage_args``.
             **kwargs: Must be empty.  Passing any keyword argument raises
-                ``ValueError`` via ``_reject_stage_args``.
+                ``TypeError`` via ``_reject_stage_args``.
 
         Returns:
             None
 
         Raises:
-            ValueError: If any positional or keyword arguments are passed.
+            TypeError: If any positional or keyword arguments are passed.
 
         Notes:
-            The ``normalize: null`` pattern from recipe configs is intentionally
-            preserved — no normalization is applied during stats collection.
+            Do not delete this override in favour of
+            ``espnet3.systems.base.training.collect_stats``.
+
+            The base implementation pops ``normalize`` and ``normalize_conf``
+            out of ``config.model`` before building the trainer.  For a task
+            whose normalizer is optional that is harmless, but for TTS it is
+            not: ``espnet2.tasks.tts`` declares ``normalize_choices`` with
+            ``default="global_mvn"``.  Removing the key therefore does not mean
+            "no normalizer" - it restores the ``global_mvn`` default.
+
+            The F5-TTS recipe configs set ``normalize: null`` on purpose, and
+            that ``null`` has to reach the task builder intact.  If the key is
+            popped, the task builds a ``GlobalMVN`` and stats collection dies
+            with::
+
+                GlobalMVN.__init__() missing 1 required positional argument:
+                'stats_file'
+
+            which is a chicken-and-egg failure: the stats file GlobalMVN wants
+            is exactly the artifact this stage is being run to produce.
+
+            Note that the base ``train()`` does *not* pop these keys - only the
+            base ``collect_stats`` does.  That asymmetry is why ``train`` is
+            safely inherited from ``BaseSystem`` while ``collect_stats`` is not.
+
+            ``test/espnet3/systems/tts/test_system.py`` pins this behaviour.
 
         Examples:
             >>> from omegaconf import OmegaConf
@@ -464,73 +477,13 @@ class TTSSystem(BaseSystem):
         start = time.perf_counter()
         self._prepare_training_runtime()
 
-        # Preserve `normalize: null` from recipe configs.
-        trainer = self._build_trainer()
+        # Build the trainer WITHOUT popping normalize/normalize_conf, unlike
+        # the base collect_stats. See the Notes in this docstring.
+        trainer = _build_trainer(self.training_config)
         trainer.collect_stats()
         logger.info(
             "Collect stats finished in %.2fs | exp_dir=%s stats_dir=%s",
             time.perf_counter() - start,
             self.training_config.exp_dir,
             getattr(self.training_config, "stats_dir", None),
-        )
-
-    def train(self, *args, **kwargs):
-        """Run the training stage using the configured trainer.
-
-        Prepares the runtime, optionally saves the ESPnet config, then calls
-        ``trainer.fit`` with any keyword arguments drawn from
-        ``training_config.fit``.  Training runs through
-        ``ESPnet3LightningTrainer``.
-
-        Args:
-            *args: Must be empty.  Passing any positional argument raises
-                ``ValueError`` via ``_reject_stage_args``.
-            **kwargs: Must be empty.  Passing any keyword argument raises
-                ``ValueError`` via ``_reject_stage_args``.
-
-        Returns:
-            None
-
-        Raises:
-            ValueError: If any positional or keyword arguments are passed.
-
-        Notes:
-            ``training_config.fit`` is forwarded verbatim to ``trainer.fit``.
-            Common keys include ``max_epochs``, ``ckpt_path``, etc.
-
-        Examples:
-            >>> from omegaconf import OmegaConf
-            >>> cfg = OmegaConf.create({
-            ...     "exp_dir": "/tmp/exp",
-            ...     "task": "tts",
-            ...     "model": {"_target_": "my.Model"},
-            ...     "fit": {"max_epochs": 10},
-            ... })
-            >>> system = TTSSystem(training_config=cfg)
-            >>> system.train()  # trains the model for 10 epochs
-        """
-        self._reject_stage_args("train", args, kwargs)
-        start = time.perf_counter()
-        self._prepare_training_runtime()
-
-        task = self.training_config.get("task")
-        if task:
-            save_espnet_config(task, self.training_config, self.training_config.exp_dir)
-
-        trainer = self._build_trainer()
-
-        fit_kwargs: Dict[str, Any] = {}
-        if hasattr(self.training_config, "fit") and self.training_config.fit:
-            fit_kwargs = OmegaConf.to_container(self.training_config.fit, resolve=True)
-
-        trainer.fit(**fit_kwargs)
-        logger.info(
-            "Training finished in %.2fs | exp_dir=%s model=%s",
-            time.perf_counter() - start,
-            self.training_config.exp_dir,
-            (
-                self.training_config.model.get("_target_", None)
-                if isinstance(self.training_config.model, DictConfig)
-                else None
-            ),
         )
