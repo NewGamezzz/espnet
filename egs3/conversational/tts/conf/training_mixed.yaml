@@ -56,7 +56,8 @@ create_dataset:
   # Per-corpus passthroughs (each read by exactly one builder, the others
   # ignore them via **_): tie the stage's roots to the same keys the
   # dataloader entries use instead of letting them drift from
-  # dataset/config.yaml's own libritts_builder/candor_builder values.
+  # dataset/config.yaml's own libritts_builder/candor_builder/fisher_builder
+  # values.
   libritts_root: ${libritts_root}
   flac_dir: ${candor_flac_root}
   fisher_flac_dir: ${fisher_flac_root}
