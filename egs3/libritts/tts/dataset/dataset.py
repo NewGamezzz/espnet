@@ -129,7 +129,12 @@ class LibriTTSDataset(TorchDataset):
         self.data_dir = recipe_root / _BUILDER_CFG["data_path"]
 
         builder = LibriTTSBuilder()
-        if not builder.is_built(recipe_dir=recipe_root):
+        # Guard on the LibriTTS manifests only, not on builder.is_built(), which
+        # also requires the LibriSpeech-PC eval manifest. This dataset never
+        # reads that file, and coupling to it would stop training on any
+        # checkout whose LibriTTS manifests were built before the eval manifest
+        # became part of create_dataset.
+        if not builder.is_libritts_built(recipe_dir=recipe_root):
             raise RuntimeError(
                 "Dataset is not built yet. Run create_dataset stage first."
             )

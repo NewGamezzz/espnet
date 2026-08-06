@@ -277,6 +277,30 @@ class LibriTTSBuilder(DatasetBuilder):
         if not lst_path.is_file():
             _download_lst(lspc_cfg["lst_url"], lst_path)
 
+    def is_libritts_built(self, recipe_dir: str | Path, **_kwargs) -> bool:
+        """Check only the LibriTTS split manifests, which training reads.
+
+        Args:
+            recipe_dir: Recipe root directory.
+            **_kwargs: Unused extra options for API compatibility.
+        Returns:
+            True if the LibriTTS split manifests exist; False otherwise.
+
+        Notes:
+            Deliberately narrower than :meth:`is_built`. ``LibriTTSDataset``
+            guards on this one, so training is not blocked by a missing
+            LibriSpeech-PC eval manifest it never reads. Widening this to the
+            eval manifest would mean an existing checkout whose LibriTTS
+            manifests are already built could no longer start training without
+            first downloading LibriSpeech.
+        """
+
+        data_dir = Path(recipe_dir).resolve() / _CFG["data_path"]
+        return all(
+            (data_dir / relpath).is_file()
+            for relpath in _CFG["manifest_paths"].values()
+        )
+
     def is_built(self, recipe_dir: str | Path, **_kwargs) -> bool:
         """Check if the dataset artifacts (manifests) are built.
 
@@ -291,17 +315,15 @@ class LibriTTSBuilder(DatasetBuilder):
             The LibriSpeech-PC manifest is part of this check because
             ``conf/inference_f5.yaml``, the default eval config, reads it. Were
             it left out, ``create_dataset`` would report success while the
-            default eval had nothing to read.
+            default eval had nothing to read. Use
+            :meth:`is_libritts_built` for the training-only subset.
         """
 
         recipe_root = Path(recipe_dir).resolve()
-        data_dir = recipe_root / _CFG["data_path"]
-        manifests_ok = all(
-            (data_dir / relpath).is_file()
-            for relpath in _CFG["manifest_paths"].values()
-        )
         _, _, lspc_manifest = _librispeech_pc_paths(recipe_root)
-        return manifests_ok and lspc_manifest.is_file()
+        return self.is_libritts_built(recipe_dir=recipe_root) and (
+            lspc_manifest.is_file()
+        )
 
     def build(
         self,

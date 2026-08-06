@@ -113,6 +113,28 @@ def test_is_built_false_without_librispeech_pc_manifest(tmp_path):
     assert LibriTTSBuilder().is_built(recipe_dir=tmp_path)
 
 
+def test_training_is_not_blocked_by_a_missing_eval_manifest(tmp_path):
+    """Training must not depend on the LibriSpeech-PC eval manifest.
+
+    LibriTTSDataset guards on is_libritts_built, not is_built. If it guarded on
+    is_built, any checkout whose LibriTTS manifests were built before the eval
+    manifest joined create_dataset would refuse to start training until the
+    user downloaded 346 MB of LibriSpeech that training never reads.
+    """
+    _make_libritts_manifests(tmp_path)
+    builder = LibriTTSBuilder()
+
+    # Eval manifest deliberately absent.
+    assert not builder.is_built(recipe_dir=tmp_path)
+    assert builder.is_libritts_built(recipe_dir=tmp_path)
+
+
+def test_is_libritts_built_false_when_a_split_manifest_is_missing(tmp_path):
+    _make_libritts_manifests(tmp_path)
+    (tmp_path / _CFG["data_path"] / _CFG["manifest_paths"]["valid"]).unlink()
+    assert not LibriTTSBuilder().is_libritts_built(recipe_dir=tmp_path)
+
+
 def test_build_writes_librispeech_pc_manifest(recipe_dir, no_network):
     """build() writes the eval manifest, and does so without any network I/O."""
     LibriTTSBuilder().build(recipe_dir=recipe_dir)
