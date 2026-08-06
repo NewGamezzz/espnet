@@ -19,10 +19,13 @@ builder:
   merge_gap: 1.0
   # Training window target duration is drawn uniformly from [window_min, window_max].
   window_min: 10.0
-  # 60 s exceeds the F5 pretraining clip regime (< 30 s Emilia clips); chosen
+  # 80 s exceeds the F5 pretraining clip regime (< 30 s Emilia clips); chosen
   # deliberately to capture longer interactions - revisit if fine-tuning
-  # quality degrades on long windows.
-  window_max: 60.0
+  # quality degrades on long windows. Ratified 2026-08-06 from the live
+  # Delta training build (previously a local override of the old 60 s
+  # default). NOTE: a single 80 s N=2 window sets a ~40 GB activation
+  # floor on A100-40G regardless of batch_bins.
+  window_max: 80.0
   # Utterance-boundary cuts; eligibility follows CoVoMix's Fisher
   # segmentation (arXiv:2404.06690), the placement search is ours (hybrid
   # closest-to-target with restart retry, see preprocessing/windows.py).
@@ -45,16 +48,17 @@ builder:
   # is dropped. min_coverage is a conservative backstop for interior holes: drop
   # a window whose transcribed union covers less than this fraction of its
   # duration (0.0 disables). A turn-coverage floor cannot distinguish a hole
-  # from a genuine silent pause, so keep it low. Both default off, preserving
-  # the current build and byte-compatibility with the bagpiper windowing copy.
-  trim_to_turns: false
+  # from a genuine silent pause, so keep it low. Both guards ON, ratified
+  # 2026-08-06 from the live Delta training build (previously local
+  # overrides of the off-by-default repo values).
+  trim_to_turns: true
   min_coverage: 0.0
   # snap_start_to_turn begins each window on the next turn instead of the
   # previous cut, skipping the silence/hole between them so the length budget
   # covers speech (raises coverage; skipped seconds are reported as
   # snapped-gaps). It brackets the leading edge during selection; trim_to_turns
-  # brackets the trailing edge it leaves. Defaults off (byte-compatible build).
-  snap_start_to_turn: false
+  # brackets the trailing edge it leaves.
+  snap_start_to_turn: true
   split_ratios:
     train: 0.96
     valid: 0.02
@@ -119,12 +123,12 @@ candor_builder:
   # backchannels into oversized spans - see the variant note above).
   merge_gap: 0.3
   window_min: 10.0
-  window_max: 60.0
+  window_max: 80.0
   boundary_guard: 0.0
   tail_min: 5.0
-  trim_to_turns: false
+  trim_to_turns: true
   min_coverage: 0.0
-  snap_start_to_turn: false
+  snap_start_to_turn: true
   split_ratios:
     train: 0.96
     valid: 0.02
