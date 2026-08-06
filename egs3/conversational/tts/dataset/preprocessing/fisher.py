@@ -155,3 +155,105 @@ def channel_source_relpaths(rec: Recording) -> tuple[str, str]:
         f"{SIDON_AUDIO_SUBDIR}/{shard}/{rid}-A.flac",
         f"{SIDON_AUDIO_SUBDIR}/{shard}/{rid}-B.flac",
     )
+
+
+def _merge_one(job: tuple[str, str, str, str, int, str]) -> tuple[str, bool]:
+    """(rid, a_path, b_path, flac_path, expected_frames, ffmpeg) ->
+    (rid, newly_written).
+
+    Atomic like the CANDOR transcode: encode to a PID-unique tmp, verify the
+    header (2 channels, exactly the manifest's sample count), then
+    ``os.replace`` onto the final path.  ``join`` maps input 0 -> left
+    (channel 0 = A) and input 1 -> right (channel 1 = B); ``-f flac`` because
+    the ``.tmp`` suffix defeats extension-based format inference.
+    """
+    rid, a_path, b_path, flac_path, expected_frames, ffmpeg = job
+    a, b, flac = Path(a_path), Path(b_path), Path(flac_path)
+    if flac.is_file():
+        return rid, False
+    for src in (a, b):
+        if not src.is_file():
+            raise FileNotFoundError(f"Fisher source audio not found: {src}")
+    tmp = flac.with_name(f"{flac.name}.{os.getpid()}.tmp")
+    subprocess.run(
+        [
+            ffmpeg,
+            "-y",
+            "-loglevel",
+            "error",
+            "-i",
+            str(a),
+            "-i",
+            str(b),
+            "-filter_complex",
+            "[0:a][1:a]join=inputs=2:channel_layout=stereo[out]",
+            "-map",
+            "[out]",
+            "-c:a",
+            "flac",
+            "-f",
+            "flac",
+            str(tmp),
+        ],
+        check=True,
+    )
+    import soundfile as sf
+
+    info = sf.info(str(tmp))
+    if info.channels != 2 or info.frames != expected_frames:
+        tmp.unlink(missing_ok=True)
+        raise RuntimeError(
+            f"{flac.name}: merged file has {info.channels} channels / "
+            f"{info.frames} frames, expected 2 / {expected_frames}"
+        )
+    os.replace(tmp, flac)
+    return rid, True
+
+
+def merge_all(
+    recordings: dict[str, Recording],
+    corpus_root: str | Path,
+    flac_dir: str | Path,
+    ffmpeg: str = "ffmpeg",
+    workers: int = 4,
+) -> int:
+    """Idempotent parallel A/B -> stereo merge; returns how many stereo FLACs
+    were newly written.  ``workers <= 1`` runs serially in-process (also what
+    the tests use, since a Pool would not see monkeypatches)."""
+    flac_dir = Path(flac_dir)
+    root = Path(corpus_root)
+    jobs = []
+    for rid, rec in sorted(recordings.items()):
+        final = flac_dir / rec.audio_relpath
+        final.parent.mkdir(parents=True, exist_ok=True)
+        if final.is_file():
+            continue
+        a_rel, b_rel = channel_source_relpaths(rec)
+        jobs.append(
+            (
+                rid,
+                str(root / a_rel),
+                str(root / b_rel),
+                str(final),
+                round(rec.duration * rec.sample_rate),
+                ffmpeg,
+            )
+        )
+    # Any ``*.tmp`` here is garbage abandoned by a killed prior run; sweep it
+    # (same rationale and caveats as candor.transcode_all).
+    for stale in flac_dir.rglob("*.tmp"):
+        try:
+            stale.unlink()
+        except OSError:
+            pass
+    if not jobs:
+        return 0
+    written = 0
+    if int(workers) <= 1:
+        for job in jobs:
+            written += int(_merge_one(job)[1])
+        return written
+    with Pool(processes=int(workers)) as pool:
+        for _rid, did_write in pool.imap_unordered(_merge_one, jobs):
+            written += int(did_write)
+    return written
