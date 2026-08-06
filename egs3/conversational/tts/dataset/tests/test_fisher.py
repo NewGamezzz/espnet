@@ -8,6 +8,8 @@ from pathlib import Path
 
 import pytest
 
+from egs3.conversational.tts.dataset.dataset import read_window_manifest
+from egs3.conversational.tts.dataset.fisher_builder import _CFG, FisherBuilder
 from egs3.conversational.tts.dataset.preprocessing import fisher
 from egs3.conversational.tts.dataset.preprocessing.sssd import Supervision
 
@@ -256,3 +258,194 @@ def test_merge_missing_source_raises(tmp_path, monkeypatch):
     recs = fisher.load_fisher_recordings(path)
     with pytest.raises(FileNotFoundError):
         fisher.merge_all(recs, tmp_path / "empty-corpus", tmp_path / "flac", workers=1)
+
+
+def write_fisher_supervisions(path: Path, sessions: dict[str, list[dict]]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(path, "wt") as f:
+        for rid, sups in sorted(sessions.items()):
+            for i, s in enumerate(sups):
+                f.write(
+                    json.dumps(
+                        {
+                            "id": f"{rid}-{i:03d}",
+                            "recording_id": rid,
+                            "language": "English",
+                            **s,
+                        }
+                    )
+                    + "\n"
+                )
+
+
+def fabricate_recipe(recipe_dir: Path) -> None:
+    tokens = [" "] + list(string.ascii_lowercase) + [".", ","] + ["<turn>", "<OTHER>"]
+    vocab = recipe_dir / "data/tokens/vocab.txt"
+    vocab.parent.mkdir(parents=True, exist_ok=True)
+    vocab.write_text("\n".join(tokens) + "\n", encoding="utf-8")
+
+
+def two_speaker_session(duration: float) -> list[dict]:
+    sups, t, ch = [], 1.0, 0
+    while t + 4.0 < duration - 1.0:
+        sups.append(
+            {
+                "start": round(t, 2),
+                "duration": 3.0,
+                "channel": ch,
+                "text": "hello there, how are you doing today",
+                "speaker": f"spk_{ch}",
+            }
+        )
+        t += 4.0
+        ch = 1 - ch
+    return sups
+
+
+def fabricate_fisher(tmp_path, sessions: dict[str, tuple[float, list[dict]]]):
+    """Corpus manifests in the fixed/ layout + PRE-MERGED stereo flacs
+    (prepare_source not needed)."""
+    root = tmp_path / "fisher"
+    flac_dir = tmp_path / "fisher_flac"
+    manifests = root / _CFG["manifests_subdir"]
+    write_fisher_recordings(
+        manifests / _CFG["recordings_file"],
+        {rid: dur for rid, (dur, _s) in sessions.items()},
+    )
+    write_fisher_supervisions(
+        manifests / _CFG["supervisions_file"],
+        {rid: sups for rid, (_d, sups) in sessions.items()},
+    )
+    for rid, (dur, _sups) in sessions.items():
+        shard = rid.split("_")[-1][:3]
+        write_flac(
+            flac_dir / shard / f"{rid}.flac", num_channels=2, duration_s=dur, sr=24000
+        )
+    return root, flac_dir
+
+
+def test_fisher_builder_end_to_end(tmp_path):
+    sessions = {f"fe_03_0000{i}": (40.0, two_speaker_session(40.0)) for i in range(4)}
+    root, flac_dir = fabricate_fisher(tmp_path, sessions)
+    recipe = tmp_path / "recipe"
+    fabricate_recipe(recipe)
+    builder = FisherBuilder()
+    assert builder.is_source_prepared(dataset_root=root, fisher_flac_dir=flac_dir)
+    builder.build(
+        recipe_dir=recipe, dataset_root=root, fisher_flac_dir=flac_dir, seed=0
+    )
+    assert builder.is_built(recipe_dir=recipe)
+
+    records = []
+    for split in ("train", "valid", "test"):
+        path = recipe / f"data/manifest/fisher_{split}.jsonl"
+        assert path.is_file()
+        try:
+            records.extend(read_window_manifest(path))
+        except RuntimeError:
+            pass  # tiny fixture: a split may legitimately be empty
+    assert records
+    for r in records:
+        assert r.num_channels == 2
+        assert r.sample_rate == 24000
+        assert r.t1 <= 40.0 + 1e-6
+        assert all(t.text == t.text.lower() for t in r.turns)
+
+
+def test_fisher_builder_drops_windows_over_unintelligible_spans(tmp_path):
+    """An empty (( )) span must kill any window overlapping it, while a
+    standalone [laughter] must not.
+
+    ``duration`` is deliberately well above ``window_max`` (60.0): a session
+    no longer than window_max always collapses to a single whole-session
+    window (see ``select_window_spans``' tail shortcut, which never
+    consults blocked/unintelligible spans), so a single window covering the
+    (( )) span would make ``assert records`` and the no-overlap assertion
+    below mutually unsatisfiable. At 180s the session is windowed into
+    several pieces, so the piece(s) touching the (( )) span can be dropped
+    while others -- including the one covering the benign [laughter] --
+    survive. Neither extra utterance ever reaches ``merge_turns`` (both
+    clean to empty text), so the window boundaries are unaffected by where
+    these two are placed; positions 50.0 and 80.0 are chosen (seed=0) to
+    fall in two DIFFERENT generated windows, verified empirically, so the
+    test actually exercises "one window dropped, another one survives"
+    rather than both spans landing in the same window.
+    """
+    duration = 180.0
+    sups = two_speaker_session(duration)
+    sups.append(
+        {
+            "start": 50.0,
+            "duration": 1.0,
+            "channel": 0,
+            "text": "(( ))",
+            "speaker": "spk_0",
+        }
+    )
+    sups.append(
+        {
+            "start": 80.0,
+            "duration": 0.5,
+            "channel": 1,
+            "text": "[laughter]",
+            "speaker": "spk_1",
+        }
+    )
+    root, flac_dir = fabricate_fisher(tmp_path, {"fe_03_00001": (duration, sups)})
+    recipe = tmp_path / "recipe"
+    fabricate_recipe(recipe)
+    FisherBuilder().build(
+        recipe_dir=recipe, dataset_root=root, fisher_flac_dir=flac_dir, seed=0
+    )
+    records = []
+    for split in ("train", "valid", "test"):
+        try:
+            records.extend(
+                read_window_manifest(recipe / f"data/manifest/fisher_{split}.jsonl")
+            )
+        except (RuntimeError, FileNotFoundError):
+            pass
+    # windows survive somewhere in the session (laughter is benign) ...
+    assert records
+    # ... but none of them covers the unintelligible instant
+    assert not any(r.t0 < 51.0 and 50.0 < r.t1 for r in records)
+    # ... and the benign [laughter] instant did NOT kill its window: some
+    # surviving window still covers it.
+    assert any(r.t0 < 80.5 and 80.0 < r.t1 for r in records)
+
+
+def test_fisher_builder_requires_vocab(tmp_path):
+    sessions = {"fe_03_00001": (40.0, two_speaker_session(40.0))}
+    root, flac_dir = fabricate_fisher(tmp_path, sessions)
+    with pytest.raises(RuntimeError, match="vocab"):
+        FisherBuilder().build(
+            recipe_dir=tmp_path / "empty-recipe",
+            dataset_root=root,
+            fisher_flac_dir=flac_dir,
+            seed=0,
+        )
+
+
+def test_fisher_builder_uses_measured_duration_not_manifest(tmp_path):
+    """Manifest lies about duration; windows must respect the real audio."""
+    sessions = {"fe_03_00001": (999.0, two_speaker_session(35.0))}
+    root, flac_dir = fabricate_fisher(tmp_path, sessions)
+    # overwrite the flac with the TRUE 35 s audio
+    write_flac(
+        flac_dir / "000/fe_03_00001.flac", num_channels=2, duration_s=35.0, sr=24000
+    )
+    recipe = tmp_path / "recipe"
+    fabricate_recipe(recipe)
+    FisherBuilder().build(
+        recipe_dir=recipe, dataset_root=root, fisher_flac_dir=flac_dir, seed=0
+    )
+    records = []
+    for split in ("train", "valid", "test"):
+        try:
+            records.extend(
+                read_window_manifest(recipe / f"data/manifest/fisher_{split}.jsonl")
+            )
+        except (RuntimeError, FileNotFoundError):
+            pass
+    assert records
+    assert all(r.t1 <= 35.0 + 1e-6 for r in records)

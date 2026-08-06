@@ -134,3 +134,43 @@ candor_builder:
     valid: manifest/candor_valid.jsonl
     test: manifest/candor_test.jsonl
   seed: 0
+
+fisher_builder:
+  # Fisher corpus root (read-only): lhotse_manifests/ + fisher_wavs_sidon_24k/.
+  # Resolution order at runtime: explicit argument > $FISHER_ROOT > this value.
+  dataset_root: /work/hdd/bbjs/shared/fisher
+  # fixed/ = supervisions with durations clamped into recording bounds
+  # (2026-08-04); recordings identical to the unfixed set.
+  manifests_subdir: lhotse_manifests/fixed
+  recordings_file: recordings_notfixed_sidon.jsonl.gz
+  supervisions_file: supervisions_notfixed_sidon.jsonl.gz
+  # One-time A/B -> stereo merge target (the pipeline assumes one
+  # multi-channel file per session; sidon audio is one mono FLAC per
+  # channel). ~350-400 GB for ~1958 h at 24 kHz.
+  # Resolution order: explicit argument > $FISHER_FLAC_DIR > this value.
+  # NOTE the builder kwarg is fisher_flac_dir (flac_dir is CANDOR's key in
+  # the shared create_dataset stage config).
+  flac_dir: /work/hdd/bbjs/ttrachu/dataset/fisher_flac
+  ffmpeg: ffmpeg
+  merge_workers: 16
+  # Windowing knobs: same VALUES as the SSSD builder section. merge_gap 1.0
+  # assumes human LDC timestamps (Fisher's are); PENDING the diag_merge_gap
+  # sweep on Delta before the real build - CANDOR's cliffhanger variant
+  # silently dropped 74.7% of its timeline at this setting.
+  merge_gap: 1.0
+  window_min: 10.0
+  window_max: 60.0
+  boundary_guard: 0.0
+  tail_min: 5.0
+  trim_to_turns: false
+  min_coverage: 0.0
+  snap_start_to_turn: false
+  split_ratios:
+    train: 0.96
+    valid: 0.02
+    test: 0.02
+  manifest_paths:
+    train: manifest/fisher_train.jsonl
+    valid: manifest/fisher_valid.jsonl
+    test: manifest/fisher_test.jsonl
+  seed: 0
