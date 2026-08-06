@@ -19,6 +19,12 @@ class EMACallback(pl.Callback):
     """
 
     def __init__(self, decay: float = 0.9999, **ema_kwargs):
+        """Configure the callback.
+
+        Args:
+            decay: EMA decay rate, forwarded to ``EMA`` as ``beta``.
+            **ema_kwargs: Extra keyword arguments forwarded to ``EMA``.
+        """
         self.decay = decay
         self.ema_kwargs = ema_kwargs
         self.ema: EMA | None = None
@@ -26,6 +32,7 @@ class EMACallback(pl.Callback):
         self._last_global_step: int = 0
 
     def setup(self, trainer: pl.Trainer, pl_module: pl.LightningModule, stage: str):
+        """Create the EMA copy of the model at the start of ``fit``."""
         # Initialize EMA on the main process only
         if stage == "fit" and trainer.is_global_zero:
             self.ema = EMA(
@@ -36,11 +43,13 @@ class EMACallback(pl.Callback):
             ).to(pl_module.device)
 
     def on_train_start(self, trainer, pl_module):
+        """Record the step counter training actually starts from."""
         # Runs after any checkpoint restore, so on resume this picks up the
         # restored global_step instead of replaying pre-resume steps as updates.
         self._last_global_step = trainer.global_step
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
+        """Update the EMA weights once per true optimizer step."""
         # Update EMA once per true optimizer step
         if self.ema is None or not trainer.is_global_zero:
             return
@@ -80,7 +89,8 @@ class EMACallback(pl.Callback):
         }
         if self.ema is not None:  # main rank: put EMA weights into the online model
             pl_module.model.load_state_dict(self.ema.ema_model.state_dict())
-        if distributed:  # send main's (EMA) weights to every rank, in registration order
+        # send main's (EMA) weights to every rank, in registration order
+        if distributed:
             for tensor in pl_module.model.state_dict().values():
                 if torch.is_tensor(tensor):
                     dist.broadcast(tensor, src=0)
@@ -99,21 +109,27 @@ class EMACallback(pl.Callback):
         self._backup = None
 
     def on_validation_start(self, trainer, pl_module):
+        """Swap the EMA weights in so validation runs on them."""
         self._swap_in_ema(trainer, pl_module)
 
     def on_validation_end(self, trainer, pl_module):
+        """Put the online weights back after validation."""
         self._restore_online(pl_module)
 
     def on_test_start(self, trainer, pl_module):
+        """Swap the EMA weights in so testing runs on them."""
         self._swap_in_ema(trainer, pl_module)
 
     def on_test_end(self, trainer, pl_module):
+        """Put the online weights back after testing."""
         self._restore_online(pl_module)
 
     def on_save_checkpoint(self, trainer, pl_module, checkpoint):
+        """Store the EMA state under ``ema_model_state_dict``."""
         if trainer.is_global_zero and self.ema is not None:
             checkpoint["ema_model_state_dict"] = self.ema.state_dict()
 
     def on_load_checkpoint(self, trainer, pl_module, checkpoint):
+        """Restore the EMA state from ``ema_model_state_dict`` if present."""
         if "ema_model_state_dict" in checkpoint and self.ema is not None:
             self.ema.load_state_dict(checkpoint["ema_model_state_dict"])

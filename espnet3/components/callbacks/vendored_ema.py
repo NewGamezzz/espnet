@@ -7,6 +7,13 @@ checkpoints written/read via ``EMA.state_dict()`` (keys ``ema_model.*`` +
 ``initted`` + ``step``) stay compatible.
 """
 
+# This file is vendored verbatim, so it is deliberately exempted from linting and
+# from formatting rather than edited to satisfy either. Adding docstrings (D1xx)
+# or reflowing long lines (E501) would break the property that makes vendoring
+# worthwhile: that this file can be diffed straight against the upstream source.
+# flake8: noqa
+# fmt: off
+
 from __future__ import annotations
 
 from copy import deepcopy
