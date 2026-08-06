@@ -1,8 +1,7 @@
 """TTS system implementation.
 
 This module adds new stages on top of the base system: removing long-short
-utterances and creating token lists, plus the stats-collection stage used by
-the F5-TTS recipe.
+utterances and creating token lists, plus the stats-collection stage.
 """
 
 import logging
@@ -19,12 +18,6 @@ from espnet2.text.cleaner import TextCleaner
 from espnet3.parallel.parallel import set_parallel
 from espnet3.systems.base.system import BaseSystem
 
-# ``_build_trainer`` / ``_ensure_directories`` are deliberately reused from the
-# base training module rather than re-implemented here, so trainer assembly and
-# directory layout cannot silently diverge between systems. Importing these
-# underscore-prefixed helpers across modules is fine: ``espnet3.systems.base``
-# and ``espnet3.systems.tts`` are sibling subpackages of the same package, and
-# the names are private to ``espnet3.systems``, not to a single module.
 from espnet3.systems.base.training import _build_trainer, _ensure_directories
 from espnet3.systems.tts.remove_long_short_provider import RemoveLongShortProvider
 from espnet3.systems.tts.remove_long_short_runner import RemoveLongShortRunner
@@ -464,8 +457,6 @@ class TTSSystem(BaseSystem):
             Note that the base ``train()`` does *not* pop these keys - only the
             base ``collect_stats`` does.  That asymmetry is why ``train`` is
             safely inherited from ``BaseSystem`` while ``collect_stats`` is not.
-
-            ``test/espnet3/systems/tts/test_system.py`` pins this behaviour.
 
         Examples:
             >>> from omegaconf import OmegaConf

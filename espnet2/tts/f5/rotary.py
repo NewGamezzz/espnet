@@ -5,21 +5,6 @@ Faithful copy of the two symbols F5 uses from ``x_transformers`` (lucidrains,
 package. Only the ``use_xpos=False`` path F5 exercises is reproduced (``scale``
 is always ``1.0``); ``einops`` calls are rewritten with plain torch ops but the
 math/layout is identical.
-
-CONVENTION (must match x_transformers exactly — RoPE has no learnable params, so
-any drift silently corrupts pretrained/trained checkpoints):
-  * inv_freq = 1 / (base ** (arange(0, dim, 2)/dim)),  base scaled by
-    ``base_rescale_factor ** (dim/(dim-2))`` (NTK-aware; factor 1.0 = no change).
-  * forward(): freqs = einsum('b i, j -> b i j'); then INTERLEAVED duplication
-    via stack((freqs, freqs), -1) -> reshape '... d r -> ... (d r)'. Returns a
-    BATCHED [b, n, dim] tensor and scale 1.0.
-  * rotate_half(): INTERLEAVED — reshape '... (d r) -> ... d r' (r=2),
-    (-x2, x1), back to '... (d r)'.  (NOT the split-half chunk convention.)
-  * apply(): t * cos(freqs) + rotate_half(t) * sin(freqs), partial-rotary safe.
-
-Verify with ``egs3/libritts/tts/local/test_rotary_equiv.py`` on the training
-venv before relying on this (the convention above tracks current x_transformers
-main; if your installed version differs, the test will fail and we adapt).
 """
 
 from __future__ import annotations

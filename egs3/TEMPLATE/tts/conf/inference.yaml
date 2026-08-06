@@ -4,8 +4,7 @@
 # Quick usage:
 #   python run.py --stages infer --inference_config conf/inference.yaml
 #
-# Shared default merged under every TTS recipe's inference config. Kept as
-# empty as possible -- see conf/training.yaml for why.
+# Shared default merged under every TTS recipe's inference config.
 
 recipe_dir: .
 exp_tag:

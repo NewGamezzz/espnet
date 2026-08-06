@@ -11,14 +11,6 @@ task (``get_espnet_model``), so it stays in sync with whatever was trained:
 ``ESPnetTTSModel(feats_extract=vocoder_mel, tts=F5TTS(...))``. Text is tokenized with
 the exact espnet2 components used in training (TextCleaner + tokenizer +
 TokenIDConverter) read from the training config's preprocessor.
-
-Generation faithfully follows upstream F5 ``infer_process`` / ``infer_batch_process``:
-RMS-normalize the reference to ``target_rms``; split ``gen_text`` into chunks with a
-reference-length-dependent ``max_chars``; per chunk compute
-``dur = n_ref + round(n_ref / len(ref_text) * len(gen_text) / local_speed)`` (with
-``local_speed=0.3`` for very short text), run ``CFM.sample(cond=ref_wave, text, dur)``,
-drop the first ``n_ref = len(ref_wave)//hop`` (prompt) frames, vocode, de-normalize,
-and cross-fade the chunks together.
 """
 
 from __future__ import annotations

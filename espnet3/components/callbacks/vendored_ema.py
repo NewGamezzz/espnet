@@ -5,16 +5,6 @@ Verbatim copy of ``ema_pytorch/ema_pytorch.py`` from lucidrains/ema-pytorch
 torch-only file. Only the import name changes; the EMA logic is unchanged so
 checkpoints written/read via ``EMA.state_dict()`` (keys ``ema_model.*`` +
 ``initted`` + ``step``) stay compatible.
-
-IMPORTANT — the ``update()`` cadence and ``get_current_decay()`` schedule have
-differed across ema-pytorch releases. This copy tracks ``main``. Verify it
-matches the version that produced your checkpoints with::
-
-    python -c "import ema_pytorch.ema_pytorch as m, inspect; \\
-        print(inspect.getsource(m.EMA.update)); \\
-        print(inspect.getsource(m.EMA.get_current_decay))"
-
-and compare against ``EMA.update`` / ``EMA.get_current_decay`` below.
 """
 
 from __future__ import annotations

@@ -21,8 +21,6 @@ API mirrors ``torchdiffeq.odeint(func, y0, t, method=...)``:
 Matches torchdiffeq's fixed solvers:
   euler:    y1 = y0 + dt * f(t0, y0)
   midpoint: y1 = y0 + dt * f(t0 + dt/2,  y0 + (dt/2) * f(t0, y0))
-
-Verify with ``egs3/libritts/tts/local/test_odeint_equiv.py``.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-# espnet3/components/callbacks/ema.py
+"""Callback for Exponential Moving Average (EMA) of model weights."""
 
 from __future__ import annotations
 
@@ -11,11 +11,11 @@ from espnet3.components.callbacks.vendored_ema import EMA
 
 class EMACallback(pl.Callback):
     """
-    Ports F5-TTS EMA behavior into ESPnet3's PL callback system.
+    ESPnet3's EMA callback system.
 
     - Updates once per true optimizer step (not per micro-step).
     - Swaps EMA weights in for validation/test, restores afterward.
-    - Saves under 'ema_model_state_dict' matching F5-TTS checkpoint format.
+    - Saves under 'ema_model_state_dict'.
     """
 
     def __init__(self, decay: float = 0.9999, **ema_kwargs):
@@ -26,10 +26,7 @@ class EMACallback(pl.Callback):
         self._last_global_step: int = 0
 
     def setup(self, trainer: pl.Trainer, pl_module: pl.LightningModule, stage: str):
-        # Initialize EMA on the main process only, matching F5-TTS
-        # (`if self.is_main: self.ema_model = EMA(...)`). On other ranks self.ema
-        # stays None, so update / save / validation-swap all no-op there (each is
-        # guarded by `self.ema is not None`).
+        # Initialize EMA on the main process only
         if stage == "fit" and trainer.is_global_zero:
             self.ema = EMA(
                 pl_module.model,
@@ -44,25 +41,7 @@ class EMACallback(pl.Callback):
         self._last_global_step = trainer.global_step
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        # Mirror F5-TTS exactly:
-        #   if accelerator.sync_gradients:   # a real optimizer update (end of accum)
-        #       if is_main:                  # main process only
-        #           ema_model.update()
-        # on_train_batch_end runs AFTER optimizer.step()/scheduler.step()/zero_grad(),
-        # so this is the post-zero_grad, once-per-update, main-only placement.
-        # `trainer.global_step` only advances on true optimizer steps, so updating
-        # once per advance reproduces sync_gradients exactly — including the
-        # epoch-final partial accumulation window, which Lightning flushes with a
-        # real optimizer.step() even when (batch_idx + 1) is not divisible by
-        # accumulate_grad_batches.
-        # Warmup is handled entirely inside EMA.update() via update_after_step /
-        # update_every (settable through ema_kwargs) — same as upstream, which
-        # never gates the call to ema_model.update() itself.
-        # At most ONE update per hook call: this hook only ever sees the
-        # post-batch weights, so replaying update() once per global_step
-        # increment (possible with multiple optimizers) would compound the
-        # decay against the same weight snapshot instead of tracking real
-        # intermediate states.
+        # Update EMA once per true optimizer step
         if self.ema is None or not trainer.is_global_zero:
             return
         if trainer.global_step == self._last_global_step:
