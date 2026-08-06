@@ -1,4 +1,4 @@
-exp_tag: train_mixed_sssd_libritts_candor
+exp_tag: train_mixed_sssd_libritts_candor_fisher
 
 num_device: 1
 num_nodes: 1
@@ -18,12 +18,14 @@ pretrained_dir: ${recipe_dir}/downloads/F5TTS_Base
 
 # LibriTTS corpus root (single-speaker mix-in).
 # `run.py --stages create_dataset --training_config conf/training_mixed.yaml`
-# now builds all three corpora: SSSD first (entry order, which also writes
-# the extended vocab), then the LibriTTS and CANDOR builders, which both read
-# that vocab. CANDOR's first run also runs its prepare_source's mp3 -> FLAC
-# transcode into candor_flac_root - a compute job, not a quick manifest
-# build. (run.py defaults --training_config to conf/training_poc.yaml, whose
-# dataset: entries are SSSD-only, so the flag above is required here.)
+# now builds all four corpora: SSSD first (entry order, which also writes
+# the extended vocab), then the LibriTTS, CANDOR, and Fisher builders, which
+# all read that vocab. CANDOR's first run also runs its prepare_source's mp3
+# -> FLAC transcode into candor_flac_root, and Fisher's first run likewise
+# merges its per-channel FLACs into fisher_flac_root - both compute jobs, not
+# a quick manifest build. (run.py defaults --training_config to
+# conf/training_poc.yaml, whose dataset: entries are SSSD-only, so the flag
+# above is required here.)
 # NOTE: placeholder path - confirm the real Delta location before training.
 libritts_root: /work/hdd/bbjs/ttrachu/dataset/LibriTTS
 
@@ -31,6 +33,11 @@ libritts_root: /work/hdd/bbjs/ttrachu/dataset/LibriTTS
 # read-only corpus root and transcode settings live in dataset/config.yaml
 # under candor_builder:).
 candor_flac_root: /work/hdd/bbjs/ttrachu/dataset/candor_flac
+
+# Fisher merged-FLAC root (the training entries' dataset_root; the read-only
+# corpus root and merge settings live in dataset/config.yaml under
+# fisher_builder:).
+fisher_flac_root: /work/hdd/bbjs/ttrachu/dataset/fisher_flac
 
 # Mel / audio front-end shared by feats_extract and the model (must stay
 # bit-compatible with the pretrained checkpoint and the vocos vocoder).
@@ -49,15 +56,17 @@ create_dataset:
   # Per-corpus passthroughs (each read by exactly one builder, the others
   # ignore them via **_): tie the stage's roots to the same keys the
   # dataloader entries use instead of letting them drift from
-  # dataset/config.yaml's own libritts_builder/candor_builder values.
+  # dataset/config.yaml's own libritts_builder/candor_builder/fisher_builder
+  # values.
   libritts_root: ${libritts_root}
   flac_dir: ${candor_flac_root}
+  fisher_flac_dir: ${fisher_flac_root}
 
 dataset:
   _target_: espnet3.components.data.data_organizer.DataOrganizer
   recipe_dir: ${recipe_dir}
   # Entry order defines the corpus order that dataloader.train.weights and
-  # dataloader.valid (unweighted) refer to: [SSSD, LibriTTS, CANDOR].
+  # dataloader.valid (unweighted) refer to: [SSSD, LibriTTS, CANDOR, Fisher].
   train:
     - data_src: conversational/tts
       data_src_args:
@@ -83,8 +92,16 @@ dataset:
         manifest_path: ${data_dir}/manifest/candor_train.jsonl
         dataset_root: ${candor_flac_root}
         min_active_speakers: 1
-  # NOTE: valid/loss is NOT comparable to earlier SSSD-only runs (LibriTTS
-  # and CANDOR slices added AND min_active_speakers relaxed to 1).
+    - data_src: egs3.conversational.tts.dataset_fisher
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/fisher_train.jsonl
+        dataset_root: ${fisher_flac_root}
+        min_active_speakers: 1
+  # NOTE: valid/loss is NOT comparable to earlier SSSD-only runs (LibriTTS,
+  # CANDOR, and Fisher slices added AND min_active_speakers relaxed to 1).
   valid:
     - data_src: conversational/tts
       data_src_args:
@@ -106,6 +123,14 @@ dataset:
         fs: ${sample_rate}
         manifest_path: ${data_dir}/manifest/candor_valid.jsonl
         dataset_root: ${candor_flac_root}
+        min_active_speakers: 1
+    - data_src: egs3.conversational.tts.dataset_fisher
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/fisher_valid.jsonl
+        dataset_root: ${fisher_flac_root}
         min_active_speakers: 1
   # Runtime tokenization against the EXTENDED vocab (base + <turn>/<OTHER>).
   preprocessor:
@@ -196,11 +221,12 @@ dataloader:
     num_workers: 4
     pin_memory: true
     # Fraction of optimizer steps per corpus, aligned with dataset.train
-    # entry order [SSSD, LibriTTS, CANDOR]. Every batch is roughly equal
-    # compute (batch_bins), so this is also the fraction of gradient mass.
-    # [1.0, 0.0, 0.0] reproduces SSSD-only training; null disables the knob
-    # (plain size-proportional concatenation - NOT recommended here).
-    weights: [0.34, 0.33, 0.33]
+    # entry order [SSSD, LibriTTS, CANDOR, Fisher]. Every batch is roughly
+    # equal compute (batch_bins), so this is also the fraction of gradient
+    # mass. [1.0, 0.0, 0.0, 0.0] reproduces SSSD-only training; null disables
+    # the knob (plain size-proportional concatenation - NOT recommended
+    # here).
+    weights: [0.25, 0.25, 0.25, 0.25]
   valid:
     batch_bins: ${dataloader.train.batch_bins}
     min_batch_size: 1

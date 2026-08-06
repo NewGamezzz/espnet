@@ -574,6 +574,16 @@ def test_three_component_weights():
     assert len(list(sampler)) == 16
 
 
+def test_four_component_weights():
+    bins = 2 * round(FS * 10.0)
+    comps = [fake_dataset([(10.0, 2)] * n) for n in (4, 8, 16, 8)]
+    sampler = ConversationBatchSampler(
+        combined(comps), batch_bins=bins, weights=[0.25, 0.25, 0.25, 0.25]
+    )
+    # L = min(4/.25, 8/.25, 16/.25, 8/.25) = 16 -> quotas [4, 4, 4, 4]
+    assert len(list(sampler)) == 16
+
+
 def test_weights_validation():
     a = fake_dataset([(10.0, 2)] * 2)
     b = fake_dataset([(10.0, 2)] * 2)

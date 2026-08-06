@@ -152,14 +152,16 @@ Batches do not need a homogeneous channel count; a duration-bucketed sampler sho
 | `dataset.sample_rate` | `24000` | training rate (48 kHz source is downsampled 2:1) |
 | `dataset.text_pad_value` | `-1` | F5 text padding convention |
 
-## Mixed training (SSSD + LibriTTS + CANDOR)
+## Mixed training (SSSD + LibriTTS + CANDOR + Fisher)
 
 `conf/training_mixed.yaml` trains on SSSD windows plus LibriTTS-960
 utterances-as-windows (N=1 conversations; the exchange contract covers any
-branch count >= 1) plus CANDOR conversational windows.
+branch count >= 1) plus CANDOR conversational windows plus Fisher
+conversational windows (11,699 two-party Fisher English calls, Sidon-restored
+24 kHz audio).
 
 Build order (or just `python run.py --stages create_dataset --training_config
-conf/training_mixed.yaml`, which runs all three builders in this order;
+conf/training_mixed.yaml`, which runs all four builders in this order;
 `run.py` defaults to `conf/training_poc.yaml`, whose `dataset:` entries are
 SSSD-only, so the plain no-flag invocation builds only SSSD):
 
@@ -170,15 +172,24 @@ SSSD-only, so the plain no-flag invocation builds only SSSD):
    mp3 -> FLAC into `candor_builder.flac_dir`, ~240 GB / ~60 core-hours -
    run it as a compute job):
    `python -m egs3.conversational.tts.dataset.candor_builder`
+4. Fisher manifests (same vocab dependency; the first run merges the
+   per-channel sidon FLACs into stereo files under
+   `fisher_builder.flac_dir`, ~350-400 GB - a compute job, not a login-node
+   task):
+   `python -m egs3.conversational.tts.dataset.fisher_builder`
 
-`dataloader.train.weights` covers three corpora now (entry order
-[SSSD, LibriTTS, CANDOR]) and sets the fraction of optimizer steps per
-corpus; a weight of `0.0` excludes a corpus from training. `[1.0, 0.0, 0.0]`
-reproduces SSSD-only training under this config's `min_active_speakers: 1`,
-not the POC baseline's `2` (`conf/training_poc.yaml`), and validation always
-runs the full combined valid set.
-See the design note "Design - LibriTTS Single-Speaker Mixing for
-Conversational F5" (vault) for the epoch-composition rule.
+`dataloader.train.weights` covers four corpora now (entry order
+[SSSD, LibriTTS, CANDOR, Fisher]) and sets the fraction of optimizer steps
+per corpus; a weight of `0.0` excludes a corpus from training. The default
+`[0.25, 0.25, 0.25, 0.25]` weights the four corpora equally; `[1.0, 0.0, 0.0,
+0.0]` reproduces SSSD-only training under this config's
+`min_active_speakers: 1`, not the POC baseline's `2`
+(`conf/training_poc.yaml`), and validation always runs the full combined
+valid set.
+See the design notes "Design - LibriTTS Single-Speaker Mixing for
+Conversational F5" (vault) for the epoch-composition rule and "Design -
+Fisher Conversational Corpus Mixing" (vault) for the Fisher build, text-
+cleaning, and windowing decisions.
 
 ## Training (multi-branch CFM POC)
 
