@@ -162,12 +162,20 @@ fisher_builder:
   # silences (Thanapat's pick, same decision process as CANDOR's 0.3).
   merge_gap: 0.2
   window_min: 10.0
-  window_max: 60.0
+  # 80 s to match the live Delta training build of the SSSD and CANDOR
+  # sections (Thanapat 2026-08-06; the mix checkout overrides those repo
+  # defaults the same way).
+  window_max: 80.0
   boundary_guard: 0.0
   tail_min: 5.0
-  trim_to_turns: false
+  # Both hole guards ON for Fisher, also matching the live training build
+  # (Thanapat 2026-08-06): stripped event tags ([laughter]/[noise]) and
+  # inter-utterance silence leave audible un-transcribed stretches; snap
+  # skips the gap after the previous cut so the length budget covers
+  # speech, trim brackets the trailing edge.
+  trim_to_turns: true
   min_coverage: 0.0
-  snap_start_to_turn: false
+  snap_start_to_turn: true
   split_ratios:
     train: 0.96
     valid: 0.02
