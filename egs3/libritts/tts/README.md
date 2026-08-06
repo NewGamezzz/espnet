@@ -3,10 +3,6 @@
 This recipe trains and evaluates **F5-TTS**, a flow-matching non-autoregressive
 TTS model with zero-shot voice cloning from a reference utterance, on LibriTTS.
 
-Every stage runs through `run.py`.
-There are no cluster submission scripts; adapt the commands below to your own
-scheduler.
-
 ## 1. Prepare data and train
 
 ```bash
@@ -30,8 +26,7 @@ python run.py --stages train --training_config conf/training_f5_tts_small.yaml
 default: the F5TTS_Small architecture (dim 768, depth 18, heads 12), targeting
 the LibriTTS rows of arXiv 2410.06885 Table 9.
 
-`create_dataset` prepares both the training data and the eval data, so no
-manual preparation step is needed anywhere in this recipe. It downloads:
+`create_dataset` prepares both the training data and the eval data. It downloads:
 
 - **LibriTTS** (OpenSLR 60), the five subsets listed in
   `dataset/config.yaml`, and writes `data/manifest/{train,valid,test}.tsv`.
@@ -40,26 +35,9 @@ manual preparation step is needed anywhere in this recipe. It downloads:
   `data/librispeech_pc/manifest.tsv` - the eval manifest that
   `conf/inference_f5.yaml` reads.
 
-Budget for the LibriSpeech side on top of LibriTTS: about 350 MB downloaded
-and about 350 MB extracted, so roughly 700 MB, since the tarball is kept in
-`downloads/` after extraction (flac barely compresses, so the extracted tree
-is about the size of the archive). The pair list is a 220 KB text file pinned
-to a specific F5-TTS commit, so the eval set cannot shift under you.
-
 Everything is idempotent: extracted subsets carry a `.complete` marker and the
 pair list is skipped when present, so re-running `create_dataset` transfers
 nothing.
-
-If the corpora already exist on your cluster, `local/prepare_librispeech_pc.py`
-remains available as a standalone CLI for building the eval manifest against a
-read-only tree:
-
-```bash
-python local/prepare_librispeech_pc.py \
-    --lst <path>/librispeech_pc_test_clean_cross_sentence.lst \
-    --test_clean_root <path>/LibriSpeech/test-clean \
-    --out_tsv data/librispeech_pc/manifest.tsv
-```
 
 ## 2. Synthesize
 

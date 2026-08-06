@@ -65,10 +65,6 @@ def build_parser(stages: Sequence[str]) -> argparse.ArgumentParser:
     return parser
 
 
-# Order matters: resolve_stages() returns stages in THIS order regardless of
-# the order they were requested in, so a stage must be listed after whatever
-# produces its inputs. create_dataset writes the manifests that
-# remove_long_short and create_token_list read, so it has to come first.
 DEFAULT_STAGES = [
     "create_dataset",
     "remove_long_short",
@@ -88,14 +84,6 @@ DEFAULT_METRICS_CONFIG = "metrics.yaml"
 def main(args) -> None:
     stages_to_run = resolve_stages(args.stages, ALL_STAGES)
 
-    # Each config is merged over the shared `egs3.TEMPLATE.tts` default (kept
-    # deliberately near-empty, see egs3/TEMPLATE/tts/conf/*.yaml), not over
-    # another recipe config. Recipe configs are *independent* full configs, so
-    # merging one over another would deep-merge incompatible blocks (e.g.
-    # model.tts_conf), and merging a config over itself is a no-op that hides
-    # the intended default values entirely. `default_package` is left unset so
-    # `load_and_merge_config` auto-infers `egs3.TEMPLATE.tts` from the config
-    # path.
     training_config = load_and_merge_config(
         args.training_config,
         config_name=DEFAULT_TRAINING_CONFIG,

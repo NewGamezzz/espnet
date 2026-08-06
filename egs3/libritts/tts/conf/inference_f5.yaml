@@ -8,8 +8,7 @@
 #
 # exp_tag is intentionally empty so this config inherits experiment identity
 # from the training config. That means run.py must always be given
-# --training_config alongside --inference_config; see
-# espnet3/utils/run_utils.py's validate_experiment_context.
+# --training_config alongside --inference_config.
 #
 # For the in-domain LibriTTS cross-speaker eval instead, use
 # conf/inference_f5_libritts.yaml.
