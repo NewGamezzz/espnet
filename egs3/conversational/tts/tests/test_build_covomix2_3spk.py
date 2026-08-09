@@ -94,7 +94,7 @@ class TestBuild:
             utt_id = e["audio_prompt_spk3"].rsplit("/", 1)[-1].removesuffix(".flac")
             assert e["audio_prompt_spk3_transcription"] == by_utt[utt_id]
 
-    def test_deterministic_for_a_seed_and_sensitive_to_it(self, tree, tmp_path):
+    def test_deterministic_for_a_seed(self, tree, tmp_path):
         a = tmp_path / "a"
         b = tmp_path / "b"
         build(tree["testset_root"], tree["librispeech_root"], a, seed=0)

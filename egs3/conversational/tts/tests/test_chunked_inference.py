@@ -572,17 +572,22 @@ class TestThreeSpeakerChunked:
             tmp_path, {"target_sec": 0.05, "cover_all_speakers": True}
         )
         test_dir = Path(cfg.inference_dir) / cfg.test_name
+        oversized_flags = []
         for wid in ("900", "901"):
             meta = json.loads((test_dir / "meta" / f"{wid}.json").read_text())
             assert meta["chunking"]["cover_all_speakers"] is True
             chunks = meta["chunking"]["chunks"]
             turns = meta["turns"]
+            oversized_flags.extend(meta["chunking"]["oversized"])
             for entry in chunks[:-1]:  # final chunk exempt
                 chans = {
                     turns[i]["channel"]
                     for i in range(entry["turn_start"], entry["turn_end"])
                 }
                 assert chans == {0, 1, 2}
+        # Coverage-forced overruns flag oversized: with target_sec=0.05
+        # and 3-channel coverage, every non-degenerate chunk exceeds target.
+        assert any(oversized_flags)
 
     def test_cover_all_speakers_with_turns_policy_is_rejected(self, tmp_path):
         with pytest.raises(ValueError, match="target_sec"):

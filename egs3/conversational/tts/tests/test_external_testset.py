@@ -409,6 +409,21 @@ class TestLoadThreeChannels:
                 num_channels=3,
             )
 
+    def test_missing_transcription_key_is_a_clear_error(self, tmp_path):
+        ts = _write_testset(tmp_path, dialogues=DIALOGUES_3SPK)
+        # Corrupt the index: audio_prompt_spk3 exists but its transcription is missing.
+        index_path = ts["testset_root"] / "dailydialog-dialogue.json"
+        entries = json.loads(index_path.read_text(encoding="utf-8"))
+        del entries[0]["audio_prompt_spk3_transcription"]
+        index_path.write_text(json.dumps(entries), encoding="utf-8")
+        with pytest.raises(ValueError, match="audio_prompt_spk3_transcription"):
+            load_covomix2_testset(
+                ts["testset_root"],
+                ts["librispeech_root"],
+                ts["vocab"],
+                num_channels=3,
+            )
+
 
 # --------------------------------------------------------------------------- #
 # Prompt block assembly (pure function)
