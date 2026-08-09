@@ -109,6 +109,70 @@ class TestSplitTurns:
             split_turns([], turns=2)
 
 
+class TestSplitTurnsCoverage:
+    # 3 channels, strict round-robin, every turn 10 s, target 25 s.
+    SECS = [10.0] * 6
+    CHANNELS = [0, 1, 2, 0, 1, 2]
+
+    def test_plain_greedy_would_close_before_channel_two_appears(self):
+        assert split_turns(self.SECS, target_sec=25.0) == [(0, 2), (2, 4), (4, 6)]
+
+    def test_chunk_may_not_close_until_every_channel_is_seen(self):
+        got = split_turns(
+            self.SECS,
+            target_sec=25.0,
+            channels=self.CHANNELS,
+            num_channels=3,
+            cover_all_speakers=True,
+        )
+        assert got == [(0, 3), (3, 6)]
+        for a, b in got:
+            assert set(self.CHANNELS[a:b]) == {0, 1, 2}
+
+    def test_final_chunk_is_exempt_from_coverage(self):
+        # 5 turns: the tail chunk (3, 5) holds channels {0, 1} only, which is
+        # fine - the last chunk never conditions anything.
+        got = split_turns(
+            [10.0] * 5,
+            target_sec=25.0,
+            channels=[0, 1, 2, 0, 1],
+            num_channels=3,
+            cover_all_speakers=True,
+        )
+        assert got == [(0, 3), (3, 5)]
+        assert set([0, 1, 2, 0, 1][3:5]) == {0, 1}
+
+    def test_flag_off_ignores_channel_arguments(self):
+        with_args = split_turns(
+            self.SECS, target_sec=25.0, channels=self.CHANNELS, num_channels=3
+        )
+        assert with_args == split_turns(self.SECS, target_sec=25.0)
+
+    def test_coverage_with_turns_policy_raises(self):
+        with pytest.raises(ValueError, match="target_sec"):
+            split_turns(
+                self.SECS,
+                turns=2,
+                channels=self.CHANNELS,
+                num_channels=3,
+                cover_all_speakers=True,
+            )
+
+    def test_coverage_without_channels_raises(self):
+        with pytest.raises(ValueError, match="channels"):
+            split_turns(self.SECS, target_sec=25.0, cover_all_speakers=True)
+
+    def test_channel_length_mismatch_raises(self):
+        with pytest.raises(ValueError, match="channels"):
+            split_turns(
+                self.SECS,
+                target_sec=25.0,
+                channels=[0, 1],
+                num_channels=3,
+                cover_all_speakers=True,
+            )
+
+
 # --------------------------------------------------------------------------- #
 # estimate_turn_secs (pure)
 # --------------------------------------------------------------------------- #

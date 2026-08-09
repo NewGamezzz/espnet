@@ -171,6 +171,9 @@ def split_turns(
     *,
     turns: int | None = None,
     target_sec: float | None = None,
+    channels: Sequence[int] | None = None,
+    num_channels: int | None = None,
+    cover_all_speakers: bool = False,
 ) -> list[tuple[int, int]]:
     """Split turn indices into chunks; returns half-open ``(start, end)``
     ranges that partition ``range(len(turn_secs))`` in order.
@@ -180,11 +183,31 @@ def split_turns(
     joins the current chunk unless that would push the chunk's predicted
     total past the target; a single turn longer than the target still gets
     its own chunk (the policy bounds growth, it never splits inside a turn).
+
+    ``cover_all_speakers`` (``target_sec`` only) additionally forbids a chunk
+    from closing until it contains at least one turn from EVERY channel in
+    ``range(num_channels)`` - conditioning chunk k on chunk k-1 loses a
+    speaker's voice reference whenever k-1 never lets that speaker talk, so
+    coverage is a conditioning guarantee, not a packing nicety.  A chunk held
+    open for coverage may exceed the target (flagged oversized by the
+    caller).  The FINAL chunk is exempt: it closes at the end of the turn
+    list and never conditions anything.
     """
     if (turns is None) == (target_sec is None):
         raise ValueError("exactly one of `turns` / `target_sec` must be set")
     if not len(turn_secs):
         raise ValueError("no turns to split")
+    if cover_all_speakers:
+        if target_sec is None:
+            raise ValueError("cover_all_speakers requires the target_sec policy")
+        if channels is None or num_channels is None:
+            raise ValueError(
+                "cover_all_speakers needs `channels` and `num_channels`"
+            )
+        if len(channels) != len(turn_secs):
+            raise ValueError(
+                f"got {len(channels)} channels for {len(turn_secs)} turns"
+            )
     if turns is not None:
         n = int(turns)
         if n < 1:
@@ -193,13 +216,21 @@ def split_turns(
     target = float(target_sec)
     if target <= 0:
         raise ValueError(f"target_sec must be > 0, got {target_sec}")
+    required = set(range(int(num_channels))) if cover_all_speakers else None
     ranges: list[tuple[int, int]] = []
     start, acc = 0, 0.0
+    seen: set[int] = set()
     for i, sec in enumerate(turn_secs):
-        if i > start and acc + float(sec) > target:
+        if (
+            i > start
+            and acc + float(sec) > target
+            and (required is None or required <= seen)
+        ):
             ranges.append((start, i))
-            start, acc = i, 0.0
+            start, acc, seen = i, 0.0, set()
         acc += float(sec)
+        if required is not None:
+            seen.add(int(channels[i]))
     ranges.append((start, len(turn_secs)))
     return ranges
 
