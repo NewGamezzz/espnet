@@ -358,7 +358,44 @@ def select_records(
     (:func:`plan_batches`) and shards over whole batches with
     :func:`assign_shard`, so batch composition - and with it every
     dialogue's noise draw - is identical for every ``shard_count``.
+
+    When ``selection.dialogue_ids`` is set (a file of one dialogue id per
+    line) the selection is exactly those dialogues - a pinned, paired subset
+    - and the band/subsample knobs must be absent.
     """
+    ids_path = selection.get("dialogue_ids")
+    if ids_path is not None:
+        for key in ("min_duration", "max_duration", "num_dialogues"):
+            if selection.get(key) is not None:
+                raise ValueError(
+                    "selection.dialogue_ids is mutually exclusive with "
+                    f"selection.{key}"
+                )
+        lines = Path(ids_path).read_text(encoding="utf-8").splitlines()
+        wanted = [ln.strip() for ln in lines if ln.strip()]
+        if not wanted:
+            raise ValueError(f"{ids_path}: no dialogue ids")
+        dupes = sorted({w for w in wanted if wanted.count(w) > 1})
+        if dupes:
+            raise ValueError(f"{ids_path}: duplicate dialogue ids {dupes}")
+        by_id = {r.dialogue_id: i for i, r in enumerate(records)}
+        missing = sorted(set(wanted) - by_id.keys())
+        if missing:
+            raise ValueError(
+                f"{ids_path}: {len(missing)} dialogue id(s) not in the "
+                f"loaded test set, e.g. {missing[:5]}"
+            )
+        eligible = sorted(by_id[w] for w in wanted)
+        logger.info(
+            "external test set: pinned selection of %d dialogues from %s",
+            len(eligible),
+            ids_path,
+        )
+        return eligible, {
+            "n_out_of_band": 0,
+            "n_not_sampled": len(records) - len(eligible),
+        }
+
     max_duration = selection.get("max_duration")
     min_duration = selection.get("min_duration")
     eligible = []

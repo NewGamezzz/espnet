@@ -17,6 +17,7 @@ shared bug in that formula cannot pass both sides.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -208,6 +209,66 @@ class TestSelection:
         got, counts = select_records(self._records(3), durations, OmegaConf.create({}))
         assert got == [0, 1, 2]
         assert counts == {"n_out_of_band": 0, "n_not_sampled": 0}
+
+    def _records_with_ids(self, ids):
+        base = _record(["abc", "def"], ["abc", "de"])
+        return [dataclasses.replace(base, dialogue_id=i) for i in ids]
+
+    def test_dialogue_ids_pins_exactly_those_dialogues(self, tmp_path):
+        ids_file = tmp_path / "ids.txt"
+        ids_file.write_text("b\nd\n\n", encoding="utf-8")
+        records = self._records_with_ids(["a", "b", "c", "d"])
+        got, counts = select_records(
+            records,
+            [1.0, 2.0, 3.0, 4.0],
+            OmegaConf.create({"dialogue_ids": str(ids_file)}),
+        )
+        assert got == [1, 3]
+        assert counts == {"n_out_of_band": 0, "n_not_sampled": 2}
+
+    def test_dialogue_ids_is_mutually_exclusive_with_band_and_subsample(
+        self, tmp_path
+    ):
+        ids_file = tmp_path / "ids.txt"
+        ids_file.write_text("a\n", encoding="utf-8")
+        records = self._records_with_ids(["a"])
+        for clash in ("min_duration", "max_duration", "num_dialogues"):
+            with pytest.raises(ValueError, match=f"mutually exclusive.*{clash}"):
+                select_records(
+                    records,
+                    [1.0],
+                    OmegaConf.create({"dialogue_ids": str(ids_file), clash: 1}),
+                )
+
+    def test_dialogue_ids_missing_id_raises(self, tmp_path):
+        ids_file = tmp_path / "ids.txt"
+        ids_file.write_text("a\nzz\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="zz"):
+            select_records(
+                self._records_with_ids(["a", "b"]),
+                [1.0, 2.0],
+                OmegaConf.create({"dialogue_ids": str(ids_file)}),
+            )
+
+    def test_dialogue_ids_duplicate_raises(self, tmp_path):
+        ids_file = tmp_path / "ids.txt"
+        ids_file.write_text("a\na\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="duplicate"):
+            select_records(
+                self._records_with_ids(["a", "b"]),
+                [1.0, 2.0],
+                OmegaConf.create({"dialogue_ids": str(ids_file)}),
+            )
+
+    def test_dialogue_ids_empty_file_raises(self, tmp_path):
+        ids_file = tmp_path / "ids.txt"
+        ids_file.write_text("\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="no dialogue ids"):
+            select_records(
+                self._records_with_ids(["a"]),
+                [1.0],
+                OmegaConf.create({"dialogue_ids": str(ids_file)}),
+            )
 
 
 # --------------------------------------------------------------------------- #
