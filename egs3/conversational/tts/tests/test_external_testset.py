@@ -17,6 +17,7 @@ shared bug in that formula cannot pass both sides.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -209,6 +210,66 @@ class TestSelection:
         assert got == [0, 1, 2]
         assert counts == {"n_out_of_band": 0, "n_not_sampled": 0}
 
+    def _records_with_ids(self, ids):
+        base = _record(["abc", "def"], ["abc", "de"])
+        return [dataclasses.replace(base, dialogue_id=i) for i in ids]
+
+    def test_dialogue_ids_pins_exactly_those_dialogues(self, tmp_path):
+        ids_file = tmp_path / "ids.txt"
+        ids_file.write_text("b\nd\n\n", encoding="utf-8")
+        records = self._records_with_ids(["a", "b", "c", "d"])
+        got, counts = select_records(
+            records,
+            [1.0, 2.0, 3.0, 4.0],
+            OmegaConf.create({"dialogue_ids": str(ids_file)}),
+        )
+        assert got == [1, 3]
+        assert counts == {"n_out_of_band": 0, "n_not_sampled": 2}
+
+    def test_dialogue_ids_is_mutually_exclusive_with_band_and_subsample(
+        self, tmp_path
+    ):
+        ids_file = tmp_path / "ids.txt"
+        ids_file.write_text("a\n", encoding="utf-8")
+        records = self._records_with_ids(["a"])
+        for clash in ("min_duration", "max_duration", "num_dialogues"):
+            with pytest.raises(ValueError, match=f"mutually exclusive.*{clash}"):
+                select_records(
+                    records,
+                    [1.0],
+                    OmegaConf.create({"dialogue_ids": str(ids_file), clash: 1}),
+                )
+
+    def test_dialogue_ids_missing_id_raises(self, tmp_path):
+        ids_file = tmp_path / "ids.txt"
+        ids_file.write_text("a\nzz\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="zz"):
+            select_records(
+                self._records_with_ids(["a", "b"]),
+                [1.0, 2.0],
+                OmegaConf.create({"dialogue_ids": str(ids_file)}),
+            )
+
+    def test_dialogue_ids_duplicate_raises(self, tmp_path):
+        ids_file = tmp_path / "ids.txt"
+        ids_file.write_text("a\na\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="duplicate"):
+            select_records(
+                self._records_with_ids(["a", "b"]),
+                [1.0, 2.0],
+                OmegaConf.create({"dialogue_ids": str(ids_file)}),
+            )
+
+    def test_dialogue_ids_empty_file_raises(self, tmp_path):
+        ids_file = tmp_path / "ids.txt"
+        ids_file.write_text("\n", encoding="utf-8")
+        with pytest.raises(ValueError, match="no dialogue ids"):
+            select_records(
+                self._records_with_ids(["a"]),
+                [1.0],
+                OmegaConf.create({"dialogue_ids": str(ids_file)}),
+            )
+
 
 # --------------------------------------------------------------------------- #
 # Test-set loading
@@ -225,14 +286,35 @@ DIALOGUES = {
     ),
 }
 
+DIALOGUES_3SPK = {
+    # Turns round-robin over channels 0, 1, 2; three prompts per dialogue.
+    "900": (
+        ["abc def", "bead cab", "chad face", "gaff bead", "haji dead", "fig jab"],
+        [
+            ("test-clean/1/1/a.flac", "abc", 1.0),
+            ("test-clean/2/2/b.flac", "de", 2.0),
+            ("test-clean/5/5/e.flac", "fed", 1.5),
+        ],
+    ),
+    "901": (
+        ["gaff bead", "haji dead", "abc def", "bead cab"],
+        [
+            ("test-clean/3/3/c.flac", "chad", 1.5),
+            ("test-clean/4/4/d.flac", "fig", 1.0),
+            ("test-clean/6/6/f.flac", "bead", 2.0),
+        ],
+    ),
+}
 
-def _write_testset(tmp_path) -> dict:
+
+def _write_testset(tmp_path, dialogues=None) -> dict:
+    dialogues = DIALOGUES if dialogues is None else dialogues
     testset_root = tmp_path / "testset"
     libri_root = tmp_path / "librispeech"
     (testset_root / "transcriptions").mkdir(parents=True)
 
     entries = []
-    for key, (lines, prompts) in DIALOGUES.items():
+    for key, (lines, prompts) in dialogues.items():
         (testset_root / "transcriptions" / f"{key}.txt").write_text(
             "\n".join(lines) + "\n", encoding="utf-8"
         )
@@ -304,6 +386,43 @@ class TestLoad:
         (testset["librispeech_root"] / "test-clean/1/1/a.flac").unlink()
         with pytest.raises(FileNotFoundError, match="prompt audio"):
             self._load(testset)
+
+
+class TestLoadThreeChannels:
+    def test_round_robin_channels_and_three_prompts(self, tmp_path):
+        ts = _write_testset(tmp_path, dialogues=DIALOGUES_3SPK)
+        records = load_covomix2_testset(
+            ts["testset_root"], ts["librispeech_root"], ts["vocab"], num_channels=3
+        )
+        assert [t.channel for t in records[0].turns] == [0, 1, 2, 0, 1, 2]
+        assert [p.channel for p in records[0].prompts] == [0, 1, 2]
+        assert len(records[0].channel_chars) == 3
+        # "901" has 4 turns: 0, 1, 2, 0 - every channel still covered.
+        assert [t.channel for t in records[1].turns] == [0, 1, 2, 0]
+
+    def test_two_speaker_index_at_three_channels_is_a_clear_error(self, testset):
+        with pytest.raises(ValueError, match="audio_prompt_spk3"):
+            load_covomix2_testset(
+                testset["testset_root"],
+                testset["librispeech_root"],
+                testset["vocab"],
+                num_channels=3,
+            )
+
+    def test_missing_transcription_key_is_a_clear_error(self, tmp_path):
+        ts = _write_testset(tmp_path, dialogues=DIALOGUES_3SPK)
+        # Corrupt the index: audio_prompt_spk3 exists but its transcription is missing.
+        index_path = ts["testset_root"] / "dailydialog-dialogue.json"
+        entries = json.loads(index_path.read_text(encoding="utf-8"))
+        del entries[0]["audio_prompt_spk3_transcription"]
+        index_path.write_text(json.dumps(entries), encoding="utf-8")
+        with pytest.raises(ValueError, match="audio_prompt_spk3_transcription"):
+            load_covomix2_testset(
+                ts["testset_root"],
+                ts["librispeech_root"],
+                ts["vocab"],
+                num_channels=3,
+            )
 
 
 # --------------------------------------------------------------------------- #

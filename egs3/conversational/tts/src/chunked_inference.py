@@ -19,6 +19,12 @@ Chunk policy (config ``chunk:``, exactly one key):
   exceed S; a single turn longer than S still becomes its own oversized
   chunk (flagged in meta and counted in the log), never split inside.
 
+``chunk.cover_all_speakers: true`` (``target_sec`` only, rejected otherwise)
+additionally holds every non-final chunk open until it has heard from every
+channel, so conditioning chunk k+1 never loses a speaker's voice reference -
+a chunk held open this way may exceed the target and is flagged oversized
+like any other.
+
 Seams: ``chunk.cross_fade_sec`` blends each join with an equal-power
 cross-fade (:func:`crossfade_concat`); 0.0 (the default) keeps the original
 hard concat bit-for-bit.  The fade is assembly-only - conditioning always
@@ -171,6 +177,9 @@ def split_turns(
     *,
     turns: int | None = None,
     target_sec: float | None = None,
+    channels: Sequence[int] | None = None,
+    num_channels: int | None = None,
+    cover_all_speakers: bool = False,
 ) -> list[tuple[int, int]]:
     """Split turn indices into chunks; returns half-open ``(start, end)``
     ranges that partition ``range(len(turn_secs))`` in order.
@@ -180,11 +189,31 @@ def split_turns(
     joins the current chunk unless that would push the chunk's predicted
     total past the target; a single turn longer than the target still gets
     its own chunk (the policy bounds growth, it never splits inside a turn).
+
+    ``cover_all_speakers`` (``target_sec`` only) additionally forbids a chunk
+    from closing until it contains at least one turn from EVERY channel in
+    ``range(num_channels)`` - conditioning chunk k on chunk k-1 loses a
+    speaker's voice reference whenever k-1 never lets that speaker talk, so
+    coverage is a conditioning guarantee, not a packing nicety.  A chunk held
+    open for coverage may exceed the target (flagged oversized by the
+    caller).  The FINAL chunk is exempt: it closes at the end of the turn
+    list and never conditions anything.
     """
     if (turns is None) == (target_sec is None):
         raise ValueError("exactly one of `turns` / `target_sec` must be set")
     if not len(turn_secs):
         raise ValueError("no turns to split")
+    if cover_all_speakers:
+        if target_sec is None:
+            raise ValueError("cover_all_speakers requires the target_sec policy")
+        if channels is None or num_channels is None:
+            raise ValueError(
+                "cover_all_speakers needs `channels` and `num_channels`"
+            )
+        if len(channels) != len(turn_secs):
+            raise ValueError(
+                f"got {len(channels)} channels for {len(turn_secs)} turns"
+            )
     if turns is not None:
         n = int(turns)
         if n < 1:
@@ -193,13 +222,21 @@ def split_turns(
     target = float(target_sec)
     if target <= 0:
         raise ValueError(f"target_sec must be > 0, got {target_sec}")
+    required = set(range(int(num_channels))) if cover_all_speakers else None
     ranges: list[tuple[int, int]] = []
     start, acc = 0, 0.0
+    seen: set[int] = set()
     for i, sec in enumerate(turn_secs):
-        if i > start and acc + float(sec) > target:
+        if (
+            i > start
+            and acc + float(sec) > target
+            and (required is None or required <= seen)
+        ):
             ranges.append((start, i))
-            start, acc = i, 0.0
+            start, acc, seen = i, 0.0, set()
         acc += float(sec)
+        if required is not None:
+            seen.add(int(channels[i]))
     ranges.append((start, len(turn_secs)))
     return ranges
 
@@ -431,12 +468,20 @@ def _plan_dialogue(
     speed: float,
     fs: int,
     hop: int,
+    cover_all_speakers: bool = False,
 ) -> _ChunkPlan:
     turn_secs = estimate_turn_secs(
         record, prompt_secs, duration_scale=duration_scale, speed=speed
     )
     target = chunk_cfg.get("target_sec")
-    ranges = split_turns(turn_secs, turns=chunk_cfg.get("turns"), target_sec=target)
+    ranges = split_turns(
+        turn_secs,
+        turns=chunk_cfg.get("turns"),
+        target_sec=target,
+        channels=[t.channel for t in record.turns],
+        num_channels=record.num_channels,
+        cover_all_speakers=cover_all_speakers,
+    )
     chunk_secs = [sum(turn_secs[a:b]) for a, b in ranges]
     return _ChunkPlan(
         ranges=ranges,
@@ -446,14 +491,17 @@ def _plan_dialogue(
     )
 
 
-def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene]:
-    """Return ``(policy, cross_fade_sec, cond)`` from the ``chunk`` block.
+def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene, bool]:
+    """Return ``(policy, cross_fade_sec, cond, cover_all_speakers)`` from the
+    ``chunk`` block.
 
     The policy stays exactly one of ``turns`` / ``target_sec``;
-    ``cross_fade_sec`` is an independent seam knob and the conditioning-
-    hygiene knobs (``cond_silence_gate``, ``cond_gate_threshold``,
-    ``cond_loudness_norm``) are independent conditioning knobs - all
-    default off, so existing configs reproduce bit-for-bit.
+    ``cross_fade_sec`` is an independent seam knob, ``cover_all_speakers`` is
+    an independent coverage knob restricted to the ``target_sec`` policy, and
+    the conditioning-hygiene knobs (``cond_silence_gate``,
+    ``cond_gate_threshold``, ``cond_loudness_norm``) are independent
+    conditioning knobs - all default off, so existing configs reproduce
+    bit-for-bit.
     """
     raw = cfg.get("chunk")
     if raw is None:
@@ -470,9 +518,11 @@ def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene]:
         "cond_gate_threshold",
         "cond_gate_fill",
         "cond_loudness_norm",
+        "cover_all_speakers",
     }
     if unknown:
         raise ValueError(f"unknown chunk keys: {sorted(unknown)}")
+    cover = bool(chunk_cfg.pop("cover_all_speakers", False) or False)
     cross_fade_sec = float(chunk_cfg.pop("cross_fade_sec", None) or 0.0)
     if cross_fade_sec < 0:
         raise ValueError(f"chunk.cross_fade_sec must be >= 0, got {cross_fade_sec}")
@@ -508,7 +558,10 @@ def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene]:
             "exactly one of chunk.turns / chunk.target_sec must be set, "
             f"got {chunk_cfg}"
         )
-    return {k: chunk_cfg[k] for k in set_keys}, cross_fade_sec, cond
+    policy = {k: chunk_cfg[k] for k in set_keys}
+    if cover and "target_sec" not in policy:
+        raise ValueError("chunk.cover_all_speakers requires the target_sec policy")
+    return policy, cross_fade_sec, cond, cover
 
 
 def run_chunked_inference(
@@ -530,7 +583,7 @@ def run_chunked_inference(
     mode = cfg.get("mode")
     if mode != MODE:
         raise ValueError(f"expected mode {MODE!r}, got {mode!r}")
-    chunk_cfg, cross_fade_sec, cond = _validated_chunk_cfg(cfg)
+    chunk_cfg, cross_fade_sec, cond, cover_all_speakers = _validated_chunk_cfg(cfg)
     prompt_fill = str(cfg.get("prompt_fill", "zeros") or "zeros")
     if prompt_fill not in PROMPT_FILLS:
         raise ValueError(
@@ -573,6 +626,7 @@ def run_chunked_inference(
             speed=speed,
             fs=fs,
             hop=hop,
+            cover_all_speakers=cover_all_speakers,
         )
         for r, secs in zip(records, prompt_secs)
     ]
@@ -597,6 +651,18 @@ def run_chunked_inference(
         _chain_cost(i) if i in selected else 0.0 for i in range(len(records))
     ]
     my_indices = assign_shard(indices, chain_costs, shard_index, shard_count)
+
+    for idx in my_indices:
+        record = records[idx]
+        empty = [c for c, chars in enumerate(record.channel_chars) if chars == 0]
+        if empty:
+            raise ValueError(
+                f"{record.dialogue_id}: channel(s) {empty} have no turns at "
+                f"num_channels={record.num_channels}; every selected dialogue "
+                "needs at least one turn per channel - exclude it via "
+                "selection.dialogue_ids"
+            )
+
     max_rounds = max((plans[i].n_chunks for i in my_indices), default=0)
     n_oversized = sum(sum(plans[i].oversized) for i in my_indices)
     logger.info(
@@ -818,6 +884,7 @@ def run_chunked_inference(
             "compute": {"autocast_dtype": autocast_dtype},
             "chunking": {
                 "policy": chunk_cfg,
+                "cover_all_speakers": cover_all_speakers,
                 "cross_fade_sec": cross_fade_sec,
                 "cond_silence_gate": cond.silence_gate,
                 "cond_gate_threshold": cond.gate_threshold,

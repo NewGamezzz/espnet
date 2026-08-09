@@ -9,6 +9,7 @@ test cannot pass both sides - same doctrine as test_external_testset.py.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 import torch
@@ -46,6 +47,7 @@ from .test_e2e_eval import (
     SPEAKER_SUMMARY_KEYS,
 )
 from .test_external_testset import (
+    DIALOGUES_3SPK,
     _external_config,
     _external_metrics_config,
     _write_testset,
@@ -107,6 +109,70 @@ class TestSplitTurns:
             split_turns([1.0], target_sec=0.0)
         with pytest.raises(ValueError, match="no turns"):
             split_turns([], turns=2)
+
+
+class TestSplitTurnsCoverage:
+    # 3 channels, strict round-robin, every turn 10 s, target 25 s.
+    SECS = [10.0] * 6
+    CHANNELS = [0, 1, 2, 0, 1, 2]
+
+    def test_plain_greedy_would_close_before_channel_two_appears(self):
+        assert split_turns(self.SECS, target_sec=25.0) == [(0, 2), (2, 4), (4, 6)]
+
+    def test_chunk_may_not_close_until_every_channel_is_seen(self):
+        got = split_turns(
+            self.SECS,
+            target_sec=25.0,
+            channels=self.CHANNELS,
+            num_channels=3,
+            cover_all_speakers=True,
+        )
+        assert got == [(0, 3), (3, 6)]
+        for a, b in got:
+            assert set(self.CHANNELS[a:b]) == {0, 1, 2}
+
+    def test_final_chunk_is_exempt_from_coverage(self):
+        # 5 turns: the tail chunk (3, 5) holds channels {0, 1} only, which is
+        # fine - the last chunk never conditions anything.
+        got = split_turns(
+            [10.0] * 5,
+            target_sec=25.0,
+            channels=[0, 1, 2, 0, 1],
+            num_channels=3,
+            cover_all_speakers=True,
+        )
+        assert got == [(0, 3), (3, 5)]
+        assert set([0, 1, 2, 0, 1][3:5]) == {0, 1}
+
+    def test_flag_off_ignores_channel_arguments(self):
+        with_args = split_turns(
+            self.SECS, target_sec=25.0, channels=self.CHANNELS, num_channels=3
+        )
+        assert with_args == split_turns(self.SECS, target_sec=25.0)
+
+    def test_coverage_with_turns_policy_raises(self):
+        with pytest.raises(ValueError, match="target_sec"):
+            split_turns(
+                self.SECS,
+                turns=2,
+                channels=self.CHANNELS,
+                num_channels=3,
+                cover_all_speakers=True,
+            )
+
+    def test_coverage_without_channels_raises(self):
+        with pytest.raises(ValueError, match="channels"):
+            split_turns(self.SECS, target_sec=25.0, cover_all_speakers=True)
+
+    def test_channel_length_mismatch_raises(self):
+        with pytest.raises(ValueError, match="channels"):
+            split_turns(
+                self.SECS,
+                target_sec=25.0,
+                channels=[0, 1],
+                num_channels=3,
+                cover_all_speakers=True,
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -465,6 +531,92 @@ class TestChunkedInfer:
         self._run(testset, tiny_model, tmp_path / "infer", {"turns": 2})
         # Config seed is 0; round 0 calls use 0, the round-1 call uses 1.
         assert sorted(seeds) == [0, 0, 1]
+
+
+# --------------------------------------------------------------------------- #
+# 3-channel end-to-end: cover_all_speakers + the empty-channel guard
+# --------------------------------------------------------------------------- #
+class TestThreeSpeakerChunked:
+    def _run3(self, tmp_path, chunk, dialogues=None, ids=None):
+        ts = _write_testset(tmp_path, dialogues=dialogues or DIALOGUES_3SPK)
+        model = build_tiny(ts["vocab"])
+        cfg = _chunked_config(ts, tmp_path / "infer", chunk)
+        cfg.testset.num_channels = 3
+        if ids is not None:
+            ids_file = tmp_path / "ids.txt"
+            ids_file.write_text("\n".join(ids) + "\n", encoding="utf-8")
+            cfg.selection = OmegaConf.create({"dialogue_ids": str(ids_file)})
+        counts = run_chunked_inference(
+            cfg,
+            training_config=ts["training_config"],
+            model=model,
+            vocoder=FakeVocoder(),
+        )
+        return ts, cfg, counts
+
+    def test_three_channel_output_contract(self, tmp_path):
+        ts, cfg, counts = self._run3(tmp_path, {"target_sec": 2.0})
+        test_dir = Path(cfg.inference_dir) / cfg.test_name
+        meta = json.loads((test_dir / "meta" / "900.json").read_text())
+        assert meta["num_channels"] == 3
+        assert len(meta["channels"]) == 3
+        assert len(meta["prompt"]["turns"]) == 3
+        for ch in range(3):
+            assert (test_dir / "wav" / f"900_ch{ch}.wav").is_file()
+            assert (test_dir / "prompt" / f"900_ch{ch}.wav").is_file()
+
+    def test_cover_all_speakers_is_recorded_and_holds(self, tmp_path):
+        # Tiny target so plain greedy WOULD close one-turn chunks; coverage
+        # must hold anyway on every non-final chunk.
+        ts, cfg, _ = self._run3(
+            tmp_path, {"target_sec": 0.05, "cover_all_speakers": True}
+        )
+        test_dir = Path(cfg.inference_dir) / cfg.test_name
+        oversized_flags = []
+        for wid in ("900", "901"):
+            meta = json.loads((test_dir / "meta" / f"{wid}.json").read_text())
+            assert meta["chunking"]["cover_all_speakers"] is True
+            chunks = meta["chunking"]["chunks"]
+            turns = meta["turns"]
+            oversized_flags.extend(meta["chunking"]["oversized"])
+            for entry in chunks[:-1]:  # final chunk exempt
+                chans = {
+                    turns[i]["channel"]
+                    for i in range(entry["turn_start"], entry["turn_end"])
+                }
+                assert chans == {0, 1, 2}
+        # Coverage-forced overruns flag oversized: with target_sec=0.05
+        # and 3-channel coverage, every non-degenerate chunk exceeds target.
+        assert any(oversized_flags)
+
+    def test_cover_all_speakers_with_turns_policy_is_rejected(self, tmp_path):
+        with pytest.raises(ValueError, match="target_sec"):
+            self._run3(tmp_path, {"turns": 2, "cover_all_speakers": True})
+
+    def test_selected_dialogue_with_an_empty_channel_is_rejected(self, tmp_path):
+        crippled = dict(DIALOGUES_3SPK)
+        crippled["902"] = (
+            ["abc def", "bead cab"],  # 2 turns -> channel 2 never speaks
+            DIALOGUES_3SPK["900"][1],
+        )
+        with pytest.raises(ValueError, match="902.*no turns"):
+            self._run3(tmp_path, {"target_sec": 2.0}, dialogues=crippled)
+
+    def test_unselected_empty_channel_dialogue_does_not_break_the_run(
+        self, tmp_path
+    ):
+        crippled = dict(DIALOGUES_3SPK)
+        crippled["902"] = (
+            ["abc def", "bead cab"],
+            DIALOGUES_3SPK["900"][1],
+        )
+        ts, cfg, counts = self._run3(
+            tmp_path,
+            {"target_sec": 2.0},
+            dialogues=crippled,
+            ids=["900", "901"],
+        )
+        assert counts["n_selected"] == 2
 
 
 # --------------------------------------------------------------------------- #
