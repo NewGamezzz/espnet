@@ -225,14 +225,35 @@ DIALOGUES = {
     ),
 }
 
+DIALOGUES_3SPK = {
+    # Turns round-robin over channels 0, 1, 2; three prompts per dialogue.
+    "900": (
+        ["abc def", "bead cab", "chad face", "gaff bead", "haji dead", "fig jab"],
+        [
+            ("test-clean/1/1/a.flac", "abc", 1.0),
+            ("test-clean/2/2/b.flac", "de", 2.0),
+            ("test-clean/5/5/e.flac", "fed", 1.5),
+        ],
+    ),
+    "901": (
+        ["gaff bead", "haji dead", "abc def", "bead cab"],
+        [
+            ("test-clean/3/3/c.flac", "chad", 1.5),
+            ("test-clean/4/4/d.flac", "fig", 1.0),
+            ("test-clean/6/6/f.flac", "bead", 2.0),
+        ],
+    ),
+}
 
-def _write_testset(tmp_path) -> dict:
+
+def _write_testset(tmp_path, dialogues=None) -> dict:
+    dialogues = DIALOGUES if dialogues is None else dialogues
     testset_root = tmp_path / "testset"
     libri_root = tmp_path / "librispeech"
     (testset_root / "transcriptions").mkdir(parents=True)
 
     entries = []
-    for key, (lines, prompts) in DIALOGUES.items():
+    for key, (lines, prompts) in dialogues.items():
         (testset_root / "transcriptions" / f"{key}.txt").write_text(
             "\n".join(lines) + "\n", encoding="utf-8"
         )
@@ -304,6 +325,28 @@ class TestLoad:
         (testset["librispeech_root"] / "test-clean/1/1/a.flac").unlink()
         with pytest.raises(FileNotFoundError, match="prompt audio"):
             self._load(testset)
+
+
+class TestLoadThreeChannels:
+    def test_round_robin_channels_and_three_prompts(self, tmp_path):
+        ts = _write_testset(tmp_path, dialogues=DIALOGUES_3SPK)
+        records = load_covomix2_testset(
+            ts["testset_root"], ts["librispeech_root"], ts["vocab"], num_channels=3
+        )
+        assert [t.channel for t in records[0].turns] == [0, 1, 2, 0, 1, 2]
+        assert [p.channel for p in records[0].prompts] == [0, 1, 2]
+        assert len(records[0].channel_chars) == 3
+        # "901" has 4 turns: 0, 1, 2, 0 - every channel still covered.
+        assert [t.channel for t in records[1].turns] == [0, 1, 2, 0]
+
+    def test_two_speaker_index_at_three_channels_is_a_clear_error(self, testset):
+        with pytest.raises(ValueError, match="audio_prompt_spk3"):
+            load_covomix2_testset(
+                testset["testset_root"],
+                testset["librispeech_root"],
+                testset["vocab"],
+                num_channels=3,
+            )
 
 
 # --------------------------------------------------------------------------- #

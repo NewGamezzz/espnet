@@ -204,7 +204,15 @@ def load_covomix2_testset(
 
         prompts = []
         for ch in range(num_channels):
-            rel = entry[f"audio_prompt_spk{ch + 1}"]
+            key_name = f"audio_prompt_spk{ch + 1}"
+            if key_name not in entry:
+                raise ValueError(
+                    f"{key}: index has no {key_name!r} - this index supports "
+                    f"fewer than {num_channels} channels; build a derived "
+                    "index (local/build_covomix2_3spk.py) or lower "
+                    "testset.num_channels"
+                )
+            rel = entry[key_name]
             audio_path = librispeech_root / rel
             if not audio_path.is_file():
                 raise FileNotFoundError(
@@ -212,7 +220,7 @@ def load_covomix2_testset(
                     "`librispeech_root` at the directory containing test-clean/"
                 )
             text = normalize_text(
-                entry[f"audio_prompt_spk{ch + 1}_transcription"], charset
+                entry[f"{key_name}_transcription"], charset
             )
             if not text:
                 raise ValueError(f"{key}: speaker {ch + 1} prompt text is empty")
