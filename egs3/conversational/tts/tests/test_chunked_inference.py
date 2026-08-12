@@ -22,6 +22,8 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
 )
 from egs3.conversational.tts.src.chunked_inference import (
     MODE as CHUNKED_MODE,
+    CondComposition,
+    _validated_chunk_cfg,
     call_turns,
     crossfade_concat,
     estimate_turn_secs,
@@ -306,6 +308,47 @@ class TestCrossfadeConcat:
     def test_negative_fade_raises(self):
         with pytest.raises(ValueError, match="fade"):
             crossfade_concat([torch.ones(1, 4)], -1)
+
+
+# --------------------------------------------------------------------------- #
+# conditioning-composition knobs (pure config validation)
+# --------------------------------------------------------------------------- #
+def _chunk_only_cfg(chunk):
+    return OmegaConf.create({"chunk": chunk})
+
+
+class TestCondCompositionConfig:
+    def test_defaults_are_previous_chunk_only(self):
+        _, _, _, comp, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
+        assert comp == CondComposition(include_prompt=False, history_chunks=1)
+
+    def test_explicit_values_are_parsed(self):
+        _, _, _, comp, _ = _validated_chunk_cfg(
+            _chunk_only_cfg(
+                {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": 0}
+            )
+        )
+        assert comp == CondComposition(include_prompt=True, history_chunks=0)
+
+    def test_all_history_is_minus_one(self):
+        _, _, _, comp, _ = _validated_chunk_cfg(
+            _chunk_only_cfg(
+                {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": -1}
+            )
+        )
+        assert comp.history_chunks == -1
+
+    def test_no_conditioning_at_all_is_rejected(self):
+        with pytest.raises(ValueError, match="cond_include_prompt"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg({"turns": 2, "cond_history_chunks": 0})
+            )
+
+    def test_history_below_minus_one_is_rejected(self):
+        with pytest.raises(ValueError, match="cond_history_chunks"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg({"turns": 2, "cond_history_chunks": -2})
+            )
 
 
 def _chunked_config(testset, inference_dir, chunk, **overrides):

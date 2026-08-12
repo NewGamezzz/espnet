@@ -398,6 +398,19 @@ class CondHygiene:
         return self.silence_gate or self.loudness_norm
 
 
+@dataclass(frozen=True)
+class CondComposition:
+    """What round r > 0 conditions on: ``[prompt?] + [last H generated chunks]``.
+
+    ``history_chunks`` counts previous generated chunks (most recent last);
+    ``0`` is none and ``-1`` is all of them.  The default ``(False, 1)`` is
+    today's previous-chunk-only conditioning, bit-for-bit.
+    """
+
+    include_prompt: bool = False
+    history_chunks: int = 1
+
+
 def _apply_cond_hygiene(
     wav: torch.Tensor,
     *,
@@ -491,17 +504,19 @@ def _plan_dialogue(
     )
 
 
-def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene, bool]:
-    """Return ``(policy, cross_fade_sec, cond, cover_all_speakers)`` from the
+def _validated_chunk_cfg(
+    cfg,
+) -> tuple[dict[str, Any], float, CondHygiene, CondComposition, bool]:
+    """Return ``(policy, cross_fade_sec, cond, comp, cover_all_speakers)`` from the
     ``chunk`` block.
 
     The policy stays exactly one of ``turns`` / ``target_sec``;
-    ``cross_fade_sec`` is an independent seam knob, ``cover_all_speakers`` is
-    an independent coverage knob restricted to the ``target_sec`` policy, and
-    the conditioning-hygiene knobs (``cond_silence_gate``,
-    ``cond_gate_threshold``, ``cond_loudness_norm``) are independent
-    conditioning knobs - all default off, so existing configs reproduce
-    bit-for-bit.
+    ``cross_fade_sec`` is an independent seam knob, ``comp`` is a
+    conditioning-composition knob, ``cover_all_speakers`` is an independent
+    coverage knob restricted to the ``target_sec`` policy, and the
+    conditioning-hygiene knobs (``cond_silence_gate``, ``cond_gate_threshold``,
+    ``cond_loudness_norm``) are independent conditioning knobs - all default off,
+    so existing configs reproduce bit-for-bit.
     """
     raw = cfg.get("chunk")
     if raw is None:
@@ -518,6 +533,8 @@ def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene, bool]
         "cond_gate_threshold",
         "cond_gate_fill",
         "cond_loudness_norm",
+        "cond_include_prompt",
+        "cond_history_chunks",
         "cover_all_speakers",
     }
     if unknown:
@@ -552,6 +569,19 @@ def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene, bool]
         gate_fill=gate_fill,
         loudness_norm=norm_on,
     )
+    include_prompt = bool(chunk_cfg.pop("cond_include_prompt", False) or False)
+    history_raw = chunk_cfg.pop("cond_history_chunks", None)
+    history_chunks = 1 if history_raw is None else int(history_raw)
+    if history_chunks < -1:
+        raise ValueError(
+            f"chunk.cond_history_chunks must be >= -1 (-1 = all), got {history_chunks}"
+        )
+    if not include_prompt and history_chunks == 0:
+        raise ValueError(
+            "chunk.cond_history_chunks: 0 leaves no conditioning - it requires "
+            "cond_include_prompt: true"
+        )
+    comp = CondComposition(include_prompt=include_prompt, history_chunks=history_chunks)
     set_keys = [k for k, v in chunk_cfg.items() if v is not None]
     if len(set_keys) != 1:
         raise ValueError(
@@ -561,7 +591,7 @@ def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene, bool]
     policy = {k: chunk_cfg[k] for k in set_keys}
     if cover and "target_sec" not in policy:
         raise ValueError("chunk.cover_all_speakers requires the target_sec policy")
-    return policy, cross_fade_sec, cond, cover
+    return policy, cross_fade_sec, cond, comp, cover
 
 
 def run_chunked_inference(
@@ -583,7 +613,9 @@ def run_chunked_inference(
     mode = cfg.get("mode")
     if mode != MODE:
         raise ValueError(f"expected mode {MODE!r}, got {mode!r}")
-    chunk_cfg, cross_fade_sec, cond, cover_all_speakers = _validated_chunk_cfg(cfg)
+    chunk_cfg, cross_fade_sec, cond, comp, cover_all_speakers = _validated_chunk_cfg(
+        cfg
+    )
     prompt_fill = str(cfg.get("prompt_fill", "zeros") or "zeros")
     if prompt_fill not in PROMPT_FILLS:
         raise ValueError(
