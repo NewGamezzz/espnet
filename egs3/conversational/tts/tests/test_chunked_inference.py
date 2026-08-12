@@ -22,6 +22,8 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
 )
 from egs3.conversational.tts.src.chunked_inference import (
     MODE as CHUNKED_MODE,
+    CondComposition,
+    _validated_chunk_cfg,
     call_turns,
     crossfade_concat,
     estimate_turn_secs,
@@ -251,6 +253,36 @@ class TestCallTurns:
             own = [tok for tok in branch if tok not in (TURN_TOKEN, OTHER_TOKEN)]
             assert len(own) == sum(len(t.text) for t in turns if t.channel == ch)
 
+    def test_include_prompt_prepends_prompt_turns_after_round_zero(self, testset):
+        record = _records(testset)[0]  # "000", 3 turns
+        ranges = split_turns([1.0, 1.0, 1.0], turns=1)  # [(0,1),(1,2),(2,3)]
+        got = call_turns(record, ranges, 1, include_prompt=True, history_chunks=1)
+        assert got == _prompt_turns(record) + list(record.turns[0:2])
+
+    def test_zero_history_is_prompt_plus_current_chunk_only(self, testset):
+        record = _records(testset)[0]
+        ranges = split_turns([1.0, 1.0, 1.0], turns=1)
+        got = call_turns(record, ranges, 1, include_prompt=True, history_chunks=0)
+        assert got == _prompt_turns(record) + list(record.turns[1:2])
+
+    def test_all_history_spans_from_turn_zero(self, testset):
+        record = _records(testset)[0]
+        ranges = split_turns([1.0, 1.0, 1.0], turns=1)
+        got = call_turns(record, ranges, 2, include_prompt=True, history_chunks=-1)
+        assert got == _prompt_turns(record) + list(record.turns[0:3])
+
+    def test_history_clamps_to_available_chunks(self, testset):
+        record = _records(testset)[0]
+        ranges = split_turns([1.0, 1.0, 1.0], turns=1)
+        assert call_turns(
+            record, ranges, 1, include_prompt=False, history_chunks=5
+        ) == call_turns(record, ranges, 1, include_prompt=False, history_chunks=1)
+
+    def test_defaults_reproduce_previous_chunk_behavior(self, testset):
+        record = _records(testset)[0]
+        ranges = split_turns([1.0, 1.0, 1.0], turns=2)  # [(0,2),(2,3)]
+        assert call_turns(record, ranges, 1) == list(record.turns[0:3])
+
 
 # --------------------------------------------------------------------------- #
 # End-to-end chunked infer stage
@@ -306,6 +338,47 @@ class TestCrossfadeConcat:
     def test_negative_fade_raises(self):
         with pytest.raises(ValueError, match="fade"):
             crossfade_concat([torch.ones(1, 4)], -1)
+
+
+# --------------------------------------------------------------------------- #
+# conditioning-composition knobs (pure config validation)
+# --------------------------------------------------------------------------- #
+def _chunk_only_cfg(chunk):
+    return OmegaConf.create({"chunk": chunk})
+
+
+class TestCondCompositionConfig:
+    def test_defaults_are_previous_chunk_only(self):
+        _, _, _, comp, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
+        assert comp == CondComposition(include_prompt=False, history_chunks=1)
+
+    def test_explicit_values_are_parsed(self):
+        _, _, _, comp, _ = _validated_chunk_cfg(
+            _chunk_only_cfg(
+                {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": 0}
+            )
+        )
+        assert comp == CondComposition(include_prompt=True, history_chunks=0)
+
+    def test_all_history_is_minus_one(self):
+        _, _, _, comp, _ = _validated_chunk_cfg(
+            _chunk_only_cfg(
+                {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": -1}
+            )
+        )
+        assert comp.history_chunks == -1
+
+    def test_no_conditioning_at_all_is_rejected(self):
+        with pytest.raises(ValueError, match="cond_include_prompt"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg({"turns": 2, "cond_history_chunks": 0})
+            )
+
+    def test_history_below_minus_one_is_rejected(self):
+        with pytest.raises(ValueError, match="cond_history_chunks"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg({"turns": 2, "cond_history_chunks": -2})
+            )
 
 
 def _chunked_config(testset, inference_dir, chunk, **overrides):
@@ -534,6 +607,174 @@ class TestChunkedInfer:
 
 
 # --------------------------------------------------------------------------- #
+# conditioning composition end-to-end
+# --------------------------------------------------------------------------- #
+class TestCondCompositionInfer:
+    def _spy_run(self, testset, tiny_model, inference_dir, chunk, **kwargs):
+        import egs3.conversational.tts.src.chunked_inference as ci
+
+        captured = []
+        real = ci.generate_batch
+
+        def spy(model, vocoder, items, **kw):
+            out = real(model, vocoder, items, **kw)
+            captured.append((items[0], out[0][0]))
+            return out
+
+        monkeypatch = kwargs.pop("monkeypatch")
+        monkeypatch.setattr(ci, "generate_batch", spy)
+        cfg = _chunked_config(testset, inference_dir, chunk)
+        run_chunked_inference(
+            cfg,
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+            **kwargs,
+        )
+        return captured
+
+    @staticmethod
+    def _prompt0(captured):
+        item0, _ = captured[0]
+        return item0.speech[:, : item0.prompt_frames * HOP].cpu()
+
+    def test_reanchor_conditions_every_round_on_the_prompt(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        captured = self._spy_run(
+            testset,
+            tiny_model,
+            tmp_path / "infer",
+            {"turns": 1, "cond_include_prompt": True, "cond_history_chunks": 0},
+            monkeypatch=monkeypatch,
+        )
+        assert len(captured) == 5
+        prompt0 = self._prompt0(captured)
+        for item, _ in (captured[2], captured[4]):  # 000 rounds 1 and 2
+            got = item.speech[:, : item.prompt_frames * HOP].cpu()
+            assert torch.equal(got, prompt0)
+
+    def test_prompt_plus_last_chunk_conditioning(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        captured = self._spy_run(
+            testset,
+            tiny_model,
+            tmp_path / "infer",
+            {"turns": 1, "cond_include_prompt": True, "cond_history_chunks": 1},
+            monkeypatch=monkeypatch,
+        )
+        prompt0 = self._prompt0(captured)
+        chunk0 = captured[0][1]  # 000 round-0 output
+        item, _ = captured[2]  # 000 round 1
+        expected = torch.cat([prompt0, chunk0], dim=1)
+        assert item.prompt_frames * HOP == expected.shape[1]
+        assert torch.equal(item.speech[:, : expected.shape[1]].cpu(), expected)
+
+    def test_all_history_conditioning_grows_with_depth(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        captured = self._spy_run(
+            testset,
+            tiny_model,
+            tmp_path / "infer",
+            {"turns": 1, "cond_include_prompt": True, "cond_history_chunks": -1},
+            monkeypatch=monkeypatch,
+        )
+        prompt0 = self._prompt0(captured)
+        chunk0, chunk1 = captured[0][1], captured[2][1]  # 000 rounds 0, 1
+        item, _ = captured[4]  # 000 round 2
+        expected = torch.cat([prompt0, chunk0, chunk1], dim=1)
+        assert item.prompt_frames * HOP == expected.shape[1]
+        assert torch.equal(item.speech[:, : expected.shape[1]].cpu(), expected)
+
+    def test_defaults_stay_bit_identical_to_previous_chunk_only(
+        self, testset, tiny_model, tmp_path
+    ):
+        for name, chunk in (
+            ("implicit", {"turns": 2}),
+            (
+                "explicit",
+                {"turns": 2, "cond_include_prompt": False, "cond_history_chunks": 1},
+            ),
+        ):
+            cfg = _chunked_config(testset, tmp_path / name, chunk)
+            run_chunked_inference(
+                cfg,
+                training_config=testset["training_config"],
+                model=tiny_model,
+                vocoder=FakeVocoder(),
+            )
+        for rel in ("wav/000_ch0.wav", "wav/000_ch1.wav", "mix/000.wav"):
+            a, _ = _read_wav(tmp_path / "implicit/valid" / rel)
+            b, _ = _read_wav(tmp_path / "explicit/valid" / rel)
+            assert (a == b).all(), rel
+
+    def test_meta_records_the_composition(self, testset, tiny_model, tmp_path):
+        cfg = _chunked_config(
+            testset,
+            tmp_path / "infer",
+            {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": -1},
+        )
+        run_chunked_inference(
+            cfg,
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+        )
+        meta = json.loads((tmp_path / "infer/valid/meta/000.json").read_text("utf-8"))
+        assert meta["chunking"]["cond_include_prompt"] is True
+        assert meta["chunking"]["cond_history_chunks"] == -1
+
+    def test_hygiene_touches_history_but_never_the_prompt_segment(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        captured = self._spy_run(
+            testset,
+            tiny_model,
+            tmp_path / "infer",
+            {
+                "turns": 1,
+                "cond_include_prompt": True,
+                "cond_history_chunks": 1,
+                "cond_silence_gate": True,
+            },
+            monkeypatch=monkeypatch,
+            speech_regions_fn=lambda wav, fs, threshold: [],
+        )
+        prompt0 = self._prompt0(captured)
+        chunk0 = captured[0][1]
+        item, _ = captured[2]  # 000 round 1
+        cut = prompt0.shape[1]
+        assert torch.equal(item.speech[:, :cut].cpu(), prompt0)
+        history = item.speech[:, cut : item.prompt_frames * HOP].cpu()
+        assert history.shape[1] == chunk0.shape[1]
+        assert not torch.equal(history, chunk0)  # fully gated to room tone
+
+    def test_prompt_only_conditioning_skips_hygiene_entirely(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        calls = []
+        self._spy_run(
+            testset,
+            tiny_model,
+            tmp_path / "infer",
+            {
+                "turns": 1,
+                "cond_include_prompt": True,
+                "cond_history_chunks": 0,
+                "cond_silence_gate": True,
+            },
+            monkeypatch=monkeypatch,
+            speech_regions_fn=lambda wav, fs, threshold: calls.append(1) or [],
+        )
+        assert calls == []  # no generated segment -> the gate never runs
+        meta = json.loads((tmp_path / "infer/valid/meta/000.json").read_text("utf-8"))
+        for c in meta["chunking"]["chunks"]:
+            assert "conditioning" not in c
+
+
+# --------------------------------------------------------------------------- #
 # 3-channel end-to-end: cover_all_speakers + the empty-channel guard
 # --------------------------------------------------------------------------- #
 class TestThreeSpeakerChunked:
@@ -602,9 +843,7 @@ class TestThreeSpeakerChunked:
         with pytest.raises(ValueError, match="902.*no turns"):
             self._run3(tmp_path, {"target_sec": 2.0}, dialogues=crippled)
 
-    def test_unselected_empty_channel_dialogue_does_not_break_the_run(
-        self, tmp_path
-    ):
+    def test_unselected_empty_channel_dialogue_does_not_break_the_run(self, tmp_path):
         crippled = dict(DIALOGUES_3SPK)
         crippled["902"] = (
             ["abc def", "bead cab"],

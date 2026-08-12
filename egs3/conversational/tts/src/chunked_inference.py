@@ -207,13 +207,9 @@ def split_turns(
         if target_sec is None:
             raise ValueError("cover_all_speakers requires the target_sec policy")
         if channels is None or num_channels is None:
-            raise ValueError(
-                "cover_all_speakers needs `channels` and `num_channels`"
-            )
+            raise ValueError("cover_all_speakers needs `channels` and `num_channels`")
         if len(channels) != len(turn_secs):
-            raise ValueError(
-                f"got {len(channels)} channels for {len(turn_secs)} turns"
-            )
+            raise ValueError(f"got {len(channels)} channels for {len(turn_secs)} turns")
     if turns is not None:
         n = int(turns)
         if n < 1:
@@ -398,6 +394,19 @@ class CondHygiene:
         return self.silence_gate or self.loudness_norm
 
 
+@dataclass(frozen=True)
+class CondComposition:
+    """What round r > 0 conditions on: ``[prompt?] + [last H generated chunks]``.
+
+    ``history_chunks`` counts previous generated chunks (most recent last);
+    ``0`` is none and ``-1`` is all of them.  The default ``(False, 1)`` is
+    today's previous-chunk-only conditioning, bit-for-bit.
+    """
+
+    include_prompt: bool = False
+    history_chunks: int = 1
+
+
 def _apply_cond_hygiene(
     wav: torch.Tensor,
     *,
@@ -427,22 +436,33 @@ def _apply_cond_hygiene(
 
 
 def call_turns(
-    record: ExternalRecord, ranges: Sequence[tuple[int, int]], k: int
+    record: ExternalRecord,
+    ranges: Sequence[tuple[int, int]],
+    k: int,
+    *,
+    include_prompt: bool = False,
+    history_chunks: int = 1,
 ) -> list[Turn]:
     """Turns conditioning ODE call ``k``.
 
     Call 0 is today's external layout: the per-channel prompt turns followed
     by chunk 0's turns.  Call k > 0 covers exactly the audio span of the
-    call - chunk k-1 (the continuation prompt) then chunk k - which keeps
-    the ``<turn>``/``<OTHER>`` budget consistent with the conditioning audio
-    by construction.  Ranges are contiguous, so this is one slice.
+    call - the selected conditioning history (``history_chunks`` previous
+    chunks, ``-1`` for all, optionally preceded by the prompt turns when
+    ``include_prompt``) then chunk k - which keeps the ``<turn>``/``<OTHER>``
+    budget consistent with the conditioning audio by construction.  Ranges
+    are contiguous, so the history+current span is one slice.
     """
     if k == 0:
         a, b = ranges[0]
         return _prompt_turns(record) + list(record.turns[a:b])
-    prev_start = ranges[k - 1][0]
+    n_hist = k if history_chunks == -1 else min(history_chunks, k)
+    start = ranges[k - n_hist][0]
     end = ranges[k][1]
-    return list(record.turns[prev_start:end])
+    turns = list(record.turns[start:end])
+    if include_prompt:
+        return _prompt_turns(record) + turns
+    return turns
 
 
 @dataclass
@@ -491,17 +511,19 @@ def _plan_dialogue(
     )
 
 
-def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene, bool]:
-    """Return ``(policy, cross_fade_sec, cond, cover_all_speakers)`` from the
+def _validated_chunk_cfg(
+    cfg,
+) -> tuple[dict[str, Any], float, CondHygiene, CondComposition, bool]:
+    """Return ``(policy, cross_fade_sec, cond, comp, cover_all_speakers)`` from the
     ``chunk`` block.
 
     The policy stays exactly one of ``turns`` / ``target_sec``;
-    ``cross_fade_sec`` is an independent seam knob, ``cover_all_speakers`` is
-    an independent coverage knob restricted to the ``target_sec`` policy, and
-    the conditioning-hygiene knobs (``cond_silence_gate``,
-    ``cond_gate_threshold``, ``cond_loudness_norm``) are independent
-    conditioning knobs - all default off, so existing configs reproduce
-    bit-for-bit.
+    ``cross_fade_sec`` is an independent seam knob, ``comp`` is a
+    conditioning-composition knob, ``cover_all_speakers`` is an independent
+    coverage knob restricted to the ``target_sec`` policy, and the
+    conditioning-hygiene knobs (``cond_silence_gate``, ``cond_gate_threshold``,
+    ``cond_loudness_norm``) are independent conditioning knobs - all default off,
+    so existing configs reproduce bit-for-bit.
     """
     raw = cfg.get("chunk")
     if raw is None:
@@ -518,6 +540,8 @@ def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene, bool]
         "cond_gate_threshold",
         "cond_gate_fill",
         "cond_loudness_norm",
+        "cond_include_prompt",
+        "cond_history_chunks",
         "cover_all_speakers",
     }
     if unknown:
@@ -552,6 +576,19 @@ def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene, bool]
         gate_fill=gate_fill,
         loudness_norm=norm_on,
     )
+    include_prompt = bool(chunk_cfg.pop("cond_include_prompt", False) or False)
+    history_raw = chunk_cfg.pop("cond_history_chunks", None)
+    history_chunks = 1 if history_raw is None else int(history_raw)
+    if history_chunks < -1:
+        raise ValueError(
+            f"chunk.cond_history_chunks must be >= -1 (-1 = all), got {history_chunks}"
+        )
+    if not include_prompt and history_chunks == 0:
+        raise ValueError(
+            "chunk.cond_history_chunks: 0 leaves no conditioning - it requires "
+            "cond_include_prompt: true"
+        )
+    comp = CondComposition(include_prompt=include_prompt, history_chunks=history_chunks)
     set_keys = [k for k, v in chunk_cfg.items() if v is not None]
     if len(set_keys) != 1:
         raise ValueError(
@@ -561,7 +598,7 @@ def _validated_chunk_cfg(cfg) -> tuple[dict[str, Any], float, CondHygiene, bool]
     policy = {k: chunk_cfg[k] for k in set_keys}
     if cover and "target_sec" not in policy:
         raise ValueError("chunk.cover_all_speakers requires the target_sec policy")
-    return policy, cross_fade_sec, cond, cover
+    return policy, cross_fade_sec, cond, comp, cover
 
 
 def run_chunked_inference(
@@ -583,7 +620,9 @@ def run_chunked_inference(
     mode = cfg.get("mode")
     if mode != MODE:
         raise ValueError(f"expected mode {MODE!r}, got {mode!r}")
-    chunk_cfg, cross_fade_sec, cond, cover_all_speakers = _validated_chunk_cfg(cfg)
+    chunk_cfg, cross_fade_sec, cond, comp, cover_all_speakers = _validated_chunk_cfg(
+        cfg
+    )
     prompt_fill = str(cfg.get("prompt_fill", "zeros") or "zeros")
     if prompt_fill not in PROMPT_FILLS:
         raise ValueError(
@@ -638,12 +677,18 @@ def run_chunked_inference(
 
     # Shard BY DIALOGUE: a chunk chain cannot cross processes.  Cost is the
     # audio the chain's ODE calls actually integrate: call 0 is prompts +
-    # chunk 0, call k is chunk k-1 + chunk k.
+    # chunk 0, call k is the composed conditioning (prompt if included +
+    # the last H history chunks) + chunk k.
     def _chain_cost(idx: int) -> float:
         plan = plans[idx]
-        cost = sum(prompt_secs[idx]) + plan.chunk_secs[0]
+        prompt_sec = sum(prompt_secs[idx])
+        cost = prompt_sec + plan.chunk_secs[0]
         for k in range(1, plan.n_chunks):
-            cost += plan.chunk_secs[k - 1] + plan.chunk_secs[k]
+            n_hist = k if comp.history_chunks == -1 else min(comp.history_chunks, k)
+            cond_sec = sum(plan.chunk_secs[k - n_hist : k])
+            if comp.include_prompt:
+                cond_sec += prompt_sec
+            cost += cond_sec + plan.chunk_secs[k]
         return cost
 
     selected = set(indices)
@@ -709,7 +754,6 @@ def run_chunked_inference(
         idx: {
             "blocks": None,
             "prompt_frames0": None,
-            "prev_wav": None,
             "chunk_wavs": [],
             "chunk_meta": [],
         }
@@ -746,16 +790,39 @@ def run_chunked_inference(
                         room_tone(blocks[ch][ch], fs) for ch in range(n)
                     ]
             else:
-                prompt_raw = state[idx]["prev_wav"]
-                if cond.enabled:
-                    prompt_raw, cond_info = _apply_cond_hygiene(
-                        prompt_raw,
-                        fs=fs,
-                        cond=cond,
-                        targets=state[idx].get("cond_targets"),
-                        fill=state[idx].get("cond_fill"),
-                        speech_regions_fn=speech_regions_fn,
+                segments: list[torch.Tensor] = []
+                if comp.include_prompt:
+                    # The SAME assembly round 0 conditioned on: blocks are
+                    # raw prompt audio, so their concat is not hop-aligned -
+                    # reproduce round 0's trim here, or the newest history
+                    # chunk loses samples off its tail to the final trim
+                    # below instead.
+                    segments.append(
+                        torch.cat(state[idx]["blocks"], dim=1)[
+                            :, : state[idx]["prompt_frames0"] * hop
+                        ]
                     )
+                n_hist = (
+                    rnd if comp.history_chunks == -1 else min(comp.history_chunks, rnd)
+                )
+                if n_hist > 0:
+                    history = torch.cat(
+                        state[idx]["chunk_wavs"][rnd - n_hist : rnd], dim=1
+                    )
+                    if cond.enabled:
+                        # Hygiene exists for degraded GENERATED audio; the
+                        # prompt segment is real and is the norm's own gain
+                        # anchor, so it stays exempt.
+                        history, cond_info = _apply_cond_hygiene(
+                            history,
+                            fs=fs,
+                            cond=cond,
+                            targets=state[idx].get("cond_targets"),
+                            fill=state[idx].get("cond_fill"),
+                            speech_regions_fn=speech_regions_fn,
+                        )
+                    segments.append(history)
+                prompt_raw = torch.cat(segments, dim=1)
             prompt_frames = prompt_raw.shape[1] // hop
             prompt_trimmed = prompt_raw[:, : prompt_frames * hop]
             if rnd == 0:
@@ -765,7 +832,13 @@ def run_chunked_inference(
                 [prompt_trimmed, torch.zeros(n, gen_frames * hop)], dim=1
             ).to(device)
             sample = {
-                "turns": call_turns(record, plans[idx].ranges, rnd),
+                "turns": call_turns(
+                    record,
+                    plans[idx].ranges,
+                    rnd,
+                    include_prompt=comp.include_prompt,
+                    history_chunks=comp.history_chunks,
+                ),
                 "num_channels": n,
             }
             sample = preprocessor(record.dialogue_id, sample)
@@ -816,7 +889,6 @@ def run_chunked_inference(
             batch_rtf = float(elapsed / batch_gen_sec) if batch_gen_sec > 0 else None
             for idx, gen_wavs in zip(batch_indices, gen_wav_list):
                 a, b = plans[idx].ranges[rnd]
-                state[idx]["prev_wav"] = gen_wavs
                 state[idx]["chunk_wavs"].append(gen_wavs)
                 chunk_entry = {
                     "round": rnd,
@@ -886,6 +958,8 @@ def run_chunked_inference(
                 "policy": chunk_cfg,
                 "cover_all_speakers": cover_all_speakers,
                 "cross_fade_sec": cross_fade_sec,
+                "cond_include_prompt": comp.include_prompt,
+                "cond_history_chunks": comp.history_chunks,
                 "cond_silence_gate": cond.silence_gate,
                 "cond_gate_threshold": cond.gate_threshold,
                 "cond_gate_fill": cond.gate_fill,
