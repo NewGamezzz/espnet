@@ -726,6 +726,53 @@ class TestCondCompositionInfer:
         assert meta["chunking"]["cond_include_prompt"] is True
         assert meta["chunking"]["cond_history_chunks"] == -1
 
+    def test_hygiene_touches_history_but_never_the_prompt_segment(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        captured = self._spy_run(
+            testset,
+            tiny_model,
+            tmp_path / "infer",
+            {
+                "turns": 1,
+                "cond_include_prompt": True,
+                "cond_history_chunks": 1,
+                "cond_silence_gate": True,
+            },
+            monkeypatch=monkeypatch,
+            speech_regions_fn=lambda wav, fs, threshold: [],
+        )
+        prompt0 = self._prompt0(captured)
+        chunk0 = captured[0][1]
+        item, _ = captured[2]  # 000 round 1
+        cut = prompt0.shape[1]
+        assert torch.equal(item.speech[:, :cut].cpu(), prompt0)
+        history = item.speech[:, cut : item.prompt_frames * HOP].cpu()
+        assert history.shape[1] == chunk0.shape[1]
+        assert not torch.equal(history, chunk0)  # fully gated to room tone
+
+    def test_prompt_only_conditioning_skips_hygiene_entirely(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        calls = []
+        self._spy_run(
+            testset,
+            tiny_model,
+            tmp_path / "infer",
+            {
+                "turns": 1,
+                "cond_include_prompt": True,
+                "cond_history_chunks": 0,
+                "cond_silence_gate": True,
+            },
+            monkeypatch=monkeypatch,
+            speech_regions_fn=lambda wav, fs, threshold: calls.append(1) or [],
+        )
+        assert calls == []  # no generated segment -> the gate never runs
+        meta = json.loads((tmp_path / "infer/valid/meta/000.json").read_text("utf-8"))
+        for c in meta["chunking"]["chunks"]:
+            assert "conditioning" not in c
+
 
 # --------------------------------------------------------------------------- #
 # 3-channel end-to-end: cover_all_speakers + the empty-channel guard
