@@ -677,7 +677,8 @@ def run_chunked_inference(
 
     # Shard BY DIALOGUE: a chunk chain cannot cross processes.  Cost is the
     # audio the chain's ODE calls actually integrate: call 0 is prompts +
-    # chunk 0, call k is chunk k-1 + chunk k.
+    # chunk 0, call k is the composed conditioning (prompt if included +
+    # the last H history chunks) + chunk k.
     def _chain_cost(idx: int) -> float:
         plan = plans[idx]
         prompt_sec = sum(prompt_secs[idx])
