@@ -680,9 +680,14 @@ def run_chunked_inference(
     # chunk 0, call k is chunk k-1 + chunk k.
     def _chain_cost(idx: int) -> float:
         plan = plans[idx]
-        cost = sum(prompt_secs[idx]) + plan.chunk_secs[0]
+        prompt_sec = sum(prompt_secs[idx])
+        cost = prompt_sec + plan.chunk_secs[0]
         for k in range(1, plan.n_chunks):
-            cost += plan.chunk_secs[k - 1] + plan.chunk_secs[k]
+            n_hist = k if comp.history_chunks == -1 else min(comp.history_chunks, k)
+            cond_sec = sum(plan.chunk_secs[k - n_hist : k])
+            if comp.include_prompt:
+                cond_sec += prompt_sec
+            cost += cond_sec + plan.chunk_secs[k]
         return cost
 
     selected = set(indices)
@@ -748,7 +753,6 @@ def run_chunked_inference(
         idx: {
             "blocks": None,
             "prompt_frames0": None,
-            "prev_wav": None,
             "chunk_wavs": [],
             "chunk_meta": [],
         }
@@ -785,16 +789,39 @@ def run_chunked_inference(
                         room_tone(blocks[ch][ch], fs) for ch in range(n)
                     ]
             else:
-                prompt_raw = state[idx]["prev_wav"]
-                if cond.enabled:
-                    prompt_raw, cond_info = _apply_cond_hygiene(
-                        prompt_raw,
-                        fs=fs,
-                        cond=cond,
-                        targets=state[idx].get("cond_targets"),
-                        fill=state[idx].get("cond_fill"),
-                        speech_regions_fn=speech_regions_fn,
+                segments: list[torch.Tensor] = []
+                if comp.include_prompt:
+                    # The SAME assembly round 0 conditioned on: blocks are
+                    # raw prompt audio, so their concat is not hop-aligned -
+                    # reproduce round 0's trim here, or the newest history
+                    # chunk loses samples off its tail to the final trim
+                    # below instead.
+                    segments.append(
+                        torch.cat(state[idx]["blocks"], dim=1)[
+                            :, : state[idx]["prompt_frames0"] * hop
+                        ]
                     )
+                n_hist = (
+                    rnd if comp.history_chunks == -1 else min(comp.history_chunks, rnd)
+                )
+                if n_hist > 0:
+                    history = torch.cat(
+                        state[idx]["chunk_wavs"][rnd - n_hist : rnd], dim=1
+                    )
+                    if cond.enabled:
+                        # Hygiene exists for degraded GENERATED audio; the
+                        # prompt segment is real and is the norm's own gain
+                        # anchor, so it stays exempt.
+                        history, cond_info = _apply_cond_hygiene(
+                            history,
+                            fs=fs,
+                            cond=cond,
+                            targets=state[idx].get("cond_targets"),
+                            fill=state[idx].get("cond_fill"),
+                            speech_regions_fn=speech_regions_fn,
+                        )
+                    segments.append(history)
+                prompt_raw = torch.cat(segments, dim=1)
             prompt_frames = prompt_raw.shape[1] // hop
             prompt_trimmed = prompt_raw[:, : prompt_frames * hop]
             if rnd == 0:
@@ -804,7 +831,13 @@ def run_chunked_inference(
                 [prompt_trimmed, torch.zeros(n, gen_frames * hop)], dim=1
             ).to(device)
             sample = {
-                "turns": call_turns(record, plans[idx].ranges, rnd),
+                "turns": call_turns(
+                    record,
+                    plans[idx].ranges,
+                    rnd,
+                    include_prompt=comp.include_prompt,
+                    history_chunks=comp.history_chunks,
+                ),
                 "num_channels": n,
             }
             sample = preprocessor(record.dialogue_id, sample)
@@ -855,7 +888,6 @@ def run_chunked_inference(
             batch_rtf = float(elapsed / batch_gen_sec) if batch_gen_sec > 0 else None
             for idx, gen_wavs in zip(batch_indices, gen_wav_list):
                 a, b = plans[idx].ranges[rnd]
-                state[idx]["prev_wav"] = gen_wavs
                 state[idx]["chunk_wavs"].append(gen_wavs)
                 chunk_entry = {
                     "round": rnd,
@@ -925,6 +957,8 @@ def run_chunked_inference(
                 "policy": chunk_cfg,
                 "cover_all_speakers": cover_all_speakers,
                 "cross_fade_sec": cross_fade_sec,
+                "cond_include_prompt": comp.include_prompt,
+                "cond_history_chunks": comp.history_chunks,
                 "cond_silence_gate": cond.silence_gate,
                 "cond_gate_threshold": cond.gate_threshold,
                 "cond_gate_fill": cond.gate_fill,
