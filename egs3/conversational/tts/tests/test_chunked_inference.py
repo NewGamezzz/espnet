@@ -253,6 +253,36 @@ class TestCallTurns:
             own = [tok for tok in branch if tok not in (TURN_TOKEN, OTHER_TOKEN)]
             assert len(own) == sum(len(t.text) for t in turns if t.channel == ch)
 
+    def test_include_prompt_prepends_prompt_turns_after_round_zero(self, testset):
+        record = _records(testset)[0]  # "000", 3 turns
+        ranges = split_turns([1.0, 1.0, 1.0], turns=1)  # [(0,1),(1,2),(2,3)]
+        got = call_turns(record, ranges, 1, include_prompt=True, history_chunks=1)
+        assert got == _prompt_turns(record) + list(record.turns[0:2])
+
+    def test_zero_history_is_prompt_plus_current_chunk_only(self, testset):
+        record = _records(testset)[0]
+        ranges = split_turns([1.0, 1.0, 1.0], turns=1)
+        got = call_turns(record, ranges, 1, include_prompt=True, history_chunks=0)
+        assert got == _prompt_turns(record) + list(record.turns[1:2])
+
+    def test_all_history_spans_from_turn_zero(self, testset):
+        record = _records(testset)[0]
+        ranges = split_turns([1.0, 1.0, 1.0], turns=1)
+        got = call_turns(record, ranges, 2, include_prompt=True, history_chunks=-1)
+        assert got == _prompt_turns(record) + list(record.turns[0:3])
+
+    def test_history_clamps_to_available_chunks(self, testset):
+        record = _records(testset)[0]
+        ranges = split_turns([1.0, 1.0, 1.0], turns=1)
+        assert call_turns(
+            record, ranges, 1, include_prompt=False, history_chunks=5
+        ) == call_turns(record, ranges, 1, include_prompt=False, history_chunks=1)
+
+    def test_defaults_reproduce_previous_chunk_behavior(self, testset):
+        record = _records(testset)[0]
+        ranges = split_turns([1.0, 1.0, 1.0], turns=2)  # [(0,2),(2,3)]
+        assert call_turns(record, ranges, 1) == list(record.turns[0:3])
+
 
 # --------------------------------------------------------------------------- #
 # End-to-end chunked infer stage
@@ -645,9 +675,7 @@ class TestThreeSpeakerChunked:
         with pytest.raises(ValueError, match="902.*no turns"):
             self._run3(tmp_path, {"target_sec": 2.0}, dialogues=crippled)
 
-    def test_unselected_empty_channel_dialogue_does_not_break_the_run(
-        self, tmp_path
-    ):
+    def test_unselected_empty_channel_dialogue_does_not_break_the_run(self, tmp_path):
         crippled = dict(DIALOGUES_3SPK)
         crippled["902"] = (
             ["abc def", "bead cab"],
