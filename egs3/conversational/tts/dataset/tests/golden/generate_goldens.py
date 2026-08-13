@@ -16,7 +16,13 @@ Usage (one-shot CLI, from the recipe root ``egs3/conversational/tts``)::
 
 Pass ``--out-dir`` to write into a scratch directory instead of overwriting
 the committed fixtures (used to verify determinism: run twice into two
-different ``--out-dir``s and diff).
+different ``--out-dir``s and diff). Re-running with the default ``--out-dir``
+over the already-committed ``inputs/`` tree overwrites every file it writes
+in place (all writes below are ``exist_ok=True`` or plain overwrites); it
+does not, however, delete files an OLDER version of this script wrote that a
+NEWER version no longer writes, so after editing the fabrication logic
+itself (not just re-running it), regenerate into a clean tree
+(``rm -rf dataset/tests/golden/inputs dataset/tests/golden/*.jsonl`` first).
 
 Also exposes ``load_golden(name)``, the parity tests' loader for the
 committed ``.jsonl`` fixtures (Tasks 5-8).
@@ -152,9 +158,8 @@ _SSSD_SESSIONS: list[tuple[str, int, float]] = [
 
 _CANDOR_DURATIONS: dict[str, float] = {f"conv-{i:03d}": 10.5 for i in range(26)}
 
-_FISHER_SESSIONS: dict[str, tuple[float, list[dict]]] = {
-    f"fe_03_{i:05d}": (10.5, test_fisher.two_speaker_session(10.5)) for i in range(26)
-}
+_FISHER_SESSION_DURATION = 10.5
+_FISHER_SESSION_IDS: list[str] = [f"fe_03_{i:05d}" for i in range(26)]
 
 
 def _gzip_text_writer(path: Path) -> io.TextIOWrapper:
@@ -169,7 +174,7 @@ def _gzip_text_writer(path: Path) -> io.TextIOWrapper:
 def _make_sssd_corpus(tmp: Path) -> dict:
     """Fabricate a miniature SSSD corpus tree + base vocab file. Lifted from
     conftest.py's ``fake_corpus`` fixture body (module-level helpers
-    ``write_flac``/``_alternating_sups`` imported, not copied), scaled to 30
+    ``write_flac``/``_alternating_sups`` imported, not copied), scaled to 26
     sessions -- see module docstring."""
     root = tmp / "corpus"
     recordings, supervisions = [], []
@@ -201,7 +206,7 @@ def _make_sssd_corpus(tmp: Path) -> dict:
         supervisions.extend(_alternating_sups(session_id, num_channels, duration))
 
     manifests = root / "lhotse_manifests_48"
-    manifests.mkdir(parents=True)
+    manifests.mkdir(parents=True, exist_ok=True)
     with _gzip_text_writer(manifests / "recordings.jsonl.gz") as f:
         for rec in recordings:
             f.write(json.dumps(rec) + "\n")
@@ -223,17 +228,30 @@ def _make_libritts_corpus(tmp: Path) -> Path:
 
 
 def _make_candor_corpus(tmp: Path) -> dict:
-    """CANDOR corpus manifests + pre-transcoded FLACs, 30 sessions (see
+    """CANDOR corpus manifests + pre-transcoded FLACs, 26 sessions (see
     module docstring)."""
     root, flac_dir = test_candor.fabricate_candor(tmp, _CANDOR_DURATIONS)
     return {"root": root, "flac_dir": flac_dir}
 
 
 def _make_fisher_corpus(tmp: Path) -> dict:
-    """Fisher corpus manifests + pre-merged stereo FLACs, 30 sessions (see
+    """Fisher corpus manifests + pre-merged stereo FLACs, 26 sessions (see
     module docstring). ``fabricate_fisher`` writes merged FLACs directly, so
-    ``prepare_source``'s ffmpeg step is never invoked here."""
-    root, flac_dir = test_fisher.fabricate_fisher(tmp, _FISHER_SESSIONS)
+    ``prepare_source``'s ffmpeg step is never invoked here.
+
+    Sessions are built here rather than at module import time so that
+    importing this module for ``load_golden`` alone (the only thing Tasks
+    5-8's parity tests need) never re-runs ``two_speaker_session`` 26 times
+    as a side effect of the import.
+    """
+    sessions = {
+        sid: (
+            _FISHER_SESSION_DURATION,
+            test_fisher.two_speaker_session(_FISHER_SESSION_DURATION),
+        )
+        for sid in _FISHER_SESSION_IDS
+    }
+    root, flac_dir = test_fisher.fabricate_fisher(tmp, sessions)
     return {"root": root, "flac_dir": flac_dir}
 
 
