@@ -51,10 +51,60 @@ class TestManifestIO:
         assert n == 2
         assert read_session_manifest(tmp_path / "m" / "sessions.jsonl") == recs
 
-    def test_write_is_atomic(self, tmp_path):
+    def test_write_publishes_via_os_replace(self, tmp_path, monkeypatch):
+        """Verify the atomic-write contract: data goes to tmp, then os.replace publishes."""
+        import os as os_module
+
         path = tmp_path / "sessions.jsonl"
+        calls = []
+        real_replace = os_module.replace
+
+        def spy_replace(src, dst):
+            calls.append((src, dst))
+            # Call the real os.replace after recording the call
+            real_replace(src, dst)
+
+        monkeypatch.setattr(
+            "egs3.conversational.tts.dataset.preprocessing.sessions.os.replace",
+            spy_replace,
+        )
         write_session_manifest(path, [_session()])
+
+        # Verify os.replace was called exactly once with correct src/dst
+        assert len(calls) == 1
+        src, dst = calls[0]
+        assert src == path.with_suffix(".jsonl.tmp")
+        assert dst == path
+        # Verify tmp file is gone after publish
         assert not path.with_suffix(".jsonl.tmp").exists()
+        # Verify final file exists and is readable
+        assert path.exists()
+
+    def test_write_crashes_safely_before_publish(self, tmp_path, monkeypatch):
+        """Verify crash-safety: tmp file has complete data even if os.replace fails."""
+        path = tmp_path / "sessions.jsonl"
+        tmp_path_expected = path.with_suffix(".jsonl.tmp")
+        records = [_session(), _session(session_id="sess_b")]
+
+        def crash_on_replace(src, dst):
+            raise OSError("Simulated crash during publish")
+
+        monkeypatch.setattr(
+            "egs3.conversational.tts.dataset.preprocessing.sessions.os.replace",
+            crash_on_replace,
+        )
+
+        # Call write_session_manifest; expect it to fail during publish
+        with pytest.raises(OSError, match="Simulated crash during publish"):
+            write_session_manifest(path, records)
+
+        # Final file must not exist (publish failed)
+        assert not path.exists()
+        # Tmp file must exist with all data intact (written before publish)
+        assert tmp_path_expected.exists()
+        # Tmp file must have complete, parseable JSONL
+        parsed = read_session_manifest(tmp_path_expected)
+        assert parsed == records
 
     def test_empty_manifest_raises(self, tmp_path):
         (tmp_path / "empty.jsonl").write_text("")
