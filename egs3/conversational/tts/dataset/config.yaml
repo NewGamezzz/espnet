@@ -54,8 +54,8 @@ libritts_builder:
   # LibriTTS native rate; the builder fails loudly on any file that differs.
   sample_rate: 24000
   manifest_paths:
-    train: manifest/libritts_train.jsonl
-    valid: manifest/libritts_valid.jsonl
+    train: manifest/sessions_libritts_train.jsonl
+    valid: manifest/sessions_libritts_valid.jsonl
   seed: 0
 
 candor_builder:

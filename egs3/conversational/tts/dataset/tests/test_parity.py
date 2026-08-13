@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 
 from ..builder import SSSDBuilder
+from ..libritts_builder import LibriTTSBuilder
 from ..preprocessing.planner import WindowParams, plan_sessions
 from ..preprocessing.sessions import read_session_manifest
 from ..preprocessing.windows import to_json
@@ -64,3 +65,44 @@ class TestSSSDParity:
         for split in ("train", "valid", "test"):
             got = _frozen_json(recipe / "data" / "manifest" / f"sessions_{split}.jsonl")
             assert got == load_golden(f"sssd_{split}")
+
+
+def _run_new_libritts_build(tmp_path):
+    """Mirror generate_goldens.py's LibriTTS invocation exactly: SSSD builds
+    FIRST into a shared recipe dir (writing the extended vocab), then the NEW
+    LibriTTSBuilder runs against that same recipe dir. LibriTTS normalizes
+    transcripts against the vocab SSSD wrote, so an isolated LibriTTS-only
+    build (unlike SSSD's own isolated parity helper above -- see its
+    docstring) would normalize against a DIFFERENT charset and silently
+    diverge from the golden. See generate_goldens.py's ``generate()``, which
+    runs SSSDBuilder().build(...) before LibriTTSBuilder().build(...) into
+    the same recipe_dir for exactly this reason."""
+    sssd_src = _GOLDEN_INPUTS / "sssd"
+    sssd_tmp = tmp_path / "sssd"
+    shutil.copytree(sssd_src, sssd_tmp)
+
+    libritts_src = _GOLDEN_INPUTS / "libritts"
+    libritts_tmp = tmp_path / "libritts"
+    shutil.copytree(libritts_src, libritts_tmp)
+
+    recipe_dir = tmp_path / "recipe"
+    SSSDBuilder().build(
+        recipe_dir=recipe_dir,
+        dataset_root=sssd_tmp / "corpus",
+        seed=SEED,
+        base_vocab_path=sssd_tmp / "base_vocab.txt",
+    )
+    LibriTTSBuilder().build(
+        recipe_dir=recipe_dir, dataset_root=libritts_tmp / "LibriTTS", seed=SEED
+    )
+    return recipe_dir
+
+
+class TestLibriTTSParity:
+    def test_train_valid_bit_parity(self, tmp_path):
+        recipe = _run_new_libritts_build(tmp_path)
+        for split in ("train", "valid"):
+            got = _frozen_json(
+                recipe / "data" / "manifest" / f"sessions_libritts_{split}.jsonl"
+            )
+            assert got == load_golden(f"libritts_{split}")
