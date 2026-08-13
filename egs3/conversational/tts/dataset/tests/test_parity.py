@@ -10,6 +10,7 @@ import shutil
 from pathlib import Path
 
 from ..builder import SSSDBuilder
+from ..candor_builder import CandorBuilder
 from ..libritts_builder import LibriTTSBuilder
 from ..preprocessing.planner import WindowParams, plan_sessions
 from ..preprocessing.sessions import read_session_manifest
@@ -106,3 +107,47 @@ class TestLibriTTSParity:
                 recipe / "data" / "manifest" / f"sessions_libritts_{split}.jsonl"
             )
             assert got == load_golden(f"libritts_{split}")
+
+
+def _run_new_candor_build(tmp_path):
+    """Mirror generate_goldens.py's CANDOR invocation exactly: SSSD builds
+    FIRST into a shared recipe dir (writing the extended vocab), then the NEW
+    CandorBuilder runs against that same recipe dir. CANDOR normalizes
+    transcripts against the vocab SSSD wrote, so an isolated CANDOR-only
+    build (unlike SSSD's own isolated parity helper above -- see its
+    docstring) would normalize against a DIFFERENT charset and silently
+    diverge from the golden. See generate_goldens.py's ``generate()``, which
+    runs SSSDBuilder().build(...) before CandorBuilder().build(...) into
+    the same recipe_dir for exactly this reason."""
+    sssd_src = _GOLDEN_INPUTS / "sssd"
+    sssd_tmp = tmp_path / "sssd"
+    shutil.copytree(sssd_src, sssd_tmp)
+
+    candor_src = _GOLDEN_INPUTS / "candor"
+    candor_tmp = tmp_path / "candor"
+    shutil.copytree(candor_src, candor_tmp)
+
+    recipe_dir = tmp_path / "recipe"
+    SSSDBuilder().build(
+        recipe_dir=recipe_dir,
+        dataset_root=sssd_tmp / "corpus",
+        seed=SEED,
+        base_vocab_path=sssd_tmp / "base_vocab.txt",
+    )
+    CandorBuilder().build(
+        recipe_dir=recipe_dir,
+        dataset_root=candor_tmp / "Candor",
+        flac_dir=candor_tmp / "candor_flac",
+        seed=SEED,
+    )
+    return recipe_dir
+
+
+class TestCandorParity:
+    def test_train_valid_test_bit_parity(self, tmp_path):
+        recipe = _run_new_candor_build(tmp_path)
+        for split in ("train", "valid", "test"):
+            got = _frozen_json(
+                recipe / "data" / "manifest" / f"sessions_candor_{split}.jsonl"
+            )
+            assert got == load_golden(f"candor_{split}")

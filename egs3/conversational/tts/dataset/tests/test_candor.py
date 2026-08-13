@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 
 from egs3.conversational.tts.dataset.candor_builder import _CFG, CandorBuilder
-from egs3.conversational.tts.dataset.dataset import (
-    ConversationDataset,
-    read_window_manifest,
-)
+from egs3.conversational.tts.dataset.dataset import ConversationDataset
 from egs3.conversational.tts.dataset.preprocessing import candor
+from egs3.conversational.tts.dataset.preprocessing.sessions import (
+    read_session_manifest,
+)
 
 from .conftest import REPO_ROOT, write_flac  # noqa: F401  (sys.path setup)
 
@@ -217,17 +217,18 @@ def test_candor_builder_end_to_end(tmp_path):
 
     records = []
     for split in ("train", "valid", "test"):
-        path = recipe / f"data/manifest/candor_{split}.jsonl"
+        path = recipe / f"data/manifest/sessions_candor_{split}.jsonl"
         assert path.is_file()
         try:
-            records.extend(read_window_manifest(path))
+            records.extend(read_session_manifest(path))
         except RuntimeError:
             pass  # tiny fixture: a split may legitimately be empty
     assert records
     for r in records:
         assert r.num_channels == 2
         assert r.sample_rate == 48000
-        assert r.t1 <= 40.0 + 1e-6
+        # duration is the MEASURED flac duration, not a windowed span
+        assert r.duration <= 40.0 + 1e-6
         # normalized text: lowercase charset survives
         assert all(t.text == t.text.lower() for t in r.turns)
 
@@ -278,9 +279,9 @@ def test_candor_builder_drops_out_of_range_turn(tmp_path):
 
     records = []
     for split in ("train", "valid", "test"):
-        path = recipe / f"data/manifest/candor_{split}.jsonl"
+        path = recipe / f"data/manifest/sessions_candor_{split}.jsonl"
         try:
-            records.extend(read_window_manifest(path))
+            records.extend(read_session_manifest(path))
         except RuntimeError:
             pass  # tiny fixture: a split may legitimately be empty
     assert records  # build still succeeds
@@ -300,13 +301,13 @@ def test_candor_builder_uses_measured_duration_not_manifest(tmp_path):
     )
     records = []
     for split in ("train", "valid", "test"):
-        path = recipe / f"data/manifest/candor_{split}.jsonl"
+        path = recipe / f"data/manifest/sessions_candor_{split}.jsonl"
         try:
-            records.extend(read_window_manifest(path))
+            records.extend(read_session_manifest(path))
         except RuntimeError:
             pass
     assert records
-    assert all(r.t1 <= 20.0 + 1e-3 for r in records)
+    assert all(r.duration <= 20.0 + 1e-3 for r in records)
 
 
 def test_candor_builder_requires_vocab(tmp_path):
@@ -328,7 +329,7 @@ def test_candor_manifest_loads_through_conversation_dataset(tmp_path):
     )
     dataset = ConversationDataset(
         split="train",
-        manifest_path=recipe / "data/manifest/candor_train.jsonl",
+        manifest_path=recipe / "data/manifest/sessions_candor_train.jsonl",
         dataset_root=flac_dir,
         fs=24000,
     )

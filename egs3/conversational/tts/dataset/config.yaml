@@ -75,26 +75,21 @@ candor_builder:
   flac_dir: /work/hdd/bbjs/ttrachu/dataset/candor_flac
   ffmpeg: ffmpeg
   transcode_workers: 16
-  # Windowing knobs: same VALUES as the SSSD builder section except merge_gap
-  # (0.3 so window cuts fall in real >= 0.3s silences; audiophile segments are
+  # merge_gap differs from the SSSD builder section's 1.0: 0.3 so turn-merge
+  # cuts fall in real >= 0.3s silences; audiophile segments are
   # silence-delimited, and 1.0 chains them across the other channel's
-  # backchannels into oversized spans - see the variant note above).
+  # backchannels into oversized spans - see the variant note above. Window
+  # knobs live in preprocessing/planner.py's WindowParams (planning is
+  # online now); this section only covers session assembly.
   merge_gap: 0.3
-  window_min: 10.0
-  window_max: 80.0
-  boundary_guard: 0.0
-  tail_min: 5.0
-  trim_to_turns: true
-  min_coverage: 0.0
-  snap_start_to_turn: true
   split_ratios:
     train: 0.96
     valid: 0.02
     test: 0.02
   manifest_paths:
-    train: manifest/candor_train.jsonl
-    valid: manifest/candor_valid.jsonl
-    test: manifest/candor_test.jsonl
+    train: manifest/sessions_candor_train.jsonl
+    valid: manifest/sessions_candor_valid.jsonl
+    test: manifest/sessions_candor_test.jsonl
   seed: 0
 
 fisher_builder:
