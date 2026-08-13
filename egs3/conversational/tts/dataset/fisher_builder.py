@@ -1,13 +1,19 @@
-"""Fisher dataset builder: conversational window manifests for the mix.
+"""Fisher dataset builder: conversational session manifests for the mix.
 
 Runs AFTER the SSSD build (``python -m egs3.conversational.tts.dataset.builder``):
 transcripts are normalized against the extended vocab that build wrote.
 ``prepare_source`` verifies the read-only corpus and runs the one-time
 A/B -> stereo merge (a COMPUTE JOB on the cluster: ~350-400 GB); ``build``
-is cheap - it cleans the LDC transcripts, windows them against measured
-FLAC durations, drops windows overlapping unintelligible-speech spans, and
-writes ``manifest/fisher_{train,valid,test}.jsonl`` in the exact
-``WindowRecord`` schema ``ConversationDataset`` already consumes.
+is cheap - it cleans the LDC transcripts, merges turns against measured
+FLAC durations, and writes one merged + normalized ``SessionRecord`` per
+session to ``manifest/sessions_fisher_{train,valid,test}.jsonl``.
+
+Window planning now happens online (see ``preprocessing/planner.py``): the
+builder emits one SESSION per line, not pre-cut windows. Unintelligible-
+speech spans (from ``clean_fisher_supervisions``) travel on the session
+record as ``exclusion_spans`` instead of driving a build-time post-filter;
+the planner drops any window overlapping one, applying the identical
+predicate the old post-filter used.
 """
 
 from __future__ import annotations
@@ -15,28 +21,22 @@ from __future__ import annotations
 import argparse
 import dataclasses
 import os
-import random
-from collections import Counter, defaultdict
 from importlib import resources
 from pathlib import Path
 
 from espnet3.components.data.dataset_builder import DatasetBuilder
 from espnet3.utils.config_utils import load_config_with_defaults
 
-from .builder import _distribution, split_sessions
+from .builder import split_sessions
 from .preprocessing.candor import measured_durations
 from .preprocessing.fisher import (
     clean_fisher_supervisions,
     load_fisher_recordings,
     merge_all,
 )
+from .preprocessing.sessions import SessionRecord, write_session_manifest
 from .preprocessing.sssd import load_supervisions, merge_turns, session_speakers
 from .preprocessing.text import normalize_text, vocab_charset
-from .preprocessing.windows import (
-    WindowingStats,
-    build_windows,
-    write_window_manifest,
-)
 
 
 def _load_configs() -> tuple[dict, dict]:
@@ -76,7 +76,7 @@ def _manifest_paths(root: Path) -> tuple[Path, Path]:
 
 
 class FisherBuilder(DatasetBuilder):
-    """Prepare Fisher conversational window manifests for mixed training."""
+    """Prepare Fisher conversational session manifests for mixed training."""
 
     def is_source_prepared(
         self,
@@ -162,17 +162,16 @@ class FisherBuilder(DatasetBuilder):
         splits = split_sessions(session_ids, _CFG["split_ratios"], seed)
         session_split = {sid: split for split, ids in splits.items() for sid in ids}
 
-        records_by_split = {split: [] for split in _CFG["manifest_paths"]}
-        stats = {split: WindowingStats() for split in records_by_split}
-        spk_windows = {split: Counter() for split in records_by_split}
-        spk_seconds = {split: defaultdict(float) for split in records_by_split}
-        speakers: dict[str, set[str]] = {split: set() for split in records_by_split}
+        session_records: dict[str, list[SessionRecord]] = {
+            split: [] for split in _CFG["manifest_paths"]
+        }
+        turn_seconds: dict[str, float] = {split: 0.0 for split in session_records}
+        speakers: dict[str, set[str]] = {split: set() for split in session_records}
         dropped_empty_turns = 0
         dropped_out_of_range_turns = 0
         dropped_benign_utts = 0
         dropped_unintelligible_utts = 0
-        dropped_unintelligible_windows = {split: 0 for split in records_by_split}
-        dropped_unintelligible_sec = {split: 0.0 for split in records_by_split}
+        exclusion_span_seconds = 0.0
         for sid in session_ids:
             split = session_split[sid]
             speakers[split] |= session_speakers(supervisions[sid])
@@ -181,12 +180,13 @@ class FisherBuilder(DatasetBuilder):
             )
             dropped_benign_utts += n_benign
             dropped_unintelligible_utts += len(unintelligible_spans)
+            exclusion_span_seconds += sum(b - a for a, b in unintelligible_spans)
             turns = merge_turns(kept, _CFG["merge_gap"])
             normalized = []
             for turn in turns:
                 # A supervision starting past the measured audio end clamps
                 # to a negative span in load_supervisions (duration = min(...,
-                # rec.duration - start) < 0); drop rather than emit a window
+                # rec.duration - start) < 0); drop rather than emit a session
                 # turn whose end is at or before its own start.
                 if turn.end <= turn.start:
                     dropped_out_of_range_turns += 1
@@ -196,35 +196,22 @@ class FisherBuilder(DatasetBuilder):
                     dropped_empty_turns += 1
                     continue
                 normalized.append(dataclasses.replace(turn, text=text))
-            records, session_stats = build_windows(
-                sid,
-                recordings[sid],
-                normalized,
-                window_min=_CFG["window_min"],
-                window_max=_CFG["window_max"],
-                boundary_guard=_CFG["boundary_guard"],
-                tail_min=_CFG["tail_min"],
-                rng=random.Random(f"{seed}:window:{sid}"),
-                trim_to_turns=_CFG["trim_to_turns"],
-                min_coverage=_CFG["min_coverage"],
-                snap_start_to_turn=_CFG["snap_start_to_turn"],
+            turn_seconds[split] += sum(t.end - t.start for t in normalized)
+            rec = recordings[sid]
+            session_records[split].append(
+                SessionRecord(
+                    session_id=sid,
+                    audio_relpath=rec.audio_relpath,
+                    num_channels=rec.num_channels,
+                    sample_rate=rec.sample_rate,
+                    duration=rec.duration,
+                    turns=tuple(normalized),
+                    exclusion_spans=tuple(unintelligible_spans),
+                )
             )
-            stats[split].merge(session_stats)
-            surviving = []
-            for record in records:
-                if any(
-                    record.t0 < b and a < record.t1 for a, b in unintelligible_spans
-                ):
-                    stats[split].n_windows -= 1
-                    dropped_unintelligible_windows[split] += 1
-                    dropped_unintelligible_sec[split] += record.duration
-                else:
-                    surviving.append(record)
-            records = surviving
-            records_by_split[split].extend(records)
-            for record in records:
-                spk_windows[split][record.num_active_speakers] += 1
-                spk_seconds[split][record.num_active_speakers] += record.duration
+
+        for split, relpath in _CFG["manifest_paths"].items():
+            write_session_manifest(data_dir / relpath, session_records[split])
 
         print(f"Fisher build summary (seed={seed}, root={root})")
         print(f"  sessions: {len(session_ids)}")
@@ -234,32 +221,16 @@ class FisherBuilder(DatasetBuilder):
             f"{dropped_out_of_range_turns}"
         )
         print(f"  utterances dropped benign (tag-only): {dropped_benign_utts}")
-        print(f"  utterances dropped unintelligible: {dropped_unintelligible_utts}")
-        for split, records in records_by_split.items():
-            n = write_window_manifest(data_dir / _CFG["manifest_paths"][split], records)
-            st = stats[split]
-            hours = sum(r.duration for r in records) / 3600
+        print(
+            "  utterances dropped unintelligible (exclusion spans, "
+            f"{exclusion_span_seconds:.1f}s total, dropped online by the "
+            f"planner): {dropped_unintelligible_utts}"
+        )
+        for split in ("train", "valid", "test"):
             print(
-                f"  {split}: {n} windows ({hours:.1f}h) over "
-                f"{len(splits[split])} sessions; "
-                f"dropped {st.dropped_span_sec / 3600:.1f}h oversized spans, "
-                f"{st.dropped_tail_sec:.1f}s tails, "
-                f"{st.dropped_empty_windows} empty windows"
+                f"  {split}: {len(session_records[split])} sessions, "
+                f"{turn_seconds[split] / 3600:.2f}h turns"
             )
-            print(
-                f"    dropped {dropped_unintelligible_windows[split]} windows "
-                f"({dropped_unintelligible_sec[split] / 3600:.1f}h) over "
-                "unintelligible spans"
-            )
-            print(
-                f"    duration[s]: " f"{_distribution([r.duration for r in records])}"
-            )
-            by_spk = ", ".join(
-                f"{k}spk {spk_windows[split][k]} "
-                f"({spk_seconds[split][k] / 3600:.1f}h)"
-                for k in sorted(spk_windows[split])
-            )
-            print(f"    windows by active speakers: {by_spk or 'n=0'}")
         for a, b in (("train", "valid"), ("train", "test"), ("valid", "test")):
             shared = len(speakers[a] & speakers[b])
             print(

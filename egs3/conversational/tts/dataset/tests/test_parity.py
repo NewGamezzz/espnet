@@ -11,6 +11,7 @@ from pathlib import Path
 
 from ..builder import SSSDBuilder
 from ..candor_builder import CandorBuilder
+from ..fisher_builder import FisherBuilder
 from ..libritts_builder import LibriTTSBuilder
 from ..preprocessing.planner import WindowParams, plan_sessions
 from ..preprocessing.sessions import read_session_manifest
@@ -151,3 +152,57 @@ class TestCandorParity:
                 recipe / "data" / "manifest" / f"sessions_candor_{split}.jsonl"
             )
             assert got == load_golden(f"candor_{split}")
+
+
+def _run_new_fisher_build(tmp_path):
+    """Mirror generate_goldens.py's Fisher invocation exactly: SSSD builds
+    FIRST into a shared recipe dir (writing the extended vocab), then the NEW
+    FisherBuilder runs against that same recipe dir. Fisher normalizes
+    transcripts against the vocab SSSD wrote, so an isolated Fisher-only
+    build (unlike SSSD's own isolated parity helper above -- see its
+    docstring) would normalize against a DIFFERENT charset and silently
+    diverge from the golden. See generate_goldens.py's ``generate()``, which
+    runs SSSDBuilder().build(...) before FisherBuilder().build(...) into
+    the same recipe_dir for exactly this reason.
+
+    This is the parity test with the most riding on it: the goldens were
+    produced WITH the old build-time post-filter that dropped windows
+    overlapping unintelligible-speech spans, while the new builder only
+    records those spans as ``SessionRecord.exclusion_spans`` and lets the
+    frozen planner apply the identical predicate online. Bit-parity here is
+    the proof the relocation changed nothing observable. The committed
+    ``inputs/fisher`` fixture also carries pre-merged stereo FLACs (see
+    generate_goldens.py's ``_make_fisher_corpus`` docstring), so
+    ``prepare_source``'s ffmpeg merge step is never invoked here either."""
+    sssd_src = _GOLDEN_INPUTS / "sssd"
+    sssd_tmp = tmp_path / "sssd"
+    shutil.copytree(sssd_src, sssd_tmp)
+
+    fisher_src = _GOLDEN_INPUTS / "fisher"
+    fisher_tmp = tmp_path / "fisher"
+    shutil.copytree(fisher_src, fisher_tmp)
+
+    recipe_dir = tmp_path / "recipe"
+    SSSDBuilder().build(
+        recipe_dir=recipe_dir,
+        dataset_root=sssd_tmp / "corpus",
+        seed=SEED,
+        base_vocab_path=sssd_tmp / "base_vocab.txt",
+    )
+    FisherBuilder().build(
+        recipe_dir=recipe_dir,
+        dataset_root=fisher_tmp / "fisher",
+        fisher_flac_dir=fisher_tmp / "fisher_flac",
+        seed=SEED,
+    )
+    return recipe_dir
+
+
+class TestFisherParity:
+    def test_train_valid_test_bit_parity(self, tmp_path):
+        recipe = _run_new_fisher_build(tmp_path)
+        for split in ("train", "valid", "test"):
+            got = _frozen_json(
+                recipe / "data" / "manifest" / f"sessions_fisher_{split}.jsonl"
+            )
+            assert got == load_golden(f"fisher_{split}")
