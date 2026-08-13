@@ -862,8 +862,14 @@ class TestOnlineMode:
             s.set_epoch(epoch)
             return {(w.session_id, w.t0, w.t1) for b in s for _, w in b}
 
-        assert spans(0) == spans(0)  # re-derivable (resume contract)
-        assert spans(0) != spans(1)  # fresh windows across epochs
+        # spans(0) a second time in a row would just hit the (0, True) cache
+        # and return by identity - never able to fail. Evict it first by
+        # visiting epoch 1, so the re-derived epoch-0 plan is a fresh
+        # _plan_and_pack call, pinning the resume contract for real.
+        s0 = spans(0)
+        s1 = spans(1)
+        assert s0 == spans(0)  # re-derivable after cache eviction (resume contract)
+        assert s0 != s1  # fresh windows across epochs
 
     def test_frozen_mode_matches_records(self, mixed_dataset):
         s = ConversationBatchSampler(mixed_dataset, batch_bins=BB, online=False)
@@ -891,6 +897,68 @@ class TestOnlineMode:
         assert comp_ids == {0}
         for batch in s:
             assert len({i for i, _ in batch}) == 1  # no cross-corpus batches
+
+    def test_weighted_quota_recomputed_each_online_epoch(self, mixed_dataset):
+        # weights=[1.0, 0.0] above never exercises the permutation branch in
+        # _epoch_batches (the nonzero component's quota always covers its
+        # whole batch count when the other component is excluded), and the
+        # frozen-mode weighted tests use per-component counts that never
+        # move. This test forces both: two nonzero-weight components whose
+        # online-mode plan (and hence packed batch count) changes epoch to
+        # epoch, so a stale-quota bug - the exact failure mode per-epoch
+        # planning introduces - would be caught.
+        bins = BB
+        probs = [0.5, 0.5]
+        s = ConversationBatchSampler(
+            mixed_dataset,
+            batch_bins=bins,
+            online=True,
+            weights=probs,
+            shuffle=True,
+            seed=0,
+        )
+
+        ran_permutation = False
+        for epoch in (0, 1):
+            # Recompute the expected quota straight from THAT epoch's plan,
+            # independently of the sampler under test (same formula the
+            # sampler itself uses, applied to a fresh plan_windows/pack_batches
+            # call here).
+            comp_batch_counts = [
+                len(
+                    pack_batches(
+                        record_costs(c.plan_windows(epoch), int(c.fs)),
+                        bins,
+                        min_batch_size=1,
+                    )
+                )
+                for c in mixed_dataset.datasets
+            ]
+            epoch_len = min(n / p for n, p in zip(comp_batch_counts, probs) if p > 0)
+            expected_quotas = [max(1, round(p * epoch_len)) for p in probs]
+            if any(q < n for q, n in zip(expected_quotas, comp_batch_counts)):
+                ran_permutation = True
+
+            s.set_epoch(epoch)
+            batches = list(s)
+            actual_quotas = [0] * len(probs)
+            for batch in batches:
+                comp_ids = {i for i, _ in batch}
+                assert len(comp_ids) == 1  # never mixed
+                actual_quotas[comp_ids.pop()] += 1
+            assert actual_quotas == expected_quotas
+
+            # len/iter agreement in the same epoch: not obvious once the
+            # permutation draw is in the mix (a stale-quota bug could easily
+            # make __len__ and __iter__ disagree instead of just being wrong
+            # together).
+            assert len(s) == len(list(s))
+
+        assert ran_permutation, (
+            "fixture/bins must exercise the permutation branch (a quota "
+            "strictly below its component's batch count) in at least one "
+            "epoch, or this test cannot distinguish a stale-quota bug"
+        )
 
     def test_component_idx_is_correct(self, mixed_dataset):
         s = ConversationBatchSampler(mixed_dataset, batch_bins=BB, online=True)
