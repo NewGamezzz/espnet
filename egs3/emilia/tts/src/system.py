@@ -119,14 +119,13 @@ class TTSSystem(BaseSystem):
         config = self.training_config
         model = _instantiate_model(config)
         if isinstance(model, AbsGANESPnetModel):
-            # Lazy: egs3/emilia/tts/src/gan_trainer.py does not exist (F5-TTS
-            # is not a GAN model, so this branch is currently unreachable in
-            # this recipe). A module-level import would break every import
-            # of src.system, since libritts's gan_trainer.py pulls in a
-            # models/gan_model.py that has no reason to exist here.
-            from src.gan_trainer import build_gan_trainer
-
-            return build_gan_trainer(config, model)
+            raise NotImplementedError(
+                "The Emilia recipe supports F5-TTS only and ships no GAN "
+                "trainer. F5-TTS is a flow-matching model, so this branch is "
+                "unreachable with the recipe's own configs; it exists to fail "
+                "loudly rather than silently route a GAN model through the "
+                "non-GAN trainer."
+            )
 
         lit_model = ESPnetLightningModule(model, config)
         return ESPnet3LightningTrainer(
