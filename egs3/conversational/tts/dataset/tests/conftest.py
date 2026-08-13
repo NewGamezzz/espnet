@@ -101,6 +101,14 @@ def _alternating_sups(session_id, num_channels, duration, utt_len=2.5, gap=1.5):
     return sups
 
 
+# Shared session table for the SSSD-shaped fixture tree: session id, channel
+# count, duration.  Both the ``fake_corpus`` fixture (recordings/supervisions
+# for the real builder pipeline) and tests that need SessionRecords directly
+# (see test_dataset.py's ``_sessions_from_fixture``) derive from this single
+# source so the two stay in sync.
+FAKE_SESSIONS = [("sess_long", 2, 60.0), ("sess_tri", 3, 40.0), ("sess_short", 2, 8.0)]
+
+
 @pytest.fixture
 def fake_corpus(tmp_path, base_vocab):
     """Miniature SSSD corpus tree + base vocab file + empty recipe dir."""
@@ -108,7 +116,7 @@ def fake_corpus(tmp_path, base_vocab):
     import json
 
     root = tmp_path / "corpus"
-    sessions = [("sess_long", 2, 60.0), ("sess_tri", 3, 40.0), ("sess_short", 2, 8.0)]
+    sessions = FAKE_SESSIONS
     recordings, supervisions = [], []
     for session_id, num_channels, duration in sessions:
         write_flac(

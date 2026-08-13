@@ -1,15 +1,17 @@
 """Tests for ConversationDataset, preprocessor composition, and the packed
 collator (AC5-AC8)."""
 
-import json
-
 import pytest
 import torch
-from .conftest import channel_tone_hz, write_flac
+from .conftest import FAKE_SESSIONS, _alternating_sups, channel_tone_hz, write_flac
 
 from egs3.conversational.tts.dataset.dataset import (
     ConversationDataset,
     collate_conversations,
+)
+from egs3.conversational.tts.dataset.preprocessing.sessions import (
+    SessionRecord,
+    write_session_manifest,
 )
 from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
 from egs3.conversational.tts.dataset.preprocessing.text import (
@@ -20,10 +22,7 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
     extend_vocab,
     make_token2id,
 )
-from egs3.conversational.tts.dataset.preprocessing.windows import (
-    WindowRecord,
-    to_json,
-)
+from egs3.conversational.tts.dataset.preprocessing.windows import WindowRecord
 from egs3.conversational.tts.dataset.preprocessor import (
     ConversationalTextPreprocessor,
 )
@@ -32,27 +31,92 @@ FS = 24000
 SRC_SR = 48000
 
 
-def make_window(session_id, num_channels, t0, t1, turns, widx=0):
-    return WindowRecord(
-        window_id=f"{session_id}_w{widx:05d}",
+def _atomic_session(session_id, num_channels, duration, turns, widx=0):
+    """A session that bypasses planning: one window, verbatim turns, exactly
+    like the retired hand-built window fixtures used to encode - see
+    plan_session's atomic branch (t0=0.0, t1=duration, turns unchanged)."""
+    return SessionRecord(
         session_id=session_id,
         audio_relpath=f"original/{session_id}_mixed.flac",
         num_channels=num_channels,
         sample_rate=SRC_SR,
-        t0=t0,
-        t1=t1,
+        duration=duration,
         turns=tuple(turns),
+        atomic=True,
+        window_id=f"{session_id}_w{widx:05d}",
     )
+
+
+def _expected_window(session: SessionRecord) -> WindowRecord:
+    """The WindowRecord plan_session's atomic branch derives from ``session``
+    (mirrored here, not imported, so the fixture stays a plain expectation
+    rather than a planner-dependent computation)."""
+    return WindowRecord(
+        window_id=session.window_id,
+        session_id=session.session_id,
+        audio_relpath=session.audio_relpath,
+        num_channels=session.num_channels,
+        sample_rate=session.sample_rate,
+        t0=0.0,
+        t1=session.duration,
+        turns=session.turns,
+    )
+
+
+def _sessions_from_fixture(root) -> list[SessionRecord]:
+    """Non-atomic SessionRecords over fake_corpus's audio + FAKE_SESSIONS
+    table, turns generated the same way the fixture builds its lhotse
+    supervisions (``_alternating_sups``), so the real planner has enough
+    turn coverage to produce several windows per session."""
+    sessions = []
+    for session_id, num_channels, duration in FAKE_SESSIONS:
+        sups = _alternating_sups(session_id, num_channels, duration)
+        turns = tuple(
+            Turn(
+                channel=s["channel"],
+                speaker=s["speaker"],
+                text=s["text"],
+                start=s["start"],
+                end=round(s["start"] + s["duration"], 3),
+            )
+            for s in sups
+        )
+        sessions.append(
+            SessionRecord(
+                session_id=session_id,
+                audio_relpath=f"original/{session_id}_mixed.flac",
+                num_channels=num_channels,
+                sample_rate=SRC_SR,
+                duration=duration,
+                turns=turns,
+            )
+        )
+    return sessions
+
+
+def _make_dataset(fake_corpus, tmp_path, **kw):
+    root, recipe_dir = fake_corpus["root"], fake_corpus["recipe_dir"]
+    manifest = tmp_path / "sessions_train.jsonl"
+    write_session_manifest(manifest, _sessions_from_fixture(root))
+    defaults = dict(
+        split="train",
+        recipe_dir=recipe_dir,
+        manifest_path=manifest,
+        dataset_root=root,
+        window_params={"window_min": 4.0, "window_max": 10.0, "tail_min": 2.0},
+    )
+    defaults.update(kw)
+    return ConversationDataset(**defaults)
 
 
 @pytest.fixture
 def corpus(tmp_path, base_vocab):
-    """Synthetic dataset root + window manifest + extended vocab on disk."""
-    windows = [
-        make_window(
+    """Synthetic dataset root + session manifest (atomic sessions, so each
+    yields exactly one deterministic window) + extended vocab on disk."""
+    sessions = [
+        _atomic_session(
             "sess2ch",
             2,
-            10.0,
             22.0,
             [
                 Turn(0, "spk_a", "good afternoon. how are you?", 10.5, 13.0),
@@ -60,10 +124,9 @@ def corpus(tmp_path, base_vocab):
                 Turn(0, "spk_a", "good, but i have a problem", 16.4, 19.0),
             ],
         ),
-        make_window(
+        _atomic_session(
             "sess3ch",
             3,
-            5.0,
             21.0,
             [
                 Turn(0, "spk_a", "hello everyone", 5.5, 7.0),
@@ -76,16 +139,15 @@ def corpus(tmp_path, base_vocab):
     write_flac(tmp_path / "original" / "sess2ch_mixed.flac", 2, 30.0)
     write_flac(tmp_path / "original" / "sess3ch_mixed.flac", 3, 25.0)
     manifest = tmp_path / "manifest.jsonl"
-    with manifest.open("w", encoding="utf-8") as f:
-        for w in windows:
-            f.write(json.dumps(to_json(w)) + "\n")
+    write_session_manifest(manifest, sessions)
     vocab_path = tmp_path / "vocab.txt"
     vocab_path.write_text("\n".join(extend_vocab(base_vocab)) + "\n", encoding="utf-8")
     return {
         "root": tmp_path,
         "manifest": manifest,
         "vocab": vocab_path,
-        "windows": windows,
+        "windows": [_expected_window(s) for s in sessions],
+        "sessions": sessions,
     }
 
 
@@ -312,20 +374,15 @@ class TestMinActiveSpeakersFilter:
     """min_active_speakers drops windows with too few active speakers."""
 
     def _manifest_with_monologue(self, corpus, tmp_path):
-        from egs3.conversational.tts.dataset.preprocessing.windows import to_json
-
-        monologue = make_window(
+        monologue = _atomic_session(
             "sess2ch",
             2,
-            0.0,
             8.0,
             [Turn(0, "spk_a", "a long monologue", 0.5, 7.0)],
             widx=9,
         )
         manifest = tmp_path / "manifest_with_mono.jsonl"
-        lines = corpus["manifest"].read_text(encoding="utf-8").splitlines()
-        lines.append(json.dumps(to_json(monologue)))
-        manifest.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        write_session_manifest(manifest, corpus["sessions"] + [monologue])
         return manifest
 
     def test_filter_drops_single_speaker_windows(self, corpus, tmp_path):
@@ -377,3 +434,38 @@ def test_collate_mixed_channel_counts():
     assert batch["speech_mask"][0, 2400:].sum() == 0
     assert batch["text"].shape == (3, 3)
     assert batch["text"][1].tolist() == [4, -1, -1]
+
+
+class TestSessionBacked:
+    """ConversationDataset consumes session manifests: records is the frozen
+    plan_windows(None) plan, and plan_windows(epoch) re-derives fresh windows
+    for training epochs on demand."""
+
+    def test_records_are_frozen_plan(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path)
+        assert ds.records == ds.plan_windows(epoch=None)
+
+    def test_plan_windows_epoch_varies(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path)
+        plans = {tuple((w.t0, w.t1) for w in ds.plan_windows(e)) for e in range(6)}
+        assert len(plans) > 1
+
+    def test_min_active_speakers_filters_plan(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path, min_active_speakers=2)
+        assert all(w.num_active_speakers >= 2 for w in ds.plan_windows(3))
+
+    def test_load_window_equals_getitem(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path, permute_channels=False)
+        a, b = ds.load_window(ds.records[0]), ds[0]
+        assert a["window_id"] == b["window_id"]
+        assert torch.equal(a["speech"], b["speech"])
+
+    def test_load_window_seeks_mid_file(self, fake_corpus, tmp_path):
+        """Planned (non-atomic) windows exercise the t0 > 0 seek-read path in
+        _load_speech, unlike the atomic fixtures in ``corpus`` above where
+        t0 is always 0.0."""
+        ds = _make_dataset(fake_corpus, tmp_path, permute_channels=False)
+        mid_file = next(r for r in ds.records if r.t0 > 0.0)
+        item = ds.load_window(mid_file)
+        expected = round(FS * (mid_file.t1 - mid_file.t0))
+        assert abs(item["speech"].shape[1] - expected) <= 1

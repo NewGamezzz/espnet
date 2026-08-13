@@ -1,4 +1,11 @@
-"""Conversation dataset backed by window manifests, plus the packed collator.
+"""Conversation dataset backed by session manifests, plus the packed collator.
+
+Windows are planned online: ``__init__`` reads a manifest of
+``SessionRecord``s (build-time output, one row per session/utterance) and
+derives ``records`` by running the planner in frozen mode (``epoch=None``),
+bit-identical to the retired offline window manifests.  Training loops that
+want fresh windows per epoch call ``plan_windows(epoch)`` directly instead of
+relying on ``records``.
 
 Audio is seek-read from the session FLAC (only the window's segment), kept
 per-channel, and resampled 48 -> 24 kHz on the fly.  The dataset is
@@ -28,6 +35,8 @@ from espnet2.fileio.sound_scp import soundfile_read
 from espnet3.utils.config_utils import load_config_with_defaults
 
 from .builder import resolve_dataset_root
+from .preprocessing.planner import WindowParams, plan_sessions
+from .preprocessing.sessions import read_session_manifest
 from .preprocessing.windows import WindowRecord, from_json
 
 _CONFIG_RESOURCE = resources.files(__package__).joinpath("config.yaml")
@@ -75,9 +84,16 @@ class ConversationDataset(TorchDataset):
     else needs re-indexing).
 
     ``min_active_speakers`` drops windows with fewer active speakers (the
-    manifests keep single-speaker windows; the POC trains with ``2`` so
+    planned windows keep single-speaker windows; the POC trains with ``2`` so
     gradient mass concentrates on actual interactions - a knob, not a
     rebuild).
+
+    ``window_params``/``window_seed`` control the online planner
+    (``preprocessing.planner.plan_sessions``): ``self.records`` is the frozen
+    plan (``plan_windows(None)``, seed 0 by default so it reproduces the
+    retired offline manifests bit-for-bit) and serves ``__len__``/
+    ``__getitem__(int)``, inference, and any init-time probe.  Training loops
+    that want fresh windows per epoch call ``plan_windows(epoch)`` directly.
     """
 
     def __init__(
@@ -91,6 +107,8 @@ class ConversationDataset(TorchDataset):
         seed: int = 0,
         inference: bool = False,
         min_active_speakers: int = 1,
+        window_params: dict | None = None,
+        window_seed: int = 0,
     ) -> None:
         self.split = split
         self.fs = int(fs if fs is not None else _DATASET_CFG["sample_rate"])
@@ -114,21 +132,24 @@ class ConversationDataset(TorchDataset):
         manifest_path = Path(manifest_path)
         if not manifest_path.is_file():
             raise FileNotFoundError(
-                f"window manifest not found: {manifest_path}. Run the "
+                f"session manifest not found: {manifest_path}. Run the "
                 "corresponding dataset builder first (SSSD: python -m "
                 "egs3.conversational.tts.dataset.builder; LibriTTS: python -m "
                 "egs3.conversational.tts.dataset.libritts_builder)."
             )
-        self.records = read_window_manifest(manifest_path)
-        if min_active_speakers > 1:
-            self.records = [
-                r for r in self.records if r.num_active_speakers >= min_active_speakers
-            ]
-            if not self.records:
-                raise RuntimeError(
-                    f"no window in {manifest_path} has >= "
-                    f"{min_active_speakers} active speakers"
-                )
+        self.sessions = read_session_manifest(manifest_path)
+        self.window_params = WindowParams(**(window_params or {}))
+        self.window_seed = int(window_seed)
+        self.min_active_speakers = int(min_active_speakers)
+        # Frozen plan: bit-identical to the retired offline manifests (same
+        # legacy RNG string, same build seed 0).  Serves valid/test splits,
+        # inference, int indexing, and CombinedDataset's init-time probes.
+        self.records = self.plan_windows(epoch=None)
+        if not self.records:
+            raise RuntimeError(
+                f"no plannable window in {manifest_path} with >= "
+                f"{min_active_speakers} active speakers"
+            )
 
         # Test hook: a fixed permutation (sequence of ints) overrides the RNG.
         self._fixed_perm: Sequence[int] | None = None
@@ -139,6 +160,24 @@ class ConversationDataset(TorchDataset):
 
     def __len__(self) -> int:
         return len(self.records)
+
+    def plan_windows(self, epoch: int | None) -> list[WindowRecord]:
+        """Plan this split's windows for ``epoch`` (None = frozen legacy plan).
+
+        Pure function of (window_seed, epoch, session metadata): every DDP
+        rank and DataLoader worker derives the identical plan.
+        """
+        records, _stats = plan_sessions(
+            self.sessions,
+            params=self.window_params,
+            seed=self.window_seed,
+            epoch=epoch,
+        )
+        if self.min_active_speakers > 1:
+            records = [
+                r for r in records if r.num_active_speakers >= self.min_active_speakers
+            ]
+        return records
 
     def _draw_perm(self, n: int) -> list[int]:
         if self._fixed_perm is not None:
@@ -176,8 +215,7 @@ class ConversationDataset(TorchDataset):
             )
         return speech
 
-    def __getitem__(self, idx: int) -> dict[str, Any]:
-        record = self.records[idx]
+    def load_window(self, record: WindowRecord) -> dict[str, Any]:
         n = record.num_channels
         speech = self._load_speech(record)
         perm = self._draw_perm(n)
@@ -200,6 +238,9 @@ class ConversationDataset(TorchDataset):
                 audio_path=str(self.dataset_root / record.audio_relpath),
             )
         return sample
+
+    def __getitem__(self, idx: int) -> dict[str, Any]:
+        return self.load_window(self.records[idx])
 
 
 def collate_conversations(
