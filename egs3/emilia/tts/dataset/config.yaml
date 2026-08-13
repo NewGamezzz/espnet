@@ -7,6 +7,7 @@ builder:
   min_duration: 0.3
   max_duration: 30.0
   strict_text_filters: false     # D3: filter_text.py rules, off by default
+  audio_suffix: .mp3
   manifest_paths:
     train: manifest/train.tsv
     valid: manifest/valid.tsv
