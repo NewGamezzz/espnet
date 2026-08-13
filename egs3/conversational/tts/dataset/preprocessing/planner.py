@@ -23,12 +23,47 @@ from .windows import WindowingStats, WindowRecord, build_windows
 class WindowParams:
     """Training-time windowing knobs (ratified 2026-08-06 live values)."""
 
+    # Training window target duration is drawn uniformly from
+    # [window_min, window_max].
     window_min: float = 10.0
+    # 80 s exceeds the F5 pretraining clip regime (< 30 s Emilia clips); chosen
+    # deliberately to capture longer interactions - revisit if fine-tuning
+    # quality degrades on long windows. Ratified 2026-08-06 from the live
+    # Delta training build (previously a local override of the old 60 s
+    # default). NOTE: a single 80 s N=2 window sets a ~40 GB activation floor
+    # on A100-40G regardless of batch_bins.
     window_max: float = 80.0
+    # Utterance-boundary cuts; eligibility follows CoVoMix's Fisher
+    # segmentation (arXiv:2404.06690), the placement search is ours (hybrid
+    # closest-to-target with restart retry, see windows.py). A boundary at t
+    # is eligible iff every turn ends >= boundary_guard before t or starts >=
+    # boundary_guard after it. 0.0 is faithful to CoVoMix (zero margin, human
+    # LDC timestamps); SSSD timestamps are Parakeet pseudo-labels, so this
+    # knob exists to reject boundaries where the neighboring utterance's
+    # alignment jitter could leak un-covered speech into the window. May be
+    # raised after inspecting debug dumps.
     boundary_guard: float = 0.0
+    # Shortest emitted window below window_min: bounds both the session tail
+    # and mid-session mini-windows emitted before an oversized blocked span.
     tail_min: float = 5.0
+    # Transcription-hole guards (SSSD's Parakeet pseudo-labels leave
+    # stretches of real speech unlabeled; a window that sweeps one in pairs
+    # audio with a transcript that does not cover it - see windows.py).
+    # trim_to_turns shrinks each window to [first turn start, last turn end],
+    # losslessly removing lead-in/trail-out holes; a window trimmed below
+    # tail_min is dropped. min_coverage is a conservative backstop for
+    # interior holes: drop a window whose transcribed union covers less than
+    # this fraction of its duration (0.0 disables). A turn-coverage floor
+    # cannot distinguish a hole from a genuine silent pause, so keep it low.
+    # Both guards ON, ratified 2026-08-06 from the live Delta training build
+    # (previously local overrides of the off-by-default repo values).
     trim_to_turns: bool = True
     min_coverage: float = 0.0
+    # snap_start_to_turn begins each window on the next turn instead of the
+    # previous cut, skipping the silence/hole between them so the length
+    # budget covers speech (raises coverage; skipped seconds are reported as
+    # snapped-gaps). It brackets the leading edge during selection;
+    # trim_to_turns brackets the trailing edge it leaves.
     snap_start_to_turn: bool = True
 
 
