@@ -17,13 +17,36 @@ than pre-baked into a static manifest: with ``online=True`` the sampler calls
 training sees new cut points every epoch - and hence a batch COUNT that can
 vary slightly epoch to epoch - identically on every DDP rank and DataLoader
 worker, because the plan is a pure function of ``(window_seed, epoch, session
-metadata)``.  Lightning tolerates this because it re-queries ``__len__`` (via
-``len(sampler)``/the progress bar total) at the start of every epoch rather
-than caching it once for the whole fit.  ``online=False`` (the default, used
-for valid/test splits and inference) instead reads each component's frozen
-``.records`` inventory - the exact windows and order emitted before per-epoch
-planning existed - so the batch count there is constant across epochs, as
-before.
+metadata)``.
+
+With this recipe's ``trainer.reload_dataloaders_every_n_epochs: 0`` (kept at
+0 on purpose - see ``lit_module.py``'s module docstring and
+``tests/test_lit_module.py``'s
+``test_training_config_has_no_per_epoch_reload_and_keeps_sanity_probe`` for
+the resume regression that value avoids), Lightning does NOT re-query
+``len(batch_sampler)`` every epoch: ``FitLoop.setup_data()`` only recomputes
+``max_batches``/the progress-bar total when
+``trainer.reload_dataloaders_every_n_epochs`` makes
+``_should_reload_train_dl`` true, so with 0 it freezes that count at
+whatever the FIRST epoch's sampler length was, for the rest of the fit, even
+though ``set_epoch``/``__iter__`` keep producing genuinely fresh per-epoch
+plans underneath.  Verified empirically (``tests/test_training_smoke.py``'s
+``test_online_sampler_survives_two_epochs_with_varying_batch_counts`` plus an
+ad hoc run recorded in the Task 10 report): a later epoch with FEWER batches
+than epoch 0 simply ends early - ``TrainingEpochLoop.run()`` catches that
+epoch's ``StopIteration`` locally, so the fit still reaches every epoch, just
+with a short one; a later epoch with MORE batches is silently truncated to
+epoch 0's frozen count, and the extra freshly-planned batches for that epoch
+are simply never trained on.  Neither direction hangs or crashes the fit, but
+neither reflects the "recomputed every epoch" behavior this docstring used to
+claim.  Net effect: the per-epoch batch-count variance this online planner
+introduces is tolerated (no hang, no truncated FIT), but not fully exploited
+- a later epoch's real plan can be undercounted relative to what
+``len(sampler)`` would report for that epoch if queried directly.
+``online=False`` (the default, used for valid/test splits and inference)
+instead reads each component's frozen ``.records`` inventory - the exact
+windows and order emitted before per-epoch planning existed - so the batch
+count there is constant across epochs regardless of this caching behavior.
 
 ``__iter__`` always yields lists of ``(component_idx, WindowRecord)`` specs -
 one uniform contract across both frozen and online modes - instead of plain

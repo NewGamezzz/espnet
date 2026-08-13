@@ -50,6 +50,49 @@ from espnet3.components.modeling.lightning_module import ESPnetLightningModule
 logger = logging.getLogger("lightning")
 
 
+class PlannedWindowView(torch.utils.data.Dataset):
+    """Route ``(component_idx, WindowRecord)`` specs from
+    ``ConversationBatchSampler`` to the right ``ConversationDataset``, then
+    apply that component's transform and preprocessor exactly like espnet3's
+    ``CombinedDataset.__getitem__`` does for int indices.
+
+    ``CombinedDataset`` caches ``cumulative_lengths`` at construction and only
+    routes ints (and utterance-id strings) through them, so per-epoch plans -
+    which have no fixed global index, only a ``(component_idx, record)`` pair
+    - cannot flow through its integer indexing.  The sampler's specs are
+    self-contained instead: no shared mutable plan for a ``Dataset`` to read
+    out from under a re-planned epoch, no cross-worker-fork hazard.
+
+    Accepts either espnet3's ``CombinedDataset`` (``.datasets``/``.transforms``
+    present) or a bare ``ConversationDataset`` (neither present, so the
+    transform/preprocessor step is a no-op and ``load_window`` output is
+    returned as-is - matching how a single-component config never routes
+    through ``CombinedDataset`` either).
+    """
+
+    def __init__(self, dataset):
+        self.dataset = dataset
+        self.datasets = getattr(dataset, "datasets", None) or [dataset]
+        self.transforms = getattr(dataset, "transforms", None)
+
+    def __len__(self):
+        return len(self.dataset)
+
+    def __getitem__(self, spec):
+        comp_idx, record = spec
+        sample = self.datasets[comp_idx].load_window(record)
+        if self.transforms is not None:
+            transform, preprocessor = self.transforms[comp_idx]
+            sample = transform(sample)
+            if getattr(self.dataset, "use_espnet_preprocessor", False):
+                sample = preprocessor(record.window_id, sample)
+            else:
+                sample = preprocessor(sample)
+        if getattr(self.dataset, "use_espnet_collator", False):
+            return record.window_id, sample
+        return sample
+
+
 class PackedConversationCollator:
     """``collate_conversations`` in the ``(ids, batch_dict)`` trainer contract.
 
@@ -161,6 +204,7 @@ class ConversationalLightningModule(ESPnetLightningModule):
         )
         initial_epoch = self._initial_epoch()
         weights = loader_config.pop("weights", None)
+        online = mode == "train"
         sampler = ConversationBatchSampler(
             dataset,
             batch_bins=int(loader_config.pop("batch_bins")),
@@ -169,16 +213,18 @@ class ConversationalLightningModule(ESPnetLightningModule):
             seed=int(self.config.get("seed") or 0),
             epoch=initial_epoch,
             weights=weights,
+            online=online,
         )
         logger.info(
             "[%s] ConversationBatchSampler: %d batches (initial epoch=%d; "
-            "per-epoch reshuffle via set_epoch)",
+            "online=%s; per-epoch reshuffle via set_epoch)",
             mode,
             len(sampler),
             initial_epoch,
+            online,
         )
         return torch.utils.data.DataLoader(
-            dataset,
+            PlannedWindowView(dataset),
             batch_sampler=sampler,
             collate_fn=self.collate_fn,
             **loader_config,
