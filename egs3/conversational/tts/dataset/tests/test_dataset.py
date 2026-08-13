@@ -452,7 +452,9 @@ class TestSessionBacked:
 
     def test_min_active_speakers_filters_plan(self, fake_corpus, tmp_path):
         ds = _make_dataset(fake_corpus, tmp_path, min_active_speakers=2)
-        assert all(w.num_active_speakers >= 2 for w in ds.plan_windows(3))
+        plan = ds.plan_windows(3)
+        assert plan  # non-vacuous: epoch 3 actually yields windows to check
+        assert all(w.num_active_speakers >= 2 for w in plan)
 
     def test_load_window_equals_getitem(self, fake_corpus, tmp_path):
         ds = _make_dataset(fake_corpus, tmp_path, permute_channels=False)
