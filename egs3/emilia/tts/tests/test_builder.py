@@ -149,3 +149,69 @@ def test_prepare_source_refuses_to_download(recipe, tmp_path):
         str(tmp_path / "raw"), str(tmp_path / "nope")), encoding="utf-8")
     with pytest.raises(RuntimeError, match="staged"):
         EmiliaBuilder().prepare_source(recipe_dir=recipe)
+
+
+def test_single_surviving_utterance_goes_to_train_not_valid(tmp_path):
+    """With exactly one kept utterance, it must land in train, not valid.
+
+    n_total == 1 is the edge case where a naive val_ratio-based rounding
+    (``max(1, int(n * ratio))``) rounds up to consume the *entire* corpus
+    into valid.tsv, leaving train.tsv empty and a training job with zero
+    rows but no error from this stage.
+    """
+    root = tmp_path / "raw"
+    _write_utt(root / "emilia/EN/EN-B000010", "EN_B00001_S00001_W000000",
+               "EN_B00001_S00001", "the only surviving utterance", 4.0, "en")
+    # Blocklisted speaker: filtered out, so exactly one utterance survives.
+    _write_utt(root / "emilia/EN/EN-B000010", "EN_B00013_S00913_W000000",
+               "EN_B00013_S00913", "blocklisted speaker text", 5.0, "en")
+
+    recipe_dir = tmp_path / "recipe"
+    (recipe_dir / "dataset").mkdir(parents=True)
+    (recipe_dir / "dataset" / "config.yaml").write_text(f"""
+builder:
+  corpus_root: {root}
+  langs: [EN]
+  data_path: data
+  val_ratio: 0.2
+  seed: 42
+  min_duration: 0.3
+  max_duration: 30.0
+  strict_text_filters: false
+  manifest_paths:
+    train: manifest/train.tsv
+    valid: manifest/valid.tsv
+  shard_table_path: manifest/shards.txt
+dataset:
+  split_manifest_paths:
+    train: manifest/train.tsv
+    valid: manifest/valid.tsv
+""", encoding="utf-8")
+
+    EmiliaBuilder().build(recipe_dir=recipe_dir)
+    data = recipe_dir / "data" / "manifest"
+    train = _read_rows(data / "train.tsv")
+    valid = _read_rows(data / "valid.tsv")
+    assert len(train) == 1
+    assert len(valid) == 0
+
+
+def test_multi_worker_build_matches_single_worker(recipe, monkeypatch):
+    """The ProcessPoolExecutor path must run and match the sequential path.
+
+    Production builds set EMILIA_BUILD_WORKERS > 1 to scan ~2,060 shard
+    directories in parallel. This exercises that path directly instead of
+    only reading the code, proving the job-tuple arguments are picklable,
+    _scan_shard is importable in a worker process, and the result is
+    byte-identical to the sequential (n_workers=1) build over the same
+    fixture -- the actual determinism guarantee under the pool.
+    """
+    EmiliaBuilder().build(recipe_dir=recipe)
+    data = recipe / "data" / "manifest"
+    sequential_train = (data / "train.tsv").read_text("utf-8")
+    sequential_valid = (data / "valid.tsv").read_text("utf-8")
+
+    monkeypatch.setenv("EMILIA_BUILD_WORKERS", "2")
+    EmiliaBuilder().build(recipe_dir=recipe)
+    assert (data / "train.tsv").read_text("utf-8") == sequential_train
+    assert (data / "valid.tsv").read_text("utf-8") == sequential_valid

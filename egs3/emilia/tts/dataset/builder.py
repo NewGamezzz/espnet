@@ -146,7 +146,13 @@ class EmiliaBuilder(DatasetBuilder):
         rng = random.Random(int(cfg["seed"]))
         order = list(range(len(rows)))
         rng.shuffle(order)
-        n_val = max(1, int(len(order) * float(cfg["val_ratio"]))) if order else 0
+        n_total = len(order)
+        if n_total > 1:
+            n_val = min(
+                max(1, int(n_total * float(cfg["val_ratio"]))), n_total - 1
+            )
+        else:
+            n_val = 0
         val_idx = set(order[:n_val])
 
         manifest_dir = data_dir / "manifest"
