@@ -39,14 +39,23 @@ with a short one; a later epoch with MORE batches is silently truncated to
 epoch 0's frozen count, and the extra freshly-planned batches for that epoch
 are simply never trained on.  Neither direction hangs or crashes the fit, but
 neither reflects the "recomputed every epoch" behavior this docstring used to
-claim.  Net effect: the per-epoch batch-count variance this online planner
-introduces is tolerated (no hang, no truncated FIT), but not fully exploited
-- a later epoch's real plan can be undercounted relative to what
-``len(sampler)`` would report for that epoch if queried directly.
-``online=False`` (the default, used for valid/test splits and inference)
-instead reads each component's frozen ``.records`` inventory - the exact
-windows and order emitted before per-epoch planning existed - so the batch
-count there is constant across epochs regardless of this caching behavior.
+claim.  Net effect: epoch 0's count is not a per-epoch estimate that
+self-corrects - it is a hard cap that governs EVERY later epoch of that same
+fit (not just "some epochs"), so an unluckily small or large epoch-0 plan
+systematically over- or under-counts the rest of that fit by the same
+margin, one direction at a time, until the process restarts.  The one
+mitigation: ``FitLoop.setup_data()`` reruns from scratch at the start of
+every ``trainer.fit()`` call, so a resume recomputes the cap fresh from
+whichever epoch it resumes into - the cap is per-fit-segment, not global
+across the whole training run.  The magnitude measured in the report (a
+~10-15% swing) reflects the smoke test's deliberately tiny fixture (4-6
+sessions); at production corpus scale (thousands of sessions) the relative
+epoch-to-epoch swing in planned batch count is far smaller, so this is not
+the magnitude to expect in real training.  ``online=False`` (the default,
+used for valid/test splits and inference) instead reads each component's
+frozen ``.records`` inventory - the exact windows and order emitted before
+per-epoch planning existed - so the batch count there is constant across
+epochs regardless of this caching behavior.
 
 ``__iter__`` always yields lists of ``(component_idx, WindowRecord)`` specs -
 one uniform contract across both frozen and online modes - instead of plain
