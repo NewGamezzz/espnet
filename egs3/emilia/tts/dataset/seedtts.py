@@ -69,3 +69,10 @@ class SeedTTSDataset(TorchDataset):
                 "ref_wav_path": prompt_wav,
             })
         return sample
+
+
+# DataOrganizer resolves a dataset entry via getattr(module, "Dataset"), so
+# expose the class under that name. This is what lets an inference config
+# select this dataset with `data_src: egs3.emilia.tts.dataset.seedtts`
+# instead of the recipe's default Dataset (EmiliaDataset).
+Dataset = SeedTTSDataset
