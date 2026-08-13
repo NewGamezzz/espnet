@@ -1,0 +1,220 @@
+# F5-TTS Base trained on Emilia, reproducing arXiv:2410.06885's official
+# F5TTS_Base checkpoint recipe (Table 3 architecture, Table 9 batch size,
+# Sec. 4 optimizer/schedule). Adapted from
+# egs3/libritts/tts/conf/training_f5_tts_small.yaml with:
+#   - Base architecture instead of Small (dim/depth/heads/text_dim per Table 3).
+#   - Emilia's builder + create_shape stage (Task 4/6) instead of LibriTTS's
+#     remove_long_short / collect_stats / create_token_list pipeline.
+#   - F5's own shipped vocab.txt (F5PinyinPreprocessor) instead of a
+#     corpus-derived char vocab, so the trained checkpoint stays token-list
+#     compatible with the official F5TTS_Base release (decision D7).
+#
+# Global batch: batch_bins(480000) * accumulate_grad_batches(8) * num_device(8)
+# / n_mel_channels(100) == 307200 mel-frames/update, matching the paper's
+# "batch size of 307,200 audio frames (0.91 hours)" (Sec. B.7) exactly.
+#
+# fp32 only: Bridges-2 nodes are V100s, which have no bf16 support, so no
+# `precision:` key is set under trainer (D5).
+#
+# Step-based validation: the full run is ~12 epochs over many months on PSC,
+# so validation is driven by trainer.val_check_interval (steps), not
+# check_val_every_n_epoch (spec 6.2).
+task: espnet2.tasks.tts.TTSTask
+
+num_device: 8
+num_nodes: 1
+
+recipe_dir: .
+data_dir: ${recipe_dir}/data
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+stats_dir: ${exp_dir}/stats
+inference_dir: ${exp_dir}/inference
+
+exp_tag: train_f5_tts_base_emilia
+
+# Mel / audio front-end settings shared by feats_extract and the model.
+sample_rate: 24000
+n_mel_channels: 100
+hop_length: 256
+win_length: 1024
+n_fft: 1024
+mel_spec_type: vocos
+
+vocab_file: ${recipe_dir}/downloads/vocab.txt
+
+create_dataset:
+  recipe_dir: ${recipe_dir}
+
+# Replaces collect_stats: synthesizes feats_shape analytically from manifest
+# durations instead of running the model's feats_extract over every sample.
+# See src/system.py TTSSystem.create_shape and the spec, section 5.4.
+create_shape:
+  splits: [train, valid]
+  save_path: ${stats_dir}
+  hop_length: ${hop_length}
+  sample_rate: ${sample_rate}
+  n_mels: ${n_mel_channels}
+  manifest_paths:            # read directly; no DataOrganizer coupling
+    train: ${data_dir}/manifest/train.tsv
+    valid: ${data_dir}/manifest/valid.tsv
+
+dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  recipe_dir: ${recipe_dir}
+  train:
+    - data_src_args:
+        split: train
+        manifest_path: ${data_dir}/manifest/train.tsv
+        fs: ${sample_rate}    # ensure consistent sampling rate via resampling in the dataset
+  valid:
+    - data_src_args:
+        split: valid
+        manifest_path: ${data_dir}/manifest/valid.tsv
+        fs: ${sample_rate}    # ensure consistent sampling rate via resampling in the dataset
+  # F5's own pinyin/char preprocessor, matching the official inference path
+  # (espnet2/text/f5_preprocessor.py) instead of espnet2's CommonPreprocessor.
+  # The mel is produced inside the model by feats_extract: vocoder_mel.
+  preprocessor:
+    _target_: espnet2.text.f5_preprocessor.F5PinyinPreprocessor
+    vocab_file: ${vocab_file}
+    text_name: text
+    train: true
+
+parallel:
+  env: local
+  n_workers: 1
+
+# espnet2 task args (consumed by get_espnet_model -> TTSTask.build_model ->
+# ESPnetTTSModel). Same shape as the VITS recipe's `model:` block.
+model:
+  token_list: ${vocab_file}        # 2545 lines -> idim=2545 -> Embedding(2546)
+  token_type: char
+  odim: null                       # derived from feats_extract.output_size()
+  feats_extract: vocoder_mel
+  feats_extract_conf:
+    fs: ${sample_rate}
+    n_fft: ${n_fft}
+    hop_length: ${hop_length}
+    win_length: ${win_length}
+    n_mels: ${n_mel_channels}
+    mel_spec_type: ${mel_spec_type}
+  # F5 trains on raw vocos log-mel; no mean/variance stats needed
+  # (create_shape replaces collect_stats on that basis).
+  normalize: null
+  tts: f5tts
+  tts_conf:                        # F5TTS_Base, Table 3
+    dim: 1024
+    depth: 22
+    heads: 16
+    dim_head: 64
+    ff_mult: 2
+    text_dim: 512
+    text_mask_padding: false
+    pe_attn_head: 1
+    conv_layers: 4
+    sigma: 0.0
+    audio_drop_prob: 0.3
+    cond_drop_prob: 0.2
+    frac_lengths_mask: [0.7, 1.0]
+    odeint_method: euler
+    mel_spec_kwargs:               # raw-waveform inference fallback inside CFM
+      n_fft: ${n_fft}
+      hop_length: ${hop_length}
+      win_length: ${win_length}
+      n_mel_channels: ${n_mel_channels}
+      target_sample_rate: ${sample_rate}
+      mel_spec_type: ${mel_spec_type}
+  model_conf: {}
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 7.5e-5
+  betas: [0.9, 0.999]      # F5-TTS uses AdamW defaults
+  weight_decay: 0.01
+
+scheduler:
+  # F5-TTS schedule: linear warmup then linear decay to ~0 (SequentialLR).
+  # total_steps MUST match the planned run (epochs * updates_per_epoch).
+  _target_: espnet2.schedulers.linear_warmup_decay.linear_warmup_decay
+  warmup_steps: 20000
+  total_steps: 1200000
+scheduler_interval: step
+
+best_model_criterion:
+  - - valid/loss
+    - 1
+    - min
+
+dataloader:
+  collate_fn:
+    _target_: espnet2.train.collate_fn.CommonCollateFn
+    # F5TTS remaps padded text to its filler id internally (via text_lengths),
+    # so the espnet2 default int_pad_value=0 is fine here.
+    int_pad_value: 0
+    float_pad_value: 0.0
+  train:
+    num_shards: 1
+    num_workers: 4
+    pin_memory: true
+    iter_factory:
+      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+      shuffle: true
+      collate_fn: ${dataloader.collate_fn}
+      batches:
+        type: numel
+        batch_size: 1          # required by signature, unused for "numel"
+        min_batch_size: 8      # >= world_size (8 GPUs); dataloader.py rejects smaller
+        # numel sampler's trailing remainder batch can be 1-7 samples with
+        # drop_last=False, which would trip the world_size check at an
+        # epoch boundary.
+        drop_last: true
+        shape_files:
+          - ${stats_dir}/train/feats_shape
+        batch_bins: 480000     # 480000 * 8 accum * 8 gpu / 100 mels = 307200
+  valid:
+    num_shards: 1
+    num_workers: 4
+    pin_memory: true
+    iter_factory:
+      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+      shuffle: false
+      collate_fn: ${dataloader.collate_fn}
+      batches:
+        type: ${dataloader.train.iter_factory.batches.type}
+        batch_size: 1          # required by signature, unused for "numel"
+        # Same world_size floor as train: validation runs distributed
+        # across all GPUs too, so it needs the identical guard.
+        min_batch_size: 8
+        drop_last: true
+        shape_files:
+          - ${stats_dir}/valid/feats_shape
+        batch_bins: ${dataloader.train.iter_factory.batches.batch_bins}
+
+trainer:
+  accelerator: auto
+  devices: ${num_device}
+  num_nodes: ${num_nodes}
+  accumulate_grad_batches: 8
+  # Real optimizer-update count isn't fixed under numel batching, so stop
+  # explicitly at the paper's target instead of relying on max_epochs.
+  max_steps: 1200000
+  val_check_interval: 5000       # steps, not epochs (spec 6.2)
+  limit_val_batches: 200
+  log_every_n_steps: 50
+  max_epochs: -1
+  gradient_clip_val: 1.0
+  strategy: auto
+  callbacks:
+    - _target_: espnet3.components.callbacks.ema.EMACallback
+      decay: 0.9999
+  logger:
+    _target_: lightning.pytorch.loggers.WandbLogger
+    project: espnet3-emilia-f5-tts
+    name: ${exp_tag}
+    save_dir: ${exp_dir}
+    log_model: false
+    id: ${exp_tag}
+    resume: allow
+
+fit:
+  ckpt_path: ${exp_dir}/last.ckpt
