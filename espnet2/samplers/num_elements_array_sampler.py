@@ -1,11 +1,19 @@
 """Numpy-backed NumElementsBatchSampler with an upstream-matching max_samples
 cap.
 
-Upstream F5-TTS caps every batch at ``max_samples=64``;
-espnet2's ``NumElementsBatchSampler`` has no such parameter, and at the short
-end of Emilia's length-sorted order an uncapped batch exceeds 300 samples
-(0.3 s floor = 28 frames, batch_bins=480000 / 100 mel channels = 4800
-frames/batch). This module provides a drop-in replacement that adds the cap.
+Originally written for egs3/emilia/tts (upstream F5-TTS caps every batch at
+``max_samples=64``; espnet2's ``NumElementsBatchSampler`` has no such
+parameter, and at the short end of Emilia's length-sorted order an uncapped
+batch exceeds 300 samples -- 0.3 s floor = 28 frames, batch_bins=480000 /
+100 mel channels = 4800 frames/batch). Moved into espnet2 (final
+whole-branch review, IMPORTANT 6): the class has nothing Emilia-specific in
+it, and living under an egs3 recipe package made two things worse than they
+needed to be -- `espnet2/samplers/build_batch_sampler.py` advertised
+"numel_array" via `BATCH_TYPES` to every espnet2 recipe globally while the
+class was only importable when `egs3` happened to be on `sys.path`, and
+`egs3/emilia/tts/run.py` importing `src.sampler` while `build_batch_sampler`
+imported the fully-qualified `egs3.emilia.tts.src.sampler` created two
+separate module objects for what was really one file.
 
 The packing loop below is a structural port of
 ``espnet2.samplers.num_elements_batch_sampler.NumElementsBatchSampler``:
@@ -13,15 +21,17 @@ same accumulate-until-batch_bins rule, same min_batch_size interaction, same
 ascending sort order, same trailing-remainder/drop_last handling, same
 sort_in_batch/sort_batch semantics. With ``max_samples`` unset the extra
 cap condition is always false, so the two samplers produce exactly the same
-batch partition (see ``egs3/emilia/tts/tests/test_sampler.py``). The dict
-of Python lists that the stock sampler builds from the shape file is
-replaced with flat numpy arrays, which is the "array" half of this class's
-name and what keeps the recipe's startup RSS down for a 37M-utterance
-corpus.
+batch partition (see
+``test/espnet2/samplers/test_num_elements_array_sampler.py``). The dict of
+Python lists that the stock sampler builds from the shape file is replaced
+with flat numpy arrays, which is the "array" half of this class's name and
+what keeps startup RSS down for a 37M-utterance corpus (egs3/emilia/tts's
+original motivating use case).
 
-Keys are assumed to be non-negative integers, matching this recipe's
-``create_shape`` stage (``src/shape.py``), which writes ``str(index)`` as
-the utterance id. Arbitrary string utterance ids are not supported.
+Keys are assumed to be non-negative integers, matching egs3/emilia/tts's
+``create_shape`` stage (``egs3/emilia/tts/src/shape.py``), which writes
+``str(index)`` as the utterance id. Arbitrary string utterance ids are not
+supported.
 """
 
 from typing import Iterator, List, Optional, Tuple, Union

@@ -11,6 +11,7 @@ from espnet2.samplers.category_power_sampler import (
 )
 from espnet2.samplers.folded_batch_sampler import FoldedBatchSampler
 from espnet2.samplers.length_batch_sampler import LengthBatchSampler
+from espnet2.samplers.num_elements_array_sampler import NumElementsArraySampler
 from espnet2.samplers.num_elements_batch_sampler import NumElementsBatchSampler
 from espnet2.samplers.sorted_batch_sampler import SortedBatchSampler
 from espnet2.samplers.unsorted_batch_sampler import UnsortedBatchSampler
@@ -72,7 +73,8 @@ BATCH_TYPES = dict(
     "    utterance_id_a 1000,80\n"
     "    utterance_id_b 1453,80\n"
     "    utterance_id_c 1241,80\n",
-    numel_array="NumElementsArraySampler (egs3/emilia/tts/src/sampler.py) is a "
+    numel_array="NumElementsArraySampler "
+    "(espnet2/samplers/num_elements_array_sampler.py) is a "
     "numpy-backed drop-in replacement for NumElementsBatchSampler: same "
     "'bins' packing rule as 'numel', plus an optional 'max_samples' hard "
     "cap on the number of samples per batch (matching upstream F5-TTS's "
@@ -226,12 +228,6 @@ def build_batch_sampler(
         )
 
     elif type == "numel_array":
-        # Imported lazily: NumElementsArraySampler lives in an egs3 recipe
-        # package (egs3/emilia/tts/src/sampler.py), not in espnet2, so this
-        # keeps espnet2 free of a hard dependency on that recipe unless
-        # "numel_array" is actually requested.
-        from egs3.emilia.tts.src.sampler import NumElementsArraySampler
-
         retval = NumElementsArraySampler(
             batch_bins=batch_bins,
             shape_files=shape_files,

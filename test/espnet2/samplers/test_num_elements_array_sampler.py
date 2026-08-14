@@ -1,9 +1,17 @@
-"""NumElementsArraySampler produces the same batches as the stock sampler."""
+"""NumElementsArraySampler produces the same batches as the stock sampler.
+
+Moved here from egs3/emilia/tts/tests/test_sampler.py (final whole-branch
+review, IMPORTANT 6): the class itself moved to
+espnet2/samplers/num_elements_array_sampler.py because it has nothing
+Emilia-specific in it, and this is its natural test home alongside
+test_num_elements_batch_sampler.py (the stock sampler it mirrors) rather
+than living under one recipe's test suite.
+"""
 
 import numpy as np
 import pytest
 
-from egs3.emilia.tts.src.sampler import NumElementsArraySampler
+from espnet2.samplers.num_elements_array_sampler import NumElementsArraySampler
 from espnet2.samplers.num_elements_batch_sampler import NumElementsBatchSampler
 
 
