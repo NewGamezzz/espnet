@@ -1,8 +1,9 @@
-dataset:
-  test:
-    - name: valid
-    - name: test
-
+# No `dataset:` block here, deliberately: with it absent,
+# espnet3.systems.base.metric._resolve_test_sets auto-scans
+# metrics_config.inference_dir and treats every non-hidden subdirectory as a
+# test set, so this file can never drift from the `infer` stage's actual
+# output directories (test_en / test_zh / test_hard) the way a hardcoded
+# `dataset.test` list can. See tests/test_metrics_config.py.
 metrics:
   - metric:
       _target_: src.metrics.versa.VersaMetric
