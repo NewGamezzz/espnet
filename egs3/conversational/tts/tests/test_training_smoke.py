@@ -145,6 +145,38 @@ def test_training_smoke_mixed_counts(ext_vocab_file):
     assert all(g.grad is not None for g in gates)
 
 
+def test_training_smoke_cond_frames_reaches_cfm(ext_vocab_file):
+    """Task 8's collator key is dead unless it survives the MultiBranchF5
+    wrapper hop: ``ConversationalLightningModule`` calls ``model(**batch)``,
+    which lands on ``MultiBranchF5.forward`` (src/model.py), NOT directly on
+    ``MultiBranchCFM.forward``.  This exercises the real path end to end and
+    confirms cond_frames reaches the CFM's forward unmodified."""
+    torch.manual_seed(0)
+    model = build_tiny(ext_vocab_file)
+    randomize_params(model, seed=42)
+    model.train()
+    collator = PackedConversationCollator()
+
+    samples = _fake_samples(0)
+    samples[0]["cond_frames"] = 5  # well within the ~24-frame assembled mel
+    window_ids, batch = collator(samples)
+    assert batch["cond_frames"].tolist() == [5, -1]
+
+    seen = {}
+    orig_forward = model.cfm.forward
+
+    def spy(*args, **kwargs):
+        seen["cond_frames"] = kwargs.get("cond_frames")
+        return orig_forward(*args, **kwargs)
+
+    model.cfm.forward = spy
+    loss, stats, weight = model(**batch)
+
+    assert seen["cond_frames"] is not None
+    assert seen["cond_frames"].tolist() == [5, -1]
+    assert torch.isfinite(loss)
+
+
 # --------------------------------------------------------------------------
 # Task 10 plan-level verification item (from Task 9's review): the sampler
 # docstring claims Lightning tolerates per-epoch batch-count variance because

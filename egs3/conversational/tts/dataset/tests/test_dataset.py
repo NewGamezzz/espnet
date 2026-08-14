@@ -420,6 +420,30 @@ class TestMinActiveSpeakersFilter:
             )
 
 
+def _sample(num_channels=2, cond_frames=None, window_id="w", t=100):
+    """A minimal collate_conversations-shaped sample: one row of speech/text
+    per channel, optionally carrying the Task 6 cond_frames key."""
+    sample = {
+        "window_id": window_id,
+        "num_channels": num_channels,
+        "speech": torch.zeros(num_channels, t),
+        "text": [torch.tensor([1, 2, 3]) for _ in range(num_channels)],
+    }
+    if cond_frames is not None:
+        sample["cond_frames"] = cond_frames
+    return sample
+
+
+def test_collate_cond_frames_mixed():
+    """AC8: chunk-task samples carry cond_frames; infill samples don't - the
+    collator always emits the key, -1 as the sentinel for infill rows."""
+    s_chunk = _sample(num_channels=2, cond_frames=700)
+    s_infill = _sample(num_channels=2)
+    batch = collate_conversations([s_chunk, s_infill], text_pad_value=-1)
+    assert batch["cond_frames"].tolist() == [700, -1]
+    assert batch["cond_frames"].dtype == torch.long
+
+
 def test_collate_mixed_channel_counts():
     """N=1 (LibriTTS-style) and N=2 windows pack into one batch."""
     samples = [

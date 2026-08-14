@@ -367,6 +367,13 @@ def collate_conversations(
         text[i, : t.shape[0]] = t
         text_lengths[i] = t.shape[0]
 
+    # Per-conversation cond_frames (Task 6's chunk-task samples), -1 sentinel
+    # for infill samples that carry no such key.  Key ALWAYS present so the
+    # model kwarg's all-(-1) default is a well-formed sentinel batch.
+    cond_frames = torch.tensor(
+        [s.get("cond_frames", -1) for s in samples], dtype=torch.long
+    )
+
     return {
         "counts": counts,
         "speech": speech,
@@ -374,5 +381,6 @@ def collate_conversations(
         "speech_mask": speech_mask,
         "text": text,
         "text_lengths": text_lengths,
+        "cond_frames": cond_frames,
         "window_ids": [s["window_id"] for s in samples],
     }

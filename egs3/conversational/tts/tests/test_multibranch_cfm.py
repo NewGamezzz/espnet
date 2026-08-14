@@ -114,6 +114,85 @@ def test_unequal_lens_within_conversation_raises():
         multibranch(mel, text, counts=[2], lens=lens)
 
 
+def test_deterministic_mask_covers_target_exactly():
+    """cond_frames >= 0 pins the span mask to exactly [cond_frames, conv_len)
+    - the whole target region, no randomness."""
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([2], seed=7, t=40)
+
+    _, _, extras = multibranch(
+        mel,
+        text,
+        counts=[2],
+        lens=lens,
+        cond_frames=torch.tensor([12]),
+        time=torch.tensor([0.5]),
+    )
+
+    m = extras["rand_span_mask"]
+    assert not m[:, :12].any()
+    assert m[:, 12:40].all()
+
+
+def test_sentinel_batch_bit_identical():
+    """An all-sentinel cond_frames=[-1] batch must consume identical RNG and
+    produce a bit-identical loss/mask to omitting the kwarg entirely - the
+    random frac_lengths draw stays unconditional."""
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([2], seed=9, t=40)
+
+    torch.manual_seed(0)
+    ref_loss, _, ref_extras = multibranch(mel, text, counts=[2], lens=lens)
+
+    torch.manual_seed(0)
+    new_loss, _, new_extras = multibranch(
+        mel, text, counts=[2], lens=lens, cond_frames=torch.tensor([-1])
+    )
+
+    torch.testing.assert_close(ref_loss, new_loss)
+    assert torch.equal(ref_extras["rand_span_mask"], new_extras["rand_span_mask"])
+
+
+def test_mixed_batch_routes_per_conversation():
+    """Two conversations in one batch: conv 0 deterministic (cond_frames=12),
+    conv 1 random (cond_frames=-1, frac_lengths=0.5) - each conversation's
+    rows share their own span, and only conv 0's is overridden."""
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([2, 2], seed=11, t=40)
+
+    _, _, extras = multibranch(
+        mel,
+        text,
+        counts=[2, 2],
+        lens=lens,
+        cond_frames=torch.tensor([12, -1]),
+        frac_lengths=torch.tensor([0.0, 0.5]),
+        time=torch.tensor([0.5, 0.5]),
+    )
+
+    m = extras["rand_span_mask"]
+    assert torch.equal(m[0], m[1])
+    assert not m[0, :12].any()
+    assert m[0, 12:].all()
+
+
+def test_cond_frames_length_mismatch_raises():
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([2, 2], seed=13, t=40)
+    with pytest.raises(ValueError, match="cond_frames"):
+        multibranch(mel, text, counts=[2, 2], lens=lens, cond_frames=torch.tensor([12]))
+
+
+def test_deterministic_mask_empty_span_raises():
+    """cond_frames >= conv_len collapses the deterministic span to empty,
+    which would otherwise silently NaN the masked-mean loss - fail loudly
+    instead (same house style as the share-one-length guard above)."""
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([2], seed=15, t=40)
+    with pytest.raises(ValueError, match="empty"):
+        multibranch(mel, text, counts=[2], lens=lens, cond_frames=torch.tensor([40]))
+
+
 def test_sample_seed_reproducible_and_channels_independent():
     """A fixed seed reproduces the run bit-exactly, but must NOT give the
     channels identical noise (CFM.sample re-seeds per row; MultiBranchCFM
