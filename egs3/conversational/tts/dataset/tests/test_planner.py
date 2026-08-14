@@ -10,6 +10,100 @@ from ..preprocessing.windows import build_windows, to_json
 # windows fit (window params shrunk so the 60 s session yields multiple).
 PARAMS = WindowParams(window_min=5.0, window_max=15.0, tail_min=2.0)
 
+# Golden pin for TestChunkTaskPlanning.test_epoch_mode_parity_branch_pinned;
+# see that test for how it was captured (a real plan_session(..., epoch=5,
+# chunk_params=None) run at this commit, hand-copied from its to_json()
+# output - the same pattern test_parity.py uses for its golden JSONL files).
+_EPOCH_MODE_GOLDEN = [
+    {
+        "window_id": "sess_golden_w00000",
+        "session_id": "sess_golden",
+        "audio_relpath": "original/a.flac",
+        "num_channels": 2,
+        "sample_rate": 48000,
+        "t0": 0.0,
+        "t1": 3.5,
+        "duration": 3.5,
+        "num_active_speakers": 2,
+        "channel_speech_sec": [1.5, 1.5],
+        "exchange_count": 1,
+        "turns": [
+            {
+                "channel": 0,
+                "speaker": "s0",
+                "text": "hello there",
+                "start": 0.0,
+                "end": 1.5,
+            },
+            {
+                "channel": 1,
+                "speaker": "s1",
+                "text": "hello there",
+                "start": 2.0,
+                "end": 3.5,
+            },
+        ],
+    },
+    {
+        "window_id": "sess_golden_w00001",
+        "session_id": "sess_golden",
+        "audio_relpath": "original/a.flac",
+        "num_channels": 2,
+        "sample_rate": 48000,
+        "t0": 4.0,
+        "t1": 7.5,
+        "duration": 3.5,
+        "num_active_speakers": 2,
+        "channel_speech_sec": [1.5, 1.5],
+        "exchange_count": 1,
+        "turns": [
+            {
+                "channel": 0,
+                "speaker": "s0",
+                "text": "hello there",
+                "start": 4.0,
+                "end": 5.5,
+            },
+            {
+                "channel": 1,
+                "speaker": "s1",
+                "text": "hello there",
+                "start": 6.0,
+                "end": 7.5,
+            },
+        ],
+    },
+    {
+        "window_id": "sess_golden_w00002",
+        "session_id": "sess_golden",
+        "audio_relpath": "original/a.flac",
+        "num_channels": 2,
+        "sample_rate": 48000,
+        "t0": 8.0,
+        "t1": 11.5,
+        "duration": 3.5,
+        "num_active_speakers": 2,
+        "channel_speech_sec": [1.5, 1.5],
+        "exchange_count": 1,
+        "turns": [
+            {
+                "channel": 0,
+                "speaker": "s0",
+                "text": "hello there",
+                "start": 8.0,
+                "end": 9.5,
+            },
+            {
+                "channel": 1,
+                "speaker": "s1",
+                "text": "hello there",
+                "start": 10.0,
+                "end": 11.5,
+            },
+        ],
+    },
+]
+
 
 def _turns(n=30, step=2.0):
     out = []
@@ -281,3 +375,129 @@ class TestChunkTaskPlanning:
         assert total.n_chunk_full > 0
         assert total.n_chunk_prompt_only > 0
         assert total.n_chunk_degraded > 0
+
+    def test_infill_branch_still_consumes_the_coin_draw(self):
+        # chunk_task_prob=1e-9 makes is_chunk virtually certain to be False,
+        # but chunk_params is not None / chunk_task_prob > 0 / epoch is not
+        # None, so this still enters the CHUNKING branch, not the
+        # bit-parity branch: the coin is drawn from the shared rng before
+        # build_windows runs. Deleting the `if is_chunk:` guard around the
+        # window-range override and draw_chunk_task calls would not be
+        # caught by any bit-parity test above - those all use
+        # chunk_task_prob == 0.0, which never even enters the chunking
+        # branch, so they cannot see a stray coin draw either.
+        s = _session()
+        plain, _ = plan_session(s, params=PARAMS, seed=3, epoch=5)
+        recs, _ = plan_session(
+            s,
+            params=PARAMS,
+            seed=3,
+            epoch=5,
+            chunk_params=ChunkTaskParams(chunk_task_prob=1e-9),
+        )
+        # (i) is_chunk came out False for this seed/session/epoch: nothing
+        # got chunked.
+        assert all(r.chunk_task is None for r in recs)
+        # (ii) but the output still differs from the plain call: build_windows
+        # here consumed an rng already advanced by one rng.random() call (the
+        # coin draw), so its window boundaries diverge from the plain call's
+        # untouched rng. Byte-identical output here would mean the coin was
+        # never actually drawn from the shared rng. PARAMS (not the default
+        # WindowParams(), whose 80s window_max exceeds this 60s session's
+        # duration and so never calls rng.uniform at all) forces real cuts
+        # that are sensitive to the extra draw.
+        assert [to_json(r) for r in plain] != [to_json(r) for r in recs]
+
+    def test_epoch_mode_parity_branch_pinned(self):
+        # Golden-style pin for the bit-parity branch's output IN epoch mode
+        # (the existing golden tests in test_parity.py only cover frozen
+        # mode, epoch=None). Captured once at this commit by running the
+        # exact call below and hand-copying its to_json output; any future
+        # change to the parity branch's RNG construction or draw order (the
+        # thing this task's bit-parity guarantee depends on) will change
+        # this output and fail loudly here instead of silently.
+        turns = (
+            Turn(channel=0, speaker="s0", text="hello there", start=0.0, end=1.5),
+            Turn(channel=1, speaker="s1", text="hello there", start=2.0, end=3.5),
+            Turn(channel=0, speaker="s0", text="hello there", start=4.0, end=5.5),
+            Turn(channel=1, speaker="s1", text="hello there", start=6.0, end=7.5),
+            Turn(channel=0, speaker="s0", text="hello there", start=8.0, end=9.5),
+            Turn(channel=1, speaker="s1", text="hello there", start=10.0, end=11.5),
+        )
+        s = _session(session_id="sess_golden", turns=turns, duration=12.0)
+        params = WindowParams(window_min=3.0, window_max=5.0, tail_min=1.0)
+        recs, _ = plan_session(s, params=params, seed=7, epoch=5, chunk_params=None)
+        assert [to_json(r) for r in recs] == _EPOCH_MODE_GOLDEN
+
+    def test_epoch_mode_parity_branch_pinned_matches_chunk_prob_zero(self):
+        # Cross-check the pinned golden above against the chunk_task_prob==0
+        # bit-parity path with the same inputs, so the golden constant and
+        # the bit-parity guarantee are shown to agree, not just each
+        # independently plausible.
+        turns = (
+            Turn(channel=0, speaker="s0", text="hello there", start=0.0, end=1.5),
+            Turn(channel=1, speaker="s1", text="hello there", start=2.0, end=3.5),
+            Turn(channel=0, speaker="s0", text="hello there", start=4.0, end=5.5),
+            Turn(channel=1, speaker="s1", text="hello there", start=6.0, end=7.5),
+            Turn(channel=0, speaker="s0", text="hello there", start=8.0, end=9.5),
+            Turn(channel=1, speaker="s1", text="hello there", start=10.0, end=11.5),
+        )
+        s = _session(session_id="sess_golden", turns=turns, duration=12.0)
+        params = WindowParams(window_min=3.0, window_max=5.0, tail_min=1.0)
+        recs, _ = plan_session(
+            s,
+            params=params,
+            seed=7,
+            epoch=5,
+            chunk_params=ChunkTaskParams(chunk_task_prob=0.0),
+        )
+        assert [to_json(r) for r in recs] == _EPOCH_MODE_GOLDEN
+
+    def test_fallback_infill_counted_and_record_survives(self):
+        # Lifts Task 3's cross-channel-floor-conflict geometry
+        # (test_cross_channel_floor_conflict_returns_none) into a
+        # planner-level fixture, engineered so the conflict is
+        # order/rng-independent: window "b"'s channel-1 candidate pool has
+        # exactly ONE eligible anchor (90.0-90.5s), and that anchor's
+        # cumulative-speech search (_min_extent) only reaches the 3.0s floor
+        # by walking forward into a LATER turn (115.0-118.0s) that sits
+        # INSIDE the forbidden region - so m_c=27.5 while a_c=10.0
+        # (m_c > a_c), failing the per-candidate check deterministically
+        # regardless of which rng state reaches this draw. Window "a"
+        # ([0, 100)) draws successfully (both channels have valid,
+        # non-conflicting candidates outside its own forbidden region), so
+        # exactly one of the two windows falls back.
+        turns = (
+            Turn(channel=1, speaker="B", text="short", start=90.0, end=90.5),
+            Turn(channel=0, speaker="A", text="x", start=95.0, end=99.0),
+            Turn(channel=0, speaker="A", text="y", start=110.0, end=113.0),
+            Turn(channel=1, speaker="B", text="z", start=115.0, end=118.0),
+        )
+        s = _session(session_id="sess_fallback", turns=turns, duration=130.0)
+        params = WindowParams(
+            window_min=5.0,
+            window_max=15.0,
+            tail_min=1.0,
+            trim_to_turns=False,
+            snap_start_to_turn=False,
+        )
+        chunk_params = ChunkTaskParams(
+            chunk_task_prob=1.0,
+            prompt_only_prob=1.0,
+            prompt_slice_min=1.0,
+            prompt_slice_max=25.0,
+            prompt_speech_floor=3.0,
+            chunk_window_min=100.0,
+            chunk_window_max=100.0,
+        )
+        recs, stats = plan_session(
+            s, params=params, seed=11, epoch=5, chunk_params=chunk_params
+        )
+        assert [(r.t0, r.t1) for r in recs] == [(0.0, 100.0), (100.0, 130.0)]
+        window_a, window_b = recs
+        assert window_a.chunk_task is not None  # succeeds: candidates outside
+        assert window_b.chunk_task is None  # falls back: infill, not dropped
+        assert stats.n_chunk_fallback_infill == 1
+        assert stats.n_chunk_prompt_only == 1
+        assert stats.n_chunk_full == 0
+        assert stats.n_chunk_degraded == 0
