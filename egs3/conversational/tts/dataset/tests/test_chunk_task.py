@@ -92,7 +92,7 @@ def test_draw_full_task_spans_are_disjoint_and_floored():
         Turn(1, "B", "dddd", 210.0, 216.0),
     )
     rec = _record()
-    plan = draw_chunk_task(
+    plan, _degraded = draw_chunk_task(
         rec,
         turns,
         300.0,
@@ -114,18 +114,16 @@ def test_draw_full_task_spans_are_disjoint_and_floored():
 def test_speech_floor_binds_on_speech_not_slice():
     # ch1's only outside turn is 2.5 s long: cannot reach 3.0 s speech -> None
     turns = (Turn(0, "A", "aaaa", 10.0, 16.0), Turn(1, "B", "bb", 20.0, 22.5))
-    assert (
-        draw_chunk_task(
-            _record(),
-            turns,
-            300.0,
-            (),
-            2,
-            random.Random(1),
-            ChunkTaskParams(prompt_only_prob=0.0),
-        )
-        is None
+    plan, _degraded = draw_chunk_task(
+        _record(),
+        turns,
+        300.0,
+        (),
+        2,
+        random.Random(1),
+        ChunkTaskParams(prompt_only_prob=0.0),
     )
+    assert plan is None
 
 
 def test_h_clamped_by_session_start_degrades_to_prompt_only():
@@ -140,7 +138,7 @@ def test_h_clamped_by_session_start_degrades_to_prompt_only():
         turns=_turns(),
     )
     turns = (Turn(0, "A", "aaaa", 40.0, 46.0), Turn(1, "B", "bbbb", 50.0, 56.0))
-    plan = draw_chunk_task(
+    plan, _degraded = draw_chunk_task(
         rec,
         turns,
         300.0,
@@ -172,7 +170,7 @@ def test_exclusion_span_clamps_prev_start_to_its_end():
         Turn(1, "B", "dddd", 210.0, 216.0),
     )
     rec = _record()
-    plan = draw_chunk_task(
+    plan, _degraded = draw_chunk_task(
         rec,
         turns,
         300.0,
@@ -192,7 +190,7 @@ def test_prompt_anchor_truncated_by_forbidden_region():
     # drawn prompt length (~7.24 s for seed 1) well below prompt_slice_max.
     turns = (Turn(0, "A", "aaaa", 95.0, 99.0),)
     rec = _record()
-    plan = draw_chunk_task(
+    plan, _degraded = draw_chunk_task(
         rec,
         turns,
         300.0,
@@ -240,7 +238,9 @@ def test_cross_channel_lp_bound_by_one_channels_floor_capped_by_anothers_headroo
         prompt_slice_max=25.0,
         prompt_speech_floor=3.0,
     )
-    plan = draw_chunk_task(_record(), turns, 300.0, (), 2, random.Random(15), params)
+    plan, _degraded = draw_chunk_task(
+        _record(), turns, 300.0, (), 2, random.Random(15), params
+    )
     assert plan.kind == "prompt_only"
     assert plan.prompt_spans == ((95.0, 99.0), (10.0, 14.0))
 
@@ -271,7 +271,7 @@ def test_cross_channel_floor_conflict_returns_none():
         prompt_slice_max=25.0,
         prompt_speech_floor=3.0,
     )
-    assert (
-        draw_chunk_task(_record(), turns, 300.0, (), 2, random.Random(0), params)
-        is None
+    plan, _degraded = draw_chunk_task(
+        _record(), turns, 300.0, (), 2, random.Random(0), params
     )
+    assert plan is None

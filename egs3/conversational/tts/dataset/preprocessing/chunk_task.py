@@ -164,7 +164,7 @@ def draw_chunk_task(
     num_channels: int,
     rng: random.Random,
     params: ChunkTaskParams,
-) -> ChunkTaskPlan | None:
+) -> tuple[ChunkTaskPlan | None, bool]:
     """Draw one seeded chunk-task plan for ``record``'s window (spec sections
     3-4).  ``record`` is duck-typed: only ``record.t0``/``record.t1`` are used,
     so callers may pass a ``WindowRecord`` or anything shaped like one.
@@ -180,10 +180,15 @@ def draw_chunk_task(
     channel order - so two calls with equivalently-seeded ``random.Random``
     instances and identical arguments always agree.
 
-    Returns None when the window cannot support a task under these params
-    (e.g. a channel has no eligible prompt anchor, or the per-channel floor
-    and headroom requirements conflict); the caller counts this and falls
-    back to an ordinary infill window.
+    Returns a ``(plan, degraded)`` tuple. ``plan`` is None when the window
+    cannot support a task under these params (e.g. a channel has no eligible
+    prompt anchor, or the per-channel floor and headroom requirements
+    conflict); the caller counts this and falls back to an ordinary infill
+    window. ``degraded`` is True iff step 1's coin picked "full" but step 2's
+    H-clamp (insufficient session prefix / heavy exclusion before the window)
+    forced the plan down to "prompt_only"; it is always False when the coin
+    itself picked "prompt_only", and it stays meaningful even when ``plan`` is
+    later None (a degrade can still be followed by a step-4/5 failure).
     """
     t0, t1 = record.t0, record.t1
 
@@ -194,6 +199,7 @@ def draw_chunk_task(
     # prompt-only. Degrading here (short session prefix / heavy exclusion)
     # still discards prev_span, but the rng draw already happened - that is
     # intentional, see the docstring's fixed rng-order guarantee.
+    degraded = False
     prev_start: float | None = None
     if not prompt_only:
         length = rng.uniform(params.prev_slice_min, params.prev_slice_max)
@@ -211,6 +217,7 @@ def draw_chunk_task(
         if t0 - prev_start < params.prev_slice_min:
             prompt_only = True
             prev_start = None
+            degraded = True
 
     # Step 3: prompt-slice length draw (always happens) and the forbidden
     # region prompt anchors must avoid.
@@ -247,7 +254,7 @@ def draw_chunk_task(
                 chosen = (anchor.start, m_c, a_c)
                 break
         if chosen is None:
-            return None
+            return None, degraded
         anchor_start, m_c, a_c = chosen
         anchors.append(anchor_start)
         m_values.append(m_c)
@@ -261,7 +268,7 @@ def draw_chunk_task(
     if lp > min_a:
         # The tightest channel's floor requirement exceeds another channel's
         # headroom: no shared length satisfies every channel at once.
-        return None
+        return None, degraded
     # Round both the shared length and each anchor onto the same 1e-6 grid
     # before adding them: anchors come from session_turns, which - unlike
     # WindowRecord.turns - is not guaranteed rounded (see windows.py's
@@ -277,4 +284,7 @@ def draw_chunk_task(
     # Step 6: assemble the plan.
     kind = "prompt_only" if prompt_only else "full"
     prev_span = (round(prev_start, 6), t0) if prev_start is not None else None
-    return ChunkTaskPlan(kind=kind, prev_span=prev_span, prompt_spans=prompt_spans)
+    return (
+        ChunkTaskPlan(kind=kind, prev_span=prev_span, prompt_spans=prompt_spans),
+        degraded,
+    )

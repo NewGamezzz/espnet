@@ -112,6 +112,18 @@ class WindowingStats:
     # All-channel gap (next turn start - previous turn end) at each chosen
     # interior cut point; 0.0 for a zero-gap speaker exchange.
     cut_gaps: list[float] = field(default_factory=list)
+    # Special-token conditioning chunk-task counters (planner.py). All stay 0
+    # unless a recipe opts into chunk_params, so default behavior - and these
+    # stats - are unchanged. n_chunk_full/n_chunk_prompt_only count attached
+    # ChunkTaskPlan.kind values; n_chunk_degraded is the subset of
+    # n_chunk_prompt_only where the prompt_only_prob coin picked "full" but
+    # draw_chunk_task's H-clamp forced "prompt_only"; n_chunk_fallback_infill
+    # counts windows where draw_chunk_task returned None and the window fell
+    # back to an ordinary infill window.
+    n_chunk_full: int = 0
+    n_chunk_prompt_only: int = 0
+    n_chunk_degraded: int = 0
+    n_chunk_fallback_infill: int = 0
 
     def merge(self, other: "WindowingStats") -> None:
         self.n_windows += other.n_windows
@@ -125,6 +137,10 @@ class WindowingStats:
         self.dropped_trimmed_short_sec += other.dropped_trimmed_short_sec
         self.snapped_gap_sec += other.snapped_gap_sec
         self.cut_gaps.extend(other.cut_gaps)
+        self.n_chunk_full += other.n_chunk_full
+        self.n_chunk_prompt_only += other.n_chunk_prompt_only
+        self.n_chunk_degraded += other.n_chunk_degraded
+        self.n_chunk_fallback_infill += other.n_chunk_fallback_infill
 
 
 def blocked_intervals(
