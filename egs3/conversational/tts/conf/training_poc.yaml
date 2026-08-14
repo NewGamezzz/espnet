@@ -154,6 +154,24 @@ best_model_criterion:
 # window_max, hole guards on - see that class's docstring), not a
 # placeholder, and window_seed 0 is parity with the retired offline window
 # manifests.
+#
+# ``chunk_task`` is the training-side knob for the special-token
+# conditioning chunk task (dataset/preprocessing/chunk_task.py's
+# ChunkTaskParams): an optional dict alongside ``window_params`` under the
+# same data_src_args entry, e.g.
+#   chunk_task:
+#     chunk_task_prob: 0.5
+#     prompt_only_prob: 0.2
+# Unset (None, the default below) disables the chunk task entirely - no
+# session is ever chunked, and ConversationDataset's frozen plan (epoch=None,
+# used for valid/test/inference) never chunks regardless of this setting.
+# ChunkTaskParams' full field/default list: chunk_task_prob 0.0 (off),
+# prompt_only_prob 0.2, chunk_window_min 15.0, chunk_window_max 35.0,
+# prev_slice_min 2.0, prev_slice_max 10.0, prompt_slice_min 3.0,
+# prompt_slice_max 8.0, prompt_speech_floor 3.0. These are placeholders per
+# that class's docstring, not ratified live-training values - the
+# special-token conditioning design is still parked pending the codebase
+# refactor it depends on, so no corpus below sets chunk_task yet.
 dataloader:
   collate_fn:
     _target_: egs3.conversational.tts.src.lit_module.PackedConversationCollator

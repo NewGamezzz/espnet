@@ -21,6 +21,7 @@ batch need no special casing.
 from __future__ import annotations
 
 import dataclasses
+import logging
 import random
 from importlib import resources
 from pathlib import Path
@@ -34,9 +35,12 @@ from espnet2.fileio.sound_scp import soundfile_read
 from espnet3.utils.config_utils import load_config_with_defaults
 
 from .builder import resolve_dataset_root
+from .preprocessing.chunk_task import ChunkTaskParams
 from .preprocessing.planner import WindowParams, plan_sessions
 from .preprocessing.sessions import read_session_manifest
 from .preprocessing.windows import WindowRecord
+
+logger = logging.getLogger(__name__)
 
 _CONFIG_RESOURCE = resources.files(__package__).joinpath("config.yaml")
 with resources.as_file(_CONFIG_RESOURCE) as _CONFIG_PATH:
@@ -96,6 +100,14 @@ class ConversationDataset(TorchDataset):
     retired offline manifests bit-for-bit) and serves ``__len__``/
     ``__getitem__(int)``, inference, and any init-time probe.  Training loops
     that want fresh windows per epoch call ``plan_windows(epoch)`` directly.
+
+    ``chunk_task`` is the training-side knob for the special-token chunk task
+    (``preprocessing.chunk_task.ChunkTaskParams``): when given, it is stored
+    as ``self.chunk_params`` and only reaches the planner from epoch-mode
+    calls to ``plan_windows`` (``epoch is not None``) - the frozen plan used
+    for valid/test/inference never chunks, mirroring the planner's own
+    ``epoch is None`` gate.  ``None`` (the default) disables the chunk task
+    entirely, same as an all-zero ``ChunkTaskParams``.
     """
 
     def __init__(
@@ -112,6 +124,7 @@ class ConversationDataset(TorchDataset):
         min_active_speakers: int = 1,
         window_params: dict | None = None,
         window_seed: int = 0,
+        chunk_task: dict | None = None,
     ) -> None:
         self.split = split
         self.fs = int(fs if fs is not None else _DATASET_CFG["sample_rate"])
@@ -144,6 +157,9 @@ class ConversationDataset(TorchDataset):
         self.sessions = read_session_manifest(manifest_path)
         self.window_params = WindowParams(**(window_params or {}))
         self.window_seed = int(window_seed)
+        self.chunk_params = (
+            ChunkTaskParams(**chunk_task) if chunk_task is not None else None
+        )
         self.min_active_speakers = int(min_active_speakers)
         # Frozen plan: bit-identical to the retired offline manifests (same
         # legacy RNG string, same build seed 0).  Serves valid/test splits,
@@ -170,13 +186,37 @@ class ConversationDataset(TorchDataset):
 
         Pure function of (window_seed, epoch, session metadata): every DDP
         rank and DataLoader worker derives the identical plan.
+
+        ``chunk_params`` is passed only when ``epoch is not None``: the
+        planner already gates chunk-task mode on ``epoch is None`` (see
+        planner.py's bit-parity guarantee for the frozen plan), so this is
+        belt and braces that also makes the intent visible at the call site.
         """
-        records, _stats = plan_sessions(
+        chunk_params = self.chunk_params if epoch is not None else None
+        records, stats = plan_sessions(
             self.sessions,
             params=self.window_params,
             seed=self.window_seed,
             epoch=epoch,
+            chunk_params=chunk_params,
         )
+        if chunk_params is not None and chunk_params.chunk_task_prob > 0:
+            # All five numbers come from plan_sessions' pre-filter stats, i.e.
+            # BEFORE the min_active_speakers filter below: logging len(records)
+            # instead would let n_chunk_full + n_chunk_prompt_only exceed the
+            # reported total once that filter drops windows. This line's
+            # window count therefore does not match the sampler's neighboring
+            # "window plan epoch=... -> M windows" line (src/sampler.py),
+            # which reports the post-filter total - expected, not a bug.
+            logger.info(
+                "chunk-task plan: %d full / %d prompt_only / %d degraded / "
+                "%d fallback of %d windows",
+                stats.n_chunk_full,
+                stats.n_chunk_prompt_only,
+                stats.n_chunk_degraded,
+                stats.n_chunk_fallback_infill,
+                stats.n_windows,
+            )
         if self.min_active_speakers > 1:
             records = [
                 r for r in records if r.num_active_speakers >= self.min_active_speakers

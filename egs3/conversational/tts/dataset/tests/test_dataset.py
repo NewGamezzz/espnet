@@ -505,6 +505,61 @@ class TestSessionBacked:
         expected = round(FS * (mid_file.t1 - mid_file.t0))
         assert abs(item["speech"].shape[1] - expected) <= 1
 
+    def test_chunk_task_config_flows_to_plans(self, fake_corpus, tmp_path):
+        """Task 10: a ``chunk_task`` dict at construction becomes
+        ``self.chunk_params`` and reaches the planner only for epoch mode -
+        the frozen (``epoch=None``) plan used for valid/test/inference must
+        never chunk, matching planner.py's bit-parity guarantee."""
+        ds = _make_dataset(
+            fake_corpus,
+            tmp_path,
+            # prompt_speech_floor lowered below fake_corpus's 2.5s turn length:
+            # its default (3.0s) exceeds every candidate anchor's headroom
+            # under prompt_slice_max here (round-robin turns return to a
+            # channel only every num_channels * 4s), so every draw would
+            # fall back to infill regardless of chunk_task_prob - not what
+            # this test is exercising.
+            chunk_task={
+                "chunk_task_prob": 1.0,
+                "prompt_only_prob": 1.0,
+                "prompt_speech_floor": 2.0,
+            },
+        )
+        frozen = ds.plan_windows(epoch=None)
+        assert all(r.chunk_task is None for r in frozen)
+        epoch_plan = ds.plan_windows(epoch=0)
+        assert any(r.chunk_task is not None for r in epoch_plan)
+
+    def test_chunk_task_disabled_by_default(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path)
+        assert ds.chunk_params is None
+        assert all(r.chunk_task is None for r in ds.plan_windows(epoch=0))
+
+    def test_chunk_task_plan_windows_logs_stats(self, fake_corpus, tmp_path, caplog):
+        ds = _make_dataset(
+            fake_corpus,
+            tmp_path,
+            # prompt_speech_floor lowered below fake_corpus's 2.5s turn length:
+            # its default (3.0s) exceeds every candidate anchor's headroom
+            # under prompt_slice_max here (round-robin turns return to a
+            # channel only every num_channels * 4s), so every draw would
+            # fall back to infill regardless of chunk_task_prob - not what
+            # this test is exercising.
+            chunk_task={
+                "chunk_task_prob": 1.0,
+                "prompt_only_prob": 1.0,
+                "prompt_speech_floor": 2.0,
+            },
+        )
+        with caplog.at_level("INFO", logger="egs3.conversational.tts.dataset.dataset"):
+            ds.plan_windows(epoch=0)
+        assert any("chunk-task plan:" in r.message for r in caplog.records)
+        # Frozen mode never chunks, so it must not emit the chunk-task line.
+        caplog.clear()
+        with caplog.at_level("INFO", logger="egs3.conversational.tts.dataset.dataset"):
+            ds.plan_windows(epoch=None)
+        assert not any("chunk-task plan:" in r.message for r in caplog.records)
+
 
 # --------------------------------------------------------------------------
 # Chunk-task assembly ([P | H | target]) fixtures
