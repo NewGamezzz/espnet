@@ -40,11 +40,11 @@ def multi_shape_files(tmp_path):
 
 
 def test_batches_are_identical_to_stock_sampler(shape_file):
-    kwargs = dict(batch_bins=480000, shape_files=[str(shape_file)],
-                  min_batch_size=8)
+    kwargs = dict(batch_bins=480000, shape_files=[str(shape_file)], min_batch_size=8)
     stock = [tuple(sorted(b, key=int)) for b in NumElementsBatchSampler(**kwargs)]
-    array = [tuple(sorted(map(str, b), key=int))
-             for b in NumElementsArraySampler(**kwargs)]
+    array = [
+        tuple(sorted(map(str, b), key=int)) for b in NumElementsArraySampler(**kwargs)
+    ]
     assert array == stock
 
 
@@ -85,32 +85,34 @@ def test_batches_are_identical_to_stock_sampler_multi_file(multi_shape_files):
     """Exercises the idx_map realignment path (sampler.py's per-auxiliary-
     file reindexing into the primary file's sort order), which no
     single-shape-file test can reach."""
-    kwargs = dict(batch_bins=50000, shape_files=multi_shape_files,
-                  min_batch_size=8)
+    kwargs = dict(batch_bins=50000, shape_files=multi_shape_files, min_batch_size=8)
     stock = [tuple(b) for b in NumElementsBatchSampler(**kwargs)]
     array = [tuple(b) for b in NumElementsArraySampler(**kwargs)]
     assert array == stock
 
 
 def test_len_matches_stock(shape_file):
-    kwargs = dict(batch_bins=480000, shape_files=[str(shape_file)],
-                  min_batch_size=8)
+    kwargs = dict(batch_bins=480000, shape_files=[str(shape_file)], min_batch_size=8)
     assert len(NumElementsArraySampler(**kwargs)) == len(
-        NumElementsBatchSampler(**kwargs))
+        NumElementsBatchSampler(**kwargs)
+    )
 
 
 def test_max_samples_caps_short_utterance_batches(shape_file):
     """Upstream caps at 64; short utterances would otherwise give 300+."""
     sampler = NumElementsArraySampler(
-        batch_bins=480000, shape_files=[str(shape_file)],
-        min_batch_size=8, max_samples=64,
+        batch_bins=480000,
+        shape_files=[str(shape_file)],
+        min_batch_size=8,
+        max_samples=64,
     )
     assert max(len(b) for b in sampler) <= 64
 
 
 def test_every_index_appears_exactly_once(shape_file):
     sampler = NumElementsArraySampler(
-        batch_bins=480000, shape_files=[str(shape_file)], min_batch_size=8)
+        batch_bins=480000, shape_files=[str(shape_file)], min_batch_size=8
+    )
     seen = [int(k) for batch in sampler for k in batch]
     assert sorted(seen) == list(range(5000))
 
@@ -126,7 +128,8 @@ def test_duplicate_key_raises(tmp_path):
 
     with pytest.raises(RuntimeError, match="duplicate"):
         NumElementsArraySampler(
-            batch_bins=480000, shape_files=[str(path)], min_batch_size=1)
+            batch_bins=480000, shape_files=[str(path)], min_batch_size=1
+        )
 
 
 def test_non_integer_key_raises_with_diagnostic(tmp_path):
@@ -140,7 +143,8 @@ def test_non_integer_key_raises_with_diagnostic(tmp_path):
 
     with pytest.raises(RuntimeError, match="integer keys.*uttA"):
         NumElementsArraySampler(
-            batch_bins=480000, shape_files=[str(path)], min_batch_size=1)
+            batch_bins=480000, shape_files=[str(path)], min_batch_size=1
+        )
 
 
 def test_max_samples_below_min_batch_size_raises(shape_file):
@@ -150,8 +154,10 @@ def test_max_samples_below_min_batch_size_raises(shape_file):
     run hit a DDP deadlock far downstream."""
     with pytest.raises(AssertionError):
         NumElementsArraySampler(
-            batch_bins=480000, shape_files=[str(shape_file)],
-            min_batch_size=8, max_samples=4,
+            batch_bins=480000,
+            shape_files=[str(shape_file)],
+            min_batch_size=8,
+            max_samples=4,
         )
 
 

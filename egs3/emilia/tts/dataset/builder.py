@@ -63,11 +63,15 @@ def _scan_shard(args) -> tuple[list, Counter]:
         if not keep:
             dropped[reason] += 1
             continue
-        rows.append((
-            record["id"], shard_idx, lang,
-            float(record["duration"]),
-            normalize_text(record["text"], lang),
-        ))
+        rows.append(
+            (
+                record["id"],
+                shard_idx,
+                lang,
+                float(record["duration"]),
+                normalize_text(record["text"], lang),
+            )
+        )
     # Sort within the shard so the build is order-independent across workers.
     rows.sort(key=lambda r: r[0])
     return rows, dropped
@@ -90,8 +94,9 @@ class EmiliaBuilder(DatasetBuilder):
     def prepare_source(self, recipe_dir, **_kwargs) -> None:
         _, cfg, _ = self._paths(recipe_dir)
         root = Path(cfg["corpus_root"]) / "emilia"
-        missing = [str(root / lang) for lang in cfg["langs"]
-                   if not (root / lang).is_dir()]
+        missing = [
+            str(root / lang) for lang in cfg["langs"] if not (root / lang).is_dir()
+        ]
         raise RuntimeError(
             "The Emilia corpus is staged and read-only; this recipe never "
             "downloads it. Point builder.corpus_root at the staged tree "
@@ -152,9 +157,7 @@ class EmiliaBuilder(DatasetBuilder):
         rng.shuffle(order)
         n_total = len(order)
         if n_total > 1:
-            n_val = min(
-                max(1, int(n_total * float(cfg["val_ratio"]))), n_total - 1
-            )
+            n_val = min(max(1, int(n_total * float(cfg["val_ratio"]))), n_total - 1)
         else:
             n_val = 0
         val_idx = set(order[:n_val])
@@ -164,8 +167,10 @@ class EmiliaBuilder(DatasetBuilder):
 
         train_path = data_dir / cfg["manifest_paths"]["train"]
         valid_path = data_dir / cfg["manifest_paths"]["valid"]
-        with train_path.open("w", encoding="utf-8") as ftr, \
-                valid_path.open("w", encoding="utf-8") as fva:
+        with (
+            train_path.open("w", encoding="utf-8") as ftr,
+            valid_path.open("w", encoding="utf-8") as fva,
+        ):
             for i, (utt_id, shard_idx, lang, duration, text) in enumerate(rows):
                 line = f"{utt_id}\t{shard_idx}\t{lang}\t{duration!r}\t{text}\n"
                 (fva if i in val_idx else ftr).write(line)
@@ -180,16 +185,24 @@ class EmiliaBuilder(DatasetBuilder):
         for r in rows:
             b = min(int((r[3] - lo) / width), _HIST_BINS - 1)
             hist[max(b, 0)] += 1
-        (manifest_dir / "report.json").write_text(json.dumps({
-            "kept": len(rows),
-            "dropped": dict(dropped),
-            "total_hours": total_seconds / 3600.0,
-            "duration_histogram": hist,
-            "histogram_range": [lo, hi],
-            "n_shards": len(shard_rels),
-        }, indent=2), encoding="utf-8")
+        (manifest_dir / "report.json").write_text(
+            json.dumps(
+                {
+                    "kept": len(rows),
+                    "dropped": dict(dropped),
+                    "total_hours": total_seconds / 3600.0,
+                    "duration_histogram": hist,
+                    "histogram_range": [lo, hi],
+                    "n_shards": len(shard_rels),
+                },
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
 
         logger.info(
             "EmiliaBuilder: kept %d, dropped %s, %.1f hours",
-            len(rows), dict(dropped), total_seconds / 3600.0,
+            len(rows),
+            dict(dropped),
+            total_seconds / 3600.0,
         )

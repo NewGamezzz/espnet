@@ -27,13 +27,15 @@ def built(tmp_path):
         for utt_id, shard, lang, dur, text in rows:
             fh.write(f"{utt_id}\t{shard}\t{lang}\t{dur!r}\t{text}\n")
 
-    for (utt_id, shard_idx, _lang, dur, _text) in rows:
+    for utt_id, shard_idx, _lang, dur, _text in rows:
         d = corpus / "emilia" / shards[shard_idx]
         d.mkdir(parents=True, exist_ok=True)
-        sf.write(d / f"{utt_id}.wav",
-                 np.zeros(int(dur * 16000), dtype=np.float32), 16000)
+        sf.write(
+            d / f"{utt_id}.wav", np.zeros(int(dur * 16000), dtype=np.float32), 16000
+        )
 
-    (recipe / "dataset" / "config.yaml").write_text(f"""
+    (recipe / "dataset" / "config.yaml").write_text(
+        f"""
 builder:
   corpus_root: {corpus}
   langs: [EN, ZH]
@@ -52,7 +54,9 @@ dataset:
   split_manifest_paths:
     train: manifest/train.tsv
     valid: manifest/valid.tsv
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     return recipe
 
 
@@ -65,12 +69,11 @@ def test_len_and_text(built):
 
 def test_sub_shard_paths_resolve(built):
     """Both utterances share the B00012 prefix but live in different dirs."""
-    ds = EmiliaDataset(split="train", recipe_dir=built, inference=True,
-                       load_speech=False)
-    assert ds[0]["wav_path"].endswith(
-        "EN/EN-B000120/EN_B00012_S00001_W000000.wav")
-    assert ds[1]["wav_path"].endswith(
-        "EN/EN-B000121/EN_B00012_S00002_W000000.wav")
+    ds = EmiliaDataset(
+        split="train", recipe_dir=built, inference=True, load_speech=False
+    )
+    assert ds[0]["wav_path"].endswith("EN/EN-B000120/EN_B00012_S00001_W000000.wav")
+    assert ds[1]["wav_path"].endswith("EN/EN-B000121/EN_B00012_S00002_W000000.wav")
 
 
 def test_speech_is_loaded_and_resampled(built):

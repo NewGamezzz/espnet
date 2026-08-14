@@ -22,8 +22,7 @@ def testset(tmp_path):
             )
         (d / "meta.lst").write_text("\n".join(lines) + "\n", encoding="utf-8")
     hard = ["zh_h0|ph|prompt-wavs/p_zh_0.wav|hard target"]
-    (root / "zh" / "hardcase.lst").write_text(
-        "\n".join(hard) + "\n", encoding="utf-8")
+    (root / "zh" / "hardcase.lst").write_text("\n".join(hard) + "\n", encoding="utf-8")
     return root
 
 
@@ -45,7 +44,6 @@ def test_hardcase_is_not_merged_into_test_zh(tmp_path, testset):
 
 def test_prompt_paths_are_absolute(tmp_path, testset):
     prepare_seedtts(testset, tmp_path / "out")
-    row = (tmp_path / "out" / "test_en" / "meta.tsv").read_text(
-        "utf-8").splitlines()[0]
+    row = (tmp_path / "out" / "test_en" / "meta.tsv").read_text("utf-8").splitlines()[0]
     _utt, wav, _text, prompt_wav, _prompt_text = row.split("\t")
     assert wav.startswith("/") and prompt_wav.startswith("/")

@@ -74,9 +74,7 @@ def _load_shape_file(path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
                 ) from e
             keys[i] = key_val
             lengths[i] = int(parts[0])
-            dims[i] = (
-                int(np.prod([int(x) for x in parts[1:]])) if len(parts) > 1 else 1
-            )
+            dims[i] = int(np.prod([int(x) for x in parts[1:]])) if len(parts) > 1 else 1
             i += 1
 
     # O(n log n) duplicate check (mirrors read_2columns_text's duplicate
@@ -141,8 +139,7 @@ class NumElementsArraySampler(AbsSampler):
             )
         if sort_in_batch != "descending" and sort_in_batch != "ascending":
             raise ValueError(
-                "sort_in_batch must be ascending"
-                f" or descending: {sort_in_batch}"
+                "sort_in_batch must be ascending" f" or descending: {sort_in_batch}"
             )
 
         self.batch_bins = batch_bins
@@ -229,9 +226,7 @@ class NumElementsArraySampler(AbsSampler):
                 bins = current_sum
 
             close_by_bins = bins > batch_bins and current_count >= min_batch_size
-            close_by_cap = (
-                max_samples is not None and current_count >= max_samples
-            )
+            close_by_cap = max_samples is not None and current_count >= max_samples
             if close_by_bins or close_by_cap:
                 batch_sizes.append(current_count)
                 current_count = 0
@@ -294,8 +289,7 @@ class NumElementsArraySampler(AbsSampler):
                 pass
             else:
                 raise ValueError(
-                    "sort_in_batch must be ascending"
-                    f" or descending: {sort_in_batch}"
+                    "sort_in_batch must be ascending" f" or descending: {sort_in_batch}"
                 )
 
             self.batch_list.append(tuple(minibatch_keys))

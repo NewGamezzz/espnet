@@ -32,7 +32,9 @@ def test_blocklist_matches_on_speaker_not_id():
 def test_non_blocklisted_speaker_is_kept():
     keep, reason = filters.keep_utterance(
         _rec(speaker="EN_B00000_S00000", id="EN_B00000_S00000_W000000"),
-        "EN", 0.3, 30.0,
+        "EN",
+        0.3,
+        30.0,
     )
     assert keep is True
     assert reason == ""
@@ -42,7 +44,9 @@ def test_non_blocklisted_speaker_is_kept():
 def test_en_cross_language_chars_rejected(bad):
     keep, reason = filters.keep_utterance(
         _rec(speaker="EN_B00000_S00000", text=f"hello {bad} world"),
-        "EN", 0.3, 30.0,
+        "EN",
+        0.3,
+        30.0,
     )
     assert (keep, reason) == (False, "charfilter")
 
@@ -67,12 +71,22 @@ def test_en_text_is_not_punctuation_normalized():
     assert filters.normalize_text("hello, world!", "EN") == "hello, world!"
 
 
-@pytest.mark.parametrize("dur,expected", [
-    (0.29, False), (0.3, True), (5.0, True), (30.0, True), (30.1, False),
-])
+@pytest.mark.parametrize(
+    "dur,expected",
+    [
+        (0.29, False),
+        (0.3, True),
+        (5.0, True),
+        (30.0, True),
+        (30.1, False),
+    ],
+)
 def test_duration_bounds_are_f5_emilia_bounds(dur, expected):
     keep, reason = filters.keep_utterance(
-        _rec(speaker="EN_B00000_S00000", duration=dur), "EN", 0.3, 30.0,
+        _rec(speaker="EN_B00000_S00000", duration=dur),
+        "EN",
+        0.3,
+        30.0,
     )
     assert keep is expected
     if not expected:
@@ -84,5 +98,6 @@ def test_strict_filters_are_off_by_default():
     rec = _rec(speaker="EN_B00000_S00000", text="ooooooooooooooo dear")
     assert filters.keep_utterance(rec, "EN", 0.3, 30.0, strict=False)[0] is True
     assert filters.keep_utterance(rec, "EN", 0.3, 30.0, strict=True) == (
-        False, "strict",
+        False,
+        "strict",
     )

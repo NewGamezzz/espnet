@@ -24,15 +24,26 @@ def test_builder_to_shape_to_sampler(tmp_path):
     for i in range(40):
         utt = f"EN_B00000_S{i:05d}_W000000"
         dur = 1.0 + (i % 8) * 0.5
-        sf.write(shard / f"{utt}.wav",
-                 np.zeros(int(dur * 24000), dtype=np.float32), 24000)
-        (shard / f"{utt}.json").write_text(json.dumps({
-            "id": utt, "wav": "x", "text": f"utterance number {i}",
-            "duration": dur, "speaker": f"EN_B00000_S{i:05d}",
-            "language": "en", "dnsmos": 3.0,
-        }), encoding="utf-8")
+        sf.write(
+            shard / f"{utt}.wav", np.zeros(int(dur * 24000), dtype=np.float32), 24000
+        )
+        (shard / f"{utt}.json").write_text(
+            json.dumps(
+                {
+                    "id": utt,
+                    "wav": "x",
+                    "text": f"utterance number {i}",
+                    "duration": dur,
+                    "speaker": f"EN_B00000_S{i:05d}",
+                    "language": "en",
+                    "dnsmos": 3.0,
+                }
+            ),
+            encoding="utf-8",
+        )
 
-    (recipe / "dataset" / "config.yaml").write_text(f"""
+    (recipe / "dataset" / "config.yaml").write_text(
+        f"""
 builder:
   corpus_root: {corpus}
   langs: [EN]
@@ -51,17 +62,20 @@ dataset:
   split_manifest_paths:
     train: manifest/train.tsv
     valid: manifest/valid.tsv
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     EmiliaBuilder().build(recipe_dir=recipe)
     ds = EmiliaDataset(split="train", recipe_dir=recipe, load_speech=False)
     shape_path = recipe / "stats" / "train" / "feats_shape"
-    n = write_shape_file(ds, shape_path, hop_length=256,
-                         sample_rate=24000, n_mels=100)
+    n = write_shape_file(ds, shape_path, hop_length=256, sample_rate=24000, n_mels=100)
     assert n == len(ds)
 
     sampler = NumElementsBatchSampler(
-        batch_bins=48000, shape_files=[str(shape_path)], min_batch_size=2,
+        batch_bins=48000,
+        shape_files=[str(shape_path)],
+        min_batch_size=2,
     )
     batches = list(sampler)
     assert batches
@@ -73,7 +87,9 @@ dataset:
     # remainder regardless of min_batch_size when drop_last is False, so
     # the production config sets drop_last: true. Pin that here.
     dropping = NumElementsBatchSampler(
-        batch_bins=48000, shape_files=[str(shape_path)], min_batch_size=8,
+        batch_bins=48000,
+        shape_files=[str(shape_path)],
+        min_batch_size=8,
         drop_last=True,
     )
     assert all(len(b) >= 8 for b in dropping)
@@ -99,15 +115,26 @@ def _write_synthetic_corpus(tmp_path, n_utts=30):
     for i in range(n_utts):
         utt = f"EN_B00000_S{i:05d}_W000000"
         dur = 1.0 + (i % 6) * 0.5
-        sf.write(shard / f"{utt}.wav",
-                 np.zeros(int(dur * 24000), dtype=np.float32), 24000)
-        (shard / f"{utt}.json").write_text(json.dumps({
-            "id": utt, "wav": "x", "text": f"stage chain utterance {i}",
-            "duration": dur, "speaker": f"EN_B00000_S{i:05d}",
-            "language": "en", "dnsmos": 3.0,
-        }), encoding="utf-8")
+        sf.write(
+            shard / f"{utt}.wav", np.zeros(int(dur * 24000), dtype=np.float32), 24000
+        )
+        (shard / f"{utt}.json").write_text(
+            json.dumps(
+                {
+                    "id": utt,
+                    "wav": "x",
+                    "text": f"stage chain utterance {i}",
+                    "duration": dur,
+                    "speaker": f"EN_B00000_S{i:05d}",
+                    "language": "en",
+                    "dnsmos": 3.0,
+                }
+            ),
+            encoding="utf-8",
+        )
 
-    (recipe / "dataset" / "config.yaml").write_text(f"""
+    (recipe / "dataset" / "config.yaml").write_text(
+        f"""
 builder:
   corpus_root: {corpus}
   langs: [EN]
@@ -126,7 +153,9 @@ dataset:
   split_manifest_paths:
     train: manifest/train.tsv
     valid: manifest/valid.tsv
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     return recipe
 
 
@@ -149,30 +178,30 @@ def test_ttssystem_create_shape_wires_config_to_shape_files(tmp_path):
     exp_dir = tmp_path / "exp"
     stats_dir = exp_dir / "stats"
 
-    training_config = OmegaConf.create({
-        "recipe_dir": str(recipe),
-        "exp_dir": str(exp_dir),
-        "stats_dir": str(stats_dir),
-        "create_shape": {
-            "splits": ["train", "valid"],
-            "save_path": str(stats_dir),
-            "hop_length": 256,
-            "sample_rate": 24000,
-            "n_mels": 100,
-            "manifest_paths": {
-                "train": str(manifest_dir / "train.tsv"),
-                "valid": str(manifest_dir / "valid.tsv"),
+    training_config = OmegaConf.create(
+        {
+            "recipe_dir": str(recipe),
+            "exp_dir": str(exp_dir),
+            "stats_dir": str(stats_dir),
+            "create_shape": {
+                "splits": ["train", "valid"],
+                "save_path": str(stats_dir),
+                "hop_length": 256,
+                "sample_rate": 24000,
+                "n_mels": 100,
+                "manifest_paths": {
+                    "train": str(manifest_dir / "train.tsv"),
+                    "valid": str(manifest_dir / "valid.tsv"),
+                },
             },
-        },
-    })
+        }
+    )
 
     system = TTSSystem(training_config=training_config)
     system.create_shape()
 
     for split in ("train", "valid"):
-        manifest_lines = (manifest_dir / f"{split}.tsv").read_text(
-            "utf-8"
-        ).splitlines()
+        manifest_lines = (manifest_dir / f"{split}.tsv").read_text("utf-8").splitlines()
         shape_path = stats_dir / split / "feats_shape"
         assert shape_path.is_file()
 

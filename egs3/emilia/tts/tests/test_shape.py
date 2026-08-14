@@ -22,8 +22,9 @@ class FakeDataset:
 def test_shape_file_format_matches_collect_stats(tmp_path):
     """collect_stats writes '<uid> <T>,<D>' with uid = str(index)."""
     out = tmp_path / "feats_shape"
-    n = write_shape_file(FakeDataset([1.0, 2.0]), out,
-                         hop_length=256, sample_rate=24000, n_mels=100)
+    n = write_shape_file(
+        FakeDataset([1.0, 2.0]), out, hop_length=256, sample_rate=24000, n_mels=100
+    )
     assert n == 2
     assert out.read_text("utf-8").splitlines() == ["0 94,100", "1 188,100"]
 
@@ -31,8 +32,9 @@ def test_shape_file_format_matches_collect_stats(tmp_path):
 def test_shape_file_is_loadable_by_the_sampler(tmp_path):
     """The espnet2 numel sampler must be able to parse it."""
     out = tmp_path / "feats_shape"
-    write_shape_file(FakeDataset([1.0, 2.0, 3.0]), out,
-                     hop_length=256, sample_rate=24000, n_mels=100)
+    write_shape_file(
+        FakeDataset([1.0, 2.0, 3.0]), out, hop_length=256, sample_rate=24000, n_mels=100
+    )
     loaded = load_num_sequence_text(str(out), loader_type="csv_int")
     assert loaded["0"] == [94, 100]
     assert len(loaded) == 3
@@ -40,5 +42,10 @@ def test_shape_file_is_loadable_by_the_sampler(tmp_path):
 
 def test_zero_length_dataset_raises(tmp_path):
     with pytest.raises(RuntimeError, match="empty"):
-        write_shape_file(FakeDataset([]), tmp_path / "feats_shape",
-                         hop_length=256, sample_rate=24000, n_mels=100)
+        write_shape_file(
+            FakeDataset([]),
+            tmp_path / "feats_shape",
+            hop_length=256,
+            sample_rate=24000,
+            n_mels=100,
+        )

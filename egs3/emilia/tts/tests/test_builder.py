@@ -8,15 +8,30 @@ import pytest
 from egs3.emilia.tts.dataset.builder import EmiliaBuilder
 
 
-def _write_utt(shard_dir: Path, utt_id: str, speaker: str, text: str,
-               duration: float, language: str):
+def _write_utt(
+    shard_dir: Path,
+    utt_id: str,
+    speaker: str,
+    text: str,
+    duration: float,
+    language: str,
+):
     shard_dir.mkdir(parents=True, exist_ok=True)
     (shard_dir / f"{utt_id}.mp3").write_bytes(b"\x00")
-    (shard_dir / f"{utt_id}.json").write_text(json.dumps({
-        "id": utt_id, "wav": f"ignored/{utt_id}.mp3", "text": text,
-        "duration": duration, "speaker": speaker,
-        "language": language, "dnsmos": 3.0,
-    }), encoding="utf-8")
+    (shard_dir / f"{utt_id}.json").write_text(
+        json.dumps(
+            {
+                "id": utt_id,
+                "wav": f"ignored/{utt_id}.mp3",
+                "text": text,
+                "duration": duration,
+                "speaker": speaker,
+                "language": language,
+                "dnsmos": 3.0,
+            }
+        ),
+        encoding="utf-8",
+    )
 
 
 @pytest.fixture
@@ -24,18 +39,48 @@ def corpus(tmp_path):
     """Two EN sub-shards of the same logical batch, plus one ZH shard."""
     root = tmp_path / "raw"
     # Sub-shard 0 and sub-shard 1 of logical batch 12 -> same B00012 prefix.
-    _write_utt(root / "emilia/EN/EN-B000120", "EN_B00012_S00001_W000000",
-               "EN_B00012_S00001", "the first english utterance", 4.0, "en")
-    _write_utt(root / "emilia/EN/EN-B000121", "EN_B00012_S00002_W000000",
-               "EN_B00012_S00002", "the second english utterance", 6.0, "en")
+    _write_utt(
+        root / "emilia/EN/EN-B000120",
+        "EN_B00012_S00001_W000000",
+        "EN_B00012_S00001",
+        "the first english utterance",
+        4.0,
+        "en",
+    )
+    _write_utt(
+        root / "emilia/EN/EN-B000121",
+        "EN_B00012_S00002_W000000",
+        "EN_B00012_S00002",
+        "the second english utterance",
+        6.0,
+        "en",
+    )
     # Blocklisted speaker.
-    _write_utt(root / "emilia/EN/EN-B000130", "EN_B00013_S00913_W000000",
-               "EN_B00013_S00913", "blocklisted speaker text", 5.0, "en")
+    _write_utt(
+        root / "emilia/EN/EN-B000130",
+        "EN_B00013_S00913_W000000",
+        "EN_B00013_S00913",
+        "blocklisted speaker text",
+        5.0,
+        "en",
+    )
     # Too short.
-    _write_utt(root / "emilia/EN/EN-B000130", "EN_B00013_S00001_W000000",
-               "EN_B00013_S00001", "tiny", 0.2, "en")
-    _write_utt(root / "emilia/ZH/ZH-B000000", "ZH_B00000_S00001_W000000",
-               "ZH_B00000_S00001", "你好,世界", 3.0, "zh")
+    _write_utt(
+        root / "emilia/EN/EN-B000130",
+        "EN_B00013_S00001_W000000",
+        "EN_B00013_S00001",
+        "tiny",
+        0.2,
+        "en",
+    )
+    _write_utt(
+        root / "emilia/ZH/ZH-B000000",
+        "ZH_B00000_S00001_W000000",
+        "ZH_B00000_S00001",
+        "你好,世界",
+        3.0,
+        "zh",
+    )
     return root
 
 
@@ -43,7 +88,8 @@ def corpus(tmp_path):
 def recipe(tmp_path, corpus):
     recipe_dir = tmp_path / "recipe"
     (recipe_dir / "dataset").mkdir(parents=True)
-    (recipe_dir / "dataset" / "config.yaml").write_text(f"""
+    (recipe_dir / "dataset" / "config.yaml").write_text(
+        f"""
 builder:
   corpus_root: {corpus}
   langs: [EN, ZH]
@@ -61,7 +107,9 @@ dataset:
   split_manifest_paths:
     train: manifest/train.tsv
     valid: manifest/valid.tsv
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
     return recipe_dir
 
 
@@ -135,9 +183,10 @@ def test_build_is_deterministic(recipe):
 
 def test_is_source_prepared_false_when_corpus_missing(tmp_path, recipe):
     (recipe / "dataset" / "config.yaml").write_text(
-        (recipe / "dataset" / "config.yaml").read_text("utf-8").replace(
-            str(tmp_path / "raw"), str(tmp_path / "nope")
-        ), encoding="utf-8",
+        (recipe / "dataset" / "config.yaml")
+        .read_text("utf-8")
+        .replace(str(tmp_path / "raw"), str(tmp_path / "nope")),
+        encoding="utf-8",
     )
     assert EmiliaBuilder().is_source_prepared(recipe_dir=recipe) is False
 
@@ -145,8 +194,10 @@ def test_is_source_prepared_false_when_corpus_missing(tmp_path, recipe):
 def test_prepare_source_refuses_to_download(recipe, tmp_path):
     """The corpus is staged and read-only; prepare_source must never write."""
     cfg = recipe / "dataset" / "config.yaml"
-    cfg.write_text(cfg.read_text("utf-8").replace(
-        str(tmp_path / "raw"), str(tmp_path / "nope")), encoding="utf-8")
+    cfg.write_text(
+        cfg.read_text("utf-8").replace(str(tmp_path / "raw"), str(tmp_path / "nope")),
+        encoding="utf-8",
+    )
     with pytest.raises(RuntimeError, match="staged"):
         EmiliaBuilder().prepare_source(recipe_dir=recipe)
 
@@ -160,15 +211,28 @@ def test_single_surviving_utterance_goes_to_train_not_valid(tmp_path):
     rows but no error from this stage.
     """
     root = tmp_path / "raw"
-    _write_utt(root / "emilia/EN/EN-B000010", "EN_B00001_S00001_W000000",
-               "EN_B00001_S00001", "the only surviving utterance", 4.0, "en")
+    _write_utt(
+        root / "emilia/EN/EN-B000010",
+        "EN_B00001_S00001_W000000",
+        "EN_B00001_S00001",
+        "the only surviving utterance",
+        4.0,
+        "en",
+    )
     # Blocklisted speaker: filtered out, so exactly one utterance survives.
-    _write_utt(root / "emilia/EN/EN-B000010", "EN_B00013_S00913_W000000",
-               "EN_B00013_S00913", "blocklisted speaker text", 5.0, "en")
+    _write_utt(
+        root / "emilia/EN/EN-B000010",
+        "EN_B00013_S00913_W000000",
+        "EN_B00013_S00913",
+        "blocklisted speaker text",
+        5.0,
+        "en",
+    )
 
     recipe_dir = tmp_path / "recipe"
     (recipe_dir / "dataset").mkdir(parents=True)
-    (recipe_dir / "dataset" / "config.yaml").write_text(f"""
+    (recipe_dir / "dataset" / "config.yaml").write_text(
+        f"""
 builder:
   corpus_root: {root}
   langs: [EN]
@@ -186,7 +250,9 @@ dataset:
   split_manifest_paths:
     train: manifest/train.tsv
     valid: manifest/valid.tsv
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     EmiliaBuilder().build(recipe_dir=recipe_dir)
     data = recipe_dir / "data" / "manifest"
@@ -207,15 +273,25 @@ def test_audio_suffix_config_is_honored_by_the_scan(tmp_path):
     shard_dir = root / "emilia" / "EN" / "EN-B000000"
     shard_dir.mkdir(parents=True)
     (shard_dir / "EN_B00000_S00000_W000000.wav").write_bytes(b"\x00")
-    (shard_dir / "EN_B00000_S00000_W000000.json").write_text(json.dumps({
-        "id": "EN_B00000_S00000_W000000", "wav": "ignored.wav",
-        "text": "a wav-suffixed utterance", "duration": 4.0,
-        "speaker": "EN_B00000_S00000", "language": "en", "dnsmos": 3.0,
-    }), encoding="utf-8")
+    (shard_dir / "EN_B00000_S00000_W000000.json").write_text(
+        json.dumps(
+            {
+                "id": "EN_B00000_S00000_W000000",
+                "wav": "ignored.wav",
+                "text": "a wav-suffixed utterance",
+                "duration": 4.0,
+                "speaker": "EN_B00000_S00000",
+                "language": "en",
+                "dnsmos": 3.0,
+            }
+        ),
+        encoding="utf-8",
+    )
 
     recipe_dir = tmp_path / "recipe"
     (recipe_dir / "dataset").mkdir(parents=True)
-    (recipe_dir / "dataset" / "config.yaml").write_text(f"""
+    (recipe_dir / "dataset" / "config.yaml").write_text(
+        f"""
 builder:
   corpus_root: {root}
   langs: [EN]
@@ -234,7 +310,9 @@ dataset:
   split_manifest_paths:
     train: manifest/train.tsv
     valid: manifest/valid.tsv
-""", encoding="utf-8")
+""",
+        encoding="utf-8",
+    )
 
     EmiliaBuilder().build(recipe_dir=recipe_dir)
     data = recipe_dir / "data" / "manifest"

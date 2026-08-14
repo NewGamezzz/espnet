@@ -86,9 +86,7 @@ class EmiliaDataset(TorchDataset):
         self.manifest_path = resolved
 
         shard_table_path = data_dir / builder_cfg["shard_table_path"]
-        self._shards = shard_table_path.read_text(
-            encoding="utf-8"
-        ).splitlines()
+        self._shards = shard_table_path.read_text(encoding="utf-8").splitlines()
 
         self._load_columns(resolved)
 
@@ -104,9 +102,7 @@ class EmiliaDataset(TorchDataset):
             for line in fh:
                 if not line.strip():
                     continue
-                utt_id, shard, _lang, duration, text = line.rstrip(
-                    "\n"
-                ).split("\t", 4)
+                utt_id, shard, _lang, duration, text = line.rstrip("\n").split("\t", 4)
                 utt_ids.append(utt_id.encode("ascii"))
                 shard_idx.append(int(shard))
                 durations.append(float(duration))
@@ -133,9 +129,7 @@ class EmiliaDataset(TorchDataset):
         ``1 + n_samples // hop`` is what torchaudio's centered STFT yields;
         ``duration * sr / hop`` is not the same thing.
         """
-        n_samples = (self.durations.astype(np.float64) * sample_rate).astype(
-            np.int64
-        )
+        n_samples = (self.durations.astype(np.float64) * sample_rate).astype(np.int64)
         return (1 + n_samples // hop_length).astype(np.int32)
 
     def _utt_id(self, idx: int) -> str:
@@ -148,9 +142,7 @@ class EmiliaDataset(TorchDataset):
 
     def _wav_path(self, idx: int) -> Path:
         shard = self._shards[int(self._shard_idx[idx])]
-        return self.corpus_root / shard / (
-            self._utt_id(idx) + self.audio_suffix
-        )
+        return self.corpus_root / shard / (self._utt_id(idx) + self.audio_suffix)
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         idx = int(idx)
@@ -167,14 +159,18 @@ class EmiliaDataset(TorchDataset):
                         torch.from_numpy(speech),
                         orig_freq=speech_fs,
                         new_freq=self.fs,
-                    ).numpy().astype(np.float32)
+                    )
+                    .numpy()
+                    .astype(np.float32)
                 )
             sample["speech"] = speech
 
         if self.inference:
-            sample.update({
-                "utt_id": np.asarray(self._utt_id(idx)),
-                "wav_path": str(self._wav_path(idx)),
-                "raw_text": sample["text"],
-            })
+            sample.update(
+                {
+                    "utt_id": np.asarray(self._utt_id(idx)),
+                    "wav_path": str(self._wav_path(idx)),
+                    "raw_text": sample["text"],
+                }
+            )
         return sample

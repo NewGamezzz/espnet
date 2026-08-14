@@ -32,8 +32,7 @@ def cfg():
 
 def test_dataset_uses_data_organizer(cfg):
     assert (
-        cfg.dataset._target_
-        == "espnet3.components.data.data_organizer.DataOrganizer"
+        cfg.dataset._target_ == "espnet3.components.data.data_organizer.DataOrganizer"
     )
 
 

@@ -48,9 +48,12 @@ class SeedTTSDataset(TorchDataset):
         if self.fs is not None and audio_fs != self.fs:
             audio = (
                 torchaudio.functional.resample(
-                    torch.from_numpy(audio), orig_freq=audio_fs,
+                    torch.from_numpy(audio),
+                    orig_freq=audio_fs,
                     new_freq=self.fs,
-                ).numpy().astype(np.float32)
+                )
+                .numpy()
+                .astype(np.float32)
             )
         return audio
 
@@ -62,12 +65,14 @@ class SeedTTSDataset(TorchDataset):
             "ref_text": prompt_text,
         }
         if self.inference:
-            sample.update({
-                "utt_id": np.asarray(utt_id),
-                "wav_path": wav_path,
-                "raw_text": text,
-                "ref_wav_path": prompt_wav,
-            })
+            sample.update(
+                {
+                    "utt_id": np.asarray(utt_id),
+                    "wav_path": wav_path,
+                    "raw_text": text,
+                    "ref_wav_path": prompt_wav,
+                }
+            )
         return sample
 
 

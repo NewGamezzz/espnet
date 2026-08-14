@@ -30,13 +30,15 @@ def _parse(lst_path: Path, lang_dir: Path) -> list[tuple[str, ...]]:
                 continue
             utt_id, prompt_text, prompt_audio, target_text = parts[:4]
             wav = lang_dir / "wavs" / f"{utt_id}.wav"
-            rows.append((
-                utt_id,
-                str(wav.resolve()),
-                target_text,
-                str((lang_dir / prompt_audio).resolve()),
-                prompt_text,
-            ))
+            rows.append(
+                (
+                    utt_id,
+                    str(wav.resolve()),
+                    target_text,
+                    str((lang_dir / prompt_audio).resolve()),
+                    prompt_text,
+                )
+            )
     return rows
 
 
