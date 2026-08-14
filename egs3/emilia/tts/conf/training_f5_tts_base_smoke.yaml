@@ -8,10 +8,19 @@
 # a partial file here would silently fall back to template defaults instead
 # of inheriting the Base config. See tests/test_training_config.py's
 # test_smoke_config_only_differs_from_base_in_five_places, which asserts the
-# two configs are byte-for-byte identical except for exactly the 5 keys
-# changed below -- that assertion is what makes the smoke's throughput
-# number meaningful, since the entire point is to measure PRODUCTION
-# throughput.
+# two configs are byte-for-byte identical (once resolved) except for
+# exactly the 5 keys changed below -- that assertion is what makes the
+# smoke's throughput number meaningful, since the entire point is to
+# measure PRODUCTION throughput. `exp_dir` and `inference_dir` also
+# resolve differently between the two configs, but only as a DERIVED
+# consequence of the single `exp_tag` change (both interpolate
+# `${exp_tag}`) -- the test counts them explicitly as expected, not as
+# independent differences, so this is still "5 keys changed", not 7.
+# `stats_dir` deliberately does NOT differ (CRITICAL 3): it is fixed at
+# `${recipe_dir}/exp/stats`, not derived from `${exp_dir}`/`${exp_tag}`,
+# specifically so create_shape's real output (written once, under the
+# Base config's exp_tag) is exactly where this config's dataloader reads
+# it from.
 #
 # Changed vs. training_f5_tts_base.yaml (5 places):
 #   1. exp_tag: train_f5_tts_base_emilia -> smoke_base_emilia
