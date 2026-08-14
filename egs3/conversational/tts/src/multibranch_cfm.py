@@ -124,7 +124,8 @@ class MultiBranchCFM(CFM):
             cond_frames = torch.as_tensor(cond_frames, device=device, dtype=torch.long)
             if cond_frames.numel() != n_conv:
                 raise ValueError(
-                    f"cond_frames has {cond_frames.numel()} entries for {n_conv} conversations"
+                    f"cond_frames has {cond_frames.numel()} entries for "
+                    f"{n_conv} conversations"
                 )
             det = cond_frames >= 0
             if det.any():
@@ -199,6 +200,7 @@ class MultiBranchCFM(CFM):
             "cond": cond,
             "pred": pred,
             "rand_span_mask": rand_span_mask,
+            # frac_lengths is the random draw (discarded if cond_frames >= 0)
             "frac_lengths": frac_lengths,
             "time": time,
         }

@@ -84,7 +84,8 @@ class ChunkTaskPlan:
             lengths.add(round(end - start, 6))
         if len(lengths) != 1:
             raise ValueError(
-                f"all prompt_spans must have equal (rounded) length, got lengths {lengths}"
+                f"all prompt_spans must have equal (rounded) length, "
+                f"got lengths {lengths}"
             )
 
 
