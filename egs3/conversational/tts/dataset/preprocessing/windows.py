@@ -30,6 +30,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Sequence
 
+from .chunk_task import ChunkTaskPlan, plan_from_json, plan_to_json
 from .sssd import Recording, Turn, occupied_intervals
 
 # Float-safety slack for containment checks on exact-boundary turns.
@@ -66,6 +67,11 @@ class WindowRecord:
     t0: float
     t1: float
     turns: tuple[Turn, ...]
+    # Special-token conditioning chunk-task plan; None for ordinary windows
+    # (the overwhelming majority - see chunk_task_prob). Kept optional and
+    # last-before-derived so unrelated call sites building WindowRecord
+    # positionally/by keyword without this field are unaffected.
+    chunk_task: "ChunkTaskPlan | None" = None
     # Derived from turns/num_channels, never passed in: always consistent
     # with the stored (rounded) turn times, including after from_json.
     num_active_speakers: int = field(init=False)
@@ -399,7 +405,7 @@ def build_windows(
 
 
 def to_json(w: WindowRecord) -> dict:
-    return {
+    d = {
         "window_id": w.window_id,
         "session_id": w.session_id,
         "audio_relpath": w.audio_relpath,
@@ -422,6 +428,13 @@ def to_json(w: WindowRecord) -> dict:
             for t in w.turns
         ],
     }
+    # Key omitted (not emitted as null) when absent: the golden-parity tests
+    # byte-compare manifests produced before this field existed, and every
+    # ordinary window has chunk_task=None, so a null key here would diverge
+    # every golden line.
+    if w.chunk_task is not None:
+        d["chunk_task"] = plan_to_json(w.chunk_task)
+    return d
 
 
 def from_json(d: dict) -> WindowRecord:
@@ -443,6 +456,7 @@ def from_json(d: dict) -> WindowRecord:
             )
             for t in d["turns"]
         ),
+        chunk_task=plan_from_json(d["chunk_task"]) if "chunk_task" in d else None,
     )
 
 
