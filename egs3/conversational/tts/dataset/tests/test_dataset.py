@@ -620,11 +620,13 @@ class TestChunkTaskAssembly:
             s["speech"][0, : s["prompt_frames"] * ds.hop],
             expected[: s["prompt_frames"] * ds.hop],
         )
-        # The packer prices this record at round(fs * assembled_duration); the
-        # two hop floors (P tail, H head) each shed < hop samples, so the
-        # estimate may overshoot the real length by at most 2 * hop.
+        # The packer prices this record at round(fs * assembled_duration) - an
+        # ESTIMATE, not the assembled length: the two hop floors (P tail, H
+        # head) each shed up to hop - 1 samples, while resample rounding can
+        # push a span a sample the other way.  Only the magnitude is
+        # contractual, and 2 * hop bounds it (equality is reachable, hence <=).
         estimate = round(ds.fs * assembled_duration(rec))
-        assert 0 <= estimate - total <= 2 * ds.hop
+        assert abs(estimate - total) <= 2 * ds.hop
 
     def test_load_window_infill_unchanged(self, tmp_path):
         ds, record = _make_dataset_with_session(tmp_path)
