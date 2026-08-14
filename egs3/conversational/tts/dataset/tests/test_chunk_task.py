@@ -203,3 +203,75 @@ def test_prompt_anchor_truncated_by_forbidden_region():
     )
     assert plan.kind == "prompt_only"
     assert plan.prompt_spans == ((95.0, 100.0),)
+
+
+def test_cross_channel_lp_bound_by_one_channels_floor_capped_by_anothers_headroom():
+    # Deliberately asymmetric 2-channel geometry (forced prompt_only, so
+    # F = (t0, t1) = (100, 130)); hand-verified against the real rng draw
+    # sequence for seed 15 (not just the final assertion):
+    #   ch0: single candidate turn 95-99 (4 s) -> m_c=3.0 (floor reached at
+    #     95+3), a_c=min(prompt_slice_max=25, 100-95)=5.0 (TIGHT headroom).
+    #   ch1: two candidates, turn 10-11 (1 s) then turn 12-16 (4 s).
+    #     rng.sample's seed-15 order tries anchor=10 first: walking forward,
+    #     the 10-11 turn supplies 1 s of speech, the 12-16 turn supplies the
+    #     remaining 2 s at offset (12-10)+2=4, so m_c=4.0 (<= its own
+    #     a_c=min(25, 100-10)=25.0, so this anchor is individually valid and
+    #     is kept - the other candidate, anchor=12 with m_c=3.0, is never
+    #     reached).
+    # Cross-channel reduction: min_a = min(5.0, 25.0) = 5.0 (ch0's headroom
+    #   is the binding cap); max_m = max(3.0, 4.0) = 4.0 (ch1's floor is the
+    #   binding minimum) - the two bounds come from DIFFERENT channels, so a
+    #   min/max mix-up (e.g. taking max(a_values) or min(m_values), or
+    #   applying the reduction in the wrong order) would not reproduce this
+    #   result by coincidence the way a same-channel-bound case could.
+    # lp_draw for seed 15 (uniform(1, 25)) is ~1.28, below both bounds:
+    #   Lp = min(1.28, min_a=5.0) = 1.28, then Lp = max(1.28, max_m=4.0) =
+    #   4.0. Since 4.0 <= min_a(5.0), the plan is valid with Lp = 4.0 on
+    #   both channels (not equal to lp_draw, not equal to either channel's
+    #   own a_c - genuinely bound by the OTHER channel's floor).
+    turns = (
+        Turn(0, "A", "x", 95.0, 99.0),
+        Turn(1, "B", "y", 10.0, 11.0),
+        Turn(1, "B", "z", 12.0, 16.0),
+    )
+    params = ChunkTaskParams(
+        prompt_only_prob=1.0,
+        prompt_slice_min=1.0,
+        prompt_slice_max=25.0,
+        prompt_speech_floor=3.0,
+    )
+    plan = draw_chunk_task(_record(), turns, 300.0, (), 2, random.Random(15), params)
+    assert plan.kind == "prompt_only"
+    assert plan.prompt_spans == ((95.0, 99.0), (10.0, 14.0))
+
+
+def test_cross_channel_floor_conflict_returns_none():
+    # Same ch0 as above (m_c=3.0, a_c=5.0, hand-verified there). ch1's floor
+    # requirement is now pushed past ch0's headroom: turn 10-10.5 (0.5 s)
+    # then turn 13-17 (4 s). Seed 0's rng.sample order for ch1 also tries
+    # anchor=10 first: 0.5 s of speech from the first turn, the remaining
+    # 2.5 s reached at offset (13-10)+2.5=5.5, so m_c=5.5 - still <= this
+    # anchor's own a_c=min(25, 100-10)=25.0, so it is individually valid and
+    # kept (never falls through to the anchor=13 candidate).
+    # min_a = min(5.0, 25.0) = 5.0; max_m = max(3.0, 5.5) = 5.5. lp_draw for
+    #   seed 0 (uniform(1, 25)) is ~19.19: Lp = min(19.19, 5.0) = 5.0, then
+    #   Lp = max(5.0, 5.5) = 5.5, which EXCEEDS min_a(5.0) - ch1's floor
+    #   genuinely conflicts with ch0's headroom (no single length satisfies
+    #   both channels at once), so the draw must return None rather than
+    #   silently emitting a plan clamped to 5.0 (which a min/max swap bug
+    #   would do, since min(max(lp_draw, max_m), min_a) = 5.0 here).
+    turns = (
+        Turn(0, "A", "x", 95.0, 99.0),
+        Turn(1, "B", "y", 10.0, 10.5),
+        Turn(1, "B", "z", 13.0, 17.0),
+    )
+    params = ChunkTaskParams(
+        prompt_only_prob=1.0,
+        prompt_slice_min=1.0,
+        prompt_slice_max=25.0,
+        prompt_speech_floor=3.0,
+    )
+    assert (
+        draw_chunk_task(_record(), turns, 300.0, (), 2, random.Random(0), params)
+        is None
+    )
