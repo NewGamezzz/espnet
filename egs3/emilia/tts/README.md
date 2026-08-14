@@ -183,9 +183,10 @@ the tests actually check for:
 
 ## Chained training and the quota guard
 
-`local/submit_train.sbatch` runs `local/quota_guard.sh` first, then trains,
-then resubmits itself with `--dependency=afterany` so the run survives
-Bridges-2's walltime cap.
+`local/submit_train.sbatch` checks the chain-depth cap, then runs
+`local/quota_guard.sh`, then loads the config and runs the completion
+check, then **queues its own successor via `--dependency=afterany`
+BEFORE training starts**, and only then runs `srun`.
 `fit.ckpt_path: ${exp_dir}/last.ckpt` (already in the production config)
 is what makes each hop resume where the last left off.
 
@@ -194,7 +195,25 @@ mkdir -p logs
 sbatch local/submit_train.sbatch
 ```
 
-**The quota guard runs before anything is written.**
+**Why the successor is queued before training, not after:** the first
+version of this script queued the next hop as its last statement, after
+`srun` returned.
+That is broken for the primary scenario chaining exists for: when
+Bridges-2 hits the `--time` limit, Slurm delivers `SIGTERM` to the job's
+entire process tree, including this parent script, not just the `srun`
+step, and bash's default disposition for `SIGTERM` with no trap is
+immediate termination -- so a trailing resubmit line never runs and the
+chain silently stops at every walltime boundary, noticeable only because
+the queue goes empty.
+Queuing the successor first means it is already in the queue regardless
+of how this job later dies: clean short-of-`max_steps` exit, walltime
+`SIGTERM`, node failure, preemption, or manual `scancel`.
+
+**The quota guard and chain-depth cap run before the successor is
+queued**, so a sustained problem (full disk, a chain that's run away)
+actually halts further submission instead of queuing through it; a
+completion check (below) also runs before queuing, so a finished run
+does not queue one more job that immediately exits, forever.
 As of 2026-08-13 the project allocation
 (`/ocean/projects/cis210027p`) is at **976.56 TiB quota, 956.12 TiB used,
 20.4 TiB free (97.9% full)**, shared with other group members, and inodes
@@ -207,17 +226,36 @@ specifically (it prints a home block in GiB before a project block in TiB;
 comparing the wrong block or the wrong unit yields a nonsense number), and
 **fails closed**: any parse failure, missing block, or unit mismatch
 aborts the job rather than letting it proceed on a guess. Threshold
-defaults to 2 TiB free, overridable via `MIN_FREE_TIB`.
+defaults to 2 TiB free, overridable via `MIN_FREE_TIB`. (It computes the
+free-space comparison with `awk`, not the brief's original `bc`, to avoid
+a dependency on `bc` being present on the compute node.)
 
-`--dependency=afterany` fires on success, failure and cancellation alike,
-so an unguarded chain would resubmit forever if a job died instantly (bad
+`--dependency=afterany` fires on success, failure and cancellation alike
+-- an unguarded chain would resubmit forever if a job died instantly (bad
 config, a quota-guard abort, a first-batch OOM).
-`submit_train.sbatch` guards against that two ways: a `CHAIN_DEPTH`
-counter (exported across hops via `sbatch --export=ALL,CHAIN_DEPTH=...`)
-that refuses to resubmit past `MAX_CHAIN_DEPTH` (default 500), and a
-completion check before training that exits 0 without training or
-resubmitting if `last.ckpt`'s step count already reached
+`submit_train.sbatch` guards against that two ways, both checked before
+the successor is queued: a `CHAIN_DEPTH` counter (exported across hops via
+`sbatch --export=ALL,CHAIN_DEPTH=...`) that refuses to queue a further hop
+past `MAX_CHAIN_DEPTH` (default 500), and a completion check that exits 0
+without queuing a successor if `last.ckpt`'s step count already reached
 `trainer.max_steps`, or a `STOP` sentinel file exists in `exp_dir`.
+
+**`scancel` behaviour, since `afterany` fires on cancellation too:** once
+a job has passed the queuing step, its successor is already sitting in
+the queue.
+Cancelling the currently running job with `scancel <jobid>` does **not**
+cancel that already-queued successor -- this is a direct consequence of
+using `afterany`, which is also what lets the chain survive preemption
+(which looks like a cancellation to Slurm).
+To actually stop the chain:
+
+- **Preferred:** touch `${exp_dir}/STOP`. The already-queued successor
+  will start, hit the completion check before training or queuing
+  anything further, and exit 0. A brief, harmless job start is the
+  accepted cost of guaranteed resume-after-preemption elsewhere in the
+  chain.
+- **Alternative:** also `scancel` the queued successor's job id (find it
+  with `squeue -u $USER`) if even that brief start is undesirable.
 
 ### Rank-0 OOM masquerading as an NCCL timeout
 

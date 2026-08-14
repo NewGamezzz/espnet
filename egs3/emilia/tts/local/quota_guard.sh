@@ -25,6 +25,11 @@
 # or a global grep on the wrong line silently mixes GiB and TiB numbers) and
 # fails CLOSED: any parse failure, missing block, or unexpected unit aborts
 # rather than allowing submission to proceed on a guess.
+#
+# DEVIATION from task-13-brief.md's example: arithmetic below uses `awk`
+# throughout instead of `bc`. This drops a dependency on `bc` being
+# installed on the compute node (not guaranteed the way awk is), and keeps
+# the numeric comparison in the same tool as the parsing above it.
 set -euo pipefail
 
 MIN_FREE_TIB="${MIN_FREE_TIB:-2}"
