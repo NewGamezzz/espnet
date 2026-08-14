@@ -2,17 +2,21 @@
 the meta/SCP output contract, and generate/gt/resynth layout parity.
 
 Fixture-based and CPU-only: a fabricated two-channel FLAC + a hand-built
-TWO-WINDOW manifest on one session, the tiny random-init DiT from the trainer
-suite, and a fake Vocos whose ``decode`` maps a mel ``(N, n_mel, T)`` to a
-wave ``(N, T*hop)``.  Two windows per session are load-bearing: the new
+SESSION manifest whose turns the real online planner (default, ratified
+``WindowParams``) plans into TWO windows, the tiny random-init DiT from the
+trainer suite, and a fake Vocos whose ``decode`` maps a mel ``(N, n_mel, T)``
+to a wave ``(N, T*hop)``.  Two windows per session are load-bearing: the new
 scheme forbids drawing a channel's prompt turn from inside the evaluated
 window (leakage), so a session with only one window has an empty candidate
 pool for every channel and every window is skipped - the happy-path fixture
 below gives each window's channels exactly one non-window candidate (the
 other window's turns), so picks are forced and deterministic without
-depending on ``random.Random`` internals.  ``gt`` mode needs neither model
-nor vocoder (pure audio slicing + concatenation), so its meta JSON is
-compared byte-for-byte against a golden dict.
+depending on ``random.Random`` internals for the LADDER (the window split
+itself still runs through the real, seeded planner - see ``_two_window_session``
+for how the turn layout forces a deterministic two-way split under
+``window_min=10``/``window_max=80`` with ``window_seed=0``).  ``gt`` mode
+needs neither model nor vocoder (pure audio slicing + concatenation), so its
+meta JSON is compared byte-for-byte against a golden dict.
 """
 
 from __future__ import annotations
@@ -28,15 +32,15 @@ from omegaconf import OmegaConf
 from .conftest import EXT_TOKENS
 from .test_build_model import build_tiny  # noqa: F401  (fixture reuse)
 
+from egs3.conversational.tts.dataset.preprocessing.sessions import (
+    SessionRecord,
+    write_session_manifest,
+)
 from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
 from egs3.conversational.tts.dataset.preprocessing.text import (
     build_branch_texts,
     encode_tokens,
     make_token2id,
-)
-from egs3.conversational.tts.dataset.preprocessing.windows import (
-    WindowRecord,
-    to_json,
 )
 from egs3.conversational.tts.src import inference as inference_mod
 from egs3.conversational.tts.src.inference import (
@@ -90,8 +94,14 @@ class TestPromptTurnLadder:
         # regardless of every relaxation tier.
         turns = [Turn(0, "a", "x", 1.0, 3.0)]
         result = _select_prompt_turn(
-            turns, 0, t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0,
-            seed=0, window_id="w",
+            turns,
+            0,
+            t0=0.0,
+            t1=5.0,
+            turn_min=2.0,
+            turn_max=10.0,
+            seed=0,
+            window_id="w",
         )
         assert result is None
 
@@ -101,8 +111,14 @@ class TestPromptTurnLadder:
         solo = Turn(0, "a", "z", 20.0, 23.0)
         pool = [overlapped, overlap_partner, solo]
         result = _select_prompt_turn(
-            pool, 0, t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0,
-            seed=0, window_id="w",
+            pool,
+            0,
+            t0=0.0,
+            t1=5.0,
+            turn_min=2.0,
+            turn_max=10.0,
+            seed=0,
+            window_id="w",
         )
         assert result is solo
 
@@ -111,8 +127,14 @@ class TestPromptTurnLadder:
         in_band = Turn(0, "a", "y", 20.0, 23.0)  # 3.0s
         pool = [too_short, in_band]
         result = _select_prompt_turn(
-            pool, 0, t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0,
-            seed=0, window_id="w",
+            pool,
+            0,
+            t0=0.0,
+            t1=5.0,
+            turn_min=2.0,
+            turn_max=10.0,
+            seed=0,
+            window_id="w",
         )
         assert result is in_band
 
@@ -120,8 +142,14 @@ class TestPromptTurnLadder:
         # Only candidate is solo but out of band -> tier 2 still returns it.
         too_short = Turn(0, "a", "x", 10.0, 11.0)
         result = _select_prompt_turn(
-            [too_short], 0, t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0,
-            seed=0, window_id="w",
+            [too_short],
+            0,
+            t0=0.0,
+            t1=5.0,
+            turn_min=2.0,
+            turn_max=10.0,
+            seed=0,
+            window_id="w",
         )
         assert result is too_short
 
@@ -129,8 +157,14 @@ class TestPromptTurnLadder:
         overlapped = Turn(0, "a", "x", 10.0, 13.0)
         overlap_partner = Turn(1, "b", "y", 11.0, 14.0)
         result = _select_prompt_turn(
-            [overlapped, overlap_partner], 0, t0=0.0, t1=5.0,
-            turn_min=2.0, turn_max=10.0, seed=0, window_id="w",
+            [overlapped, overlap_partner],
+            0,
+            t0=0.0,
+            t1=5.0,
+            turn_min=2.0,
+            turn_max=10.0,
+            seed=0,
+            window_id="w",
         )
         assert result is overlapped
 
@@ -139,7 +173,12 @@ class TestPromptTurnLadder:
         b = Turn(0, "a", "y", 20.0, 23.0)
         pool = [a, b]  # both solo, both in band -> tier 1 has 2 candidates
         kwargs = dict(
-            t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0, seed=0, window_id="w",
+            t0=0.0,
+            t1=5.0,
+            turn_min=2.0,
+            turn_max=10.0,
+            seed=0,
+            window_id="w",
         )
         first = _select_prompt_turn(pool, 0, **kwargs)
         second = _select_prompt_turn(pool, 0, **kwargs)
@@ -163,45 +202,70 @@ def _write_flac(path: Path, num_channels: int, duration_s: float, sr: int) -> No
     sf.write(str(path), data, sr, subtype="PCM_16", format="FLAC")
 
 
-def _window_a() -> WindowRecord:
-    return WindowRecord(
+def _two_window_session() -> SessionRecord:
+    """One non-atomic session whose turns force the REAL online planner
+    (default, ratified ``WindowParams``: ``window_min=10``, ``window_max=80``,
+    ``tail_min=5``, ``trim_to_turns=True``, ``snap_start_to_turn=True``) at
+    the default ``window_seed=0`` to split it into exactly two windows -
+    verified by directly simulating ``plan_sessions`` with this exact turn
+    layout (see task-11-report.md for the derivation, reproducible via
+    ``random.Random("0:window:sess").uniform(10.0, 80.0)`` ~= 75.49).
+
+    Turn layout: two turns near the start (envelope [0.5, 8.5), 8.0s after
+    ``trim_to_turns``) and two turns after a long silent gap (envelope
+    [76.5, 84.5), 8.0s).  ``snap_start_to_turn`` starts the first iteration on
+    the first turn (0.5s); the seeded target cut (~75.99s) lands in the gap
+    between the two turn groups (no turn spans it), so the untrimmed first
+    window is exactly ``[0.5, 75.99)`` and trims to the first group's
+    envelope.  The second iteration snaps straight to the second group's
+    first turn (76.5s); the remaining duration from there is <= window_max,
+    so it is emitted directly as the final window and trims to the second
+    group's envelope.  Each turn is individually 2.5s so BOTH windows' prompt
+    (built from the other window's two turns) totals 5.0s raw, matching the
+    golden ``prompt_frames``/``prompt_sec`` arithmetic below regardless of
+    which window is being generated.
+    """
+    return SessionRecord(
+        session_id="sess",
+        audio_relpath="original/sess_mixed.flac",
+        num_channels=2,
+        sample_rate=SRC_SR,
+        duration=90.0,
+        turns=(
+            Turn(0, "spk_a", "abc def", 0.5, 3.0),  # 2.5s
+            Turn(1, "spk_b", "bead cab", 6.0, 8.5),  # 2.5s
+            Turn(0, "spk_a", "cage jade", 76.5, 79.0),  # 2.5s
+            Turn(1, "spk_b", "badge fig", 82.0, 84.5),  # 2.5s
+        ),
+    )
+
+
+def _solo_session() -> SessionRecord:
+    """One ATOMIC session (bypasses planning: one window, verbatim turns,
+    ``t0=0``/``t1=duration``) - every channel's only pool turns are its own
+    (in-window) turns, so the non-window tier is always empty."""
+    return SessionRecord(
+        session_id="sess",
+        audio_relpath="original/sess_mixed.flac",
+        num_channels=2,
+        sample_rate=SRC_SR,
+        duration=10.0,
+        turns=(
+            Turn(0, "spk_a", "abc def", 0.5, 3.0),
+            Turn(1, "spk_b", "bead cab", 6.0, 8.5),
+        ),
+        atomic=True,
         window_id="sess_w00000",
-        session_id="sess",
-        audio_relpath="original/sess_mixed.flac",
-        num_channels=2,
-        sample_rate=SRC_SR,
-        t0=5.0,
-        t1=13.0,
-        turns=(
-            Turn(0, "spk_a", "abc def", 5.5, 8.0),  # 2.5s, rel 0.5-3.0
-            Turn(1, "spk_b", "bead cab", 8.5, 11.0),  # 2.5s, rel 3.5-6.0
-        ),
     )
 
 
-def _window_b() -> WindowRecord:
-    return WindowRecord(
-        window_id="sess_w00001",
-        session_id="sess",
-        audio_relpath="original/sess_mixed.flac",
-        num_channels=2,
-        sample_rate=SRC_SR,
-        t0=25.0,
-        t1=33.0,
-        turns=(
-            Turn(0, "spk_a", "cage jade", 25.5, 28.0),  # 2.5s
-            Turn(1, "spk_b", "badge fig", 28.5, 31.0),  # 2.5s
-        ),
-    )
-
-
-def _write_fixture_files(tmp_path, windows, flac_duration_s: float) -> dict:
+def _write_fixture_files(
+    tmp_path, session: SessionRecord, flac_duration_s: float
+) -> dict:
     root = tmp_path / "data"
     _write_flac(root / "original" / "sess_mixed.flac", 2, flac_duration_s, SRC_SR)
-    manifest = root / "valid.jsonl"
-    manifest.write_text(
-        "".join(json.dumps(to_json(w)) + "\n" for w in windows), encoding="utf-8"
-    )
+    manifest = root / "sessions_valid.jsonl"
+    write_session_manifest(manifest, [session])
     vocab = tmp_path / "vocab.txt"
     vocab.write_text("\n".join(EXT_TOKENS) + "\n", encoding="utf-8")
     training_config = OmegaConf.create(
@@ -226,14 +290,14 @@ def fixture(tmp_path):
     """Two windows on one session: each window's channels draw their prompt
     turn from the OTHER window (the only non-window candidate), so every
     ladder pick is forced to a single element regardless of the seed."""
-    return _write_fixture_files(tmp_path, [_window_a(), _window_b()], 40.0)
+    return _write_fixture_files(tmp_path, _two_window_session(), 90.0)
 
 
 @pytest.fixture
 def solo_window_fixture(tmp_path):
     """One window, one session: every channel's only pool turns are its own
     (in-window) turns, so the non-window tier is always empty."""
-    return _write_fixture_files(tmp_path, [_window_a()], 20.0)
+    return _write_fixture_files(tmp_path, _solo_session(), 10.0)
 
 
 def _infer_config(fixture, mode, inference_dir):
@@ -338,15 +402,15 @@ class TestGtContract:
                     {
                         "channel": 0,
                         "text": "cage jade",
-                        "start": 25.5,
-                        "end": 28.0,
+                        "start": 76.5,
+                        "end": 79.0,
                         "duration_sec": 2.5,
                     },
                     {
                         "channel": 1,
                         "text": "badge fig",
-                        "start": 28.5,
-                        "end": 31.0,
+                        "start": 82.0,
+                        "end": 84.5,
                         "duration_sec": 2.5,
                     },
                 ],
@@ -366,8 +430,8 @@ class TestGtContract:
                 },
             ],
             "turns": [
-                {"channel": 0, "text": "abc def", "start": 0.5, "end": 3.0},
-                {"channel": 1, "text": "bead cab", "start": 3.5, "end": 6.0},
+                {"channel": 0, "text": "abc def", "start": 0.0, "end": 2.5},
+                {"channel": 1, "text": "bead cab", "start": 5.5, "end": 8.0},
             ],
         }
         assert meta == expected
@@ -438,9 +502,7 @@ class TestAudioAssembly:
             assert sr == FS
             assert data.shape[0] == round(2.5 * FS)
 
-    def test_prompt_frame_exact_trim_reconstructed_from_channel_blocks(
-        self, fixture
-    ):
+    def test_prompt_frame_exact_trim_reconstructed_from_channel_blocks(self, fixture):
         inf_dir = fixture["tmp_path"] / "infer_trim"
         cfg = _infer_config(fixture, "gt", inf_dir)
         run_inference(cfg, training_config=fixture["training_config"])
@@ -457,9 +519,7 @@ class TestAudioAssembly:
         )
         expected_frames = total_samples // HOP
         assert meta["prompt"]["total_frames"] == expected_frames
-        assert meta["prompt"]["total_sec"] == round(
-            (expected_frames * HOP) / FS, 6
-        )
+        assert meta["prompt"]["total_sec"] == round((expected_frames * HOP) / FS, 6)
 
     def test_generated_region_covers_the_whole_window(self, fixture, ext_vocab_file):
         inf_dir = fixture["tmp_path"] / "infer_gen_len"
@@ -467,7 +527,9 @@ class TestAudioAssembly:
         model = build_tiny(ext_vocab_file).eval()
         vocoder = FakeVocoder()
         run_inference(
-            cfg, training_config=fixture["training_config"], model=model,
+            cfg,
+            training_config=fixture["training_config"],
+            model=model,
             vocoder=vocoder,
         )
         test_dir = inf_dir / "valid"
@@ -503,7 +565,9 @@ class TestTextAssembly:
         model = build_tiny(ext_vocab_file).eval()
         vocoder = FakeVocoder()
         run_inference(
-            cfg, training_config=fixture["training_config"], model=model,
+            cfg,
+            training_config=fixture["training_config"],
+            model=model,
             vocoder=vocoder,
         )
 
@@ -513,9 +577,7 @@ class TestTextAssembly:
         prompt_turns = [
             _TextTurn(p["channel"], p["text"]) for p in meta["prompt"]["turns"]
         ]
-        window_turns = [
-            _TextTurn(t["channel"], t["text"]) for t in meta["turns"]
-        ]
+        window_turns = [_TextTurn(t["channel"], t["text"]) for t in meta["turns"]]
         expected_branches = build_branch_texts(prompt_turns + window_turns, 2)
         token2id = make_token2id(EXT_TOKENS)
         expected_ids = [encode_tokens(b, token2id) for b in expected_branches]
@@ -552,9 +614,7 @@ class TestModeParity:
 
     def _layout(self, test_dir: Path):
         files = sorted(
-            str(p.relative_to(test_dir))
-            for p in test_dir.rglob("*")
-            if p.is_file()
+            str(p.relative_to(test_dir)) for p in test_dir.rglob("*") if p.is_file()
         )
         return files
 
@@ -645,6 +705,7 @@ class TestSelection:
         )
         assert stats["n_selected"] == 0
         assert stats["n_skipped"] == 1
-        assert not (inf_dir / "valid" / "meta.scp").exists() or (
-            inf_dir / "valid" / "meta.scp"
-        ).read_text("utf-8").strip() == ""
+        assert (
+            not (inf_dir / "valid" / "meta.scp").exists()
+            or (inf_dir / "valid" / "meta.scp").read_text("utf-8").strip() == ""
+        )

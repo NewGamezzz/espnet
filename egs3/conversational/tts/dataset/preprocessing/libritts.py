@@ -1,11 +1,13 @@
-"""LibriTTS corpus ingestion: subset scanning and utterance-as-window records.
+"""LibriTTS corpus ingestion: subset scanning and utterance-as-session records.
 
-A LibriTTS utterance becomes a 1-channel ``WindowRecord`` (one turn on
-channel 0 spanning the whole file), so everything downstream of the manifest
-(dataset, preprocessor, collator, sampler, model) is reused unchanged.
-Corpus-specific code stays in this module per the generalization contract in
-the design note: adding another corpus means another module like this one,
-never changes downstream of the manifest.
+A LibriTTS utterance becomes a 1-channel, ATOMIC ``SessionRecord`` (one turn
+on channel 0 spanning the whole file; ``atomic=True`` so the online planner
+passes it through as a single window with ``window_id`` preserved), so
+everything downstream of the manifest (dataset, preprocessor, collator,
+sampler, model) is reused unchanged. Corpus-specific code stays in
+this module per the generalization contract in the design note: adding
+another corpus means another module like this one, never changes downstream
+of the manifest.
 """
 
 from __future__ import annotations
@@ -16,8 +18,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Sequence
 
+from .sessions import SessionRecord
 from .sssd import Turn
-from .windows import WindowRecord
 
 
 @dataclass(frozen=True)
@@ -73,32 +75,27 @@ def scan_subset(root: Path, subset: str, workers: int = 1) -> list[UttEntry]:
     return [entry for entry in maybe_entries if entry is not None]
 
 
-def utterance_record(
+def utterance_session(
     entry: UttEntry, duration: float, sample_rate: int, text: str
-) -> WindowRecord:
-    """One N=1 window spanning the whole utterance file.
+) -> SessionRecord:
+    """One atomic session per utterance; window_id preserved so the frozen
+    plan reproduces the retired manifest ids (parity).
 
     ``text`` is the NORMALIZED transcript (the builder normalizes against the
     extended-vocab charset, mirroring the SSSD build so ``<OTHER>`` counts and
     token coverage can never diverge between corpora).
     """
-    return WindowRecord(
-        window_id=f"libritts_{entry.utt_id}",
+    return SessionRecord(
         session_id=f"libritts_{entry.speaker}_{entry.chapter}",
         audio_relpath=entry.audio_relpath,
         num_channels=1,
         sample_rate=sample_rate,
-        t0=0.0,
-        t1=duration,
+        duration=duration,
         turns=(
-            Turn(
-                channel=0,
-                speaker=entry.speaker,
-                text=text,
-                start=0.0,
-                end=duration,
-            ),
+            Turn(channel=0, speaker=entry.speaker, text=text, start=0.0, end=duration),
         ),
+        atomic=True,
+        window_id=f"libritts_{entry.utt_id}",
     )
 
 

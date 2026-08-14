@@ -8,9 +8,15 @@ from pathlib import Path
 
 import pytest
 
-from egs3.conversational.tts.dataset.dataset import read_window_manifest
 from egs3.conversational.tts.dataset.fisher_builder import _CFG, FisherBuilder
 from egs3.conversational.tts.dataset.preprocessing import fisher
+from egs3.conversational.tts.dataset.preprocessing.planner import (
+    WindowParams,
+    plan_sessions,
+)
+from egs3.conversational.tts.dataset.preprocessing.sessions import (
+    read_session_manifest,
+)
 from egs3.conversational.tts.dataset.preprocessing.sssd import Supervision
 
 from .conftest import REPO_ROOT, write_flac  # noqa: F401  (sys.path setup)
@@ -384,38 +390,112 @@ def test_fisher_builder_end_to_end(tmp_path):
 
     records = []
     for split in ("train", "valid", "test"):
-        path = recipe / f"data/manifest/fisher_{split}.jsonl"
+        path = recipe / f"data/manifest/sessions_fisher_{split}.jsonl"
         assert path.is_file()
         try:
-            records.extend(read_window_manifest(path))
+            records.extend(read_session_manifest(path))
         except RuntimeError:
             pass  # tiny fixture: a split may legitimately be empty
     assert records
     for r in records:
         assert r.num_channels == 2
         assert r.sample_rate == 24000
-        assert r.t1 <= 40.0 + 1e-6
+        # duration is the MEASURED flac duration, not a windowed span
+        assert r.duration <= 40.0 + 1e-6
+        # normalized text: lowercase charset survives
         assert all(t.text == t.text.lower() for t in r.turns)
+        # no unintelligible utterances in this fixture: nothing to exclude
+        assert r.exclusion_spans == ()
 
 
-def test_fisher_builder_drops_windows_over_unintelligible_spans(tmp_path):
-    """An empty (( )) span must kill any window overlapping it, while a
+def test_fisher_builder_populates_exclusion_spans(tmp_path):
+    """An empty (( )) span must land on the session's ``exclusion_spans``
+    (the planner drops any window overlapping it, tested in
+    ``test_planner.py::TestExclusionSpans``), while a standalone [laughter]
+    must not: it is benign (tag-only), never unintelligible speech.
+    """
+    duration = 40.0
+    sups = two_speaker_session(duration)
+    sups.append(
+        {
+            "start": 20.0,
+            "duration": 1.0,
+            "channel": 0,
+            "text": "(( ))",
+            "speaker": "spk_0",
+        }
+    )
+    sups.append(
+        {
+            "start": 25.0,
+            "duration": 0.5,
+            "channel": 1,
+            "text": "[laughter]",
+            "speaker": "spk_1",
+        }
+    )
+    root, flac_dir = fabricate_fisher(tmp_path, {"fe_03_00001": (duration, sups)})
+    recipe = tmp_path / "recipe"
+    fabricate_recipe(recipe)
+    FisherBuilder().build(
+        recipe_dir=recipe, dataset_root=root, fisher_flac_dir=flac_dir, seed=0
+    )
+    records = []
+    for split in ("train", "valid", "test"):
+        try:
+            records.extend(
+                read_session_manifest(
+                    recipe / f"data/manifest/sessions_fisher_{split}.jsonl"
+                )
+            )
+        except (RuntimeError, FileNotFoundError):
+            pass
+    assert len(records) == 1
+    # exactly the (( )) span, unrounded; the benign [laughter] contributes
+    # nothing
+    assert records[0].exclusion_spans == ((20.0, 21.0),)
+
+
+def test_fisher_build_then_plan_drops_windows_over_unintelligible_spans(tmp_path):
+    """End-to-end proof that relocating the unintelligible-span filter from
+    build time into the online planner changed nothing observable: an empty
+    (( )) span must still kill any planned window overlapping it, while a
     standalone [laughter] must not.
+
+    This is the direct descendant of the pre-refactor
+    ``test_fisher_builder_drops_windows_over_unintelligible_spans`` (see git
+    history), rewritten for the two-stage pipeline: the OLD test called only
+    ``FisherBuilder().build()`` and read pre-cut windows straight off disk;
+    the NEW builder never cuts windows, so this version chains
+    ``FisherBuilder().build()`` (which now only records the span on
+    ``SessionRecord.exclusion_spans``) into ``plan_sessions`` (frozen,
+    seed=0, epoch=None -- the same RNG seed string
+    ``f"{seed}:window:{session_id}"`` the old build-time ``build_windows``
+    call used, so window boundaries are unchanged) with the ratified
+    ``WindowParams`` defaults (window_max=80.0, matching this fixture's old
+    config values). ``TestFisherParity`` in test_parity.py is NOT this
+    coverage: the committed golden Fisher fixture's sessions carry no
+    unintelligible utterances (``two_speaker_session`` only ever emits
+    plain, representable text), so ``exclusion_spans`` is empty on every
+    golden record and the ``planner.py:118`` branch this task relocated the
+    filter into is never exercised by that test. This test is the one that
+    actually exercises it.
 
     ``duration`` is deliberately well above ``window_max`` (60.0): a session
     no longer than window_max always collapses to a single whole-session
     window (see ``select_window_spans``' tail shortcut, which never
     consults blocked/unintelligible spans), so a single window covering the
-    (( )) span would make ``assert records`` and the no-overlap assertion
-    below mutually unsatisfiable. At 180s the session is windowed into
+    (( )) span would make ``assert planned`` and the no-overlap assertion
+    below mutually unsatisfiable. At 180s the session is planned into
     several pieces, so the piece(s) touching the (( )) span can be dropped
     while others -- including the one covering the benign [laughter] --
     survive. Neither extra utterance ever reaches ``merge_turns`` (both
     clean to empty text), so the window boundaries are unaffected by where
-    these two are placed; positions 50.0 and 80.0 are chosen (seed=0) to
-    fall in two DIFFERENT generated windows, verified empirically, so the
-    test actually exercises "one window dropped, another one survives"
-    rather than both spans landing in the same window.
+    these two are placed; positions 50.0 and 80.0 are the old test's
+    empirically-chosen values, re-verified here to still fall in two
+    DIFFERENT planned windows under the unchanged RNG seed, so the test
+    actually exercises "one window dropped, another one survives" rather
+    than both spans landing in the same window.
     """
     duration = 180.0
     sups = two_speaker_session(duration)
@@ -443,21 +523,26 @@ def test_fisher_builder_drops_windows_over_unintelligible_spans(tmp_path):
     FisherBuilder().build(
         recipe_dir=recipe, dataset_root=root, fisher_flac_dir=flac_dir, seed=0
     )
-    records = []
+    sessions = []
     for split in ("train", "valid", "test"):
         try:
-            records.extend(
-                read_window_manifest(recipe / f"data/manifest/fisher_{split}.jsonl")
+            sessions.extend(
+                read_session_manifest(
+                    recipe / f"data/manifest/sessions_fisher_{split}.jsonl"
+                )
             )
         except (RuntimeError, FileNotFoundError):
             pass
+    assert len(sessions) == 1
+    assert sessions[0].exclusion_spans == ((50.0, 51.0),)
+    planned, _stats = plan_sessions(sessions, params=WindowParams(), seed=0, epoch=None)
     # windows survive somewhere in the session (laughter is benign) ...
-    assert records
+    assert planned
     # ... but none of them covers the unintelligible instant
-    assert not any(r.t0 < 51.0 and 50.0 < r.t1 for r in records)
+    assert not any(w.t0 < 51.0 and 50.0 < w.t1 for w in planned)
     # ... and the benign [laughter] instant did NOT kill its window: some
     # surviving window still covers it.
-    assert any(r.t0 < 80.5 and 80.0 < r.t1 for r in records)
+    assert any(w.t0 < 80.5 and 80.0 < w.t1 for w in planned)
 
 
 def test_fisher_builder_requires_vocab(tmp_path):
@@ -489,9 +574,11 @@ def test_fisher_builder_uses_measured_duration_not_manifest(tmp_path):
     for split in ("train", "valid", "test"):
         try:
             records.extend(
-                read_window_manifest(recipe / f"data/manifest/fisher_{split}.jsonl")
+                read_session_manifest(
+                    recipe / f"data/manifest/sessions_fisher_{split}.jsonl"
+                )
             )
         except (RuntimeError, FileNotFoundError):
             pass
     assert records
-    assert all(r.t1 <= 35.0 + 1e-6 for r in records)
+    assert all(r.duration <= 35.0 + 1e-6 for r in records)

@@ -1,8 +1,10 @@
 """espnet3 ``infer`` stage for the conversational multi-branch F5 recipe.
 
-Batch-generates multi-channel conversations from manifest windows in three
-modes that share ONE output layout so the later ``measure`` stage needs zero
-metric-side special-casing:
+Batch-generates multi-channel conversations from the split's frozen window
+plan - ``ConversationDataset(inference=True)`` reads a session manifest and
+plans it online, bit-identical to the retired offline window manifests - in
+three modes that share ONE output layout so the later ``measure`` stage
+needs zero metric-side special-casing:
 
 * ``generate`` - run the assembled model (zero-init gates by default);
 * ``gt``       - copy the ground-truth window audio;
@@ -17,9 +19,9 @@ generates the entire dialog, and every channel is guaranteed a voice
 reference in the prompt (a hard project rule: every speaker must have a
 prompt reference).
 
-Turn-pool construction (once per manifest, not per window): for a window's
-``session_id``, the pool is the union of ``turns`` across every record in the
-manifest sharing that ``session_id``, deduplicated by
+Turn-pool construction (once per dataset, not per window): for a window's
+``session_id``, the pool is the union of ``turns`` across every planned
+window record sharing that ``session_id``, deduplicated by
 ``(channel, start, end, text)``.
 
 Per-channel candidate selection uses a relaxation ladder (first non-empty
@@ -122,7 +124,7 @@ def _build_turn_pools(records) -> dict[str, list[Any]]:
     ``session_id``, deduplicated by ``(channel, start, end, text)``, in
     first-seen order (deterministic regardless of hash randomization since
     membership uses a set but output order only ever follows record/turn
-    iteration order).  Built once for the whole manifest, not per window.
+    iteration order).  Built once for the whole dataset, not per window.
     """
     pools: dict[str, list[Any]] = {}
     seen: dict[str, set[tuple]] = {}

@@ -1,4 +1,4 @@
-"""LibriTTS scanning and utterance-as-window record construction."""
+"""LibriTTS scanning and utterance-as-session/window record construction."""
 
 import string
 from pathlib import Path
@@ -7,16 +7,16 @@ import numpy as np
 import pytest
 import soundfile as sf
 
-from egs3.conversational.tts.dataset.dataset import (
-    ConversationDataset,
-    read_window_manifest,
-)
+from egs3.conversational.tts.dataset.dataset import ConversationDataset
 from egs3.conversational.tts.dataset.libritts_builder import LibriTTSBuilder
 from egs3.conversational.tts.dataset.preprocessing.libritts import (
     UttEntry,
     scan_subset,
     subsample_to_hours,
-    utterance_record,
+    utterance_session,
+)
+from egs3.conversational.tts.dataset.preprocessing.sessions import (
+    read_session_manifest,
 )
 
 from .conftest import REPO_ROOT  # noqa: F401  (sys.path setup)
@@ -90,7 +90,7 @@ def test_scan_subset_threaded_matches_serial(tmp_path):
     assert len(threaded) == 10
 
 
-def test_utterance_record_shape(tmp_path):
+def test_utterance_session_shape(tmp_path):
     entry = UttEntry(
         utt_id="103_1241_000000_000001",
         audio_relpath="train-clean-100/103/1241/103_1241_000000_000001.wav",
@@ -98,20 +98,20 @@ def test_utterance_record_shape(tmp_path):
         chapter="1241",
         text="Hello there.",
     )
-    record = utterance_record(
+    record = utterance_session(
         entry, duration=2.5, sample_rate=24000, text="hello there."
     )
-    assert record.window_id == "libritts_103_1241_000000_000001"
     assert record.session_id == "libritts_103_1241"
+    assert record.audio_relpath == entry.audio_relpath
     assert record.num_channels == 1
     assert record.sample_rate == 24000
-    assert (record.t0, record.t1) == (0.0, 2.5)
-    assert record.num_active_speakers == 1
-    assert record.exchange_count == 0
+    assert record.duration == 2.5
+    assert record.atomic is True
+    assert record.window_id == "libritts_103_1241_000000_000001"
     (turn,) = record.turns
     assert (turn.channel, turn.speaker) == (0, "103")
     assert turn.text == "hello there."  # normalized text, not the raw transcript
-    assert (turn.start, turn.end) == (0.0, 2.5)
+    assert (turn.start, turn.end) == (0.0, 2.5)  # turn spans the whole utterance
 
 
 def test_subsample_to_hours_budget_and_determinism():
@@ -180,7 +180,9 @@ def test_builder_end_to_end(tmp_path):
     builder.build(recipe_dir=recipe, dataset_root=root, seed=0)
     assert builder.is_built(recipe_dir=recipe)
 
-    train = read_window_manifest(recipe / "data/manifest/libritts_train.jsonl")
+    train = read_session_manifest(
+        recipe / "data/manifest/sessions_libritts_train.jsonl"
+    )
     # the 0.5 s utterance is dropped; the three subsets each contribute one
     assert sorted(r.window_id for r in train) == [
         "libritts_1_10_000000_000001",
@@ -188,14 +190,16 @@ def test_builder_end_to_end(tmp_path):
         "libritts_3_30_000000_000001",
     ]
     for r in train:
+        assert r.atomic is True
         assert r.num_channels == 1
-        assert r.num_active_speakers == 1
-        assert r.t0 == 0.0 and r.t1 >= 1.0
+        assert r.duration >= 1.0
         assert r.turns[0].channel == 0
         # normalized against the charset: lowercased, punctuation kept
         assert r.turns[0].text == r.turns[0].text.lower()
 
-    valid = read_window_manifest(recipe / "data/manifest/libritts_valid.jsonl")
+    valid = read_session_manifest(
+        recipe / "data/manifest/sessions_libritts_valid.jsonl"
+    )
     assert {r.window_id for r in valid} == {
         "libritts_4_40_000000_000001",
         "libritts_4_40_000000_000002",
@@ -214,7 +218,9 @@ def test_builder_accepts_libritts_root_passthrough(tmp_path):
     builder.prepare_source(recipe_dir=recipe, libritts_root=root)
     builder.build(recipe_dir=recipe, libritts_root=root, seed=0)
     assert builder.is_built(recipe_dir=recipe)
-    train = read_window_manifest(recipe / "data/manifest/libritts_train.jsonl")
+    train = read_session_manifest(
+        recipe / "data/manifest/sessions_libritts_train.jsonl"
+    )
     assert len(train) == 3
 
 
@@ -244,7 +250,7 @@ def test_manifest_loads_through_conversation_dataset(tmp_path):
     LibriTTSBuilder().build(recipe_dir=recipe, dataset_root=root, seed=0)
     dataset = ConversationDataset(
         split="train",
-        manifest_path=recipe / "data/manifest/libritts_train.jsonl",
+        manifest_path=recipe / "data/manifest/sessions_libritts_train.jsonl",
         dataset_root=root,
         fs=24000,
     )

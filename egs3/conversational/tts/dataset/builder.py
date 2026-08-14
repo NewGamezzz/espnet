@@ -1,12 +1,15 @@
-"""SSSD dataset builder: window manifests, splits, and the extended vocab.
+"""SSSD dataset builder: session manifests, splits, and the extended vocab.
 
 Thin orchestration in the libritts house style; the algorithms live in the
-``preprocessing/`` package (``sssd.py`` / ``windows.py`` / ``text.py``) so
-tests hit them with fabricated fixtures.  The corpus directory is treated as
-strictly read-only.
+``preprocessing/`` package (``sssd.py`` / ``text.py``) so tests hit them with
+fabricated fixtures.  The corpus directory is treated as strictly read-only.
+
+Window planning now happens online (see ``preprocessing/planner.py``): the
+builder emits one merged + normalized SESSION per line, not pre-cut windows.
 
 Build outputs (under ``<recipe_dir>/data/``):
-  - ``manifest/{train,valid,test}.jsonl``  window manifests (one JSON per line)
+  - ``manifest/sessions_{train,valid,test}.jsonl``  session manifests
+    (one JSON per line, ``SessionRecord`` schema)
   - ``tokens/vocab.txt``   base vocab + ``<turn>`` + ``<OTHER>`` appended at the
     end (pure token-per-line; the line index is the token id, so the file
     carries no comments -- ids are documented in the meta file instead)
@@ -23,7 +26,6 @@ import json
 import os
 import random
 import statistics
-from collections import Counter, defaultdict
 from importlib import resources
 from pathlib import Path
 from typing import Sequence
@@ -31,6 +33,7 @@ from typing import Sequence
 from espnet3.components.data.dataset_builder import DatasetBuilder
 from espnet3.utils.config_utils import load_config_with_defaults
 
+from .preprocessing.sessions import SessionRecord, write_session_manifest
 from .preprocessing.sssd import (
     Turn,
     load_recordings,
@@ -39,7 +42,6 @@ from .preprocessing.sssd import (
     session_speakers,
 )
 from .preprocessing.text import NEW_TOKENS, extend_vocab, normalize_text, vocab_charset
-from .preprocessing.windows import WindowingStats, build_windows, to_json
 
 
 def _load_builder_config() -> dict:
@@ -112,23 +114,8 @@ def _distribution(values: Sequence[float]) -> str:
     )
 
 
-def _gap_summary(gaps: Sequence[float], old_rule_threshold: float = 0.2) -> str:
-    """Distribution of the all-channel gap at chosen cut points, plus how many
-    of them the former all-channel-silence rule (>= 0.2 s) could not use."""
-    if not gaps:
-        return "n=0"
-    vals = sorted(gaps)
-    n = len(vals)
-    below = sum(1 for g in vals if g < old_rule_threshold)
-    return (
-        f"n={n} min={vals[0]:.3f} p10={vals[int(0.1 * (n - 1))]:.3f} "
-        f"median={vals[(n - 1) // 2]:.3f} mean={statistics.fmean(vals):.3f}; "
-        f"gaps < {old_rule_threshold}s: {below} ({100 * below / n:.1f}%)"
-    )
-
-
 class SSSDBuilder(DatasetBuilder):
-    """Prepare SSSD window manifests and the extended vocab for ESPnet3 TTS."""
+    """Prepare SSSD session manifests and the extended vocab for ESPnet3 TTS."""
 
     def is_source_prepared(
         self,
@@ -212,65 +199,44 @@ class SSSDBuilder(DatasetBuilder):
         splits = split_sessions(session_ids, _CFG["split_ratios"], seed)
         session_split = {sid: split for split, ids in splits.items() for sid in ids}
 
-        writers = {}
-        for split, relpath in _CFG["manifest_paths"].items():
-            path = data_dir / relpath
-            path.parent.mkdir(parents=True, exist_ok=True)
-            writers[split] = path.open("w", encoding="utf-8")
-
-        stats = {split: WindowingStats() for split in writers}
-        durations: dict[str, list[float]] = {split: [] for split in writers}
-        turns_per_window: dict[str, list[int]] = {split: [] for split in writers}
-        exchange_counts: dict[str, list[int]] = {split: [] for split in writers}
-        # windows and seconds keyed by num_active_speakers, per split
-        spk_windows: dict[str, Counter] = {split: Counter() for split in writers}
-        spk_seconds: dict[str, defaultdict] = {
-            split: defaultdict(float) for split in writers
+        session_records: dict[str, list[SessionRecord]] = {
+            split: [] for split in _CFG["manifest_paths"]
         }
-        speakers: dict[str, set[str]] = {split: set() for split in writers}
+        turn_seconds: dict[str, float] = {split: 0.0 for split in session_records}
+        speakers: dict[str, set[str]] = {split: set() for split in session_records}
         overlap_time = speech_time = 0.0
         dropped_empty_turns = 0
 
-        try:
-            for sid in session_ids:
-                split = session_split[sid]
-                sups = supervisions[sid]
-                speakers[split] |= session_speakers(sups)
-                turns = merge_turns(sups, _CFG["merge_gap"])
-                normalized = []
-                for turn in turns:
-                    text = normalize_text(turn.text, charset)
-                    if not text:
-                        dropped_empty_turns += 1
-                        continue
-                    normalized.append(dataclasses.replace(turn, text=text))
-                ov, sp = overlap_and_speech_time(normalized)
-                overlap_time += ov
-                speech_time += sp
-                records, session_stats = build_windows(
-                    sid,
-                    recordings[sid],
-                    normalized,
-                    window_min=_CFG["window_min"],
-                    window_max=_CFG["window_max"],
-                    boundary_guard=_CFG["boundary_guard"],
-                    tail_min=_CFG["tail_min"],
-                    rng=random.Random(f"{seed}:window:{sid}"),
-                    trim_to_turns=_CFG["trim_to_turns"],
-                    min_coverage=_CFG["min_coverage"],
-                    snap_start_to_turn=_CFG["snap_start_to_turn"],
+        for sid in session_ids:
+            split = session_split[sid]
+            sups = supervisions[sid]
+            speakers[split] |= session_speakers(sups)
+            turns = merge_turns(sups, _CFG["merge_gap"])
+            normalized = []
+            for turn in turns:
+                text = normalize_text(turn.text, charset)
+                if not text:
+                    dropped_empty_turns += 1
+                    continue
+                normalized.append(dataclasses.replace(turn, text=text))
+            ov, sp = overlap_and_speech_time(normalized)
+            overlap_time += ov
+            speech_time += sp
+            turn_seconds[split] += sum(t.end - t.start for t in normalized)
+            rec = recordings[sid]
+            session_records[split].append(
+                SessionRecord(
+                    session_id=sid,
+                    audio_relpath=rec.audio_relpath,
+                    num_channels=rec.num_channels,
+                    sample_rate=rec.sample_rate,
+                    duration=rec.duration,
+                    turns=tuple(normalized),
                 )
-                stats[split].merge(session_stats)
-                for record in records:
-                    writers[split].write(json.dumps(to_json(record)) + "\n")
-                    durations[split].append(record.duration)
-                    turns_per_window[split].append(len(record.turns))
-                    exchange_counts[split].append(record.exchange_count)
-                    spk_windows[split][record.num_active_speakers] += 1
-                    spk_seconds[split][record.num_active_speakers] += record.duration
-        finally:
-            for f in writers.values():
-                f.close()
+            )
+
+        for split, relpath in _CFG["manifest_paths"].items():
+            write_session_manifest(data_dir / relpath, session_records[split])
 
         vocab_path = data_dir / _CFG["vocab_path"]
         vocab_path.parent.mkdir(parents=True, exist_ok=True)
@@ -303,37 +269,10 @@ class SSSDBuilder(DatasetBuilder):
         ratio = overlap_time / speech_time if speech_time else 0.0
         print(f"  overlap ratio (>=2 channels active / any active): {ratio:.3f}")
         for split in ("train", "valid", "test"):
-            st = stats[split]
             print(
-                f"  {split}: {st.n_windows} windows over "
-                f"{len(splits[split])} sessions; "
-                f"dropped {st.dropped_span_sec:.1f}s "
-                f"({st.dropped_span_sec / 3600:.1f}h) oversized blocked spans, "
-                f"{st.dropped_sliver_sec:.1f}s slivers, "
-                f"{st.dropped_tail_sec:.1f}s tails, "
-                f"{st.dropped_empty_windows} empty windows, "
-                f"{st.dropped_low_coverage_windows} low-coverage "
-                f"({st.dropped_low_coverage_sec / 3600:.1f}h), "
-                f"{st.dropped_trimmed_short_windows} trimmed-short "
-                f"({st.dropped_trimmed_short_sec / 3600:.1f}h), "
-                f"{st.snapped_gap_sec / 3600:.1f}h snapped-gaps"
+                f"  {split}: {len(session_records[split])} sessions, "
+                f"{turn_seconds[split] / 3600:.2f}h turns"
             )
-            print(f"    duration[s]: {_distribution(durations[split])}")
-            print(f"    turns/window: {_distribution(turns_per_window[split])}")
-            print(f"    exchanges/window: {_distribution(exchange_counts[split])}")
-            by_spk = ", ".join(
-                f"{k}spk {spk_windows[split][k]} "
-                f"({spk_seconds[split][k] / 3600:.1f}h)"
-                for k in sorted(spk_windows[split])
-            )
-            print(f"    windows by active speakers: {by_spk or 'n=0'}")
-            n_mini = sum(1 for d in durations[split] if d < _CFG["window_min"])
-            mini_sec = sum(d for d in durations[split] if d < _CFG["window_min"])
-            print(
-                f"    mini-windows ({_CFG['tail_min']:g} <= dur < "
-                f"{_CFG['window_min']:g}s): {n_mini} ({mini_sec / 3600:.1f}h)"
-            )
-            print(f"    cut-point gap[s]: {_gap_summary(st.cut_gaps)}")
         for a, b in (("train", "valid"), ("train", "test"), ("valid", "test")):
             shared = len(speakers[a] & speakers[b])
             print(

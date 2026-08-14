@@ -1,10 +1,14 @@
-"""LibriTTS dataset builder: single-speaker window manifests for the mix.
+"""LibriTTS dataset builder: single-speaker session manifests for the mix.
 
 Runs AFTER the SSSD build (``python -m egs3.conversational.tts.dataset.builder``):
 it normalizes transcripts against the charset of the extended vocab that build
 wrote, so token coverage can never diverge between corpora.  Emits
-``manifest/libritts_{train,valid}.jsonl`` in the exact ``WindowRecord`` schema
-``ConversationDataset`` already consumes; no new dataset class exists.
+``manifest/sessions_libritts_{train,valid}.jsonl``: one ATOMIC ``SessionRecord``
+per utterance (see ``preprocessing/sessions.py``), so the online planner
+(``preprocessing/planner.py``) passes each utterance through as a single
+window with its ``window_id`` preserved, bit-identical to the retired
+per-utterance window manifests.  ``ConversationDataset`` consumes these
+session manifests directly; no new dataset class exists.
 
 The corpus directory is treated as strictly read-only.
 """
@@ -23,9 +27,9 @@ from espnet3.components.data.dataset_builder import DatasetBuilder
 from espnet3.utils.config_utils import load_config_with_defaults
 
 from .builder import _distribution
-from .preprocessing.libritts import scan_subset, subsample_to_hours, utterance_record
+from .preprocessing.libritts import scan_subset, subsample_to_hours, utterance_session
+from .preprocessing.sessions import write_session_manifest
 from .preprocessing.text import normalize_text, vocab_charset
-from .preprocessing.windows import write_window_manifest
 
 
 def _load_configs() -> tuple[dict, dict]:
@@ -55,7 +59,7 @@ def resolve_libritts_root(explicit: str | Path | None = None) -> Path:
 
 
 class LibriTTSBuilder(DatasetBuilder):
-    """Prepare LibriTTS single-speaker window manifests for mixed training."""
+    """Prepare LibriTTS single-speaker session manifests for mixed training."""
 
     def is_source_prepared(
         self,
@@ -159,8 +163,10 @@ class LibriTTSBuilder(DatasetBuilder):
                 if not text:
                     dropped_empty += 1
                     continue
-                records.append(utterance_record(entry, duration, expected_rate, text))
-            n = write_window_manifest(data_dir / _CFG["manifest_paths"][split], records)
+                records.append(utterance_session(entry, duration, expected_rate, text))
+            n = write_session_manifest(
+                data_dir / _CFG["manifest_paths"][split], records
+            )
             total_h = sum(r.duration for r in records) / 3600
             print(
                 f"  {split}: {n} utterances ({total_h:.1f}h) from "

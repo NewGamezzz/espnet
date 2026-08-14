@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """Sanity generation from one dev window (the go/no-go listening artifact).
 
-Takes one window from the step-2 manifests, keeps the first ``--prompt-sec``
-of every channel as the acoustic prompt (the infilling mask covers the
-remainder), conditions each branch on its full masked script, runs the
-multi-branch ODE inference with the exchanges active and CFG as in the
-existing F5 inference path, vocodes each channel with Vocos, and writes
+Takes one window from the split's frozen plan over the step-2 session
+manifest (``ConversationDataset(inference=True)``), keeps the first
+``--prompt-sec`` of every channel as the acoustic prompt (the infilling mask
+covers the remainder), conditions each branch on its full masked script,
+runs the multi-branch ODE inference with the exchanges active and CFG as in
+the existing F5 inference path, vocodes each channel with Vocos, and writes
 per-channel wavs plus a mixdown next to a text dump of the masked scripts.
 
 Separated channels with sensible turn-taking = POC signal; audio quality is

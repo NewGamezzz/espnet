@@ -8,7 +8,12 @@ from omegaconf import OmegaConf
 
 from .conftest import REPO_ROOT  # noqa: F401  (sys.path setup)
 
-from egs3.conversational.tts.src.lit_module import ConversationalLightningModule
+from egs3.conversational.tts.src.lit_module import (
+    ConversationalLightningModule,
+    PackedConversationCollator,
+    PlannedWindowView,
+)
+from egs3.conversational.tts.src.sampler import ConversationBatchSampler
 
 
 class _RecordingLogDict:
@@ -91,7 +96,16 @@ def test_training_config_has_no_per_epoch_reload_and_keeps_sanity_probe():
     ConversationBatchSampler.set_epoch. The sanity probe (num_sanity_val_steps)
     is kept ON to fail fast on broken val/train paths - its dataloader
     workers are shut down by ConversationalLightningModule.on_validation_end
-    (gated on trainer.sanity_checking) instead of being disabled."""
+    (gated on trainer.sanity_checking) instead of being disabled.
+
+    Do NOT set reload=1 to make Lightning re-query the online sampler's
+    per-epoch batch count (Task 10 plan-review item): that would reintroduce
+    the resume bug above. src/sampler.py's docstring documents (with numbers
+    from test_training_smoke.py's
+    test_online_sampler_survives_two_epochs_with_varying_batch_counts) that
+    reload=0 keeps the fit safe - no hang, no truncated fit - even though a
+    later epoch's real online-planned batch count can be undercounted
+    relative to epoch 0's frozen total."""
     import yaml
     from .conftest import REPO_ROOT
 
@@ -130,3 +144,112 @@ def test_on_validation_end_releases_iterator_only_during_sanity(sanity_checking)
     module.on_validation_end()
 
     assert len(calls) == (1 if sanity_checking else 0)
+
+
+# --------------------------------------------------------------------------
+# Task 10: PlannedWindowView routes (component_idx, WindowRecord) specs from
+# ConversationBatchSampler's online-mode __iter__ to the right
+# ConversationDataset, mirroring CombinedDataset.__getitem__'s transform/
+# preprocessor/collator application (which only understands int/str indices,
+# not specs - see PlannedWindowView's docstring in src/lit_module.py).
+# --------------------------------------------------------------------------
+
+
+class TestPlannedWindowView:
+    def test_spec_routing_matches_int_routing(self, combined_two_corpora):
+        view = PlannedWindowView(combined_two_corpora)
+        comp = combined_two_corpora.datasets[1]
+        record = comp.records[0]
+        via_spec = view[(1, record)]
+        # int index of the same record through CombinedDataset
+        offset = len(combined_two_corpora.datasets[0])
+        via_int = combined_two_corpora[offset + 0]
+        assert via_spec.keys() == via_int.keys()
+        assert via_spec["window_id"] == via_int["window_id"]
+        assert torch.equal(via_spec["text"][0], via_int["text"][0])  # preprocessor ran
+
+    def test_bare_dataset_supported(self, bare_conversation_dataset):
+        view = PlannedWindowView(bare_conversation_dataset)
+        rec = bare_conversation_dataset.records[0]
+        assert view[(0, rec)]["window_id"] == rec.window_id
+
+    def test_len_delegates_to_underlying_dataset(self, combined_two_corpora):
+        view = PlannedWindowView(combined_two_corpora)
+        assert len(view) == len(combined_two_corpora)
+
+    def test_collator_uid_contract_matches_combined_dataset(self, combined_two_corpora):
+        """When use_espnet_collator is set (mirroring what _packed_dataloader
+        does on the underlying dataset before wrapping it), the view returns
+        (window_id, sample) - the same (uid, sample) shape CombinedDataset's
+        int path returns under the same flag."""
+        combined_two_corpora.use_espnet_collator = True
+        view = PlannedWindowView(combined_two_corpora)
+        comp = combined_two_corpora.datasets[0]
+        record = comp.records[0]
+        uid, sample = view[(0, record)]
+        assert uid == record.window_id
+        assert "text" in sample
+        combined_two_corpora.use_espnet_collator = False
+
+
+# --------------------------------------------------------------------------
+# Task 10: _packed_dataloader wraps the dataset in PlannedWindowView and
+# constructs ConversationBatchSampler with online=(mode == "train") - valid
+# stays on the frozen per-record plan, train replans fresh every epoch.
+# --------------------------------------------------------------------------
+
+
+def _bare_module_for_loader(dataset) -> ConversationalLightningModule:
+    """Same __new__ bypass as _bare_module (skips DataOrganizer setup):
+    _packed_dataloader only reads self.config/self.collate_fn/_initial_epoch,
+    all stubbed directly instead of going through the full hydra config path
+    a real DataOrganizer would need."""
+    module = ConversationalLightningModule.__new__(ConversationalLightningModule)
+    module.__dict__["_trainer"] = None
+    module.__dict__["collate_fn"] = PackedConversationCollator()
+    loader_kwargs = dict(
+        batch_bins=10**9,  # everything fits in one batch; only wiring matters
+        min_batch_size=1,
+        num_workers=0,
+    )
+    module.__dict__["config"] = OmegaConf.create(
+        {
+            "seed": 0,
+            "dataloader": {
+                "train": {**loader_kwargs, "shuffle": True},
+                "valid": {**loader_kwargs, "shuffle": False},
+            },
+        }
+    )
+    return module
+
+
+class TestPackedDataloaderWiring:
+    def test_train_dataloader_wraps_view_and_is_online(self, bare_conversation_dataset):
+        module = _bare_module_for_loader(bare_conversation_dataset)
+        loader = module._packed_dataloader(bare_conversation_dataset, "train")
+        assert isinstance(loader.dataset, PlannedWindowView)
+        assert isinstance(loader.batch_sampler, ConversationBatchSampler)
+        assert loader.batch_sampler.online is True
+
+    def test_valid_dataloader_wraps_view_and_is_frozen(self, bare_conversation_dataset):
+        module = _bare_module_for_loader(bare_conversation_dataset)
+        loader = module._packed_dataloader(bare_conversation_dataset, "valid")
+        assert isinstance(loader.dataset, PlannedWindowView)
+        assert isinstance(loader.batch_sampler, ConversationBatchSampler)
+        assert loader.batch_sampler.online is False
+
+    def test_dataloader_yields_a_real_batch(self, combined_two_corpora):
+        """End-to-end: the DataLoader built by _packed_dataloader actually
+        produces a collated batch through PlannedWindowView + load_window +
+        the preprocessor + PackedConversationCollator, not just the right
+        wiring types (combined_two_corpora carries a real preprocessor, so
+        the "text" key collate_conversations needs is actually present)."""
+        module = _bare_module_for_loader(combined_two_corpora)
+        loader = module._packed_dataloader(combined_two_corpora, "valid")
+        window_ids, batch = next(iter(loader))
+        expected_ids = {
+            r.window_id for c in combined_two_corpora.datasets for r in c.records
+        }
+        assert set(window_ids) <= expected_ids
+        assert batch["speech"].shape[0] >= 1

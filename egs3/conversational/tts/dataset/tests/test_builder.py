@@ -42,22 +42,22 @@ class TestBuildEndToEnd:
         with pytest.raises(RuntimeError, match="externally"):
             builder.prepare_source(dataset_root=empty)
 
-    def test_outputs_exist_and_windows_are_sane(self, fake_corpus, capsys):
+    def test_outputs_exist_and_sessions_are_sane(self, fake_corpus, capsys):
         builder, recipe_dir = build(fake_corpus)
         assert builder.is_built(recipe_dir=recipe_dir)
         data_dir = recipe_dir / "data"
-        train = (data_dir / "manifest/train.jsonl").read_text().splitlines()
+        train = (data_dir / "manifest/sessions_train.jsonl").read_text().splitlines()
         assert train, "3 sessions with ratios 0.96/0.02/0.02 must all land in train"
         sessions = set()
         for line in train:
-            w = json.loads(line)
-            assert w["audio_relpath"].startswith("original/")
-            assert 0 <= w["t0"] < w["t1"]
-            assert w["turns"], "zero-speech windows must be dropped"
-            for turn in w["turns"]:
-                assert w["t0"] <= turn["start"] and turn["end"] <= w["t1"]
+            s = json.loads(line)
+            assert s["audio_relpath"].startswith("original/")
+            assert s["duration"] > 0
+            assert s["turns"], "sessions with no speech must not appear"
+            for turn in s["turns"]:
+                assert 0 <= turn["start"] < turn["end"] <= s["duration"]
                 assert turn["text"] == turn["text"].lower()
-            sessions.add(w["session_id"])
+            sessions.add(s["session_id"])
         assert sessions == {"sess_long", "sess_tri", "sess_short"}
         summary = capsys.readouterr().out
         assert "speaker overlap" in summary
@@ -83,9 +83,9 @@ class TestBuildEndToEnd:
         _, dir_a = build(fake_corpus, recipe_dir=tmp_path / "a")
         _, dir_b = build(fake_corpus, recipe_dir=tmp_path / "b")
         for relpath in (
-            "manifest/train.jsonl",
-            "manifest/valid.jsonl",
-            "manifest/test.jsonl",
+            "manifest/sessions_train.jsonl",
+            "manifest/sessions_valid.jsonl",
+            "manifest/sessions_test.jsonl",
             "tokens/vocab.txt",
         ):
             assert (dir_a / "data" / relpath).read_bytes() == (

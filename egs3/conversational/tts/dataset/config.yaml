@@ -9,56 +9,14 @@ builder:
   base_vocab_path: null
   data_path: data
   manifest_paths:
-    train: manifest/train.jsonl
-    valid: manifest/valid.jsonl
-    test: manifest/test.jsonl
+    train: manifest/sessions_train.jsonl
+    valid: manifest/sessions_valid.jsonl
+    test: manifest/sessions_test.jsonl
   vocab_path: tokens/vocab.txt
   vocab_meta_path: tokens/vocab_meta.json
   seed: 0
   # Same-channel utterances closer than merge_gap seconds merge into one turn.
   merge_gap: 1.0
-  # Training window target duration is drawn uniformly from [window_min, window_max].
-  window_min: 10.0
-  # 80 s exceeds the F5 pretraining clip regime (< 30 s Emilia clips); chosen
-  # deliberately to capture longer interactions - revisit if fine-tuning
-  # quality degrades on long windows. Ratified 2026-08-06 from the live
-  # Delta training build (previously a local override of the old 60 s
-  # default). NOTE: a single 80 s N=2 window sets a ~40 GB activation
-  # floor on A100-40G regardless of batch_bins.
-  window_max: 80.0
-  # Utterance-boundary cuts; eligibility follows CoVoMix's Fisher
-  # segmentation (arXiv:2404.06690), the placement search is ours (hybrid
-  # closest-to-target with restart retry, see preprocessing/windows.py).
-  # A boundary at t
-  # is eligible iff every turn ends >= boundary_guard before t or starts
-  # >= boundary_guard after it.  0.0 is faithful to CoVoMix (zero margin,
-  # human LDC timestamps); SSSD timestamps are Parakeet pseudo-labels, so
-  # this knob exists to reject boundaries where the neighboring utterance's
-  # alignment jitter could leak un-covered speech into the window.  May be
-  # raised after inspecting debug dumps.
-  boundary_guard: 0.0
-  # Shortest emitted window below window_min: bounds both the session tail
-  # and mid-session mini-windows emitted before an oversized blocked span.
-  tail_min: 5.0
-  # Transcription-hole guards (SSSD's Parakeet pseudo-labels leave stretches of
-  # real speech unlabeled; a window that sweeps one in pairs audio with a
-  # transcript that does not cover it - see preprocessing/windows.py).
-  # trim_to_turns shrinks each window to [first turn start, last turn end],
-  # losslessly removing lead-in/trail-out holes; a window trimmed below tail_min
-  # is dropped. min_coverage is a conservative backstop for interior holes: drop
-  # a window whose transcribed union covers less than this fraction of its
-  # duration (0.0 disables). A turn-coverage floor cannot distinguish a hole
-  # from a genuine silent pause, so keep it low. Both guards ON, ratified
-  # 2026-08-06 from the live Delta training build (previously local
-  # overrides of the off-by-default repo values).
-  trim_to_turns: true
-  min_coverage: 0.0
-  # snap_start_to_turn begins each window on the next turn instead of the
-  # previous cut, skipping the silence/hole between them so the length budget
-  # covers speech (raises coverage; skipped seconds are reported as
-  # snapped-gaps). It brackets the leading edge during selection; trim_to_turns
-  # brackets the trailing edge it leaves.
-  snap_start_to_turn: true
   split_ratios:
     train: 0.96
     valid: 0.02
@@ -68,9 +26,9 @@ builder:
 dataset:
   sample_rate: 24000
   split_manifest_paths:
-    train: manifest/train.jsonl
-    valid: manifest/valid.jsonl
-    test: manifest/test.jsonl
+    train: manifest/sessions_train.jsonl
+    valid: manifest/sessions_valid.jsonl
+    test: manifest/sessions_test.jsonl
   # Built by the builder, consumed by the preprocessor, not the dataset:
   # training configs point ConversationalTextPreprocessor's token_list here
   # (the dataset itself is vocab-agnostic and yields raw turns).
@@ -96,8 +54,8 @@ libritts_builder:
   # LibriTTS native rate; the builder fails loudly on any file that differs.
   sample_rate: 24000
   manifest_paths:
-    train: manifest/libritts_train.jsonl
-    valid: manifest/libritts_valid.jsonl
+    train: manifest/sessions_libritts_train.jsonl
+    valid: manifest/sessions_libritts_valid.jsonl
   seed: 0
 
 candor_builder:
@@ -117,26 +75,21 @@ candor_builder:
   flac_dir: /work/hdd/bbjs/ttrachu/dataset/candor_flac
   ffmpeg: ffmpeg
   transcode_workers: 16
-  # Windowing knobs: same VALUES as the SSSD builder section except merge_gap
-  # (0.3 so window cuts fall in real >= 0.3s silences; audiophile segments are
+  # merge_gap differs from the SSSD builder section's 1.0: 0.3 so turn-merge
+  # cuts fall in real >= 0.3s silences; audiophile segments are
   # silence-delimited, and 1.0 chains them across the other channel's
-  # backchannels into oversized spans - see the variant note above).
+  # backchannels into oversized spans - see the variant note above. Window
+  # knobs live in preprocessing/planner.py's WindowParams (planning is
+  # online now); this section only covers session assembly.
   merge_gap: 0.3
-  window_min: 10.0
-  window_max: 80.0
-  boundary_guard: 0.0
-  tail_min: 5.0
-  trim_to_turns: true
-  min_coverage: 0.0
-  snap_start_to_turn: true
   split_ratios:
     train: 0.96
     valid: 0.02
     test: 0.02
   manifest_paths:
-    train: manifest/candor_train.jsonl
-    valid: manifest/candor_valid.jsonl
-    test: manifest/candor_test.jsonl
+    train: manifest/sessions_candor_train.jsonl
+    valid: manifest/sessions_candor_valid.jsonl
+    test: manifest/sessions_candor_test.jsonl
   seed: 0
 
 fisher_builder:
@@ -157,35 +110,21 @@ fisher_builder:
   flac_dir: /work/hdd/bbjs/ttrachu/dataset/fisher_flac
   ffmpeg: ffmpeg
   merge_workers: 16
-  # Windowing knobs: same VALUES as the SSSD builder section except
-  # merge_gap. 0.2 chosen from the measured Delta sweep 2026-08-06
+  # merge_gap chosen from the measured Delta sweep 2026-08-06
   # (jobs/diag_merge_gap_fisher.py): Fisher's oversized-span drop has no
   # plateau - 49.4% of the timeline at 1.0, 20.8% at 0.3, 15.4% at 0.2,
   # with a 5.6% cross-channel-overlap floor at 0.0. 0.2 keeps ~1,350 h
   # windowable and window cuts still fall in real >= 0.2 s same-channel
   # silences (Thanapat's pick, same decision process as CANDOR's 0.3).
+  # Window knobs live in preprocessing/planner.py's WindowParams (planning
+  # is online now); this section only covers session assembly.
   merge_gap: 0.2
-  window_min: 10.0
-  # 80 s to match the live Delta training build of the SSSD and CANDOR
-  # sections (Thanapat 2026-08-06; the mix checkout overrides those repo
-  # defaults the same way).
-  window_max: 80.0
-  boundary_guard: 0.0
-  tail_min: 5.0
-  # Both hole guards ON for Fisher, also matching the live training build
-  # (Thanapat 2026-08-06): stripped event tags ([laughter]/[noise]) and
-  # inter-utterance silence leave audible un-transcribed stretches; snap
-  # skips the gap after the previous cut so the length budget covers
-  # speech, trim brackets the trailing edge.
-  trim_to_turns: true
-  min_coverage: 0.0
-  snap_start_to_turn: true
   split_ratios:
     train: 0.96
     valid: 0.02
     test: 0.02
   manifest_paths:
-    train: manifest/fisher_train.jsonl
-    valid: manifest/fisher_valid.jsonl
-    test: manifest/fisher_test.jsonl
+    train: manifest/sessions_fisher_train.jsonl
+    valid: manifest/sessions_fisher_valid.jsonl
+    test: manifest/sessions_fisher_test.jsonl
   seed: 0

@@ -123,6 +123,32 @@ best_model_criterion:
 # Standard PyTorch DataLoader around ConversationBatchSampler (built per
 # epoch by the recipe LightningModule; the espnet3 iter_factory path is not
 # used - it cannot reshuffle batches across epochs, see src/sampler.py).
+# Windows are planned per epoch, not pre-baked into a static manifest (see
+# src/sampler.py's module docstring): ConversationBatchSampler(online=True)
+# replans train windows fresh every epoch via ConversationDataset.plan_windows,
+# so the batch composition (and the batch COUNT) can vary slightly epoch to
+# epoch; the plan+pack cost is logged once per fresh epoch as
+# "window plan epoch=... online=...: N sessions -> M windows, K batches,
+# plan+pack T.TTs". valid stays on the frozen per-record plan (online=False),
+# constant across epochs as before. Because trainer.reload_dataloaders_every_n_epochs
+# is 0 below (a deliberate choice - see that key's comment), Lightning does
+# NOT re-query the batch count every epoch: the first epoch's count fixes the
+# progress-bar total and the val_check_interval fraction for the WHOLE fit
+# SEGMENT (every fit()/resume reruns this once from scratch) - a later
+# epoch's fresh plan can pack to slightly more or fewer batches than that
+# frozen total, and that gap applies to every epoch after it until the next
+# resume, not just an occasional one. Harmless (no hang, no truncated fit -
+# see src/sampler.py's docstring and tests/test_training_smoke.py's
+# test_online_sampler_survives_two_epochs_with_varying_batch_counts for the
+# measured evidence), and the relative swing shrinks at real corpus scale
+# (the measured swing used a tiny few-session smoke fixture, not production
+# session counts). ``window_params``/``window_seed`` can be set per corpus
+# entry under dataset.train[i].data_src_args; the unset default
+# (dataset/preprocessing/planner.py's WindowParams) is itself the single
+# ratified live-training configuration shared by every corpus (80 s
+# window_max, hole guards on - see that class's docstring), not a
+# placeholder, and window_seed 0 is parity with the retired offline window
+# manifests.
 dataloader:
   collate_fn:
     _target_: egs3.conversational.tts.src.lit_module.PackedConversationCollator
