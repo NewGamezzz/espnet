@@ -196,6 +196,54 @@ dataset:
     assert len(valid) == 0
 
 
+def test_audio_suffix_config_is_honored_by_the_scan(tmp_path):
+    """builder.py must not hardcode '.mp3': _scan_shard's missing_audio
+    check has to key off builder.audio_suffix, or any corpus staged with a
+    non-mp3 suffix (e.g. the .wav fixtures test recipes use to avoid
+    needing an mp3 encoder) silently drops every row as missing_audio and
+    ships an empty manifest.
+    """
+    root = tmp_path / "raw"
+    shard_dir = root / "emilia" / "EN" / "EN-B000000"
+    shard_dir.mkdir(parents=True)
+    (shard_dir / "EN_B00000_S00000_W000000.wav").write_bytes(b"\x00")
+    (shard_dir / "EN_B00000_S00000_W000000.json").write_text(json.dumps({
+        "id": "EN_B00000_S00000_W000000", "wav": "ignored.wav",
+        "text": "a wav-suffixed utterance", "duration": 4.0,
+        "speaker": "EN_B00000_S00000", "language": "en", "dnsmos": 3.0,
+    }), encoding="utf-8")
+
+    recipe_dir = tmp_path / "recipe"
+    (recipe_dir / "dataset").mkdir(parents=True)
+    (recipe_dir / "dataset" / "config.yaml").write_text(f"""
+builder:
+  corpus_root: {root}
+  langs: [EN]
+  data_path: data
+  val_ratio: 0.2
+  seed: 42
+  min_duration: 0.3
+  max_duration: 30.0
+  strict_text_filters: false
+  audio_suffix: .wav
+  manifest_paths:
+    train: manifest/train.tsv
+    valid: manifest/valid.tsv
+  shard_table_path: manifest/shards.txt
+dataset:
+  split_manifest_paths:
+    train: manifest/train.tsv
+    valid: manifest/valid.tsv
+""", encoding="utf-8")
+
+    EmiliaBuilder().build(recipe_dir=recipe_dir)
+    data = recipe_dir / "data" / "manifest"
+    rows = _read_rows(data / "train.tsv") + _read_rows(data / "valid.tsv")
+    assert len(rows) == 1
+    report = json.loads((data / "report.json").read_text("utf-8"))
+    assert report["dropped"].get("missing_audio", 0) == 0
+
+
 def test_multi_worker_build_matches_single_worker(recipe, monkeypatch):
     """The ProcessPoolExecutor path must run and match the sequential path.
 

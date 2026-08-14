@@ -36,7 +36,7 @@ def _load_cfg(recipe_dir: Path) -> dict:
 
 def _scan_shard(args) -> tuple[list, Counter]:
     """Read one shard directory. Runs in a worker process."""
-    shard_rel, shard_idx, lang, corpus_root, lo, hi, strict = args
+    shard_rel, shard_idx, lang, corpus_root, lo, hi, strict, audio_suffix = args
     shard_dir = Path(corpus_root) / "emilia" / shard_rel
     rows: list = []
     dropped: Counter = Counter()
@@ -45,11 +45,11 @@ def _scan_shard(args) -> tuple[list, Counter]:
     except OSError:
         return rows, dropped
 
-    mp3s = {n for n in names if n.endswith(".mp3")}
+    audios = {n for n in names if n.endswith(audio_suffix)}
     for name in names:
         if not name.endswith(".json"):
             continue
-        if name[:-5] + ".mp3" not in mp3s:
+        if name[:-5] + audio_suffix not in audios:
             dropped["missing_audio"] += 1
             continue
         try:
@@ -111,6 +111,10 @@ class EmiliaBuilder(DatasetBuilder):
         lo = float(cfg["min_duration"])
         hi = float(cfg["max_duration"])
         strict = bool(cfg["strict_text_filters"])
+        # str() so the value stays picklable when EMILIA_BUILD_WORKERS > 1
+        # sends this tuple to a ProcessPoolExecutor worker (matches the
+        # existing str(corpus_root) below, for the same reason).
+        audio_suffix = str(cfg.get("audio_suffix", ".mp3"))
 
         # Deterministic shard ordering: language order from config, then
         # directory name. shard_idx is the line number in shards.txt.
@@ -123,7 +127,7 @@ class EmiliaBuilder(DatasetBuilder):
                 shard_rels.append((f"{lang}/{d}", lang))
 
         jobs = [
-            (rel, idx, lang, str(corpus_root), lo, hi, strict)
+            (rel, idx, lang, str(corpus_root), lo, hi, strict, audio_suffix)
             for idx, (rel, lang) in enumerate(shard_rels)
         ]
 
