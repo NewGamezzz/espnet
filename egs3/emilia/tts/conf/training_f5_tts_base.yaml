@@ -161,8 +161,15 @@ dataloader:
       shuffle: true
       collate_fn: ${dataloader.collate_fn}
       batches:
-        type: numel
-        batch_size: 1          # required by signature, unused for "numel"
+        # numel_array is NumElementsArraySampler (egs3/emilia/tts/src/sampler.py):
+        # a numpy-backed drop-in for numel's NumElementsBatchSampler, adding
+        # the upstream max_samples cap below. Equivalent to "numel" batch-for-
+        # batch when max_samples is unset (see tests/test_sampler.py); with
+        # it set, caps batches that would otherwise exceed 300+ samples at
+        # the short end of Emilia's length-sorted order (0.3s floor = 28
+        # frames, batch_bins=480000 / 100 mels = 4800 frames/batch).
+        type: numel_array
+        batch_size: 1          # required by signature, unused for "numel_array"
         min_batch_size: 8      # >= world_size (8 GPUs); dataloader.py rejects smaller
         # numel sampler's trailing remainder batch can be 1-7 samples with
         # drop_last=False, which would trip the world_size check at an
@@ -171,6 +178,7 @@ dataloader:
         shape_files:
           - ${stats_dir}/train/feats_shape
         batch_bins: 480000     # 480000 * 8 accum * 8 gpu / 100 mels = 307200
+        max_samples: 64        # upstream F5-TTS's cap (Sec. B.7)
   valid:
     num_shards: 1
     num_workers: 4
@@ -181,7 +189,7 @@ dataloader:
       collate_fn: ${dataloader.collate_fn}
       batches:
         type: ${dataloader.train.iter_factory.batches.type}
-        batch_size: 1          # required by signature, unused for "numel"
+        batch_size: 1          # required by signature, unused for "numel_array"
         # Same world_size floor as train: validation runs distributed
         # across all GPUs too, so it needs the identical guard.
         min_batch_size: 8
@@ -189,6 +197,11 @@ dataloader:
         shape_files:
           - ${stats_dir}/valid/feats_shape
         batch_bins: ${dataloader.train.iter_factory.batches.batch_bins}
+        # Also capped: with the default sort_batch=ascending, validation
+        # iterates short-to-long, so limit_val_batches's first N batches are
+        # exactly the short-utterance region where an uncapped batch would
+        # be largest - the same OOM risk as train, just earlier.
+        max_samples: ${dataloader.train.iter_factory.batches.max_samples}
 
 trainer:
   accelerator: auto

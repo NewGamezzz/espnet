@@ -72,6 +72,16 @@ BATCH_TYPES = dict(
     "    utterance_id_a 1000,80\n"
     "    utterance_id_b 1453,80\n"
     "    utterance_id_c 1241,80\n",
+    numel_array="NumElementsArraySampler (egs3/emilia/tts/src/sampler.py) is a "
+    "numpy-backed drop-in replacement for NumElementsBatchSampler: same "
+    "'bins' packing rule as 'numel', plus an optional 'max_samples' hard "
+    "cap on the number of samples per batch (matching upstream F5-TTS's "
+    "max_samples=64, which NumElementsBatchSampler has no equivalent for). "
+    "Shape file keys must be non-negative integers. "
+    "\n\n"
+    "    0 1000,80\n"
+    "    1 1453,80\n"
+    "    2 1241,80\n",
 )
 
 CATEGORY_BATCH_TYPES = dict(
@@ -136,12 +146,13 @@ def build_batch_sampler(
     fold_lengths: Sequence[int] = (),
     padding: bool = True,
     utt2category_file: Optional[str] = None,
+    max_samples: Optional[int] = None,
 ) -> AbsSampler:
     """Helper function to instantiate BatchSampler.
 
     Args:
         type: mini-batch type. "unsorted", "sorted", "folded", "numel",
-            "length", or "catbel"
+            "length", "numel_array", or "catbel"
         batch_size: The mini-batch size. Used for "unsorted", "sorted",
             "folded", "catbel" mode
         batch_bins: Used for "numel" model
@@ -154,6 +165,8 @@ def build_batch_sampler(
         fold_lengths: Used for "folded" mode
         padding: Whether sequences are input as a padded tensor or not.
             used for "numel" mode
+        max_samples: Hard cap on samples per batch. Used for "numel_array"
+            mode only.
     """
     if len(shape_files) == 0:
         raise ValueError("No shape file are given")
@@ -212,11 +225,29 @@ def build_batch_sampler(
             min_batch_size=min_batch_size,
         )
 
+    elif type == "numel_array":
+        # Imported lazily: NumElementsArraySampler lives in an egs3 recipe
+        # package (egs3/emilia/tts/src/sampler.py), not in espnet2, so this
+        # keeps espnet2 free of a hard dependency on that recipe unless
+        # "numel_array" is actually requested.
+        from egs3.emilia.tts.src.sampler import NumElementsArraySampler
+
+        retval = NumElementsArraySampler(
+            batch_bins=batch_bins,
+            shape_files=shape_files,
+            sort_in_batch=sort_in_batch,
+            sort_batch=sort_batch,
+            drop_last=drop_last,
+            padding=padding,
+            min_batch_size=min_batch_size,
+            max_samples=max_samples,
+        )
+
     else:
         raise ValueError(
             f"Not supported: {type}. "
             "Please specify batch_type in unsorted, sorted, folded, numel, "
-            "length."
+            "length, numel_array."
         )
     return retval
 

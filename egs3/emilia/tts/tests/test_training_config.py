@@ -89,3 +89,23 @@ def test_create_shape_block_has_manifest_paths(cfg):
     manifest_paths = cfg.create_shape.manifest_paths
     assert "train" in manifest_paths
     assert "valid" in manifest_paths
+
+
+def test_train_uses_numel_array_with_upstream_max_samples_cap(cfg):
+    """Task 12: NumElementsArraySampler with upstream's max_samples=64 cap,
+    fixing the 300+-sample batches an uncapped numel sampler would produce
+    at the short end of Emilia's length-sorted order (spec 6.1)."""
+    batches = cfg.dataloader.train.iter_factory.batches
+    assert batches.type == "numel_array"
+    assert batches.max_samples == 64
+
+
+def test_valid_also_uses_numel_array_with_max_samples_cap(cfg):
+    """Valid inherits type via interpolation from train; max_samples is set
+    explicitly too. With sort_batch's ascending default, validation's first
+    limit_val_batches batches are exactly the short-utterance region where
+    an uncapped batch would be largest, so the same OOM risk as train
+    applies to validation, just earlier."""
+    batches = cfg.dataloader.valid.iter_factory.batches
+    assert batches.type == "numel_array"
+    assert batches.max_samples == 64
