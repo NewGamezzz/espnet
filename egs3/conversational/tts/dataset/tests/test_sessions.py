@@ -11,6 +11,8 @@ from ..preprocessing.sessions import (
     write_session_manifest,
 )
 from ..preprocessing.sssd import Turn
+from ..preprocessing.windows import WindowRecord
+from ..preprocessing.windows import to_json as window_to_json
 
 
 def _session(**kw):
@@ -110,3 +112,34 @@ class TestManifestIO:
         (tmp_path / "empty.jsonl").write_text("")
         with pytest.raises(RuntimeError):
             read_session_manifest(tmp_path / "empty.jsonl")
+
+
+class TestRejectsRetiredWindowManifest:
+    """A retired WINDOW-manifest line has every key from_json requires, but
+    its ``duration`` is the WINDOW duration while turns carry absolute
+    session seconds - silently accepted, it would train on ~the first
+    window per session. from_json must reject it instead."""
+
+    def _window_manifest_line(self) -> dict:
+        rec = WindowRecord(
+            window_id="sess_a_w00000",
+            session_id="sess_a",
+            audio_relpath="original/sess_a_mixed.flac",
+            num_channels=2,
+            sample_rate=48000,
+            t0=0.0,
+            t1=8.5,
+            turns=(Turn(channel=0, speaker="s0", text="hi there", start=0.5, end=2.0),),
+        )
+        return window_to_json(rec)
+
+    def test_from_json_rejects_retired_window_manifest(self):
+        d = self._window_manifest_line()
+        with pytest.raises(ValueError, match="retired WINDOW manifest"):
+            from_json(d)
+
+    def test_read_session_manifest_rejects_retired_window_manifest(self, tmp_path):
+        path = tmp_path / "fisher_train.jsonl"
+        path.write_text(json.dumps(self._window_manifest_line()) + "\n")
+        with pytest.raises(ValueError, match="retired WINDOW manifest"):
+            read_session_manifest(path)

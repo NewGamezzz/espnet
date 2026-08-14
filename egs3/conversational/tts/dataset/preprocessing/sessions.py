@@ -62,6 +62,13 @@ def to_json(s: SessionRecord) -> dict:
 
 
 def from_json(d: dict) -> SessionRecord:
+    if "t0" in d or "t1" in d:
+        raise ValueError(
+            f"record {d.get('window_id') or d.get('session_id')!r} looks like a "
+            "retired WINDOW manifest line (has t0/t1); this recipe now reads "
+            "session manifests (manifest/sessions_*.jsonl). Re-run the "
+            "create_dataset stage - see README 'Cluster migration'."
+        )
     return SessionRecord(
         session_id=d["session_id"],
         audio_relpath=d["audio_relpath"],
