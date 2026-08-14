@@ -13,7 +13,6 @@ from egs3.conversational.tts.dataset.preprocessing.libritts import (
     UttEntry,
     scan_subset,
     subsample_to_hours,
-    utterance_record,
     utterance_session,
 )
 from egs3.conversational.tts.dataset.preprocessing.sessions import (
@@ -89,30 +88,6 @@ def test_scan_subset_threaded_matches_serial(tmp_path):
     threaded = scan_subset(tmp_path, "train-clean-100", workers=4)
     assert threaded == serial
     assert len(threaded) == 10
-
-
-def test_utterance_record_shape(tmp_path):
-    entry = UttEntry(
-        utt_id="103_1241_000000_000001",
-        audio_relpath="train-clean-100/103/1241/103_1241_000000_000001.wav",
-        speaker="103",
-        chapter="1241",
-        text="Hello there.",
-    )
-    record = utterance_record(
-        entry, duration=2.5, sample_rate=24000, text="hello there."
-    )
-    assert record.window_id == "libritts_103_1241_000000_000001"
-    assert record.session_id == "libritts_103_1241"
-    assert record.num_channels == 1
-    assert record.sample_rate == 24000
-    assert (record.t0, record.t1) == (0.0, 2.5)
-    assert record.num_active_speakers == 1
-    assert record.exchange_count == 0
-    (turn,) = record.turns
-    assert (turn.channel, turn.speaker) == (0, "103")
-    assert turn.text == "hello there."  # normalized text, not the raw transcript
-    assert (turn.start, turn.end) == (0.0, 2.5)
 
 
 def test_utterance_session_shape(tmp_path):

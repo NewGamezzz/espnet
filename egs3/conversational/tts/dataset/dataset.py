@@ -46,18 +46,6 @@ _DATASET_CFG = _CONFIG["dataset"]
 _BUILDER_CFG = _CONFIG["builder"]
 
 
-def read_window_manifest(path: str | Path) -> list[WindowRecord]:
-    records = []
-    with Path(path).open("r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if line:
-                records.append(from_json(json.loads(line)))
-    if not records:
-        raise RuntimeError(f"Window manifest is empty: {path}")
-    return records
-
-
 class ConversationDataset(TorchDataset):
     """Multi-channel conversation windows for F5-TTS fine-tuning.
 

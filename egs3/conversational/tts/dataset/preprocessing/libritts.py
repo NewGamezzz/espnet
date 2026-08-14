@@ -4,9 +4,7 @@ A LibriTTS utterance becomes a 1-channel, ATOMIC ``SessionRecord`` (one turn
 on channel 0 spanning the whole file; ``atomic=True`` so the online planner
 passes it through as a single window with ``window_id`` preserved), so
 everything downstream of the manifest (dataset, preprocessor, collator,
-sampler, model) is reused unchanged. ``utterance_record`` (retiring, deleted
-in Task 12) builds the equivalent pre-cut ``WindowRecord`` directly; both
-share the same session/window id composition. Corpus-specific code stays in
+sampler, model) is reused unchanged. Corpus-specific code stays in
 this module per the generalization contract in the design note: adding
 another corpus means another module like this one, never changes downstream
 of the manifest.
@@ -76,35 +74,6 @@ def scan_subset(root: Path, subset: str, workers: int = 1) -> list[UttEntry]:
     else:
         maybe_entries = [load(path) for path in text_paths]
     return [entry for entry in maybe_entries if entry is not None]
-
-
-def utterance_record(
-    entry: UttEntry, duration: float, sample_rate: int, text: str
-) -> WindowRecord:
-    """One N=1 window spanning the whole utterance file.
-
-    ``text`` is the NORMALIZED transcript (the builder normalizes against the
-    extended-vocab charset, mirroring the SSSD build so ``<OTHER>`` counts and
-    token coverage can never diverge between corpora).
-    """
-    return WindowRecord(
-        window_id=f"libritts_{entry.utt_id}",
-        session_id=f"libritts_{entry.speaker}_{entry.chapter}",
-        audio_relpath=entry.audio_relpath,
-        num_channels=1,
-        sample_rate=sample_rate,
-        t0=0.0,
-        t1=duration,
-        turns=(
-            Turn(
-                channel=0,
-                speaker=entry.speaker,
-                text=text,
-                start=0.0,
-                end=duration,
-            ),
-        ),
-    )
 
 
 def utterance_session(

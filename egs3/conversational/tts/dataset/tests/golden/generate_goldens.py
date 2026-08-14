@@ -1,4 +1,6 @@
-"""Generate golden window-manifest fixtures from the CURRENT (offline) SSSD /
+"""HISTORICAL - ran against the pre-refactor builders; kept only for provenance of the committed goldens; do not re-run
+
+Generate golden window-manifest fixtures from the CURRENT (offline) SSSD /
 LibriTTS / CANDOR / Fisher builders.
 
 These fixtures freeze today's offline window-manifest output on synthetic
