@@ -5,6 +5,8 @@ from pathlib import Path
 import pytest
 from omegaconf import OmegaConf
 
+from egs3.emilia.tts.tests._dotted_paths import iter_targets, resolve_dotted_path
+
 CONF = Path(__file__).resolve().parents[1] / "conf" / "training_f5_tts_base.yaml"
 SMOKE_CONF = (
     Path(__file__).resolve().parents[1] / "conf" / "training_f5_tts_base_smoke.yaml"
@@ -129,6 +131,30 @@ def test_stats_dir_is_shared_across_exp_tags(cfg):
     raw = OmegaConf.to_container(cfg, resolve=False)
     assert "${exp_tag}" not in raw["stats_dir"]
     assert "${exp_dir}" not in raw["stats_dir"]
+
+
+@pytest.mark.parametrize("conf_path", [CONF, SMOKE_CONF])
+def test_stats_dir_survives_the_real_template_merge(conf_path):
+    """CRITICAL 3, through the actual production pipeline, not a plain
+    OmegaConf.load of the recipe file in isolation.
+
+    egs3/TEMPLATE/tts/conf/training.yaml (the near-empty default every
+    recipe config merges over -- see run.py's DEFAULT_TRAINING_CONFIG,
+    fixed alongside this in the same review wave) itself defines
+    `stats_dir: ${exp_dir}/stats`. Before that DEFAULT_TRAINING_CONFIG fix,
+    load_and_merge_config always raised FileNotFoundError, so this merge
+    never actually happened in production; fixing it newly activates a
+    merge this test needs to check, not assume. OmegaConf.merge(default,
+    user) means the recipe's own stats_dir should win over the template's,
+    but "should" is exactly what CRITICAL 3 was about -- so resolve
+    through the real load_and_merge_config, the same call
+    local/submit_train.sbatch and run.py both make, and confirm the result
+    is still exp_tag-independent."""
+    from espnet3.utils.config_utils import load_and_merge_config
+
+    cfg = load_and_merge_config(conf_path, config_name="training.yaml")
+    assert "exp_tag" not in cfg.stats_dir
+    assert cfg.stats_dir.endswith("/exp/stats")
 
 
 def test_create_shape_block_has_manifest_paths(cfg):
@@ -261,3 +287,57 @@ def test_smoke_config_has_short_step_budget():
     assert cfg.trainer.val_check_interval == 100
     assert cfg.trainer.limit_val_batches == 5
     assert cfg.exp_tag == "smoke_base_emilia"
+
+
+# --- IMPORTANT 5, training configs (advisor follow-up on the final
+# whole-branch review): test_seedtts_inference_config.py and
+# test_metrics_config.py close this gap for the infer/measure configs, but
+# left the training configs' own dotted paths -- task, dataset._target_,
+# optimizer._target_, scheduler._target_, dataloader.collate_fn._target_,
+# both iter_factory._target_s, trainer.callbacks[0]._target_,
+# trainer.logger._target_ -- unresolved by any test. --dry_run never
+# instantiates any of these (run_stages hits `if dry_run: continue` before
+# calling the stage), so a wrong path here would first fail at trainer
+# construction on a real PSC job, exactly the class of defect C1/C2 were.
+
+
+@pytest.mark.parametrize("conf_path", [CONF, SMOKE_CONF])
+def test_task_and_every_target_resolve(conf_path):
+    cfg = OmegaConf.load(conf_path)
+    resolved = OmegaConf.to_container(cfg, resolve=True)
+
+    # `task` isn't a `_target_`, but is resolved the same way in production
+    # (espnet3/utils/task_utils.py's get_task_class -> hydra.utils.get_class,
+    # semantically the same import+getattr resolve_dotted_path performs).
+    task_obj = resolve_dotted_path(resolved["task"])
+    assert task_obj is not None
+
+    targets = list(iter_targets(resolved))
+    # Sanity: confirm the walk actually found the targets this test exists
+    # to check, so a future edit that silently drops one doesn't make this
+    # test vacuously pass on fewer paths checked.
+    expected_min = {
+        "espnet3.components.data.data_organizer.DataOrganizer",
+        "espnet2.text.f5_preprocessor.F5PinyinPreprocessor",
+        "torch.optim.AdamW",
+        "espnet2.schedulers.linear_warmup_decay.linear_warmup_decay",
+        "espnet2.train.collate_fn.CommonCollateFn",
+        "espnet2.iterators.sequence_iter_factory.SequenceIterFactory",
+        "espnet3.components.callbacks.ema.EMACallback",
+    }
+    assert expected_min <= set(targets), sorted(expected_min - set(targets))
+    for target in targets:
+        resolve_dotted_path(target)
+
+
+def test_base_and_smoke_logger_targets_both_resolve():
+    """trainer.logger._target_ is the one target that structurally differs
+    between base (WandbLogger) and smoke (CSVLogger); pin both explicitly
+    since test_task_and_every_target_resolve's `expected_min` check doesn't
+    distinguish which config produced which logger target."""
+    base_logger = OmegaConf.load(CONF).trainer.logger._target_
+    smoke_logger = OmegaConf.load(SMOKE_CONF).trainer.logger._target_
+    assert base_logger == "lightning.pytorch.loggers.WandbLogger"
+    assert smoke_logger == "lightning.pytorch.loggers.CSVLogger"
+    resolve_dotted_path(base_logger)
+    resolve_dotted_path(smoke_logger)
