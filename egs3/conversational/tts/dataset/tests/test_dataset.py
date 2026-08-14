@@ -1,13 +1,22 @@
 """Tests for ConversationDataset, preprocessor composition, and the packed
 collator (AC5-AC8)."""
 
+import dataclasses
+
 import pytest
 import torch
+import torchaudio
 from .conftest import FAKE_SESSIONS, _alternating_sups, channel_tone_hz, write_flac
+
+from espnet2.fileio.sound_scp import soundfile_read
 
 from egs3.conversational.tts.dataset.dataset import (
     ConversationDataset,
     collate_conversations,
+)
+from egs3.conversational.tts.dataset.preprocessing.chunk_task import (
+    ChunkTaskPlan,
+    assembled_duration,
 )
 from egs3.conversational.tts.dataset.preprocessing.sessions import (
     SessionRecord,
@@ -471,3 +480,238 @@ class TestSessionBacked:
         item = ds.load_window(mid_file)
         expected = round(FS * (mid_file.t1 - mid_file.t0))
         assert abs(item["speech"].shape[1] - expected) <= 1
+
+
+# --------------------------------------------------------------------------
+# Chunk-task assembly ([P | H | target]) fixtures
+# --------------------------------------------------------------------------
+
+CHUNK_SESSION_ID = "sesschunk"
+CHUNK_AUDIO_RELPATH = f"original/{CHUNK_SESSION_ID}_mixed.flac"
+CHUNK_SESSION_SEC = 40.0
+CHUNK_T0, CHUNK_T1 = 18.0, 28.0
+CHUNK_TURNS = (
+    Turn(0, "spk_a", "hello there", 18.5, 21.0),
+    Turn(1, "spk_b", "hi to you", 21.5, 24.0),
+    Turn(0, "spk_a", "yes indeed", 25.0, 27.0),
+)
+
+
+def _write_noise_flac(path, num_channels, duration_s, sr):
+    """Per-channel seeded white noise, one FLAC per session.
+
+    Deliberately NOT conftest's pure tones: a 1 kHz tone at 24 kHz repeats
+    every 24 samples, so a seam misaligned by any multiple of 24 would still
+    compare equal in the interior.  Noise has no period, so the hop-snap /
+    boundary assertions below fail on an off-by-anything.  PCM_16 quantization
+    is deterministic, so two reads of the same span are bit-identical.
+    """
+    import numpy as np
+    import soundfile as sf
+
+    n = int(round(duration_s * sr))
+    data = np.stack(
+        [
+            np.random.default_rng(1234 + c).uniform(-0.3, 0.3, n).astype(np.float32)
+            for c in range(num_channels)
+        ],
+        axis=1,
+    )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    sf.write(str(path), data, sr, subtype="PCM_16", format="FLAC")
+
+
+def _make_dataset_with_session(tmp_path, src_sr=SRC_SR, num_channels=2, **kw):
+    """One synthetic session on disk + ONE hand-built mid-session WindowRecord.
+
+    The record is hand-built rather than planner-derived so the chunk-task
+    tests can pin exact numbers on t0/t1 (and hence on the prompt/prev spans
+    placed around them); the manifest still carries a real session because
+    ``ConversationDataset.__init__`` insists on a non-empty frozen plan.
+
+    ``src_sr=FS`` gives a session whose source rate already equals the training
+    rate, so ``_load_span`` skips the resample entirely and every read is an
+    exact slice - that is what lets the seam tests assert ``torch.equal``
+    rather than a tolerance (LibriTTS sessions are natively 24 kHz, so this is
+    a real config, not a test-only shortcut).
+    """
+    _write_noise_flac(
+        tmp_path / CHUNK_AUDIO_RELPATH, num_channels, CHUNK_SESSION_SEC, src_sr
+    )
+    session = SessionRecord(
+        session_id=CHUNK_SESSION_ID,
+        audio_relpath=CHUNK_AUDIO_RELPATH,
+        num_channels=num_channels,
+        sample_rate=src_sr,
+        duration=CHUNK_SESSION_SEC,
+        turns=CHUNK_TURNS,
+        atomic=True,
+        window_id=f"{CHUNK_SESSION_ID}_w00000",
+    )
+    manifest = tmp_path / "chunk_manifest.jsonl"
+    write_session_manifest(manifest, [session])
+    kw.setdefault("permute_channels", False)
+    ds = ConversationDataset(
+        split="valid", manifest_path=manifest, dataset_root=tmp_path, **kw
+    )
+    record = WindowRecord(
+        window_id=f"{CHUNK_SESSION_ID}_w00001",
+        session_id=CHUNK_SESSION_ID,
+        audio_relpath=CHUNK_AUDIO_RELPATH,
+        num_channels=num_channels,
+        sample_rate=src_sr,
+        t0=CHUNK_T0,
+        t1=CHUNK_T1,
+        turns=CHUNK_TURNS,
+    )
+    return ds, record
+
+
+def _spans_outside(record, lp, start=1.0, gap=1.0):
+    """One prompt span per ORIGINAL channel, all of length ``lp``, laid out
+    back-to-back in the session prefix so none of them touches the window (or,
+    for the tests here, the prev slice immediately before it)."""
+    return tuple(
+        (round(start + c * (lp + gap), 6), round(start + c * (lp + gap) + lp, 6))
+        for c in range(record.num_channels)
+    )
+
+
+def _read_span(tmp_path, span, channel, fs, src_sr=SRC_SR):
+    """Independent reference read of one channel of ``span`` (session-absolute
+    seconds), built from soundfile + torchaudio directly rather than through
+    the dataset, so the assertions do not restate the implementation."""
+    array, rate = soundfile_read(
+        str(tmp_path / CHUNK_AUDIO_RELPATH),
+        dtype="float32",
+        start=round(span[0] * src_sr),
+        end=round(span[1] * src_sr),
+        always_2d=True,
+    )
+    row = torch.from_numpy(array[:, channel].copy())
+    if fs != rate:
+        row = torchaudio.functional.resample(row, orig_freq=rate, new_freq=fs)
+    return row
+
+
+class TestChunkTaskAssembly:
+    """Task-6 contract: chunk-task records assemble as [P | H | target] with
+    both conditioning blocks snapped to whole mel hops."""
+
+    def test_load_window_assembles_chunk_task(self, tmp_path):
+        ds, record = _make_dataset_with_session(tmp_path)
+        plan = ChunkTaskPlan(
+            kind="full",
+            prev_span=(record.t0 - 4.0, record.t0),
+            prompt_spans=_spans_outside(record, lp=3.5),
+        )
+        rec = dataclasses.replace(record, chunk_task=plan)
+        ds._fixed_perm = [1, 0]
+        s = ds.load_window(rec)
+        assert s["cond_frames"] == s["prompt_frames"] + s["prev_frames"]
+        assert s["prompt_frames"] == int(3.5 * ds.fs) // ds.hop
+        assert s["prev_frames"] == int(4.0 * ds.fs) // ds.hop
+        total = s["speech"].shape[1]
+        target = total - s["cond_frames"] * ds.hop
+        assert abs(target - int(rec.duration * ds.fs)) <= ds.hop
+        # P rows follow the permutation: row 0 carries channel 1's prompt slice.
+        expected = _read_span(tmp_path, plan.prompt_spans[1], channel=1, fs=ds.fs)
+        torch.testing.assert_close(
+            s["speech"][0, : s["prompt_frames"] * ds.hop],
+            expected[: s["prompt_frames"] * ds.hop],
+        )
+        # The packer prices this record at round(fs * assembled_duration); the
+        # two hop floors (P tail, H head) each shed < hop samples, so the
+        # estimate may overshoot the real length by at most 2 * hop.
+        estimate = round(ds.fs * assembled_duration(rec))
+        assert 0 <= estimate - total <= 2 * ds.hop
+
+    def test_load_window_infill_unchanged(self, tmp_path):
+        ds, record = _make_dataset_with_session(tmp_path)
+        s = ds.load_window(record)
+        assert "cond_frames" not in s and "prompt_frames" not in s
+        assert "prev_frames" not in s
+        assert list(s) == ["window_id", "num_channels", "speech", "turns", "perm"]
+
+    def test_head_trim_lands_t0_on_a_frame_boundary(self, tmp_path):
+        """The interesting case: a prev slice whose length is NOT a whole
+        number of hops, on a 24 kHz session so every read is an exact slice."""
+        ds, record = _make_dataset_with_session(tmp_path, src_sr=FS)
+        prev_start = record.t0 - 3.7
+        plan = ChunkTaskPlan(
+            kind="full",
+            prev_span=(prev_start, record.t0),
+            prompt_spans=_spans_outside(record, lp=3.5),
+        )
+        rec = dataclasses.replace(record, chunk_task=plan)
+        perm = [1, 0]
+        ds._fixed_perm = perm
+        s = ds.load_window(rec)
+
+        b = round(3.7 * ds.fs)  # 88800 samples of prev material
+        assert s["prev_frames"] == b // ds.hop  # 346 frames, 224 samples over
+        assert b % ds.hop != 0  # non-vacuous: the head trim actually fires
+        head_drop = b - s["prev_frames"] * ds.hop
+
+        cond = s["cond_frames"] * ds.hop
+        for row, channel in enumerate(perm):
+            # Target region starts EXACTLY at the cond_frames boundary.
+            torch.testing.assert_close(
+                s["speech"][row, cond:],
+                _read_span(tmp_path, (record.t0, record.t1), channel, ds.fs, src_sr=FS),
+                rtol=0,
+                atol=0,
+            )
+            # H is the TAIL of the prev slice: the head is what got dropped.
+            torch.testing.assert_close(
+                s["speech"][row, s["prompt_frames"] * ds.hop : cond],
+                _read_span(tmp_path, (prev_start, record.t0), channel, ds.fs, FS)[
+                    head_drop:
+                ],
+                rtol=0,
+                atol=0,
+            )
+            # P is the HEAD of that channel's prompt span (tail trimmed).
+            torch.testing.assert_close(
+                s["speech"][row, : s["prompt_frames"] * ds.hop],
+                _read_span(tmp_path, plan.prompt_spans[channel], channel, ds.fs, FS)[
+                    : s["prompt_frames"] * ds.hop
+                ],
+                rtol=0,
+                atol=0,
+            )
+        assert s["speech"].shape[1] - cond == round(rec.duration * ds.fs)
+
+    def test_prompt_only_has_no_prev_block(self, tmp_path):
+        """prompt_only: prev_frames == 0 and everything after P is exactly the
+        ordinary infill read of the same window (same call, same perm)."""
+        ds, record = _make_dataset_with_session(tmp_path)
+        plan = ChunkTaskPlan(
+            kind="prompt_only",
+            prev_span=None,
+            prompt_spans=_spans_outside(record, lp=3.5),
+        )
+        ds._fixed_perm = [1, 0]
+        s = ds.load_window(dataclasses.replace(record, chunk_task=plan))
+        infill = ds.load_window(record)
+
+        assert s["prev_frames"] == 0
+        assert s["cond_frames"] == s["prompt_frames"]
+        assert torch.equal(
+            s["speech"][:, s["prompt_frames"] * ds.hop :], infill["speech"]
+        )
+        assert (
+            s["speech"].shape[1]
+            == s["prompt_frames"] * ds.hop + infill["speech"].shape[1]
+        )
+
+    def test_prompt_block_is_hop_snapped_and_rectangular(self, tmp_path):
+        ds, record = _make_dataset_with_session(tmp_path, src_sr=FS)
+        plan = ChunkTaskPlan(
+            kind="prompt_only",
+            prev_span=None,
+            prompt_spans=_spans_outside(record, lp=3.3),  # 79200 samples: not a hop
+        )
+        s = ds.load_window(dataclasses.replace(record, chunk_task=plan))
+        assert s["prompt_frames"] == round(3.3 * ds.fs) // ds.hop
+        assert s["speech"].shape[0] == record.num_channels

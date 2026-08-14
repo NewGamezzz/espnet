@@ -60,6 +60,14 @@ class ConversationDataset(TorchDataset):
                            to the audio rows (row k holds original channel
                            ``perm[k]``)
 
+    Records carrying a special-token conditioning plan
+    (``WindowRecord.chunk_task``, see ``preprocessing.chunk_task``) assemble
+    their ``speech`` as ``[P | H | target]`` - per-speaker voice prompt,
+    previous-chunk slice, then the window - and carry three extra int keys:
+    ``prompt_frames``, ``prev_frames`` and ``cond_frames`` (their sum), all in
+    mel frames of ``hop`` samples.  Ordinary infill records carry none of them,
+    so nothing downstream of the untouched majority path changes.
+
     No token ids here: tokenization lives in the recipe preprocessor
     (``preprocessor.ConversationalTextPreprocessor``), which derives the
     per-branch ``text`` tensors from ``turns``.  Because ``channel`` is
@@ -74,6 +82,13 @@ class ConversationDataset(TorchDataset):
     planned windows keep single-speaker windows; the POC trains with ``2`` so
     gradient mass concentrates on actual interactions - a knob, not a
     rebuild).
+
+    ``hop`` is the dataset-side single source of truth for the mel frame rate
+    (``fs / hop`` = 93.75 frames/s at the defaults).  It MUST equal the mel
+    hop the model's feature extractor uses (``hop_length`` in the training
+    configs): chunk-task assembly snaps the conditioning blocks to whole hops
+    so ``cond_frames`` indexes the assembled sample's mel frames exactly, and
+    a mismatch would silently shift the conditioning/target boundary.
 
     ``window_params``/``window_seed`` control the online planner
     (``preprocessing.planner.plan_sessions``): ``self.records`` is the frozen
@@ -90,6 +105,7 @@ class ConversationDataset(TorchDataset):
         manifest_path: str | Path | None = None,
         dataset_root: str | Path | None = None,
         fs: int | None = None,
+        hop: int = 256,
         permute_channels: bool | None = None,
         seed: int = 0,
         inference: bool = False,
@@ -99,6 +115,7 @@ class ConversationDataset(TorchDataset):
     ) -> None:
         self.split = split
         self.fs = int(fs if fs is not None else _DATASET_CFG["sample_rate"])
+        self.hop = int(hop)
         self.permute_channels = (
             permute_channels if permute_channels is not None else split == "train"
         )
@@ -180,10 +197,18 @@ class ConversationDataset(TorchDataset):
             self._worker_rng = random.Random(f"{self.seed}:{torch.initial_seed()}")
         return self._worker_rng.sample(range(n), n)
 
-    def _load_speech(self, record: WindowRecord) -> torch.Tensor:
+    def _load_span(self, record: WindowRecord, a: float, b: float) -> torch.Tensor:
+        """Seek-read ``[a, b)`` SESSION-ABSOLUTE seconds of ``record``'s audio.
+
+        Same validation and resample as the plain window read, but ``a``/``b``
+        are unconstrained by ``record.t0``/``t1``: chunk-task assembly pulls
+        prompt and previous-chunk material from anywhere in the session, and
+        ``ChunkTaskPlan``'s spans live in the same absolute coordinates as
+        ``t0``/``t1`` (see ``preprocessing.chunk_task``).
+        """
         path = self.dataset_root / record.audio_relpath
-        start = round(record.t0 * record.sample_rate)
-        stop = round(record.t1 * record.sample_rate)
+        start = round(a * record.sample_rate)
+        stop = round(b * record.sample_rate)
         array, rate = soundfile_read(
             str(path), dtype="float32", start=start, end=stop, always_2d=True
         )
@@ -202,21 +227,89 @@ class ConversationDataset(TorchDataset):
             )
         return speech
 
+    def _load_speech(self, record: WindowRecord) -> torch.Tensor:
+        return self._load_span(record, record.t0, record.t1)
+
+    def _assemble_chunk_task(
+        self, record: WindowRecord, perm: Sequence[int]
+    ) -> tuple[torch.Tensor, int, int]:
+        """Assemble a chunk-task record as ``[P | H | target]`` (rows in
+        ``perm`` order) and return ``(speech, prompt_frames, prev_frames)``.
+
+        ``P`` is the per-speaker voice prompt, ``H`` the previous-chunk slice
+        immediately preceding the window (empty for a ``prompt_only`` plan),
+        and ``target`` the window itself.  Both conditioning blocks are snapped
+        to a whole number of ``self.hop`` samples so that, in mel frames, the
+        target starts exactly at frame ``prompt_frames + prev_frames`` - the
+        model masks conditioning by frame index, so a partial hop anywhere
+        before ``t0`` would offset every downstream frame.
+        """
+        plan = record.chunk_task
+
+        # --- P: one voice reference per ORIGINAL channel -------------------
+        # Each channel's prompt span is drawn independently (different anchors,
+        # different times), so this is one read per channel of which only that
+        # channel's column is kept.  Iterating over ``perm`` puts channel
+        # perm[r] in row r, matching the row order the H+target block gets.
+        rows = [self._load_span(record, *plan.prompt_spans[c])[c] for c in perm]
+        # The spans share a length in SECONDS, but rounding each edge to source
+        # samples and resampling can leave rows a sample or two apart; P has to
+        # be rectangular, so level down to the shortest row before snapping.
+        prompt_frames = min(row.shape[0] for row in rows) // self.hop
+        prompt_samples = prompt_frames * self.hop
+        # Trim P's TAIL: each span begins on its anchor turn's onset (see
+        # draw_chunk_task step 4), so the head is the part of the reference
+        # worth hearing and the far end is arbitrary continuation.  Same
+        # convention as inference's prompt trim (src/inference.py).
+        prompt = torch.stack([row[:prompt_samples] for row in rows])
+
+        # --- H + target: ONE read, so the t0 seam is a slice, not a join ----
+        # Reading [prev_start, t1) in a single call keeps H and the target
+        # sample-contiguous and, at 48 kHz sources, resampled as one signal -
+        # two reads would put a resampler edge transient right at t0.
+        prev_start = plan.prev_span[0] if plan.prev_span is not None else record.t0
+        block = self._load_span(record, prev_start, record.t1)[perm]
+        b = round((record.t0 - prev_start) * self.fs)
+        prev_frames = b // self.hop
+        # Trim H's HEAD, not its tail: t0 sits at sample ``b`` of this block and
+        # must land on frame prompt_frames + prev_frames, and the target after
+        # it must stay whole and contiguous - so the sub-hop remainder can only
+        # come off the far (earliest) end, which is expendable context.  A
+        # prompt_only plan has prev_start == t0, hence b == 0, and this slice
+        # is a no-op.
+        block = block[:, b - prev_frames * self.hop :]
+        return torch.cat([prompt, block], dim=1), prompt_frames, prev_frames
+
     def load_window(self, record: WindowRecord) -> dict[str, Any]:
         n = record.num_channels
-        speech = self._load_speech(record)
+        # Drawn once and shared by every read below: a second _draw_perm call
+        # would consume the worker RNG at a chunk-task-dependent rate and
+        # desync the permutation stream from the infill path.
         perm = self._draw_perm(n)
+        chunk_frames: dict[str, int] = {}
+        if record.chunk_task is None:
+            speech = self._load_speech(record)[perm]
+        else:
+            speech, prompt_frames, prev_frames = self._assemble_chunk_task(record, perm)
+            chunk_frames = {
+                "prompt_frames": prompt_frames,
+                "prev_frames": prev_frames,
+                "cond_frames": prompt_frames + prev_frames,
+            }
         inv = {orig: row for row, orig in enumerate(perm)}
         sample: dict[str, Any] = {
             "window_id": record.window_id,
             "num_channels": n,
-            "speech": speech[perm],
+            "speech": speech,
             "turns": [
                 dataclasses.replace(t, channel=inv[t.channel])  # row index
                 for t in record.turns
             ],
             "perm": torch.tensor(perm, dtype=torch.long),
         }
+        # Only chunk-task records grow keys: an ordinary infill sample stays
+        # exactly the dict every existing consumer already expects.
+        sample.update(chunk_frames)
         if self.inference:
             sample.update(
                 session_id=record.session_id,
