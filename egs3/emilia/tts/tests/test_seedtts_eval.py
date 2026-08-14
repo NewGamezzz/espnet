@@ -47,3 +47,51 @@ def test_prompt_paths_are_absolute(tmp_path, testset):
     row = (tmp_path / "out" / "test_en" / "meta.tsv").read_text("utf-8").splitlines()[0]
     _utt, wav, _text, prompt_wav, _prompt_text = row.split("\t")
     assert wav.startswith("/") and prompt_wav.startswith("/")
+
+
+def test_literal_pipe_in_target_text_is_retained(tmp_path):
+    """A bare `split("|")` sliced to `parts[:4]` would silently truncate
+    target_text at the first embedded '|'; `split("|", 3)` (maxsplit=3)
+    must keep the remainder as part of the last column instead."""
+    root = tmp_path / "seedtts_testset"
+    d = root / "en"
+    (d / "wavs").mkdir(parents=True)
+    (d / "prompt-wavs").mkdir(parents=True)
+    (d / "wavs" / "en_0.wav").write_bytes(b"\x00")
+    (d / "prompt-wavs" / "p_en_0.wav").write_bytes(b"\x00")
+    (d / "meta.lst").write_text(
+        "en_0|prompt text|prompt-wavs/p_en_0.wav|a target with a | pipe in it\n",
+        encoding="utf-8",
+    )
+    other = root / "zh"
+    (other / "wavs").mkdir(parents=True)
+    (other / "prompt-wavs").mkdir(parents=True)
+    (other / "meta.lst").write_text("", encoding="utf-8")
+    (other / "hardcase.lst").write_text("", encoding="utf-8")
+
+    prepare_seedtts(root, tmp_path / "out")
+    row = (tmp_path / "out" / "test_en" / "meta.tsv").read_text("utf-8").splitlines()[0]
+    _utt, _wav, text, _prompt_wav, _prompt_text = row.split("\t")
+    assert text == "a target with a | pipe in it"
+
+
+def test_malformed_lst_line_raises(tmp_path):
+    """A line with fewer than 4 '|'-separated fields must abort the whole
+    build, not silently reduce the row count -- exact row counts are this
+    recipe's documented acceptance criterion (README), so a silent skip
+    could make a wrong result look right."""
+    root = tmp_path / "seedtts_testset"
+    d = root / "en"
+    (d / "wavs").mkdir(parents=True)
+    (d / "prompt-wavs").mkdir(parents=True)
+    (d / "meta.lst").write_text(
+        "only|three|fields\ngood_id|p|prompt-wavs/p.wav|t\n", encoding="utf-8"
+    )
+    other = root / "zh"
+    (other / "wavs").mkdir(parents=True)
+    (other / "prompt-wavs").mkdir(parents=True)
+    (other / "meta.lst").write_text("", encoding="utf-8")
+    (other / "hardcase.lst").write_text("", encoding="utf-8")
+
+    with pytest.raises(RuntimeError, match="malformed"):
+        prepare_seedtts(root, tmp_path / "out")

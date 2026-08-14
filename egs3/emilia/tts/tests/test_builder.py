@@ -322,6 +322,55 @@ dataset:
     assert report["dropped"].get("missing_audio", 0) == 0
 
 
+def test_embedded_newline_in_text_does_not_corrupt_manifest_rows(tmp_path):
+    """A JSON `text` field containing a literal newline or tab must not
+    split or shift the TSV row it's written into -- normalize_text strips
+    it (see test_filters.py), and this is the end-to-end check that the
+    manifest still has exactly one row per utterance with 5 fields."""
+    root = tmp_path / "raw"
+    _write_utt(
+        root / "emilia/EN/EN-B000000",
+        "EN_B00000_S00000_W000000",
+        "EN_B00000_S00000",
+        "an utterance\nwith an embedded\tnewline and tab",
+        4.0,
+        "en",
+    )
+
+    recipe_dir = tmp_path / "recipe"
+    (recipe_dir / "dataset").mkdir(parents=True)
+    (recipe_dir / "dataset" / "config.yaml").write_text(
+        f"""
+builder:
+  corpus_root: {root}
+  langs: [EN]
+  data_path: data
+  val_ratio: 0.2
+  seed: 42
+  min_duration: 0.3
+  max_duration: 30.0
+  strict_text_filters: false
+  manifest_paths:
+    train: manifest/train.tsv
+    valid: manifest/valid.tsv
+  shard_table_path: manifest/shards.txt
+dataset:
+  split_manifest_paths:
+    train: manifest/train.tsv
+    valid: manifest/valid.tsv
+""",
+        encoding="utf-8",
+    )
+
+    EmiliaBuilder().build(recipe_dir=recipe_dir)
+    data = recipe_dir / "data" / "manifest"
+    lines = (data / "train.tsv").read_text("utf-8").splitlines()
+    assert len(lines) == 1
+    fields = lines[0].split("\t")
+    assert len(fields) == 5
+    assert "\n" not in fields[4] and "\t" not in fields[4]
+
+
 def test_multi_worker_build_matches_single_worker(recipe, monkeypatch):
     """The ProcessPoolExecutor path must run and match the sequential path.
 

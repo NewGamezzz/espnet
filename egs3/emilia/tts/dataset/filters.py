@@ -103,8 +103,36 @@ EN_CHAR_FILTERS = ("ا", "い", "て")
 
 ZH_PUNCT_TABLE = str.maketrans({",": "，", "!": "！", "?": "？"})
 
+# dataset/builder.py writes normalize_text's output as the last, unquoted
+# field of a tab-separated manifest row (IMPORTANT: TSV, minor #4 in the
+# final whole-branch review). A literal '\n', '\r' or '\t' inside a JSON
+# text field would otherwise split or shift that row.
+_ROW_BREAKING_WHITESPACE_TABLE = str.maketrans({"\n": " ", "\r": " ", "\t": " "})
+
 _REPEAT_RUN = re.compile(r"(.)\1{10,}")
 _LONG_DIGITS = re.compile(r"\d{15,}")
+
+# IMPORTANT 4 (final whole-branch review): keep_utterance used to dispatch
+# these three per-language rules with `X if lang == "EN" else Y`, which
+# silently applies the ZH rule to ANY lang that isn't the literal string
+# "EN" -- including a typo, or a genuinely new third language, since
+# dataset/config.yaml exposes `langs` as a config knob with no validation
+# against these tables. Dict lookups keyed by language raise on an unknown
+# key instead of silently guessing.
+_BLOCKLIST_BY_LANG = {"EN": OUT_EN, "ZH": OUT_ZH}
+_CHAR_FILTERS_BY_LANG = {"EN": EN_CHAR_FILTERS, "ZH": ZH_CHAR_FILTERS}
+_REPETITION_LENGTH_BY_LANG = {"EN": 4, "ZH": 2}
+
+
+def _lookup_by_lang(mapping: dict, lang: str, what: str):
+    """Look up a per-language filter table, raising on an unknown lang."""
+    try:
+        return mapping[lang]
+    except KeyError:
+        raise ValueError(
+            f"keep_utterance: no {what} configured for lang={lang!r}. "
+            f"Known languages: {sorted(mapping)}."
+        ) from None
 
 
 def repetition_found(text: str, length: int = 2) -> bool:
@@ -122,8 +150,18 @@ def repetition_found(text: str, length: int = 2) -> bool:
 
 
 def normalize_text(text: str, lang: str) -> str:
-    """Strip, and for ZH map ASCII punctuation to full-width."""
+    """Strip, and for ZH map ASCII punctuation to full-width.
+
+    Also replaces embedded newlines/carriage-returns/tabs with a single
+    space each: dataset/builder.py writes this text as the last, unquoted
+    field of a tab-separated manifest row with no escaping. A literal
+    ``\\n``/``\\r``/``\\t`` inside a JSON ``text`` field would otherwise
+    split or shift the row, silently corrupting the manifest -- a defect
+    that would only show up once, at a random position, somewhere across
+    37M rows.
+    """
     text = text.strip()
+    text = text.translate(_ROW_BREAKING_WHITESPACE_TABLE)
     if lang == "ZH":
         text = text.translate(ZH_PUNCT_TABLE)
     return text
@@ -157,15 +195,15 @@ def keep_utterance(
     text = record["text"].strip()
     duration = float(record["duration"])
 
-    blocklist = OUT_EN if lang == "EN" else OUT_ZH
+    blocklist = _lookup_by_lang(_BLOCKLIST_BY_LANG, lang, "blocklist")
     if speaker in blocklist:
         return False, "blocklist"
 
-    char_filters = EN_CHAR_FILTERS if lang == "EN" else ZH_CHAR_FILTERS
+    char_filters = _lookup_by_lang(_CHAR_FILTERS_BY_LANG, lang, "char filters")
     if any(ch in text for ch in char_filters):
         return False, "charfilter"
 
-    rep_len = 4 if lang == "EN" else 2
+    rep_len = _lookup_by_lang(_REPETITION_LENGTH_BY_LANG, lang, "repetition length")
     if repetition_found(text, length=rep_len):
         return False, "repetition"
 
