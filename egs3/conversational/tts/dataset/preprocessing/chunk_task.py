@@ -105,6 +105,33 @@ def plan_from_json(d: dict) -> ChunkTaskPlan:
     )
 
 
+def assembled_duration(record: "WindowRecord") -> float:
+    """Total seconds ``record_costs`` should price ``record`` at.
+
+    Duck-typed: uses only ``record.t0``/``record.t1``/``record.chunk_task``, so
+    any object shaped like a ``WindowRecord`` works (see ``draw_chunk_task``'s
+    docstring for the same convention). For a record with no chunk-task plan
+    (the overwhelming majority - see ``chunk_task_prob``) this is plain
+    ``t1 - t0``. For a chunk-task record, training assembles the window
+    together with its prompt span (one representative span from
+    ``prompt_spans`` - all spans share the same length, see
+    ``ChunkTaskPlan.__post_init__``) and, for a "full" plan, its previous-chunk
+    slice, so the packer must price the ASSEMBLED length, not just the window.
+    """
+    window_len = record.t1 - record.t0
+    chunk_task = record.chunk_task
+    if chunk_task is None:
+        return window_len
+    prompt_start, prompt_end = chunk_task.prompt_spans[0]
+    lp = prompt_end - prompt_start
+    if chunk_task.prev_span is not None:
+        prev_start, prev_end = chunk_task.prev_span
+        prev_len = prev_end - prev_start
+    else:
+        prev_len = 0.0
+    return lp + prev_len + window_len
+
+
 def _outside(turn: Turn, span: tuple[float, float]) -> bool:
     """True iff ``turn`` does not overlap ``span`` at all; touching exactly at
     an edge (``turn.end == span[0]`` or ``turn.start == span[1]``) counts as

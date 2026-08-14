@@ -64,11 +64,16 @@ fixed global index for a ``Dataset.__getitem__(int)`` to look up, so the
 downstream ``Dataset`` must accept the spec directly.
 
 Cost model (espnet3 numel strategy with a row-based cost): a window of N
-channels and duration ``t1 - t0`` costs ``N`` transformer rows of
-``round(fs * (t1 - t0))`` samples each; a batch padded to its longest
-window costs ``total_rows * T_max`` sample-rows, and ``batch_bins`` is
-sized directly in those units (~94 mel frames per second per row at 24 kHz
-/ hop 256).  Shapes come from window metadata alone; no audio is loaded.
+channels costs ``N`` transformer rows of ``round(fs * assembled_duration(record))``
+samples each (see ``chunk_task.assembled_duration``), where ``assembled_duration``
+is plain ``t1 - t0`` for an ordinary record (``record.chunk_task is None``, the
+overwhelming majority) and ``t1 - t0`` plus the record's prompt span plus, for a
+"full" chunk-task plan, its previous-chunk slice otherwise - the packer prices
+what training actually assembles onto the row, not just the window; a batch
+padded to its longest window costs ``total_rows * T_max`` sample-rows, and
+``batch_bins`` is sized directly in those units (~94 mel frames per second per
+row at 24 kHz / hop 256).  Shapes come from window metadata alone; no audio is
+loaded.
 ``min_batch_size`` counts conversations, not rows, and mixed-N batches need
 no special casing because the budget is in N x T units.  With the
 ``weights`` knob (see ``ConversationBatchSampler``), each corpus component is
@@ -88,6 +93,8 @@ from typing import TYPE_CHECKING, Iterator, Sequence
 import numpy as np
 import torch
 
+from egs3.conversational.tts.dataset.preprocessing.chunk_task import assembled_duration
+
 if TYPE_CHECKING:
     from egs3.conversational.tts.dataset.preprocessing.windows import WindowRecord
 
@@ -104,8 +111,15 @@ def _component_datasets(dataset) -> Sequence:
 
 
 def record_costs(records: Sequence["WindowRecord"], fs: int) -> list[tuple[int, int]]:
-    """Per record: ``(T_samples, num_channels)`` from metadata alone."""
-    return [(round(fs * (r.t1 - r.t0)), r.num_channels) for r in records]
+    """Per record: ``(T_samples, num_channels)`` from metadata alone.
+
+    ``T_samples`` prices ``assembled_duration`` (window plus, for a chunk-task
+    record, its prompt span and any previous-chunk slice - see
+    ``chunk_task.py``), not just ``t1 - t0``: an ordinary record's
+    ``chunk_task`` is None, for which ``assembled_duration`` already reduces to
+    the plain window length, so one formula covers both cases uniformly.
+    """
+    return [(round(fs * assembled_duration(r)), r.num_channels) for r in records]
 
 
 def pack_batches(
