@@ -14,7 +14,10 @@ from .conftest import (
 )
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
+    NEW_TOKENS,
     OTHER_TOKEN,
+    PREV_CHUNK_TOKEN,
+    SPEAKER_PROMPT_TOKEN,
     TURN_TOKEN,
     make_token2id,
 )
@@ -74,12 +77,28 @@ def test_embedding_surgery_rows():
     warm_starts = {
         token2id[TURN_TOKEN] + 1: token2id[" "] + 1,  # <turn> <- space row
         token2id[OTHER_TOKEN] + 1: 0,  # <OTHER> <- filler row
+        token2id[SPEAKER_PROMPT_TOKEN] + 1: 0,  # <speaker_prompt> <- filler row
+        token2id[PREV_CHUNK_TOKEN] + 1: 0,  # <prev_chunk> <- filler row
     }
     for row, source in warm_starts.items():
         diff = new[row] - pretrained[source]
         assert diff.abs().max() > 0  # noise was actually added
         # Within the noise scale (5 sigma per coordinate is generous).
         assert diff.abs().max() < 5 * noise_scale
+
+
+def test_extended_embedding_four_new_rows():
+    base = ["x", " ", "y"]
+    tokens = base + list(NEW_TOKENS)
+    weight = torch.randn(len(base) + 1, 8)
+    out = extended_text_embedding(weight, tokens, noise_scale=0.0)
+    assert out.shape == (len(tokens) + 1, 8)
+    torch.testing.assert_close(out[: len(base) + 1], weight)
+    space_row = base.index(" ") + 1
+    torch.testing.assert_close(out[len(base) + 1], weight[space_row])  # <turn>
+    torch.testing.assert_close(out[len(base) + 2], weight[0])  # <OTHER>
+    torch.testing.assert_close(out[len(base) + 3], weight[0])  # <speaker_prompt>
+    torch.testing.assert_close(out[len(base) + 4], weight[0])  # <prev_chunk>
 
 
 def test_embedding_surgery_rejects_wrong_base():

@@ -6,14 +6,27 @@ the retired offline builders used - so it reproduces their window manifests
 bit-for-bit; that mode serves valid/test splits, inference, and the golden
 parity tests.  Epoch mode appends ":epoch{epoch}" for fresh training windows
 each epoch that any rank or worker can re-derive independently.
+
+Special-token conditioning chunk-task mode (chunk_task.py) hooks into epoch
+mode only: passing a ``chunk_params`` whose ``chunk_task_prob > 0`` draws one
+per-SESSION-per-epoch coin from the SAME rng that windows itself, and on a
+"chunk" outcome plans that session's windows against ``chunk_params``'s
+window range instead of ``params``'s, then calls ``draw_chunk_task`` per
+surviving window (same rng, after exclusion-span filtering) to attach a
+``ChunkTaskPlan``.  Frozen mode, ``chunk_params=None``, ``chunk_task_prob ==
+0``, and ``session.atomic`` all take the exact pre-chunk-task code path with
+identical RNG construction and zero extra draws - the bit-parity guarantee
+the golden tests in test_parity.py depend on.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import random
 from dataclasses import dataclass
 from typing import Iterable
 
+from .chunk_task import ChunkTaskParams, draw_chunk_task
 from .sessions import SessionRecord
 from .sssd import Recording
 from .windows import WindowingStats, WindowRecord, build_windows
@@ -79,6 +92,7 @@ def plan_session(
     params: WindowParams,
     seed: int,
     epoch: int | None,
+    chunk_params: ChunkTaskParams | None = None,
 ) -> tuple[list[WindowRecord], WindowingStats]:
     if session.atomic:
         stats = WindowingStats()
@@ -95,6 +109,7 @@ def plan_session(
                 turns=session.turns,
             )
         ], stats
+
     rec = Recording(
         id=session.session_id,
         audio_relpath=session.audio_relpath,
@@ -102,19 +117,71 @@ def plan_session(
         num_channels=session.num_channels,
         duration=session.duration,
     )
+
+    # BIT-PARITY: chunk_params is None / chunk_task_prob == 0 / epoch is None
+    # all take the exact pre-chunk-task code path below, with the exact same
+    # RNG construction and zero extra draws - required for the golden parity
+    # tests and for valid/test/inference (epoch=None), which must never chunk.
+    chunking = (
+        chunk_params is not None
+        and chunk_params.chunk_task_prob > 0
+        and epoch is not None
+    )
+
+    if not chunking:
+        records, stats = build_windows(
+            session.session_id,
+            rec,
+            session.turns,
+            window_min=params.window_min,
+            window_max=params.window_max,
+            boundary_guard=params.boundary_guard,
+            tail_min=params.tail_min,
+            rng=_window_rng(seed, session.session_id, epoch),
+            trim_to_turns=params.trim_to_turns,
+            min_coverage=params.min_coverage,
+            snap_start_to_turn=params.snap_start_to_turn,
+        )
+        if session.exclusion_spans:
+            surviving = []
+            for record in records:
+                if any(
+                    record.t0 < b and a < record.t1 for a, b in session.exclusion_spans
+                ):
+                    stats.n_windows -= 1
+                else:
+                    surviving.append(record)
+            records = surviving
+        return records, stats
+
+    # Chunk-task mode: one rng constructed once, the per-session coin drawn
+    # FIRST from it, then the same rng object flows to build_windows and to
+    # every draw_chunk_task call below (fixed draw order == determinism).
+    rng = _window_rng(seed, session.session_id, epoch)
+    is_chunk = rng.random() < chunk_params.chunk_task_prob
+    window_params = params
+    if is_chunk:
+        window_params = dataclasses.replace(
+            params,
+            window_min=chunk_params.chunk_window_min,
+            window_max=chunk_params.chunk_window_max,
+        )
     records, stats = build_windows(
         session.session_id,
         rec,
         session.turns,
-        window_min=params.window_min,
-        window_max=params.window_max,
-        boundary_guard=params.boundary_guard,
-        tail_min=params.tail_min,
-        rng=_window_rng(seed, session.session_id, epoch),
-        trim_to_turns=params.trim_to_turns,
-        min_coverage=params.min_coverage,
-        snap_start_to_turn=params.snap_start_to_turn,
+        window_min=window_params.window_min,
+        window_max=window_params.window_max,
+        boundary_guard=window_params.boundary_guard,
+        tail_min=window_params.tail_min,
+        rng=rng,
+        trim_to_turns=window_params.trim_to_turns,
+        min_coverage=window_params.min_coverage,
+        snap_start_to_turn=window_params.snap_start_to_turn,
     )
+    # Exclusion-span filtering runs BEFORE draw_chunk_task calls: draws only
+    # happen per SURVIVING window, so no draws are wasted on dropped windows
+    # and the surviving set alone determines the draw sequence.
     if session.exclusion_spans:
         surviving = []
         for record in records:
@@ -123,6 +190,32 @@ def plan_session(
             else:
                 surviving.append(record)
         records = surviving
+
+    if is_chunk:
+        chunked_records = []
+        for record in records:
+            plan, degraded = draw_chunk_task(
+                record,
+                session.turns,
+                session.duration,
+                session.exclusion_spans,
+                session.num_channels,
+                rng,
+                chunk_params,
+            )
+            if plan is None:
+                stats.n_chunk_fallback_infill += 1
+                chunked_records.append(record)
+                continue
+            if plan.kind == "full":
+                stats.n_chunk_full += 1
+            else:
+                stats.n_chunk_prompt_only += 1
+            if degraded:
+                stats.n_chunk_degraded += 1
+            chunked_records.append(dataclasses.replace(record, chunk_task=plan))
+        records = chunked_records
+
     return records, stats
 
 
@@ -132,11 +225,18 @@ def plan_sessions(
     params: WindowParams,
     seed: int,
     epoch: int | None,
+    chunk_params: ChunkTaskParams | None = None,
 ) -> tuple[list[WindowRecord], WindowingStats]:
     all_records: list[WindowRecord] = []
     total = WindowingStats()
     for session in sessions:
-        records, stats = plan_session(session, params=params, seed=seed, epoch=epoch)
+        records, stats = plan_session(
+            session,
+            params=params,
+            seed=seed,
+            epoch=epoch,
+            chunk_params=chunk_params,
+        )
         all_records.extend(records)
         total.merge(stats)
     return all_records, total

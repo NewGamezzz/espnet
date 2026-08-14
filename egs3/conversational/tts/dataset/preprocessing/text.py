@@ -20,17 +20,28 @@ from typing import Mapping, Sequence
 
 TURN_TOKEN = "<turn>"
 OTHER_TOKEN = "<OTHER>"
-NEW_TOKENS: tuple[str, str] = (TURN_TOKEN, OTHER_TOKEN)
+# Audio-only conditioning spans (design decision 2026-08-14): the speaker
+# reference prompt and, for online-window training, the previous chunk's
+# audio.  Both carry no text of their own, so they get one vocab id each,
+# not a per-character run like <OTHER>.
+SPEAKER_PROMPT_TOKEN = "<speaker_prompt>"
+PREV_CHUNK_TOKEN = "<prev_chunk>"
+NEW_TOKENS: tuple[str, str, str, str] = (
+    TURN_TOKEN,
+    OTHER_TOKEN,
+    SPEAKER_PROMPT_TOKEN,
+    PREV_CHUNK_TOKEN,
+)
 
 # char_tokens.txt vocabs encode the space character as this symbol.
 SPACE_SYMBOL = "<space>"
 
 
 def extend_vocab(base_tokens: Sequence[str]) -> list[str]:
-    """Append the two new tokens to the end of ``base_tokens``.
+    """Append the four new tokens to the end of ``base_tokens``.
 
     Every base token keeps its id (line index); the new ids are contiguous at
-    the end.  Raises ``ValueError`` if either token is already present, since
+    the end.  Raises ``ValueError`` if any of them is already present, since
     that would silently break the "new token" assumption.
     """
     base = list(base_tokens)

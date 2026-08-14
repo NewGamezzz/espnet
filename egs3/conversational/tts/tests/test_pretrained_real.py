@@ -6,7 +6,7 @@ through the production assembly path:
 
 * vocab provenance and the appended-token id layout,
 * the surgery loader (every backbone tensor bit-exact, embedding rows
-  bit-exact, exactly two warm-started rows, gates zero after injection),
+  bit-exact, exactly four warm-started rows, gates zero after injection),
 * single-channel ODE parity: with zero gates and ``counts=[1]`` the assembled
   multi-branch model must reproduce the baseline ``espnet2`` ``CFM`` output
   on identical inputs and seed (this simultaneously validates checkpoint
@@ -35,6 +35,8 @@ from .conftest import REPO_ROOT  # noqa: F401  (side effect: repo root on sys.pa
 from egs3.conversational.tts.dataset.preprocessing.text import (  # noqa: E402
     NEW_TOKENS,
     OTHER_TOKEN,
+    PREV_CHUNK_TOKEN,
+    SPEAKER_PROMPT_TOKEN,
     TURN_TOKEN,
     extend_vocab,
     make_token2id,
@@ -156,9 +158,11 @@ def test_vocab_provenance_accepts_real_vocab_and_rejects_mismatch(assets):
 def test_new_tokens_appended_after_real_vocab(assets):
     base_size = len(assets["base"])
     token2id = make_token2id(assets["ext"])
-    assert assets["ext"][-2:] == list(NEW_TOKENS)
+    assert assets["ext"][-len(NEW_TOKENS) :] == list(NEW_TOKENS)
     assert token2id[TURN_TOKEN] == base_size
     assert token2id[OTHER_TOKEN] == base_size + 1
+    assert token2id[SPEAKER_PROMPT_TOKEN] == base_size + 2
+    assert token2id[PREV_CHUNK_TOKEN] == base_size + 3
     # The Emilia vocab carries a literal space token; the surgery warm-starts
     # <turn> from its row, so it must resolve.
     assert " " in token2id
@@ -226,8 +230,10 @@ def test_assembled_weights_bitexact_vs_checkpoint(
             assert new.shape[0] == base_rows + len(NEW_TOKENS)
             assert torch.equal(new[:base_rows], ref), "original embedding rows changed"
             # Warm starts must differ from their sources (noise was added).
-            assert not torch.equal(new[base_rows], ref[0])
-            assert not torch.equal(new[base_rows + 1], ref[0])
+            assert not torch.equal(new[base_rows], ref[0])  # <turn>
+            assert not torch.equal(new[base_rows + 1], ref[0])  # <OTHER>
+            assert not torch.equal(new[base_rows + 2], ref[0])  # <speaker_prompt>
+            assert not torch.equal(new[base_rows + 3], ref[0])  # <prev_chunk>
         else:
             assert torch.equal(state[mapped], ref), f"weight mismatch at {key}"
 

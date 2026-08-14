@@ -74,6 +74,7 @@ class MultiBranchCFM(CFM):
         frac_lengths=None,  # (B,) pre-sampled span fractions (tests only)
         time=None,  # (B,) pre-sampled flow times (tests only)
         x0=None,  # (R, T, d) pre-sampled noise (tests only)
+        cond_frames=None,  # (B,) long, -1 sentinel: chunk-task deterministic span
     ):
         # handle raw wave
         if inp.ndim == 2:
@@ -112,6 +113,33 @@ class MultiBranchCFM(CFM):
         conv_span_mask = F.pad(
             conv_span_mask, (0, seq_len - conv_span_mask.shape[1]), value=False
         )
+
+        # Chunk-task conversations (cond_frames >= 0) override the random
+        # span with the deterministic target region [cond_frames, conv_len):
+        # everything before cond_frames is prompt/prev-chunk context, never
+        # masked.  Sentinel rows (-1) fall through to the random draw above
+        # untouched, so an all-sentinel batch is bit-identical to omitting
+        # the kwarg (the random draw itself stays unconditional).
+        if cond_frames is not None:
+            cond_frames = torch.as_tensor(cond_frames, device=device, dtype=torch.long)
+            if cond_frames.numel() != n_conv:
+                raise ValueError(
+                    f"cond_frames has {cond_frames.numel()} entries for "
+                    f"{n_conv} conversations"
+                )
+            det = cond_frames >= 0
+            if det.any():
+                pos = torch.arange(seq_len, device=device)
+                det_mask = (pos[None, :] >= cond_frames.clamp(min=0)[:, None]) & (
+                    pos[None, :] < conv_lens[:, None]
+                )
+                if (det & ~det_mask.any(dim=1)).any():
+                    raise ValueError(
+                        "cond_frames leaves an empty deterministic span for at "
+                        "least one conversation (cond_frames >= conv_len)"
+                    )
+                conv_span_mask = torch.where(det[:, None], det_mask, conv_span_mask)
+
         rand_span_mask = conv_span_mask.repeat_interleave(counts_t, dim=0)
         rand_span_mask &= mask
 
@@ -172,6 +200,7 @@ class MultiBranchCFM(CFM):
             "cond": cond,
             "pred": pred,
             "rand_span_mask": rand_span_mask,
+            # frac_lengths is the random draw (discarded if cond_frames >= 0)
             "frac_lengths": frac_lengths,
             "time": time,
         }

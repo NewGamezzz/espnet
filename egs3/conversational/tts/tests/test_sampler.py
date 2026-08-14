@@ -9,6 +9,7 @@ import pytest
 import torch
 from lightning.pytorch.callbacks import ModelCheckpoint
 
+from egs3.conversational.tts.dataset.preprocessing.chunk_task import ChunkTaskPlan
 from egs3.conversational.tts.dataset.preprocessing.planner import (
     WindowParams,
     plan_sessions,
@@ -41,7 +42,9 @@ def fake_dataset(windows, *, session_id="s", fs=FS):
 
     Records are plain ``SimpleNamespace`` objects carrying ``window_id``/
     ``session_id`` (for spec-yield identity assertions below) plus the
-    ``t0``/``t1``/``num_channels`` fields the sampler's cost model reads.
+    ``t0``/``t1``/``num_channels``/``chunk_task`` fields the sampler's cost
+    model reads (``chunk_task=None``, matching a real ``WindowRecord``'s
+    default for the overwhelming majority of ordinary windows).
     """
     records = [
         SimpleNamespace(
@@ -50,6 +53,7 @@ def fake_dataset(windows, *, session_id="s", fs=FS):
             t0=0.0,
             t1=duration,
             num_channels=n,
+            chunk_task=None,
         )
         for i, (duration, n) in enumerate(windows)
     ]
@@ -74,6 +78,14 @@ def window_ids(batches):
     return {w.window_id for batch in batches for _, w in batch}
 
 
+def _rec(t0, t1, chunk_task=None, num_channels=2):
+    """Bare WindowRecord stand-in: only the fields record_costs/assembled_duration
+    read (mirrors fake_dataset's SimpleNamespace records above)."""
+    return SimpleNamespace(
+        t0=t0, t1=t1, num_channels=num_channels, chunk_task=chunk_task
+    )
+
+
 # --------------------------------------------------------------------------
 # record_costs / pack_batches: metadata-only cost model, packing budget.
 # --------------------------------------------------------------------------
@@ -82,6 +94,28 @@ def window_ids(batches):
 def test_record_costs_metadata_only():
     dataset = fake_dataset([(10.0, 2), (60.0, 3)])
     assert record_costs(dataset.records, FS) == [(240000, 2), (1440000, 3)]
+
+
+def test_record_costs_chunk_task_uses_assembled_length():
+    plan = ChunkTaskPlan(
+        kind="full",
+        prev_span=(94.0, 100.0),
+        prompt_spans=((10.0, 14.5), (40.0, 44.5)),
+    )
+    rec = _rec(t0=100.0, t1=130.0, chunk_task=plan)
+    ((cost, n),) = record_costs([rec], fs=24000)
+    assert cost == round(24000 * (4.5 + 6.0 + 30.0)) and n == 2
+
+
+def test_record_costs_chunk_task_prompt_only_has_no_prev_length():
+    plan = ChunkTaskPlan(
+        kind="prompt_only",
+        prev_span=None,
+        prompt_spans=((10.0, 14.5), (40.0, 44.5)),
+    )
+    rec = _rec(t0=100.0, t1=130.0, chunk_task=plan)
+    ((cost, n),) = record_costs([rec], fs=24000)
+    assert cost == round(24000 * (4.5 + 30.0)) and n == 2
 
 
 def test_pack_batches_budget_and_coverage():
@@ -265,6 +299,7 @@ class _TinyConversationDataset(torch.utils.data.Dataset):
                 t0=0.0,
                 t1=1.0 + i,
                 num_channels=1,
+                chunk_task=None,
                 idx=i,
             )
             for i in range(n)

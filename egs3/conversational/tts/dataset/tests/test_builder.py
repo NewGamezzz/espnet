@@ -107,10 +107,9 @@ class TestVocabSafety:
         # Provenance guard: step 3 checks this against the vocab shipped with
         # the pretrained checkpoint before loading weights.
         assert meta["base_vocab_sha256"] == hashlib.sha256(base_bytes).hexdigest()
-        assert meta["total_size"] == len(base_vocab) + 2
+        assert meta["total_size"] == len(base_vocab) + len(NEW_TOKENS)
         assert meta["new_tokens"] == {
-            NEW_TOKENS[0]: len(base_vocab),
-            NEW_TOKENS[1]: len(base_vocab) + 1,
+            token: len(base_vocab) + i for i, token in enumerate(NEW_TOKENS)
         }
 
     def test_emilia_style_vocab_space_token_and_crlf(self, fake_corpus, tmp_path):
