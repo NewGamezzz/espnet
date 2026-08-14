@@ -2,15 +2,16 @@
 
 Drives ``ConversationalTTSSystem.infer()`` / ``run_inference`` then
 ``ConversationalTTSSystem.measure()`` / ``measure()`` on a fully fabricated
-fixture (a tiny two-channel FLAC, a hand-built window manifest, and the tiny
-random-init DiT from the trainer suite), proving the step's acceptance
-criterion end to end: ``meta.scp`` -> all three lean metric classes -> a
-``metrics.json`` with every documented summary key present. No corpus, no
-checkpoint, no network: every metric backend (transcriber, normalizer,
-embedder, MOS predictor) is swapped for a trivial fake, injected through a
-test-scoped metrics config that is hydra-instantiated the same way
-``conf/metrics.yaml`` is (mirroring ``tests/test_measure.py``'s stub-metric
-approach, extended here to the three REAL metric classes).
+fixture (a tiny two-channel FLAC, a hand-built session manifest whose turns
+the real online planner plans into two windows, and the tiny random-init DiT
+from the trainer suite), proving the step's acceptance criterion end to end:
+``meta.scp`` -> all three lean metric classes -> a ``metrics.json`` with
+every documented summary key present. No corpus, no checkpoint, no network:
+every metric backend (transcriber, normalizer, embedder, MOS predictor) is
+swapped for a trivial fake, injected through a test-scoped metrics config
+that is hydra-instantiated the same way ``conf/metrics.yaml`` is (mirroring
+``tests/test_measure.py``'s stub-metric approach, extended here to the three
+REAL metric classes).
 
 Two runs exercise the two viable ``infer`` code paths, BOTH on a two-window
 session: under the reworked infer stage's leakage rule (a channel's prompt
@@ -47,11 +48,11 @@ from .conftest import EXT_TOKENS
 from .test_build_model import build_tiny  # noqa: F401  (fixture reuse)
 from .test_inference import FakeVocoder, _infer_config, _write_flac
 
-from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
-from egs3.conversational.tts.dataset.preprocessing.windows import (
-    WindowRecord,
-    to_json,
+from egs3.conversational.tts.dataset.preprocessing.sessions import (
+    SessionRecord,
+    write_session_manifest,
 )
+from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
 from egs3.conversational.tts.src.inference import run_inference
 from egs3.conversational.tts.src.system import ConversationalTTSSystem
 from espnet3.systems.base.metric import measure
@@ -194,9 +195,9 @@ def _assert_all_summary_keys_present(results: dict) -> None:
 
 
 # --------------------------------------------------------------------------- #
-# fixture: two windows on one FLAC (feeds the gt-mode-via-system run below);
-# a single-window variant (matching tests/test_inference.py's fixture shape)
-# feeds the generate-mode leg.
+# fixture: one session manifest whose turns the real online planner (default,
+# ratified WindowParams, window_seed=0) splits into two windows on one FLAC,
+# feeding both the gt-mode-via-system run and the generate-mode leg below.
 # --------------------------------------------------------------------------- #
 def _turns_at(offset: float) -> tuple:
     return (
@@ -207,29 +208,34 @@ def _turns_at(offset: float) -> tuple:
     )
 
 
-def _window(window_id: str, t0: float) -> WindowRecord:
-    return WindowRecord(
-        window_id=window_id,
+def _two_window_session() -> SessionRecord:
+    """One non-atomic session: a turn group near the start (envelope [0.5,
+    10.0) after ``trim_to_turns``) and a second group after a long silent gap
+    (envelope [77.5, 87.0)).  Same derivation as
+    ``tests.test_inference._two_window_session``: at the default
+    ``window_seed=0`` / ratified ``WindowParams``, the seeded first cut
+    (``random.Random("0:window:sess").uniform(10.0, 80.0)`` ~= 75.49, so the
+    target lands at ~75.99s) falls in the gap between the two groups (no turn
+    spans it), so ``snap_start_to_turn`` + ``trim_to_turns`` yield exactly two
+    windows, one per group - verified by directly simulating
+    ``plan_sessions`` with this turn layout."""
+    return SessionRecord(
         session_id="sess",
         audio_relpath="original/sess_mixed.flac",
         num_channels=2,
         sample_rate=SRC_SR,
-        t0=t0,
-        t1=t0 + 12.0,
-        turns=_turns_at(t0),
+        duration=90.0,
+        turns=_turns_at(0.0) + _turns_at(77.0),
     )
 
 
-def _build_fixture(tmp_path, windows, flac_duration_s: float) -> dict:
-    """One fabricated recipe data dir (FLAC + manifest + vocab + minimal
-    training config); the two fixtures below vary only the window list and
-    the FLAC duration that must cover it."""
+def _build_fixture(tmp_path, session: SessionRecord, flac_duration_s: float) -> dict:
+    """One fabricated recipe data dir (FLAC + session manifest + vocab +
+    minimal training config)."""
     root = tmp_path / "data"
     _write_flac(root / "original" / "sess_mixed.flac", 2, flac_duration_s, SRC_SR)
-    manifest = root / "valid.jsonl"
-    manifest.write_text(
-        "".join(json.dumps(to_json(w)) + "\n" for w in windows), encoding="utf-8"
-    )
+    manifest = root / "sessions_valid.jsonl"
+    write_session_manifest(manifest, [session])
     vocab = tmp_path / "vocab.txt"
     vocab.write_text("\n".join(EXT_TOKENS) + "\n", encoding="utf-8")
     training_config = OmegaConf.create(
@@ -251,8 +257,7 @@ def _build_fixture(tmp_path, windows, flac_duration_s: float) -> dict:
 
 @pytest.fixture
 def two_window_fixture(tmp_path):
-    windows = [_window("sess_w00000", 5.0), _window("sess_w00001", 18.0)]
-    return _build_fixture(tmp_path, windows, flac_duration_s=35.0)
+    return _build_fixture(tmp_path, _two_window_session(), flac_duration_s=90.0)
 
 
 # --------------------------------------------------------------------------- #
