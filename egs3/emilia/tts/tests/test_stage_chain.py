@@ -138,6 +138,10 @@ def test_ttssystem_create_shape_wires_config_to_shape_files(tmp_path):
     write_shape_file helper. A typo in a config key here would otherwise
     surface for the first time on PSC.
     """
+    # val_ratio=0.2 over 30 utterances gives an asymmetric 24/6 train/valid
+    # split (seed=42). That asymmetry is load-bearing: it is what would
+    # catch a swapped cfg["manifest_paths"][split] lookup in create_shape,
+    # which two equal-sized splits would let through silently.
     recipe = _write_synthetic_corpus(tmp_path)
     EmiliaBuilder().build(recipe_dir=recipe)
 
