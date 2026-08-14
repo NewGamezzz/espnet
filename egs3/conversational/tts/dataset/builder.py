@@ -171,7 +171,7 @@ class SSSDBuilder(DatasetBuilder):
             raise ValueError(
                 "base_vocab_path is required: point it at the pretrained char "
                 "vocab to extend (builder.base_vocab_path in config.yaml, or "
-                "--base-vocab-path on the CLI). The two new tokens are appended "
+                "--base-vocab-path on the CLI). The four new tokens are appended "
                 "at the end so every pretrained token id is unchanged."
             )
         base_vocab_path = Path(base_vocab_path)

@@ -102,6 +102,26 @@ class TestVocabExtension:
         assert extended[: len(base_vocab)] == base_vocab
         assert extended[len(base_vocab) :] == list(NEW_TOKENS)
 
+    def test_extend_vocab_appends_four_tokens_in_order(self):
+        base = ["a", "b", "<space>"]
+        out = extend_vocab(base)
+        assert out[:3] == base
+        assert out[3:] == ["<turn>", "<OTHER>", "<speaker_prompt>", "<prev_chunk>"]
+
+    def test_new_token_constants(self):
+        from egs3.conversational.tts.dataset.preprocessing.text import (
+            NEW_TOKENS,
+            SPEAKER_PROMPT_TOKEN,
+            PREV_CHUNK_TOKEN,
+        )
+
+        assert NEW_TOKENS == (
+            "<turn>",
+            "<OTHER>",
+            SPEAKER_PROMPT_TOKEN,
+            PREV_CHUNK_TOKEN,
+        )
+
     def test_existing_new_token_raises(self, base_vocab):
         with pytest.raises(ValueError, match="already exists"):
             extend_vocab(base_vocab + [OTHER_TOKEN])
