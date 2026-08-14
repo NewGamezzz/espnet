@@ -359,3 +359,99 @@ def test_online_sampler_survives_two_epochs_with_varying_batch_counts(
     # a different window set than epoch 0, not a replay under a new epoch
     # number.
     assert recorder.window_ids_per_epoch[0] != recorder.window_ids_per_epoch[1]
+
+
+# window_seed=20 with 6 sessions (otherwise identical shape to the fixture
+# above) packs epoch 0 to 26 batches and epoch 1 to 29 - found by scanning
+# window_seed 0..59 for the largest epoch1-over-epoch0 gap; re-derived below
+# from the real dataset/sampler, not hardcoded.
+ONLINE_SMOKE_MORE_WINDOW_SEED = 20
+
+
+@pytest.fixture
+def online_train_combined_more_sessions(tmp_path, ext_vocab_file):
+    sessions = []
+    for k in range(6):
+        session_id = f"sess{k}"
+        write_conversation_flac(
+            tmp_path / "original" / f"{session_id}_mixed.flac", 2, 45.0
+        )
+        sessions.append(
+            SessionRecord(
+                session_id=session_id,
+                audio_relpath=f"original/{session_id}_mixed.flac",
+                num_channels=2,
+                sample_rate=48000,
+                duration=45.0,
+                turns=tuple(_online_smoke_turns(session_id, 2, 45.0)),
+            )
+        )
+    manifest = tmp_path / "sessions_train.jsonl"
+    write_session_manifest(manifest, sessions)
+    dataset = ConversationDataset(
+        split="train",
+        manifest_path=manifest,
+        dataset_root=tmp_path,
+        fs=ONLINE_SMOKE_FS,
+        permute_channels=False,
+        window_params=ONLINE_SMOKE_WINDOW_PARAMS,
+        window_seed=ONLINE_SMOKE_MORE_WINDOW_SEED,
+    )
+    preprocessor = ConversationalTextPreprocessor(token_list=ext_vocab_file)
+    return CombinedDataset(
+        datasets=[dataset],
+        transforms=[(None, preprocessor)],
+        use_espnet_preprocessor=True,
+    )
+
+
+def test_online_sampler_epoch1_more_batches_is_capped_at_epoch0_count(
+    online_train_combined_more_sessions, ext_vocab_file
+):
+    """Discriminates the retired sampler docstring's claim ("Lightning
+    re-queries len(batch_sampler) at the start of every epoch") from the
+    corrected one ("epoch 0's count is a hard cap for the rest of that fit
+    segment"). Direction 1 above (fewer batches in epoch 1) is observably
+    identical under both hypotheses: a short epoch just ends early either
+    way. This is the direction that actually distinguishes them: epoch 1's
+    real plan packs to MORE batches than epoch 0, so if Lightning re-queried
+    the length every epoch (the retired claim), the trainer would consume
+    all of epoch 1's real batch count; if it caches max_batches from epoch 0
+    (the corrected claim), epoch 1 is silently truncated down to epoch 0's
+    count. The assertion below is the exact number that falls out only under
+    the corrected hypothesis."""
+    dataset = online_train_combined_more_sessions.datasets[0]
+    planned = {e: _sampler_len(dataset, e) for e in (0, 1)}
+    assert planned[1] > planned[0], (
+        "fixture must exercise the more-batches-next-epoch direction "
+        f"(got {planned}); re-search ONLINE_SMOKE_MORE_WINDOW_SEED if "
+        "planner internals changed"
+    )
+
+    module = _online_smoke_module(online_train_combined_more_sessions, ext_vocab_file)
+    recorder = _EpochRecorder()
+    trainer = pl.Trainer(
+        accelerator="cpu",
+        devices=1,
+        max_epochs=2,
+        reload_dataloaders_every_n_epochs=0,  # matches conf/training_*.yaml
+        use_distributed_sampler=False,
+        num_sanity_val_steps=0,
+        limit_val_batches=0,
+        accumulate_grad_batches=1,
+        callbacks=[recorder],
+        logger=False,
+        enable_progress_bar=False,
+        enable_model_summary=False,
+        enable_checkpointing=False,
+    )
+    trainer.fit(module)
+
+    assert trainer.current_epoch == 2
+    assert recorder.batches_per_epoch[0] == planned[0]
+    # The discriminating assertion: epoch 1 observed a batch count equal to
+    # epoch 0's frozen cap, NOT its own (larger) planned count. Under the
+    # retired "re-queries every epoch" claim this would equal planned[1]
+    # instead, and the assertion below would fail.
+    assert recorder.batches_per_epoch[1] == planned[0]
+    assert recorder.batches_per_epoch[1] < planned[1]
