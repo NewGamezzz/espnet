@@ -239,10 +239,20 @@ class ConversationDataset(TorchDataset):
         ``P`` is the per-speaker voice prompt, ``H`` the previous-chunk slice
         immediately preceding the window (empty for a ``prompt_only`` plan),
         and ``target`` the window itself.  Both conditioning blocks are snapped
-        to a whole number of ``self.hop`` samples so that, in mel frames, the
-        target starts exactly at frame ``prompt_frames + prev_frames`` - the
-        model masks conditioning by frame index, so a partial hop anywhere
-        before ``t0`` would offset every downstream frame.
+        to a whole number of ``self.hop`` samples so that the target starts at
+        frame ``prompt_frames + prev_frames`` - the model masks conditioning by
+        frame index, so a partial hop anywhere before ``t0`` would offset every
+        downstream frame.
+
+        How exact that boundary is: sample-exact when the source is already at
+        ``self.fs``, and within one output sample otherwise, because ``b``
+        below predicts t0's offset from the span in SECONDS while the block's
+        real offset comes from rounding each edge to SOURCE samples - the two
+        can disagree by half a source sample.  One sample is two orders of
+        magnitude below ``hop`` (256), and the mel boundary is softer than the
+        sample boundary anyway: with ``n_fft`` (1024) > ``hop``, the frame at
+        ``cond_frames`` straddles the seam and mixes conditioning with target
+        audio regardless.  Same convention as inference (``src/inference.py``).
         """
         plan = record.chunk_task
 

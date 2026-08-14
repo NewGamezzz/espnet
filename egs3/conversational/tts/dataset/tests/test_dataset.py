@@ -594,6 +594,27 @@ def _read_span(tmp_path, span, channel, fs, src_sr=SRC_SR):
     return row
 
 
+def _seam_shift_errors(got, ref, max_shift=2, edge=64):
+    """``(best_shift, {shift: max_abs_error})`` for aligning ``got`` against an
+    independently-read reference.
+
+    Used only where an exact comparison is impossible: ``ref`` resamples its
+    own span, so its output grid is phase-locked to that span's FIRST SOURCE
+    SAMPLE.  When the two reads start an odd number of source samples apart,
+    the grids interleave at a half sample and no integer shift reproduces
+    ``got`` exactly - the best that can be asserted is that the minimum sits
+    within one sample of 0.  ``edge`` skips the reference's own resampler
+    transient at either end.
+    """
+    errors = {}
+    for k in range(-max_shift, max_shift + 1):
+        a = got[k:] if k >= 0 else got
+        c = ref if k >= 0 else ref[-k:]
+        n = min(a.shape[0], c.shape[0])
+        errors[k] = float((a[edge : n - edge] - c[edge : n - edge]).abs().max())
+    return min(errors, key=errors.get), errors
+
+
 class TestChunkTaskAssembly:
     """Task-6 contract: chunk-task records assemble as [P | H | target] with
     both conditioning blocks snapped to whole mel hops."""
@@ -683,6 +704,79 @@ class TestChunkTaskAssembly:
                 atol=0,
             )
         assert s["speech"].shape[1] - cond == round(rec.duration * ds.fs)
+
+    def _assert_resampled_head_trim(self, ds, record, tmp_path, prev_start):
+        """Shared body of the two 48 kHz head-trim cases below."""
+        plan = ChunkTaskPlan(
+            kind="full",
+            prev_span=(prev_start, record.t0),
+            prompt_spans=_spans_outside(record, lp=3.5),
+        )
+        rec = dataclasses.replace(record, chunk_task=plan)
+        perm = [1, 0]
+        ds._fixed_perm = perm
+        s = ds.load_window(rec)
+
+        b = round((record.t0 - prev_start) * ds.fs)
+        assert b % ds.hop != 0  # non-vacuous: the head trim actually fires
+        assert s["prev_frames"] == b // ds.hop
+        head_drop = b - s["prev_frames"] * ds.hop
+        assert head_drop > 0
+
+        # b only PREDICTS where t0 lands in the resampled block; the truth is
+        # the source-sample difference scaled by fs/src_sr.  They may disagree
+        # by up to one output sample, which is what the seam tolerance below
+        # allows for (and is < hop = 256 by two orders of magnitude).
+        true_offset = (
+            (round(record.t0 * SRC_SR) - round(prev_start * SRC_SR)) * ds.fs / SRC_SR
+        )
+        assert abs(b - true_offset) <= 1
+
+        cond = s["cond_frames"] * ds.hop
+        for row, channel in enumerate(perm):
+            # Exact against the SAME span: identical input to the resampler, so
+            # H+target must be that read with head_drop samples off the front.
+            block = _read_span(tmp_path, (prev_start, record.t1), channel, ds.fs)
+            torch.testing.assert_close(
+                s["speech"][row, s["prompt_frames"] * ds.hop :],
+                block[head_drop:],
+                rtol=0,
+                atol=0,
+            )
+            # And the target region really is [t0, t1): compared against an
+            # independent read, whose resampler grid may sit half a source
+            # sample away, so only the ALIGNMENT is assertable, not equality.
+            best, errors = _seam_shift_errors(
+                s["speech"][row, cond:],
+                _read_span(tmp_path, (record.t0, record.t1), channel, ds.fs),
+            )
+            assert abs(best) <= 1, f"seam off by {best} samples: {errors}"
+            far = min(errors[k] for k in errors if abs(k) >= 2)
+            assert errors[best] < 0.75 * far, errors  # a real minimum, not noise
+        assert abs(s["speech"].shape[1] - cond - round(rec.duration * ds.fs)) <= 1
+        return s
+
+    def test_head_trim_on_resampled_source(self, tmp_path):
+        """Non-zero head trim on a 48 kHz source (the 24 kHz test above reads
+        exact slices, and the brief's 48 kHz test has a hop-aligned prev, so
+        neither covers resample + head trim together).
+
+        prev = 3.7 s spans an EVEN number of source samples, so the block's
+        resampler grid coincides with the reference read's and the seam is
+        bit-exact at shift 0.
+        """
+        ds, record = _make_dataset_with_session(tmp_path)
+        self._assert_resampled_head_trim(ds, record, tmp_path, prev_start=14.3)
+
+    def test_head_trim_with_odd_source_offset(self, tmp_path):
+        """The case where ``b`` and the true offset genuinely disagree: a prev
+        span of an ODD number of source samples puts t0 half an output sample
+        away from ``round((t0 - prev_start) * fs)``."""
+        ds, record = _make_dataset_with_session(tmp_path)
+        odd_src_len = 177599
+        prev_start = (round(record.t0 * SRC_SR) - odd_src_len) / SRC_SR
+        assert odd_src_len % 2 == 1
+        self._assert_resampled_head_trim(ds, record, tmp_path, prev_start)
 
     def test_prompt_only_has_no_prev_block(self, tmp_path):
         """prompt_only: prev_frames == 0 and everything after P is exactly the
