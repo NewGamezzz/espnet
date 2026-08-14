@@ -93,7 +93,12 @@ def test_draw_full_task_spans_are_disjoint_and_floored():
     )
     rec = _record()
     plan = draw_chunk_task(
-        rec, turns, 300.0, (), 2, random.Random(1),
+        rec,
+        turns,
+        300.0,
+        (),
+        2,
+        random.Random(1),
         ChunkTaskParams(prompt_only_prob=0.0),
     )
     assert plan.kind == "full"
@@ -111,7 +116,12 @@ def test_speech_floor_binds_on_speech_not_slice():
     turns = (Turn(0, "A", "aaaa", 10.0, 16.0), Turn(1, "B", "bb", 20.0, 22.5))
     assert (
         draw_chunk_task(
-            _record(), turns, 300.0, (), 2, random.Random(1),
+            _record(),
+            turns,
+            300.0,
+            (),
+            2,
+            random.Random(1),
             ChunkTaskParams(prompt_only_prob=0.0),
         )
         is None
@@ -131,7 +141,12 @@ def test_h_clamped_by_session_start_degrades_to_prompt_only():
     )
     turns = (Turn(0, "A", "aaaa", 40.0, 46.0), Turn(1, "B", "bbbb", 50.0, 56.0))
     plan = draw_chunk_task(
-        rec, turns, 300.0, (), 2, random.Random(1),
+        rec,
+        turns,
+        300.0,
+        (),
+        2,
+        random.Random(1),
         ChunkTaskParams(prompt_only_prob=0.0),
     )
     assert plan is not None and plan.kind == "prompt_only" and plan.prev_span is None
@@ -178,7 +193,12 @@ def test_prompt_anchor_truncated_by_forbidden_region():
     turns = (Turn(0, "A", "aaaa", 95.0, 99.0),)
     rec = _record()
     plan = draw_chunk_task(
-        rec, turns, 300.0, (), 1, random.Random(1),
+        rec,
+        turns,
+        300.0,
+        (),
+        1,
+        random.Random(1),
         ChunkTaskParams(prompt_only_prob=1.0),
     )
     assert plan.kind == "prompt_only"
