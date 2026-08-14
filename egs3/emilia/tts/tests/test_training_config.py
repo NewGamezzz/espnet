@@ -6,11 +6,29 @@ import pytest
 from omegaconf import OmegaConf
 
 CONF = Path(__file__).resolve().parents[1] / "conf" / "training_f5_tts_base.yaml"
+SMOKE_CONF = (
+    Path(__file__).resolve().parents[1] / "conf" / "training_f5_tts_base_smoke.yaml"
+)
 
 
 @pytest.fixture
 def cfg():
     return OmegaConf.load(CONF)
+
+
+def _flatten(container, prefix=""):
+    """Flatten a nested dict/list into {dotted.path: leaf_value}."""
+    flat = {}
+    if isinstance(container, dict):
+        items = container.items()
+    elif isinstance(container, list):
+        items = enumerate(container)
+    else:
+        return {prefix: container}
+    for key, value in items:
+        path = f"{prefix}.{key}" if prefix else str(key)
+        flat.update(_flatten(value, path))
+    return flat
 
 
 def test_base_architecture_matches_paper(cfg):
@@ -109,3 +127,70 @@ def test_valid_also_uses_numel_array_with_max_samples_cap(cfg):
     batches = cfg.dataloader.valid.iter_factory.batches
     assert batches.type == "numel_array"
     assert batches.max_samples == 64
+
+
+def test_smoke_config_only_differs_from_base_in_five_places():
+    """The smoke config exists to measure PRODUCTION throughput, so it must
+    be the Base config with exactly max_steps, val_check_interval,
+    limit_val_batches, exp_tag and trainer.logger changed -- in particular
+    batch_bins, accumulate_grad_batches and num_device must be untouched.
+
+    load_and_merge_config merges each config over the near-empty
+    egs3.TEMPLATE.tts default, never over another recipe config (see
+    run.py's comment), so the smoke config is a full standalone copy rather
+    than a thin override; this test is what actually enforces "everything
+    else stays at production values" instead of relying on the copy being
+    faithful by inspection.
+    """
+    base = _flatten(OmegaConf.to_container(OmegaConf.load(CONF), resolve=False))
+    smoke = _flatten(OmegaConf.to_container(OmegaConf.load(SMOKE_CONF), resolve=False))
+
+    # trainer.logger is a wholesale block replacement (WandbLogger ->
+    # CSVLogger), so its key SET is expected to differ, not just its
+    # values; that structural swap is checked separately below and in
+    # test_smoke_config_uses_offline_csv_logger. Everything else must have
+    # an identical key set.
+    base_rest = {k: v for k, v in base.items() if not k.startswith("trainer.logger")}
+    smoke_rest = {k: v for k, v in smoke.items() if not k.startswith("trainer.logger")}
+    assert set(base_rest) == set(smoke_rest), "smoke config adds/drops keys vs. base"
+
+    differing = {k for k in base_rest if base_rest[k] != smoke_rest[k]}
+    expected = {
+        "exp_tag",
+        "trainer.max_steps",
+        "trainer.val_check_interval",
+        "trainer.limit_val_batches",
+    }
+    assert differing == expected
+
+    # The logger block itself must differ (WandbLogger -> CSVLogger); its
+    # exact shape is pinned by test_smoke_config_uses_offline_csv_logger.
+    assert base["trainer.logger._target_"] != smoke["trainer.logger._target_"]
+
+
+def test_smoke_config_uses_offline_csv_logger():
+    """logger: false can never work in espnet3: default_callbacks.py installs
+    a LearningRateMonitor() unconditionally, and Lightning refuses that
+    callback without a logger. CSVLogger is offline (local files only, no
+    wandb run left behind by a one-off smoke test)."""
+    cfg = OmegaConf.load(SMOKE_CONF)
+    assert cfg.trainer.logger._target_ == "lightning.pytorch.loggers.CSVLogger"
+
+
+def test_smoke_config_keeps_production_batch_arithmetic():
+    """Same 307200-frame global batch as Base -- this is the entire point of
+    measuring throughput on the smoke run."""
+    cfg = OmegaConf.load(SMOKE_CONF)
+    bins = cfg.dataloader.train.iter_factory.batches.batch_bins
+    accum = cfg.trainer.accumulate_grad_batches
+    n_gpu = cfg.num_device
+    n_mels = cfg.n_mel_channels
+    assert bins * accum * n_gpu / n_mels == 307200
+
+
+def test_smoke_config_has_short_step_budget():
+    cfg = OmegaConf.load(SMOKE_CONF)
+    assert cfg.trainer.max_steps == 200
+    assert cfg.trainer.val_check_interval == 100
+    assert cfg.trainer.limit_val_batches == 5
+    assert cfg.exp_tag == "smoke_base_emilia"
