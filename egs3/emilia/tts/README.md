@@ -61,8 +61,76 @@ Do not shortcut back to `processed/`:
 | `create_shape` | Synthesizes `feats_shape` analytically from the builder's own `duration` field (`1 + duration * sample_rate // hop_length`), instead of decoding audio. | **New**, replaces `collect_stats`. |
 | `collect_stats` | espnet2's stage that decodes every utterance and runs `feats_extract` to get shapes plus mean/variance stats. | **Dropped**, replaced by `create_shape`. `normalize: null` in the training config means no mean/variance stats are needed either, so nothing else is lost. Avoids ~37M mp3 decodes plus mel extraction on a stage that would otherwise run once over the whole corpus. |
 | `train` | Standard espnet3 training loop, F5-TTS Base architecture and Table 9 batch size. | Yes |
-| `infer` | Seed-TTS test-en / test-zh / test-hard, LibriSpeech-PC test-clean. | Yes |
+| `infer` | Seed-TTS test-en / test-zh / test-hard. | Yes |
 | `measure` | Same VERSA metrics stack as the LibriTTS recipe. | Yes |
+
+## The F5 vocab: `downloads/vocab.txt`
+
+`downloads/vocab.txt` is gitignored, and it is both the model's
+`token_list` (`conf/training_f5_tts_base.yaml`'s `model.token_list`) and
+`F5PinyinPreprocessor`'s vocab.
+Dropping the `create_token_list` stage (see the Stage list above) turned a
+generated artifact into an undocumented manual prerequisite -- and a
+*wrong* vocab produces silent checkpoint incompatibility with the official
+F5TTS_Base release rather than an error, which is exactly what decision D7
+exists to prevent.
+
+**Source:** upstream `SWivid/F5-TTS` GitHub repo, `data/Emilia_ZH_EN_pinyin/vocab.txt`
+-- the fixed vocab F5's own training/data-prep scripts
+(`prepare_emilia.py` / `prepare_csv_wavs.py`) build the Emilia+pinyin
+tokenizer from, and what the officially released `F5TTS_Base` checkpoint
+was trained against.
+
+**Fetch:**
+
+```bash
+mkdir -p downloads
+curl -fL -o downloads/vocab.txt \
+    https://raw.githubusercontent.com/SWivid/F5-TTS/main/data/Emilia_ZH_EN_pinyin/vocab.txt
+```
+
+If upstream has moved the file since this was written, `git clone
+https://github.com/SWivid/F5-TTS` and copy `data/Emilia_ZH_EN_pinyin/vocab.txt`
+directly -- do not substitute a vocab from a different F5 variant (e.g. a
+`Emilia_ZH_EN_char` or single-language build); it will pass the shape
+verification below while being silently incompatible with `F5TTS_Base`.
+
+**Verification an operator should run before trusting the file** (pinned
+by `tests/test_pinyin_parity.py::test_vocab_file_matches_documented_shape`):
+
+```bash
+wc -l downloads/vocab.txt                       # must read 2545
+grep -c '<unk>\|<sos/eos>\|<blank>' downloads/vocab.txt   # must read 0
+head -c1 downloads/vocab.txt | od -c | head -1   # must show a literal space
+```
+
+Index 0 must be a literal space (`vocab[" "] == 0`, matching F5's
+`build_pinyin_vocab` convention, `espnet2/text/f5_pinyin.py`), and the file
+must define no `<unk>`, `<sos/eos>` or `<blank>` symbol: F5's fixed vocab
+maps every unknown token to index 0 (`text_to_pinyin_ids`), which is why
+`F5PinyinPreprocessor` exists instead of `CommonPreprocessor` (see that
+module's docstring).
+
+## Preparing the Seed-TTS eval set
+
+`conf/inference_f5_seedtts.yaml` reads
+`${data_dir}/eval/test_{en,zh,hard}/meta.tsv`, produced by
+`local/prepare_seedtts_eval.py` from the official Seed-TTS eval release
+(`seedtts_testset`, `en/` and `zh/` subdirectories with `meta.lst` /
+`hardcase.lst`). This step is not wired into any `run.py` stage -- run it
+directly before `infer`:
+
+```bash
+python local/prepare_seedtts_eval.py /path/to/seedtts_testset data/eval
+```
+
+**Acceptance criterion** (also enforced by
+`local/prepare_seedtts_eval.py::prepare_seedtts`'s row counts, printed by
+the command above): **test_en 1088, test_zh 2020, test_hard 400.**
+A malformed `.lst` line aborts the whole build rather than silently
+producing a short count (a triaged finding from the final whole-branch
+review) -- fix the source file and re-run rather than proceeding on a
+partial manifest.
 
 ## Batch arithmetic
 
@@ -299,9 +367,10 @@ saved with `save_weights_only=True`.
 2026 failure mode from the quota section above), training cannot resume
 as-is: no best-K checkpoint can substitute, because none of them carry
 optimizer/scheduler/EMA state.**
-`submit_train.sbatch`'s resume path (`fit.ckpt_path: ${exp_dir}/last.ckpt`)
-depends entirely on this one file staying intact; keep the quota guard
-enabled and do not disable it to "just get one more job through".
+`submit_train.sbatch`'s resume path (`--ckpt_path "$LAST_CKPT"`, passed to
+`run.py` only when the file already exists -- see the chaining section
+above) depends entirely on this one file staying intact; keep the quota
+guard enabled and do not disable it to "just get one more job through".
 
 ## Accepted SIM deviation
 
@@ -315,6 +384,16 @@ carries over unchanged here; it is not re-litigated by this recipe.
 ## Recipe stages, end to end
 
 ```bash
+# 0) One-time prerequisites -- see the sections above for full detail.
+#    Neither is wired into a run.py stage.
+#    0a) The F5 vocab (downloads/vocab.txt): both model.token_list and
+#        F5PinyinPreprocessor's vocab.
+mkdir -p downloads
+curl -fL -o downloads/vocab.txt \
+    https://raw.githubusercontent.com/SWivid/F5-TTS/main/data/Emilia_ZH_EN_pinyin/vocab.txt
+#    0b) The Seed-TTS eval manifests `infer` reads.
+python local/prepare_seedtts_eval.py /path/to/seedtts_testset data/eval
+
 # 1) Build manifests from the raw corpus (once; ~37M JSON sidecars, runs
 #    under `parallel:`, one task per shard)
 python run.py --stages create_dataset --training_config conf/training_f5_tts_base.yaml
@@ -326,7 +405,9 @@ python run.py --stages create_shape --training_config conf/training_f5_tts_base.
 #    full run
 sbatch local/submit_smoke.sbatch
 
-# 4) Train (chained across walltime; see above)
+# 4) Train (chained across walltime; see above). local/submit_train.sbatch
+#    passes --ckpt_path itself once a checkpoint exists -- do not add
+#    fit.ckpt_path to the config (see "Checkpoint retention trap" above).
 sbatch local/submit_train.sbatch
 
 # 5) Seed-TTS inference
