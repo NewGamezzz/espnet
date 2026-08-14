@@ -43,6 +43,12 @@ def _load_shape_file(path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     Python lists and converting: at Emilia's 37M-utterance scale, three
     37M-element Python int lists would themselves be a multi-GB transient
     RSS spike, defeating the point of the numpy backing.
+
+    Raises RuntimeError on a non-integer key (this sampler requires
+    integer keys; see the class docstring) or a duplicate key (stock's
+    ``read_2columns_text`` raises on duplicates too; a hand-rolled parser
+    that silently kept both rows would emit the same utterance in two
+    different batches).
     """
     with open(path, "r", encoding="utf-8") as f:
         n_lines = sum(1 for line in f if line.strip())
@@ -53,18 +59,33 @@ def _load_shape_file(path: str) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
 
     with open(path, "r", encoding="utf-8") as f:
         i = 0
-        for line in f:
+        for lineno, line in enumerate(f, start=1):
             line = line.strip()
             if not line:
                 continue
             key_str, shape_str = line.split(maxsplit=1)
             parts = shape_str.split(",")
-            keys[i] = int(key_str)
+            try:
+                key_val = int(key_str)
+            except ValueError as e:
+                raise RuntimeError(
+                    f"{path}:{lineno}: numel_array requires integer keys, "
+                    f"got {key_str!r}"
+                ) from e
+            keys[i] = key_val
             lengths[i] = int(parts[0])
             dims[i] = (
                 int(np.prod([int(x) for x in parts[1:]])) if len(parts) > 1 else 1
             )
             i += 1
+
+    # O(n log n) duplicate check (mirrors read_2columns_text's duplicate
+    # guard, which this hand-rolled parser otherwise bypasses).
+    sorted_keys = np.sort(keys)
+    dup_mask = sorted_keys[1:] == sorted_keys[:-1]
+    if dup_mask.any():
+        dup_key = int(sorted_keys[1:][dup_mask][0])
+        raise RuntimeError(f"{path}: duplicate key {dup_key}")
 
     return keys, lengths, dims
 
@@ -78,6 +99,11 @@ class NumElementsArraySampler(AbsSampler):
     batch, matching upstream F5-TTS's ``max_samples=64``. When
     ``max_samples`` is None (the default) this sampler produces exactly the
     same batch partition as the stock sampler.
+
+    Shape file keys must be non-negative integers (this recipe's
+    ``create_shape`` stage writes ``str(index)`` as the utterance id;
+    arbitrary string utterance ids are not supported and raise
+    ``RuntimeError`` with the offending file, line, and value).
     """
 
     @typechecked
@@ -95,6 +121,20 @@ class NumElementsArraySampler(AbsSampler):
         assert batch_bins > 0
         if max_samples is not None:
             assert max_samples > 0
+            # close_by_cap (unlike close_by_bins) ignores min_batch_size by
+            # design, since the cap is a hard ceiling: if max_samples were
+            # allowed below min_batch_size, every batch would close at
+            # max_samples, the trailing-remainder redistribution above
+            # would stall with every batch already at the cap, and every
+            # realized batch would end up under min_batch_size with no
+            # error (the espnet3 dataloader only validates the *configured*
+            # min_batch_size, not realized batch sizes, so an under-sized
+            # batch on an 8-GPU run would surface much later as a DDP
+            # deadlock, not here).
+            assert max_samples >= min_batch_size, (
+                f"max_samples ({max_samples}) must be >= min_batch_size "
+                f"({min_batch_size})"
+            )
         if sort_batch != "ascending" and sort_batch != "descending":
             raise ValueError(
                 f"sort_batch must be ascending or descending: {sort_batch}"
