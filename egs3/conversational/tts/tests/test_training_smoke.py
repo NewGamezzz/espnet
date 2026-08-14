@@ -8,6 +8,7 @@ import pytest
 import torch
 from omegaconf import OmegaConf
 from .conftest import (
+    EXT_TOKENS,
     MEL,
     T,
     AJ_TEXTS,
@@ -23,6 +24,10 @@ from egs3.conversational.tts.dataset.preprocessing.sessions import (
     write_session_manifest,
 )
 from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
+from egs3.conversational.tts.dataset.preprocessing.text import (
+    PREV_CHUNK_TOKEN,
+    SPEAKER_PROMPT_TOKEN,
+)
 from egs3.conversational.tts.dataset.preprocessor import ConversationalTextPreprocessor
 from egs3.conversational.tts.src.branch_exchange import ExchangedBlock, get_context
 from egs3.conversational.tts.src.build_model import exchange_param_groups
@@ -175,6 +180,77 @@ def test_training_smoke_cond_frames_reaches_cfm(ext_vocab_file):
     assert seen["cond_frames"] is not None
     assert seen["cond_frames"].tolist() == [5, -1]
     assert torch.isfinite(loss)
+
+
+_SPEAKER_PROMPT_ID = EXT_TOKENS.index(SPEAKER_PROMPT_TOKEN)
+_PREV_CHUNK_ID = EXT_TOKENS.index(PREV_CHUNK_TOKEN)
+
+
+def _fake_chunk_task_samples(step: int, n: int = 2):
+    """One chunk-task conversation (an audio-only <speaker_prompt>/<prev_chunk>
+    prefix ahead of ordinary text, cond_frames set) plus one ordinary infill
+    conversation, in the fabricated-sample style of ``_fake_samples`` above -
+    the shape Task 11's chunk task actually trains on, packed into one batch."""
+    gen = torch.Generator().manual_seed(2000 + step)
+    prompt_frames, prev_frames = 3, 2
+    cond_frames = prompt_frames + prev_frames  # 5: same safe value as above
+    prefix = [_SPEAKER_PROMPT_ID] * prompt_frames + [_PREV_CHUNK_ID] * prev_frames
+    chunk_sample = {
+        "window_id": f"chunk{step}",
+        "num_channels": n,
+        "speech": 0.1 * torch.randn(n, 6144, generator=gen),
+        "text": [
+            torch.cat(
+                [
+                    torch.tensor(prefix, dtype=torch.long),
+                    torch.randint(0, 12, (20,), generator=gen),
+                ]
+            )
+            for _ in range(n)
+        ],
+        "cond_frames": cond_frames,
+    }
+    infill_sample = {
+        "window_id": f"infill{step}",
+        "num_channels": n,
+        "speech": 0.1 * torch.randn(n, 5120, generator=gen),
+        "text": [torch.randint(0, 12, (30,), generator=gen) for _ in range(n)],
+    }
+    return [chunk_sample, infill_sample]
+
+
+def test_training_smoke_chunk_task_mixed_batch(ext_vocab_file):
+    """One real optimizer step on a batch mixing a chunk-task conversation
+    with an ordinary infill conversation. test_training_smoke_cond_frames_
+    reaches_cfm already proves cond_frames reaches the CFM through the real
+    ``model(**batch)`` call; this proves the mixed batch survives a full
+    backward + optimizer step with finite loss and finite gradients/params,
+    not just a finite forward."""
+    torch.manual_seed(0)
+    model = build_tiny(ext_vocab_file)
+    randomize_params(model, seed=44)
+    model.train()
+    optimizer = torch.optim.AdamW(
+        exchange_param_groups(model, lr_exchange=1e-2, lr_backbone=1e-4)
+    )
+    collator = PackedConversationCollator()
+
+    window_ids, batch = collator(_fake_chunk_task_samples(0))
+    assert window_ids == ["chunk0", "infill0"]
+    assert batch["cond_frames"].tolist() == [5, -1]
+
+    loss, stats, weight = model(**batch)
+    assert torch.isfinite(loss)
+    assert torch.isfinite(stats["loss_ch0"]) and torch.isfinite(stats["loss_ch1"])
+    assert int(weight) == 2  # conversations, not rows
+
+    optimizer.zero_grad()
+    loss.backward()
+    grads = [p.grad for p in model.parameters() if p.grad is not None]
+    assert grads, "no gradients reached model parameters"
+    assert all(torch.isfinite(g).all() for g in grads)
+    optimizer.step()
+    assert all(torch.isfinite(p).all() for p in model.parameters())
 
 
 # --------------------------------------------------------------------------
