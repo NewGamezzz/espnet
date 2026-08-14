@@ -69,3 +69,54 @@ def test_oov_fails_loudly(tmp_path):
     pre = ConversationalTextPreprocessor(token_list=vocab)
     with pytest.raises(KeyError, match="not in vocab"):
         pre("uid", sample_of([FakeTurn(0, "spk", "abz", 0.0, 1.0)], 1))
+
+
+def test_chunk_task_prefix_per_frame(tmp_path, turns_3spk, base_vocab):
+    """Chunk-task samples (Task 6's ``prompt_frames``/``prev_frames`` keys)
+    get an identical [SPEAKER_PROMPT_TOKEN]*prompt_frames +
+    [PREV_CHUNK_TOKEN]*prev_frames prefix on every branch, ahead of that
+    branch's normal build_branch_texts output."""
+    vocab = write_vocab(tmp_path, extend_vocab(base_vocab))
+    pre = ConversationalTextPreprocessor(token_list=vocab)
+    sample = sample_of(turns_3spk, 3)
+    sample["prompt_frames"] = 5
+    sample["prev_frames"] = 3
+    out = pre("uid", sample)
+    sp = pre.token2id["<speaker_prompt>"]
+    pc = pre.token2id["<prev_chunk>"]
+    cond = 5 + 3
+    for t in out["text"]:
+        assert t[:5].tolist() == [sp] * 5
+        assert t[5:8].tolist() == [pc] * 3
+    a, b = out["text"][0], out["text"][1]
+    assert not torch.equal(a[8:], b[8:])  # target region still branch-specific
+    expected = [
+        encode_tokens(branch, pre.token2id)
+        for branch in build_branch_texts(turns_3spk, 3)
+    ]
+    assert [t[cond:].tolist() for t in out["text"]] == expected
+
+
+def test_chunk_task_prefix_prompt_only(tmp_path, turns_3spk, base_vocab):
+    """``prev_frames == 0`` (prompt_only plan): prefix is prompt tokens only,
+    immediately followed by the ordinary <turn>-led branch text."""
+    vocab = write_vocab(tmp_path, extend_vocab(base_vocab))
+    pre = ConversationalTextPreprocessor(token_list=vocab)
+    sample = sample_of(turns_3spk, 3)
+    sample["prompt_frames"] = 4
+    sample["prev_frames"] = 0
+    out = pre("uid", sample)
+    sp = pre.token2id["<speaker_prompt>"]
+    turn = pre.token2id["<turn>"]
+    for t in out["text"]:
+        assert t[:4].tolist() == [sp] * 4
+        assert t[4].item() == turn
+
+
+def test_infill_has_no_prefix(tmp_path, turns_3spk, base_vocab):
+    """Samples without the chunk-task keys (ordinary infill) are byte-
+    identical to the pre-Task-7 output: no prefix, first token is <turn>."""
+    vocab = write_vocab(tmp_path, extend_vocab(base_vocab))
+    pre = ConversationalTextPreprocessor(token_list=vocab)
+    out = pre("uid", sample_of(turns_3spk, 3))
+    assert out["text"][0][0].item() == pre.token2id["<turn>"]

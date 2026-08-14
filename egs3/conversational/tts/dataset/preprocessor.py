@@ -25,7 +25,13 @@ import torch
 
 from espnet2.train.preprocessor import AbsPreprocessor
 
-from .preprocessing.text import build_branch_texts, encode_tokens, make_token2id
+from .preprocessing.text import (
+    PREV_CHUNK_TOKEN,
+    SPEAKER_PROMPT_TOKEN,
+    build_branch_texts,
+    encode_tokens,
+    make_token2id,
+)
 
 
 def read_vocab(path: str | Path) -> list[str]:
@@ -43,6 +49,14 @@ class ConversationalTextPreprocessor(AbsPreprocessor):
     the output aligns with ``speech`` row ``i`` for any permutation.  Sets
     ``sample["text"]`` to a list of N variable-length int64 tensors, the
     contract ``collate_conversations`` packs.
+
+    Chunk-task samples (``ConversationDataset.load_window`` with
+    ``record.chunk_task`` set) carry ``prompt_frames``/``prev_frames`` int
+    keys; every branch then gets the same
+    ``[SPEAKER_PROMPT_TOKEN] * prompt_frames + [PREV_CHUNK_TOKEN] *
+    prev_frames`` prefix ahead of its normal turn-marked text, so the text
+    stream has one marker per mel frame over the ``speech`` tensor's P/H
+    span.  Ordinary infill samples carry neither key and get no prefix.
     """
 
     def __init__(self, token_list: str | Path, train: bool = False) -> None:
@@ -52,6 +66,18 @@ class ConversationalTextPreprocessor(AbsPreprocessor):
 
     def __call__(self, uid: str, data: dict[str, Any]) -> dict[str, Any]:
         branch_tokens = build_branch_texts(data["turns"], data["num_channels"])
+        if "prompt_frames" in data:
+            # Chunk-task sample (Task 6): P/H are audio-only, so they get a
+            # flat run of one marker per mel frame - identical on every
+            # branch, since the conditioning audio isn't attributed to a
+            # speaker until the target region begins.  prev_frames is always
+            # set alongside prompt_frames (ConversationDataset.load_window
+            # sets both from the same chunk_frames dict), so a direct lookup
+            # matches encode_tokens' fail-loudly-on-inconsistency convention.
+            prefix = [SPEAKER_PROMPT_TOKEN] * data["prompt_frames"] + [
+                PREV_CHUNK_TOKEN
+            ] * data["prev_frames"]
+            branch_tokens = [prefix + tokens for tokens in branch_tokens]
         # encode_tokens fails loudly on OOV: after build-time normalization
         # an unknown token is a pipeline bug, not user input to be cleaned.
         data["text"] = [
