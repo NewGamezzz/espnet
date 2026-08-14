@@ -28,6 +28,7 @@ then commit the diff under a change that explains why the format moved.
 
 from __future__ import annotations
 
+import itertools
 import json
 import os
 from pathlib import Path
@@ -138,17 +139,47 @@ def _build_sample(tmp_path: Path, vocab_path: Path) -> dict:
     return preprocessor(SESSION_ID, raw)
 
 
-def _payload(sample: dict, token2id: dict[str, int]) -> dict:
-    """The format contract: frame counts plus the first/last 8 token ids of
-    each branch's text stream (not the audio - see module docstring).
+def _run_length_encode(ids: list[int]) -> list[list[int]]:
+    """``[[value, run_length], ...]`` for consecutive equal ids."""
+    return [[value, sum(1 for _ in group)] for value, group in itertools.groupby(ids)]
 
-    ``vocab`` anchors the raw ids below to what they MEAN: the tiny synthetic
+
+def _payload(sample: dict, token2id: dict[str, int]) -> dict:
+    """The format contract: frame counts plus the shape of each branch's text
+    stream (not the audio - see module docstring).
+
+    ``first_8``/``last_8`` alone only sample the two ENDS of the stream: a
+    preprocessor regression that mis-places the prompt/prev boundary while
+    keeping ``prompt_frames``/``prev_frames`` totals unchanged (those two
+    integers come from ``load_window``'s assembler dict, a DIFFERENT code
+    path from the preprocessor's actual token stream - see
+    ``ConversationalTextPreprocessor.__call__``) would still pass. Two
+    additions close that gap, both read from the real token stream, not the
+    assembler dict:
+
+    - ``prefix_runs``: a run-length encoding of the WHOLE conditioning
+      prefix (``ids[:cond_frames]``), so the entire composition - not just
+      its ends - is pinned; for a well-formed sample this is exactly
+      ``[[speaker_prompt_id, prompt_frames], [prev_chunk_id, prev_frames]]``
+      (or just the first run for a prompt_only plan with ``prev_frames==0``),
+      derived independently here rather than asserted as that shape, so a
+      genuine regression shows up as a value mismatch instead of being
+      baked into the golden by construction.
+    - ``boundary_8``: an 8-token slice straddling the prompt/prev transition
+      (``ids[prompt_frames - 4 : prompt_frames + 4]``), so an off-by-one at
+      the exact boundary index is caught even if ``prefix_runs`` were
+      somehow computed from the same wrong index (independent redundancy,
+      "belt and braces").
+
+    ``vocab`` anchors the raw ids above to what they MEAN: the tiny synthetic
     vocab's exact size and layout is an implementation detail of the
     ``base_vocab``/``extend_vocab`` fixtures, not part of the format contract
-    itself, so a future reader can decode ``first_8``/``last_8`` without
-    reconstructing that fixture (e.g. ``first_8`` entries equal to
-    ``vocab.speaker_prompt`` confirms the prompt-frame prefix comes first).
+    itself, so a future reader can decode the ids without reconstructing that
+    fixture (e.g. ``first_8`` entries equal to ``vocab.speaker_prompt``
+    confirms the prompt-frame prefix comes first).
     """
+    cond_frames = sample["cond_frames"]
+    prompt_frames = sample["prompt_frames"]
     branches = []
     for tokens in sample["text"]:
         ids = tokens.tolist()
@@ -157,12 +188,14 @@ def _payload(sample: dict, token2id: dict[str, int]) -> dict:
                 "length": len(ids),
                 "first_8": ids[:8],
                 "last_8": ids[-8:],
+                "prefix_runs": _run_length_encode(ids[:cond_frames]),
+                "boundary_8": ids[max(0, prompt_frames - 4) : prompt_frames + 4],
             }
         )
     return {
-        "prompt_frames": sample["prompt_frames"],
+        "prompt_frames": prompt_frames,
         "prev_frames": sample["prev_frames"],
-        "cond_frames": sample["cond_frames"],
+        "cond_frames": cond_frames,
         "vocab": {
             "size": len(token2id),
             "turn": token2id[TURN_TOKEN],
