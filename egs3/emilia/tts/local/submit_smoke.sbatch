@@ -96,7 +96,14 @@
 
 set -euo pipefail
 cd /ocean/projects/cis210027p/ttrachu/development/espnet_proj/espnet_emilia
+# `set -e`/`set -u` are disabled across the activation ONLY. activate_python.sh
+# runs `eval "$(pixi shell-hook)"`, whose output references unset variables, so
+# under `set -u` the job aborts before producing any output: observed on PSC as
+# job 43566289, FAILED in 3 seconds with a 0-byte log. Re-enabled immediately
+# afterwards so the rest of the script keeps strict-mode semantics.
+set +eu
 source tools/activate_python.sh
+set -eu
 cd egs3/emilia/tts
 
 # Offline CSV logger: espnet3 installs LearningRateMonitor unconditionally,
