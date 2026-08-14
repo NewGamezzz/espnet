@@ -156,24 +156,42 @@ def test_sentinel_batch_bit_identical():
 def test_mixed_batch_routes_per_conversation():
     """Two conversations in one batch: conv 0 deterministic (cond_frames=12),
     conv 1 random (cond_frames=-1, frac_lengths=0.5) - each conversation's
-    rows share their own span, and only conv 0's is overridden."""
+    rows share their own span, conv 0's is overridden, and conv 1's is
+    routed through UNTOUCHED. That second half is the actual routing test:
+    a broken torch.where(det.any(), det_mask, conv_span_mask) (clobbering
+    every conversation once ANY conversation is deterministic) would still
+    pass an assertion that only inspects conv 0, so re-run the identical
+    call with cond_frames=None from the same seed and require conv 1's rows
+    to be bit-identical across the two runs."""
     multibranch = make_multibranch(make_dit(seed=0)).eval()
     mel, text, lens = make_packed_mels([2, 2], seed=11, t=40)
-
-    _, _, extras = multibranch(
-        mel,
-        text,
+    common = dict(
         counts=[2, 2],
         lens=lens,
-        cond_frames=torch.tensor([12, -1]),
         frac_lengths=torch.tensor([0.0, 0.5]),
         time=torch.tensor([0.5, 0.5]),
     )
 
-    m = extras["rand_span_mask"]
-    assert torch.equal(m[0], m[1])
-    assert not m[0, :12].any()
-    assert m[0, 12:].all()
+    torch.manual_seed(21)
+    _, _, extras_det = multibranch(
+        mel, text, cond_frames=torch.tensor([12, -1]), **common
+    )
+    torch.manual_seed(21)
+    _, _, extras_rand = multibranch(mel, text, **common)
+
+    m_det = extras_det["rand_span_mask"]
+    m_rand = extras_rand["rand_span_mask"]
+
+    # conv 0 (rows 0-1): overridden to the deterministic span exactly [12, 40).
+    assert torch.equal(m_det[0], m_det[1])
+    assert not m_det[0, :12].any()
+    assert m_det[0, 12:].all()
+
+    # conv 1 (rows 2-3): sentinel, must be routed through untouched - bit
+    # identical to the cond_frames=None run, and shared within the conv.
+    assert torch.equal(m_det[2], m_rand[2])
+    assert torch.equal(m_det[3], m_rand[3])
+    assert torch.equal(m_det[2], m_det[3])
 
 
 def test_cond_frames_length_mismatch_raises():

@@ -73,6 +73,10 @@ dataset:
         split: train
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
+        # Ties cond_frames' hop-frame math (ConversationDataset.load_window)
+        # to the same hop feats_extract mels on, so a future hop_length
+        # change can't silently desync the two.
+        hop: ${hop_length}
         # Relaxed from 2 (ratified 2026-07-30): SSSD's own single-active
         # windows are in-domain single-speaker data now that the mix
         # includes LibriTTS anyway.
@@ -82,6 +86,7 @@ dataset:
         split: train
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
+        hop: ${hop_length}
         manifest_path: ${data_dir}/manifest/sessions_libritts_train.jsonl
         dataset_root: ${libritts_root}
     - data_src: egs3.conversational.tts.dataset_candor
@@ -89,6 +94,7 @@ dataset:
         split: train
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
+        hop: ${hop_length}
         manifest_path: ${data_dir}/manifest/sessions_candor_train.jsonl
         dataset_root: ${candor_flac_root}
         min_active_speakers: 1
@@ -97,6 +103,7 @@ dataset:
         split: train
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
+        hop: ${hop_length}
         manifest_path: ${data_dir}/manifest/sessions_fisher_train.jsonl
         dataset_root: ${fisher_flac_root}
         min_active_speakers: 1
@@ -108,12 +115,14 @@ dataset:
         split: valid
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
+        hop: ${hop_length}
         min_active_speakers: 1
     - data_src: egs3.conversational.tts.dataset_libritts
       data_src_args:
         split: valid
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
+        hop: ${hop_length}
         manifest_path: ${data_dir}/manifest/sessions_libritts_valid.jsonl
         dataset_root: ${libritts_root}
     - data_src: egs3.conversational.tts.dataset_candor
@@ -121,6 +130,7 @@ dataset:
         split: valid
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
+        hop: ${hop_length}
         manifest_path: ${data_dir}/manifest/sessions_candor_valid.jsonl
         dataset_root: ${candor_flac_root}
         min_active_speakers: 1
@@ -129,6 +139,7 @@ dataset:
         split: valid
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
+        hop: ${hop_length}
         manifest_path: ${data_dir}/manifest/sessions_fisher_valid.jsonl
         dataset_root: ${fisher_flac_root}
         min_active_speakers: 1

@@ -40,6 +40,10 @@ dataset:
         split: train
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
+        # Ties cond_frames' hop-frame math (ConversationDataset.load_window)
+        # to the same hop feats_extract mels on, so a future hop_length
+        # change can't silently desync the two.
+        hop: ${hop_length}
         # Concentrate gradient mass on actual interactions (knob, not a
         # rebuild: relax it if per-channel speech quality drifts).
         min_active_speakers: 2
@@ -49,6 +53,7 @@ dataset:
         split: valid
         recipe_dir: ${recipe_dir}
         fs: ${sample_rate}
+        hop: ${hop_length}
         min_active_speakers: 2
   # Runtime tokenization against the EXTENDED vocab (base + <turn>/<OTHER>).
   preprocessor:
