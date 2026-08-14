@@ -1,7 +1,5 @@
 import random
 
-import pytest
-
 from ..preprocessing.planner import WindowParams, plan_session, plan_sessions
 from ..preprocessing.sessions import SessionRecord
 from ..preprocessing.sssd import Recording, Turn

@@ -259,7 +259,8 @@ class ConversationBatchSampler:
             return self._cache_batches
         t_start = time.perf_counter()
         components = _component_datasets(self.dataset)
-        epoch_arg = self.epoch if self.online else None
+        # epoch_arg is only read when self.online (the plan_windows branch below).
+        epoch_arg = self.epoch
         plans = [
             c.plan_windows(epoch_arg) if self.online else list(c.records)
             for c in components
