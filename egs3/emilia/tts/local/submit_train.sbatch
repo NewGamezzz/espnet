@@ -88,7 +88,12 @@ if (( CHAIN_DEPTH >= MAX_CHAIN_DEPTH )); then
 fi
 
 CONFIG="${CONFIG:-conf/training_f5_tts_base.yaml}"
-read -r EXP_DIR MAX_STEPS <<< "$(python -c "
+# NOTE: `read ... <<< "$(cmd)"` would NOT fail under `set -e` if `cmd` raised
+# -- bash only checks the exit status of `read` itself, not the substitution
+# feeding it, so a broken config would silently leave EXP_DIR/MAX_STEPS
+# empty instead of aborting. Assign to a variable first: a bare `var=$(cmd)`
+# IS a checked simple command under `set -e`.
+CONFIG_INFO="$(python -c "
 from pathlib import Path
 from espnet3.utils.config_utils import load_and_merge_config
 cfg = load_and_merge_config(
@@ -96,6 +101,7 @@ cfg = load_and_merge_config(
 )
 print(cfg.exp_dir, cfg.trainer.max_steps)
 ")"
+read -r EXP_DIR MAX_STEPS <<< "$CONFIG_INFO"
 
 if [[ -f "$EXP_DIR/STOP" ]]; then
     echo "STOP sentinel found at $EXP_DIR/STOP; not training, not resubmitting."
