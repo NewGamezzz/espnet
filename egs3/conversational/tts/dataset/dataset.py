@@ -21,7 +21,6 @@ batch need no special casing.
 from __future__ import annotations
 
 import dataclasses
-import json
 import random
 from importlib import resources
 from pathlib import Path
@@ -37,7 +36,7 @@ from espnet3.utils.config_utils import load_config_with_defaults
 from .builder import resolve_dataset_root
 from .preprocessing.planner import WindowParams, plan_sessions
 from .preprocessing.sessions import read_session_manifest
-from .preprocessing.windows import WindowRecord, from_json
+from .preprocessing.windows import WindowRecord
 
 _CONFIG_RESOURCE = resources.files(__package__).joinpath("config.yaml")
 with resources.as_file(_CONFIG_RESOURCE) as _CONFIG_PATH:

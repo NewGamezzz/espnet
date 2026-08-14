@@ -20,7 +20,6 @@ from typing import Sequence
 
 from .sessions import SessionRecord
 from .sssd import Turn
-from .windows import WindowRecord
 
 
 @dataclass(frozen=True)
