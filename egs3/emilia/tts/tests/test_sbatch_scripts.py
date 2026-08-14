@@ -159,3 +159,45 @@ def test_quota_guard_documents_awk_vs_bc_deviation():
     text = (LOCAL / "quota_guard.sh").read_text()
     assert "DEVIATION" in text
     assert "bc" in text
+
+
+def test_train_sbatch_uses_template_config_name_not_recipe_filename():
+    """load_and_merge_config's `config_name` selects the near-empty
+    TEMPLATE stub (egs3/TEMPLATE/tts/conf/training.yaml), independent of
+    whichever concrete config $CONFIG points at -- it is NOT supposed to
+    match this recipe's own filename. Passing
+    config_name='training_f5_tts_base.yaml' (a file that only exists under
+    this recipe's own conf/, not the template's) made load_and_merge_config
+    raise FileNotFoundError on every invocation; verified directly against
+    run.py's identical bug (see tests/test_run_default_configs.py)."""
+    body = _executable_body(TRAIN.read_text())
+    assert "config_name='training.yaml'" in body
+    assert "config_name='training_f5_tts_base.yaml'" not in body
+
+
+def test_train_sbatch_preflight_checks_artifacts_before_resubmission_queue():
+    """IMPORTANT 1: a missing vocab_file/feats_shape/manifest must abort a
+    single job, not queue up to MAX_CHAIN_DEPTH=500 queued-and-failing
+    successors -- the pre-flight check must run, and be visible in the
+    script, before the queuing step."""
+    body = _executable_body(TRAIN.read_text())
+    queue_idx = body.index("--dependency=afterany:")
+    preflight_idx = body.index("PRE-FLIGHT FAILED")
+    assert preflight_idx < queue_idx
+    assert "VOCAB_FILE" in body
+    assert "TRAIN_SHAPE" in body
+    assert "VALID_SHAPE" in body
+    assert "TRAIN_MANIFEST" in body
+    assert "VALID_MANIFEST" in body
+
+
+def test_train_sbatch_passes_ckpt_path_conditionally():
+    """conf/training_f5_tts_base.yaml ships `fit: {}` (IMPORTANT 1): resume
+    must come from here instead, and only when $LAST_CKPT already exists on
+    disk, or a fresh run's first hop FileNotFoundErrors in Lightning."""
+    body = _executable_body(TRAIN.read_text())
+    ckpt_check_idx = body.index('if [[ -e "$LAST_CKPT" ]]; then\n    CKPT_ARGS')
+    srun_idx = body.index("srun --kill-on-bad-exit=1")
+    assert ckpt_check_idx < srun_idx
+    assert '--ckpt_path "$LAST_CKPT"' in body
+    assert '"${CKPT_ARGS[@]}"' in body

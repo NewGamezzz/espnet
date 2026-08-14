@@ -27,10 +27,12 @@
 # Chaining (Task 13 step 2) -- FIX ROUND 1: resubmission moved to BEFORE
 # training, not after it
 # ---------------------------------------------------------------------------
-# `fit.ckpt_path: ${exp_dir}/last.ckpt` (already set in
-# conf/training_f5_tts_base.yaml) makes each job resume where the last left
-# off. This script re-submits itself with `--dependency=afterany` so the
-# chain survives the 48h walltime cap.
+# This script computes $LAST_CKPT and, when it already exists on disk,
+# passes `--ckpt_path "$LAST_CKPT"` to `run.py` (which sets
+# `fit.ckpt_path` for that invocation only -- see step 7 below and
+# conf/training_f5_tts_base.yaml's `fit: {}`) so each job resumes where the
+# last left off. This script re-submits itself with `--dependency=afterany`
+# so the chain survives the 48h walltime cap.
 #
 # CORRECTED PLACEMENT: the next hop is queued BEFORE `srun` runs, not after
 # it. The original placement (queue after `srun` returns) is broken: when
@@ -137,20 +139,39 @@ bash local/quota_guard.sh
 #    the inline script.
 # NOTE: `read ... <<< "$(cmd)"` would NOT fail under `set -e` if `cmd`
 # raised -- bash only checks the exit status of `read` itself, not the
-# substitution feeding it, so a broken config would silently leave
-# EXP_DIR/MAX_STEPS empty instead of aborting. Assign to a variable first:
-# a bare `var=$(cmd)` IS a checked simple command under `set -e`.
+# substitution feeding it, so a broken config would silently leave these
+# variables empty instead of aborting. Capture into CONFIG_INFO first: a
+# bare `var=$(cmd)` IS a checked simple command under `set -e`. Only THEN
+# is CONFIG_INFO (now a plain string, not a live substitution) fed to
+# `mapfile`, so a python failure aborts here rather than downstream with
+# blank variables. One value per line, not space-joined on one line: this
+# now carries seven fields (Task 13's original two, plus the pre-flight
+# artifact paths below), and `read -r a b <<< "..."` silently mis-splits
+# once a value can itself contain whitespace-adjacent tokens.
 export CONFIG="${CONFIG:-conf/training_f5_tts_base.yaml}"
 CONFIG_INFO="$(python -c "
 import os
 from pathlib import Path
 from espnet3.utils.config_utils import load_and_merge_config
 cfg = load_and_merge_config(
-    Path(os.environ['CONFIG']), config_name='training_f5_tts_base.yaml'
+    Path(os.environ['CONFIG']), config_name='training.yaml'
 )
-print(cfg.exp_dir, cfg.trainer.max_steps)
+print(cfg.exp_dir)
+print(cfg.trainer.max_steps)
+print(cfg.vocab_file)
+print(cfg.create_shape.manifest_paths.train)
+print(cfg.create_shape.manifest_paths.valid)
+print(cfg.dataloader.train.iter_factory.batches.shape_files[0])
+print(cfg.dataloader.valid.iter_factory.batches.shape_files[0])
 ")"
-read -r EXP_DIR MAX_STEPS <<< "$CONFIG_INFO"
+mapfile -t CONFIG_LINES <<< "$CONFIG_INFO"
+EXP_DIR="${CONFIG_LINES[0]}"
+MAX_STEPS="${CONFIG_LINES[1]}"
+VOCAB_FILE="${CONFIG_LINES[2]}"
+TRAIN_MANIFEST="${CONFIG_LINES[3]}"
+VALID_MANIFEST="${CONFIG_LINES[4]}"
+TRAIN_SHAPE="${CONFIG_LINES[5]}"
+VALID_SHAPE="${CONFIG_LINES[6]}"
 
 # 4) Completion check, BEFORE queuing the next hop: a finished run must not
 #    queue one more job that then immediately exits, forever.
@@ -173,7 +194,30 @@ if [[ -e "$LAST_CKPT" ]]; then
     fi
 fi
 
-# 5) Queue the next hop NOW, before training runs -- see the header comment
+# 5) Pre-flight artifact check, BEFORE queuing the next hop (IMPORTANT 1):
+#    `d54c4d225d` moved successor-queuing to before `srun`, which means a
+#    fast first-batch failure (e.g. a missing vocab_file or feats_shape --
+#    exactly CRITICAL 3's failure mode) now queues its own successor before
+#    ever finding out training can't start, and that successor repeats the
+#    same failure, and so on -- up to MAX_CHAIN_DEPTH=500 queued-and-failing
+#    jobs from one bad prerequisite. A handful of existence checks here
+#    (vocab_file, both feats_shape files, both manifests) turn that into
+#    one failed job instead.
+MISSING=0
+for ARTIFACT in "$VOCAB_FILE" "$TRAIN_SHAPE" "$VALID_SHAPE" \
+    "$TRAIN_MANIFEST" "$VALID_MANIFEST"; do
+    if [[ ! -e "$ARTIFACT" ]]; then
+        echo "PRE-FLIGHT FAILED: required artifact missing: $ARTIFACT" >&2
+        MISSING=1
+    fi
+done
+if (( MISSING )); then
+    echo "ABORT: not training, not resubmitting -- run create_dataset and" \
+        "create_shape first." >&2
+    exit 1
+fi
+
+# 6) Queue the next hop NOW, before training runs -- see the header comment
 #    for why this must happen before `srun`, not after it. --export=ALL
 #    forwards CHAIN_DEPTH (and everything else already in this job's
 #    environment) to the next job; without it, CHAIN_DEPTH would silently
@@ -182,12 +226,20 @@ sbatch --export=ALL,CHAIN_DEPTH=$((CHAIN_DEPTH + 1)) \
     --dependency=afterany:"$SLURM_JOB_ID" \
     local/submit_train.sbatch
 
-# 6) Train. If this dies for any reason -- clean completion short of
+# 7) Train. If this dies for any reason -- clean completion short of
 #    max_steps, walltime SIGTERM, node failure, preemption, manual scancel
-#    -- the successor queued in step 5 is already there to pick it up via
-#    fit.ckpt_path: ${exp_dir}/last.ckpt.
+#    -- the successor queued in step 6 is already there to pick it up.
+#    conf/training_f5_tts_base.yaml ships `fit: {}` deliberately (an
+#    unconditional fit.ckpt_path FileNotFoundErrors Lightning on a fresh
+#    run, verified against the installed lightning==2.6.5): --ckpt_path is
+#    passed here, to run.py, only when $LAST_CKPT already exists on disk.
 export TORCH_NCCL_ASYNC_ERROR_HANDLING=1
 export NCCL_DEBUG=WARN
 
+CKPT_ARGS=()
+if [[ -e "$LAST_CKPT" ]]; then
+    CKPT_ARGS=(--ckpt_path "$LAST_CKPT")
+fi
+
 srun --kill-on-bad-exit=1 python run.py --stages train \
-    --training_config "$CONFIG"
+    --training_config "$CONFIG" "${CKPT_ARGS[@]}"

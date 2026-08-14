@@ -63,10 +63,15 @@ def test_precision_is_fp32(cfg):
 
 
 def test_validation_is_step_based(cfg):
-    """Spec 6.2: 12 epochs total, so per-epoch validation is useless."""
+    """Spec 6.2: 12 epochs total, so per-epoch validation is useless.
+
+    Pin the actual values, not just `> 0`: 5000/200 are a named spec
+    decision (spec 6.2), not incidental numbers a `> 0` check would let
+    drift silently.
+    """
     assert "check_val_every_n_epoch" not in cfg.trainer
-    assert cfg.trainer.val_check_interval > 0
-    assert cfg.trainer.limit_val_batches > 0
+    assert cfg.trainer.val_check_interval == 5000
+    assert cfg.trainer.limit_val_batches == 200
 
 
 def test_uses_f5_pinyin_preprocessor_not_common(cfg):
@@ -82,9 +87,19 @@ def test_normalize_is_null_and_no_collect_stats(cfg):
     assert "create_token_list" not in cfg
 
 
-def test_auto_resume_is_configured(cfg):
-    """Preemption recovery on PSC depends on this."""
-    assert str(cfg.fit.ckpt_path).endswith("last.ckpt")
+def test_fit_has_no_unconditional_ckpt_path(cfg):
+    """IMPORTANT 1: `fit.ckpt_path: ${exp_dir}/last.ckpt` unconditionally
+    FileNotFoundErrors on a fresh run -- verified directly against the
+    installed lightning==2.6.5: CheckpointConnector._parse_ckpt_path passes
+    a literal, non-"best"/"last"/"hpc" ckpt_path straight through to
+    TorchCheckpointIO.load_checkpoint, which raises FileNotFoundError for a
+    nonexistent path (lightning_fabric/plugins/io/torch_io.py:88-89).
+
+    Resume is instead supplied conditionally by local/submit_train.sbatch
+    via `run.py --ckpt_path`, only when $LAST_CKPT already exists -- see
+    tests/test_sbatch_scripts.py and tests/test_run_ckpt_path_override.py.
+    """
+    assert cfg.fit == {}
 
 
 def test_recipe_dir_is_set(cfg):
@@ -93,12 +108,27 @@ def test_recipe_dir_is_set(cfg):
     assert cfg.recipe_dir is not None
 
     # Check raw (unresolved) interpolation strings, not resolved values:
-    # data_dir/exp_dir must reference ${recipe_dir} directly, and stats_dir
-    # must chain through exp_dir back to it.
+    # data_dir/exp_dir must reference ${recipe_dir} directly. stats_dir is
+    # intentionally NOT scoped through exp_dir (see
+    # test_stats_dir_is_shared_across_exp_tags): it chains straight back to
+    # ${recipe_dir} instead, since feats_shape is a property of the corpus,
+    # not of one experiment.
     raw = OmegaConf.to_container(cfg, resolve=False)
     assert "${recipe_dir}" in raw["data_dir"]
     assert "${recipe_dir}" in raw["exp_dir"]
-    assert "${exp_dir}" in raw["stats_dir"]
+    assert "${recipe_dir}" in raw["stats_dir"]
+    assert "${exp_dir}" not in raw["stats_dir"]
+
+
+def test_stats_dir_is_shared_across_exp_tags(cfg):
+    """CRITICAL 3: stats_dir (and everything derived from it) must be
+    independent of exp_tag, or create_shape run against one exp_tag writes
+    feats_shape somewhere a different exp_tag's dataloader never looks --
+    exactly what happened when both training_f5_tts_base.yaml and
+    training_f5_tts_base_smoke.yaml derived stats_dir from ${exp_dir}."""
+    raw = OmegaConf.to_container(cfg, resolve=False)
+    assert "${exp_tag}" not in raw["stats_dir"]
+    assert "${exp_dir}" not in raw["stats_dir"]
 
 
 def test_create_shape_block_has_manifest_paths(cfg):
@@ -141,9 +171,22 @@ def test_smoke_config_only_differs_from_base_in_five_places():
     than a thin override; this test is what actually enforces "everything
     else stays at production values" instead of relying on the copy being
     faithful by inspection.
+
+    Compares RESOLVED values, not raw interpolation strings (CRITICAL 3
+    regression guard). The original version of this test used
+    `resolve=False`, so `stats_dir: ${exp_dir}/stats` was a byte-identical
+    *string* in both configs and the test passed precisely where the two
+    configs actually diverged: with exp_tag interpolated in, base resolved
+    to exp/train_f5_tts_base_emilia/stats while smoke resolved to
+    exp/smoke_base_emilia/stats -- two different, unrelated directories.
+    Resolving first is what makes this test able to catch that class of
+    bug; see test_stats_dir_is_shared_across_exp_tags for the direct fix
+    pin and the falsification note below.
     """
-    base = _flatten(OmegaConf.to_container(OmegaConf.load(CONF), resolve=False))
-    smoke = _flatten(OmegaConf.to_container(OmegaConf.load(SMOKE_CONF), resolve=False))
+    base = _flatten(OmegaConf.to_container(OmegaConf.load(CONF), resolve=True))
+    smoke = _flatten(
+        OmegaConf.to_container(OmegaConf.load(SMOKE_CONF), resolve=True)
+    )
 
     # trainer.logger is a wholesale block replacement (WandbLogger ->
     # CSVLogger), so its key SET is expected to differ, not just its
@@ -157,6 +200,14 @@ def test_smoke_config_only_differs_from_base_in_five_places():
     differing = {k for k in base_rest if base_rest[k] != smoke_rest[k]}
     expected = {
         "exp_tag",
+        # exp_dir and inference_dir both interpolate ${exp_tag}, so they are
+        # legitimate, expected consequences of the single exp_tag change --
+        # NOT independent differences. Widening this set beyond that (e.g.
+        # to also exclude stats_dir) would re-hide the exact bug this test
+        # exists to catch; stats_dir is deliberately NOT in this set (see
+        # the explicit assertion below).
+        "exp_dir",
+        "inference_dir",
         "trainer.max_steps",
         "trainer.val_check_interval",
         "trainer.limit_val_batches",
@@ -166,6 +217,22 @@ def test_smoke_config_only_differs_from_base_in_five_places():
     # The logger block itself must differ (WandbLogger -> CSVLogger); its
     # exact shape is pinned by test_smoke_config_uses_offline_csv_logger.
     assert base["trainer.logger._target_"] != smoke["trainer.logger._target_"]
+
+    # Direct, explicit pin (CRITICAL 3): stats_dir and everything derived
+    # from it must be IDENTICAL between base and smoke once resolved, since
+    # only training_f5_tts_base.yaml's create_shape stage actually runs
+    # (the smoke's own README-documented sequence never calls create_shape)
+    # and the smoke's dataloader must read what that run wrote.
+    assert base["stats_dir"] == smoke["stats_dir"]
+    assert base["create_shape.save_path"] == smoke["create_shape.save_path"]
+    assert (
+        base["dataloader.train.iter_factory.batches.shape_files.0"]
+        == smoke["dataloader.train.iter_factory.batches.shape_files.0"]
+    )
+    assert (
+        base["dataloader.valid.iter_factory.batches.shape_files.0"]
+        == smoke["dataloader.valid.iter_factory.batches.shape_files.0"]
+    )
 
 
 def test_smoke_config_uses_offline_csv_logger():

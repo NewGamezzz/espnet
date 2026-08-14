@@ -39,7 +39,15 @@ num_nodes: 1
 recipe_dir: .
 data_dir: ${recipe_dir}/data
 exp_dir: ${recipe_dir}/exp/${exp_tag}
-stats_dir: ${exp_dir}/stats
+# feats_shape is a property of the corpus (manifest durations), not of a
+# specific experiment -- fixed at ${recipe_dir}/exp/stats, not
+# experiment-scoped via ${exp_dir}. This MUST match
+# training_f5_tts_base.yaml's stats_dir exactly: the README's documented
+# sequence runs create_shape once against the base config, then submits the
+# smoke, which never runs create_shape itself -- an experiment-scoped
+# stats_dir here would make the smoke read shape files that were never
+# written under its own exp_tag.
+stats_dir: ${recipe_dir}/exp/stats
 inference_dir: ${exp_dir}/inference
 
 exp_tag: smoke_base_emilia
@@ -173,10 +181,12 @@ dataloader:
       shuffle: true
       collate_fn: ${dataloader.collate_fn}
       batches:
-        # numel_array is NumElementsArraySampler (egs3/emilia/tts/src/sampler.py):
-        # a numpy-backed drop-in for numel's NumElementsBatchSampler, adding
-        # the upstream max_samples cap below. Equivalent to "numel" batch-for-
-        # batch when max_samples is unset (see tests/test_sampler.py); with
+        # numel_array is NumElementsArraySampler
+        # (espnet2/samplers/num_elements_array_sampler.py): a numpy-backed
+        # drop-in for numel's NumElementsBatchSampler, adding the upstream
+        # max_samples cap below. Equivalent to "numel" batch-for-batch when
+        # max_samples is unset (see
+        # test/espnet2/samplers/test_num_elements_array_sampler.py); with
         # it set, caps batches that would otherwise exceed 300+ samples at
         # the short end of Emilia's length-sorted order (0.3s floor = 28
         # frames, batch_bins=480000 / 100 mels = 4800 frames/batch).
@@ -239,5 +249,9 @@ trainer:
     name: ""
     version: ${exp_tag}
 
-fit:
-  ckpt_path: ${exp_dir}/last.ckpt
+# Same reasoning as training_f5_tts_base.yaml: an unconditional
+# fit.ckpt_path FileNotFoundErrors on a fresh run. The smoke is a one-shot
+# job (submit_smoke.sbatch, no chaining), so it always starts fresh; kept
+# empty here for the same reason, and to keep this a byte-for-byte copy of
+# the base config outside the 5 documented differences above.
+fit: {}

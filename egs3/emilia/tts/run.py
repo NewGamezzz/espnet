@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 from typing import Sequence
 
+from omegaconf import OmegaConf
 from src.system import TTSSystem
 
 from espnet3.utils.config_utils import load_and_merge_config
@@ -54,6 +55,20 @@ def build_parser(stages: Sequence[str]) -> argparse.ArgumentParser:
         help="Hydra config for the measure stage (metrics).",
     )
     parser.add_argument(
+        "--ckpt_path",
+        default=None,
+        type=Path,
+        help=(
+            "Path to a checkpoint to resume `train` from. Sets "
+            "training_config.fit.ckpt_path for this invocation only; the "
+            "config itself ships `fit: {}` because an unconditional "
+            "ckpt_path FileNotFoundErrors on a fresh run (Lightning's "
+            "CheckpointConnector treats a literal, nonexistent path as an "
+            "error, not a no-op). local/submit_train.sbatch passes this "
+            "only when $LAST_CKPT already exists on disk."
+        ),
+    )
+    parser.add_argument(
         "--dry_run",
         action="store_true",
         help="Print what would be executed without actually running stages.",
@@ -75,8 +90,23 @@ DEFAULT_STAGES = [
 ]
 
 ALL_STAGES = DEFAULT_STAGES
-DEFAULT_TRAINING_CONFIG = "training_f5_tts_base.yaml"
-DEFAULT_INFERENCE_CONFIG = "inference_f5_seedtts.yaml"
+# NOTE: these name the near-empty *template* stub each recipe config merges
+# over (egs3/TEMPLATE/tts/conf/{training,inference,metrics}.yaml -- see
+# `load_and_merge_config`'s docstring and the comment in main() below), NOT
+# this recipe's own concrete config filenames. `config_name` is passed to
+# `load_and_merge_config` unconditionally, independent of whichever real
+# file `--training_config`/`--inference_config` points at, so it must always
+# match a file that exists under the template package. Found and fixed
+# during the final whole-branch review: these previously read
+# "training_f5_tts_base.yaml" / "inference_f5_seedtts.yaml" (this recipe's
+# own filenames, not the template's), so `load_and_merge_config` raised
+# FileNotFoundError trying to open
+# egs3/TEMPLATE/tts/conf/training_f5_tts_base.yaml on every single
+# invocation -- verified directly; no test exercised run.py's actual CLI
+# entrypoint end to end, the same class of gap IMPORTANT 5 closes for
+# output_fn and metrics `_target_`. See tests/test_run_default_configs.py.
+DEFAULT_TRAINING_CONFIG = "training.yaml"
+DEFAULT_INFERENCE_CONFIG = "inference.yaml"
 DEFAULT_METRICS_CONFIG = "metrics.yaml"
 
 
@@ -107,6 +137,16 @@ def main(args) -> None:
         config_name=DEFAULT_METRICS_CONFIG,
         resolve=False,
     )
+    if args.ckpt_path is not None:
+        if training_config is None:
+            raise ValueError("--ckpt_path requires --training_config.")
+        # OmegaConf.update rather than attribute assignment: works whether
+        # `fit` is present as `{}` (the shipped default) or absent entirely,
+        # and is the same mechanism apply_training_experiment_context below
+        # uses to patch config fields in place before resolution.
+        OmegaConf.update(
+            training_config, "fit.ckpt_path", str(args.ckpt_path), force_add=True
+        )
     logger = configure_logging()
     apply_training_experiment_context(
         training_config=training_config,

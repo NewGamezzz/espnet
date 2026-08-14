@@ -27,7 +27,15 @@ num_nodes: 1
 recipe_dir: .
 data_dir: ${recipe_dir}/data
 exp_dir: ${recipe_dir}/exp/${exp_tag}
-stats_dir: ${exp_dir}/stats
+# feats_shape is a property of the corpus (manifest durations), not of a
+# specific experiment -- fixed at ${recipe_dir}/exp/stats, not
+# experiment-scoped via ${exp_dir}. Both this config and
+# training_f5_tts_base_smoke.yaml only differ in exp_tag, so an
+# experiment-scoped stats_dir would put create_shape's real output (written
+# once, under this config's exp_tag) somewhere the smoke config's dataloader
+# would never look -- exactly the bug this comment replaces. See
+# tests/test_training_config.py::test_stats_dir_is_shared_across_exp_tags.
+stats_dir: ${recipe_dir}/exp/stats
 inference_dir: ${exp_dir}/inference
 
 exp_tag: train_f5_tts_base_emilia
@@ -161,10 +169,12 @@ dataloader:
       shuffle: true
       collate_fn: ${dataloader.collate_fn}
       batches:
-        # numel_array is NumElementsArraySampler (egs3/emilia/tts/src/sampler.py):
-        # a numpy-backed drop-in for numel's NumElementsBatchSampler, adding
-        # the upstream max_samples cap below. Equivalent to "numel" batch-for-
-        # batch when max_samples is unset (see tests/test_sampler.py); with
+        # numel_array is NumElementsArraySampler
+        # (espnet2/samplers/num_elements_array_sampler.py): a numpy-backed
+        # drop-in for numel's NumElementsBatchSampler, adding the upstream
+        # max_samples cap below. Equivalent to "numel" batch-for-batch when
+        # max_samples is unset (see
+        # test/espnet2/samplers/test_num_elements_array_sampler.py); with
         # it set, caps batches that would otherwise exceed 300+ samples at
         # the short end of Emilia's length-sorted order (0.3s floor = 28
         # frames, batch_bins=480000 / 100 mels = 4800 frames/batch).
@@ -229,5 +239,14 @@ trainer:
     id: ${exp_tag}
     resume: allow
 
-fit:
-  ckpt_path: ${exp_dir}/last.ckpt
+# Resume is NOT configured here unconditionally: on a fresh run
+# ${exp_dir}/last.ckpt does not exist, and Lightning 2.x's
+# CheckpointConnector._parse_ckpt_path passes a literal (non-"best"/"last"/
+# "hpc") ckpt_path straight through to TorchCheckpointIO.load_checkpoint,
+# which raises FileNotFoundError for a nonexistent path -- verified
+# directly against the installed lightning==2.6.5
+# (lightning_fabric/plugins/io/torch_io.py:88-89). local/submit_train.sbatch
+# passes --ckpt_path to run.py, and run.py sets fit.ckpt_path here, only
+# when $LAST_CKPT already exists, so the first hop of a chain runs with no
+# ckpt_path at all.
+fit: {}
