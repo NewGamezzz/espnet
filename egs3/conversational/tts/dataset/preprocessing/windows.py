@@ -72,6 +72,9 @@ class WindowRecord:
     # last-before-derived so unrelated call sites building WindowRecord
     # positionally/by keyword without this field are unaffected.
     chunk_task: "ChunkTaskPlan | None" = None
+    # Mode T (timestamp-aligned target text, design 2026-08-15): set by the
+    # planner's per-window coin; False = Mode O, today's order-only format.
+    timestamp_text: bool = False
     # Derived from turns/num_channels, never passed in: always consistent
     # with the stored (rounded) turn times, including after from_json.
     num_active_speakers: int = field(init=False)
@@ -124,6 +127,10 @@ class WindowingStats:
     n_chunk_prompt_only: int = 0
     n_chunk_degraded: int = 0
     n_chunk_fallback_infill: int = 0
+    # Mode T coin outcomes (planner): windows flagged timestamp_text, and
+    # coin-heads windows degraded back to Mode O by the fit predicate.
+    n_timestamp_windows: int = 0
+    n_timestamp_degraded: int = 0
 
     def merge(self, other: "WindowingStats") -> None:
         self.n_windows += other.n_windows
@@ -141,6 +148,8 @@ class WindowingStats:
         self.n_chunk_prompt_only += other.n_chunk_prompt_only
         self.n_chunk_degraded += other.n_chunk_degraded
         self.n_chunk_fallback_infill += other.n_chunk_fallback_infill
+        self.n_timestamp_windows += other.n_timestamp_windows
+        self.n_timestamp_degraded += other.n_timestamp_degraded
 
 
 def blocked_intervals(
@@ -450,6 +459,10 @@ def to_json(w: WindowRecord) -> dict:
     # every golden line.
     if w.chunk_task is not None:
         d["chunk_task"] = plan_to_json(w.chunk_task)
+    # Same omit-when-default convention as chunk_task above: default False
+    # windows (the overwhelming majority) leave golden manifests unchanged.
+    if w.timestamp_text:
+        d["timestamp_text"] = True
     return d
 
 
@@ -473,6 +486,7 @@ def from_json(d: dict) -> WindowRecord:
             for t in d["turns"]
         ),
         chunk_task=plan_from_json(d["chunk_task"]) if "chunk_task" in d else None,
+        timestamp_text=d.get("timestamp_text", False),
     )
 
 
