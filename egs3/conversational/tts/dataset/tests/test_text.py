@@ -4,16 +4,20 @@ import pytest
 from .conftest import FakeTurn
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
+    FRAMES_PER_SECOND,
     NEW_TOKENS,
     OTHER_TOKEN,
     TURN_FILL_TOKEN,
     TURN_TOKEN,
     build_branch_texts,
+    build_branch_texts_timestamped,
     encode_tokens,
     extend_vocab,
     make_token2id,
     normalize_text,
     render_tokens,
+    timestamp_fits,
+    turn_frame_spans,
     vocab_charset,
 )
 
@@ -69,6 +73,11 @@ class TestMaskingRoundTrip:
     def test_channel_out_of_range_raises(self, turns_3spk):
         with pytest.raises(ValueError, match="out of range"):
             build_branch_texts(turns_3spk, 2)  # fixture uses channel 2
+
+    def test_mode_o_never_emits_turn_fill(self):
+        turns = [_turn(0, "hello there", 0.0, 2.0), _turn(1, "yes", 2.5, 3.0)]
+        for branch in build_branch_texts(turns, 2):
+            assert TURN_FILL_TOKEN not in branch
 
 
 class TestNoLeak:
@@ -197,10 +206,6 @@ class TestTimestampAssembly:
     def test_single_turn_layout(self):
         # 2.0 s target = 187 frames at 93.75 fps; one turn [0.5, 1.5) = frames 47..141.
         turns = [_turn(0, "hi", 10.5, 11.5)]
-        from egs3.conversational.tts.dataset.preprocessing.text import (
-            build_branch_texts_timestamped,
-        )
-
         out = build_branch_texts_timestamped(turns, 2, t0=10.0, target_frames=187)
         a, b = out
         assert len(a) == len(b) == 187
@@ -211,10 +216,6 @@ class TestTimestampAssembly:
         assert b == [OTHER_TOKEN] * 187  # non-owner branch is all <OTHER>
 
     def test_overlapping_turns_are_independent_per_branch(self):
-        from egs3.conversational.tts.dataset.preprocessing.text import (
-            build_branch_texts_timestamped,
-        )
-
         turns = [_turn(0, "abc", 0.0, 1.0), _turn(1, "de", 0.5, 1.5)]
         out = build_branch_texts_timestamped(turns, 2, t0=0.0, target_frames=187)
         assert (
@@ -222,29 +223,17 @@ class TestTimestampAssembly:
         )  # round(0.5 * 93.75) = 47
 
     def test_unfittable_turn_raises(self):
-        from egs3.conversational.tts.dataset.preprocessing.text import (
-            build_branch_texts_timestamped,
-        )
-
         turns = [_turn(0, "way too much text", 0.0, 0.05)]  # 4 frames, needs 18
         with pytest.raises(ValueError, match="does not fit"):
             build_branch_texts_timestamped(turns, 1, t0=0.0, target_frames=187)
 
     def test_timestamp_fits_normal_and_defective(self):
-        from egs3.conversational.tts.dataset.preprocessing.text import (
-            timestamp_fits,
-        )
-
         good = [_turn(0, "hello there", 0.0, 2.0)]
         bad = [_turn(0, "I'm gonna go.", 0.0, 0.01)]
         assert timestamp_fits(good, t0=0.0, t1=2.0)
         assert not timestamp_fits(bad, t0=0.0, t1=2.0)
 
     def test_spans_clamped_to_target(self):
-        from egs3.conversational.tts.dataset.preprocessing.text import (
-            turn_frame_spans,
-        )
-
         turns = [_turn(0, "x", 0.0, 99.0)]
         spans = turn_frame_spans(turns, t0=0.0, target_frames=100)
         assert spans == [(0, 100)]
@@ -254,12 +243,6 @@ class TestTimestampAssembly:
 
         Tests with realistic non-zero t0, exact banker's rounding, and boundary cases.
         """
-        from egs3.conversational.tts.dataset.preprocessing.text import (
-            FRAMES_PER_SECOND,
-            build_branch_texts_timestamped,
-            timestamp_fits,
-        )
-
         fps = FRAMES_PER_SECOND
 
         # Layout 1: turn starting exactly at t0 (boundary case)

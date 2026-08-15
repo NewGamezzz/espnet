@@ -246,6 +246,8 @@ class ConversationDataset(TorchDataset):
                 stats.n_windows,
             )
         if epoch is not None and self.timestamp_align_prob > 0:
+            # Same pre-filter caveat as the chunk-task line above: counts come
+            # from plan_sessions' stats, before the min_active_speakers filter.
             logger.info(
                 "timestamp-text plan: %d mode-T / %d degraded of %d windows",
                 stats.n_timestamp_windows,
