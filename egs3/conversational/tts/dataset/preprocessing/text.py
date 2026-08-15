@@ -26,11 +26,17 @@ OTHER_TOKEN = "<OTHER>"
 # not a per-character run like <OTHER>.
 SPEAKER_PROMPT_TOKEN = "<speaker_prompt>"
 PREV_CHUNK_TOKEN = "<prev_chunk>"
-NEW_TOKENS: tuple[str, str, str, str] = (
+# Mode T in-turn fill (design 2026-08-15): pads a timestamp-aligned turn
+# block from its last character to its span end.  A DEDICATED token, not a
+# reuse of F5's filler row 0: the filler also serves Mode O tail padding,
+# and sharing the row would couple the two roles' gradients.
+TURN_FILL_TOKEN = "<turn_fill>"
+NEW_TOKENS: tuple[str, str, str, str, str] = (
     TURN_TOKEN,
     OTHER_TOKEN,
     SPEAKER_PROMPT_TOKEN,
     PREV_CHUNK_TOKEN,
+    TURN_FILL_TOKEN,
 )
 
 # char_tokens.txt vocabs encode the space character as this symbol.
@@ -38,7 +44,7 @@ SPACE_SYMBOL = "<space>"
 
 
 def extend_vocab(base_tokens: Sequence[str]) -> list[str]:
-    """Append the four new tokens to the end of ``base_tokens``.
+    """Append the five new tokens to the end of ``base_tokens``.
 
     Every base token keeps its id (line index); the new ids are contiguous at
     the end.  Raises ``ValueError`` if any of them is already present, since
@@ -160,7 +166,15 @@ def encode_tokens(tokens: Sequence[str], token2id: Mapping[str, int]) -> list[in
 
 
 def render_tokens(tokens: Sequence[str]) -> str:
-    """Human-readable one-line rendering: ``<turn>`` -> ``|``, ``<OTHER>`` -> ``#``."""
+    """Human-readable one-line rendering: ``<turn>`` -> ``|``, ``<OTHER>`` ->
+    ``#``, ``<turn_fill>`` -> ``_``."""
     return "".join(
-        "|" if t == TURN_TOKEN else "#" if t == OTHER_TOKEN else t for t in tokens
+        "|"
+        if t == TURN_TOKEN
+        else "#"
+        if t == OTHER_TOKEN
+        else "_"
+        if t == TURN_FILL_TOKEN
+        else t
+        for t in tokens
     )

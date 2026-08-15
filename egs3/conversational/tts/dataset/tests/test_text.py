@@ -7,6 +7,7 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
     NEW_TOKENS,
     OTHER_TOKEN,
     TURN_TOKEN,
+    TURN_FILL_TOKEN,
     build_branch_texts,
     encode_tokens,
     extend_vocab,
@@ -102,11 +103,22 @@ class TestVocabExtension:
         assert extended[: len(base_vocab)] == base_vocab
         assert extended[len(base_vocab) :] == list(NEW_TOKENS)
 
+    def test_new_tokens_is_five_tuple_ending_with_turn_fill(self):
+        assert len(NEW_TOKENS) == 5
+        assert NEW_TOKENS[-1] == TURN_FILL_TOKEN
+        assert TURN_FILL_TOKEN == "<turn_fill>"
+
+    def test_extend_vocab_appends_turn_fill_last(self):
+        base = ["a", "b", "<space>"]
+        extended = extend_vocab(base)
+        assert extended[:3] == base
+        assert extended[3:] == list(NEW_TOKENS)
+
     def test_extend_vocab_appends_four_tokens_in_order(self):
         base = ["a", "b", "<space>"]
         out = extend_vocab(base)
         assert out[:3] == base
-        assert out[3:] == ["<turn>", "<OTHER>", "<speaker_prompt>", "<prev_chunk>"]
+        assert out[3:] == ["<turn>", "<OTHER>", "<speaker_prompt>", "<prev_chunk>", "<turn_fill>"]
 
     def test_new_token_constants(self):
         from egs3.conversational.tts.dataset.preprocessing.text import (
@@ -120,6 +132,7 @@ class TestVocabExtension:
             "<OTHER>",
             SPEAKER_PROMPT_TOKEN,
             PREV_CHUNK_TOKEN,
+            TURN_FILL_TOKEN,
         )
 
     def test_existing_new_token_raises(self, base_vocab):
@@ -173,3 +186,8 @@ class TestNormalizeAndEncode:
         assert rendered == "|good afternoon. how are you?|" + "#" * len(
             turns_3spk[1].text
         )
+
+    def test_render_tokens_handles_turn_fill(self):
+        tokens = [TURN_TOKEN, "h", "i", TURN_FILL_TOKEN, OTHER_TOKEN]
+        rendered = render_tokens(tokens)
+        assert rendered == "|hi_#"

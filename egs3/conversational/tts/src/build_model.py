@@ -40,6 +40,7 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
     OTHER_TOKEN,
     PREV_CHUNK_TOKEN,
     SPEAKER_PROMPT_TOKEN,
+    TURN_FILL_TOKEN,
     TURN_TOKEN,
     make_token2id,
 )
@@ -88,6 +89,10 @@ def extended_text_embedding(
     lives in row i+1).  ``tokens`` is the extended vocab whose last
     ``len(NEW_TOKENS)`` entries must be ``NEW_TOKENS`` (step 2 appends them
     at the end, so all original ids - and therefore rows - are unchanged).
+    Five appended tokens are warm-started: ``<turn>`` from the space
+    character's row; ``<OTHER>``, ``<speaker_prompt>``, ``<prev_chunk>``,
+    and ``<turn_fill>`` from the filler row 0 - F5's learned "audio beyond
+    text" representation - each plus small Gaussian noise.
     """
     if list(tokens[-len(NEW_TOKENS) :]) != list(NEW_TOKENS):
         raise ValueError(
@@ -107,6 +112,7 @@ def extended_text_embedding(
     other_row = token2id[OTHER_TOKEN] + 1  # == base_size + 2
     sp_row = token2id[SPEAKER_PROMPT_TOKEN] + 1  # == base_size + 3
     pc_row = token2id[PREV_CHUNK_TOKEN] + 1  # == base_size + 4
+    tf_row = token2id[TURN_FILL_TOKEN] + 1  # == base_size + 5
 
     def _noise() -> torch.Tensor:
         return noise_scale * torch.randn(
@@ -125,6 +131,7 @@ def extended_text_embedding(
     # learned "audio beyond text" representation (design decision 2026-08-14).
     new_weight[sp_row] = pretrained_weight[0] + _noise()
     new_weight[pc_row] = pretrained_weight[0] + _noise()
+    new_weight[tf_row] = pretrained_weight[0] + _noise()
     return new_weight
 
 

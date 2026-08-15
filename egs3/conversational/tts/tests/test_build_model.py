@@ -18,6 +18,7 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
     OTHER_TOKEN,
     PREV_CHUNK_TOKEN,
     SPEAKER_PROMPT_TOKEN,
+    TURN_FILL_TOKEN,
     TURN_TOKEN,
     make_token2id,
 )
@@ -79,6 +80,7 @@ def test_embedding_surgery_rows():
         token2id[OTHER_TOKEN] + 1: 0,  # <OTHER> <- filler row
         token2id[SPEAKER_PROMPT_TOKEN] + 1: 0,  # <speaker_prompt> <- filler row
         token2id[PREV_CHUNK_TOKEN] + 1: 0,  # <prev_chunk> <- filler row
+        token2id[TURN_FILL_TOKEN] + 1: 0,  # <turn_fill> <- filler row
     }
     for row, source in warm_starts.items():
         diff = new[row] - pretrained[source]
@@ -99,6 +101,19 @@ def test_extended_embedding_four_new_rows():
     torch.testing.assert_close(out[len(base) + 2], weight[0])  # <OTHER>
     torch.testing.assert_close(out[len(base) + 3], weight[0])  # <speaker_prompt>
     torch.testing.assert_close(out[len(base) + 4], weight[0])  # <prev_chunk>
+    torch.testing.assert_close(out[len(base) + 5], weight[0])  # <turn_fill>
+
+
+def test_turn_fill_row_warm_starts_from_filler():
+    base = ["a", "b", " "]
+    tokens = base + list(NEW_TOKENS)
+    weight = torch.randn(len(base) + 1, 8)
+    gen = torch.Generator().manual_seed(0)
+    out = extended_text_embedding(weight, tokens, noise_scale=0.02, generator=gen)
+    assert out.shape == (len(tokens) + 1, 8)
+    tf_row = len(base) + 5  # token id len(base)+4, +1 for the filler shift
+    assert torch.allclose(out[tf_row], weight[0], atol=0.1)
+    assert not torch.equal(out[tf_row], weight[0])  # noise was added
 
 
 def test_embedding_surgery_rejects_wrong_base():
