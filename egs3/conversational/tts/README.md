@@ -28,7 +28,8 @@ Rules (fixed by design, see `dataset/preprocessing/text.py`):
 
 ## New vocab tokens
 
-The builder appends exactly two tokens, `<turn>` and `<OTHER>`, at the END of the user-supplied base vocab, so every pretrained token id is unchanged.
+The builder appends five tokens, in order `<turn>`, `<OTHER>`, `<speaker_prompt>`, `<prev_chunk>`, `<turn_fill>` (`dataset/preprocessing/text.py`'s `NEW_TOKENS`), at the END of the user-supplied base vocab, so every pretrained token id is unchanged.
+`<speaker_prompt>` and `<prev_chunk>` mark the special-token chunk task's audio-only conditioning spans; `<turn_fill>` is Mode T's in-turn padding token (see "Timestamp-aligned text (Mode T)" below).
 The extended vocab is written as a new file (`data/tokens/vocab.txt`, pure token-per-line; the original is never edited).
 Because the line index IS the token id, the vocab file itself carries no header comment; the new ids are documented in `data/tokens/vocab_meta.json`:
 
@@ -36,11 +37,13 @@ Because the line index IS the token id, the vocab file itself carries no header 
 {
   "base_vocab_path": "...", "base_vocab_size": 2545,
   "base_vocab_sha256": "<hash of the base vocab file bytes>",
-  "new_tokens": {"<turn>": 2545, "<OTHER>": 2546}, "total_size": 2547
+  "new_tokens": {"<turn>": 2545, "<OTHER>": 2546, "<speaker_prompt>": 2547, "<prev_chunk>": 2548, "<turn_fill>": 2549},
+  "total_size": 2550
 }
 ```
 
 `base_vocab_size` and `base_vocab_sha256` are a provenance guard: before loading pretrained weights, training asserts them against the vocab shipped with the checkpoint, so a build against the wrong base vocab fails before it can corrupt the text-embedding alignment.
+`<turn_fill>` bumped `total_size` from 2549 to 2550: a vocab or checkpoint built before this token existed fails loudly at these same sha256/strict-load gates rather than silently misaligning ids, and the fix is the cluster `create_dataset` re-run already pending for the chunk-task vocab bump (see "Cluster migration" below).
 
 ## Building
 
@@ -143,6 +146,18 @@ e.g. `window plan epoch=3 online=True: 512 sessions -> 8041 windows, 620 batches
 `window_min`/`window_max`/`boundary_guard`/`tail_min` (the placement search, above) and `trim_to_turns`/`min_coverage`/`snap_start_to_turn` (the hole guards, above) no longer live in `dataset/config.yaml`'s `builder:` section - windowing moved out of build time entirely.
 They live in `dataset/preprocessing/planner.py`'s `WindowParams` dataclass, whose defaults ARE the single ratified live-training configuration shared by every corpus (`window_max: 80.0`, both hole guards on), not a placeholder.
 Per-entry overrides go under a training config's `dataset.train[i].data_src_args.window_params` (a dict merged over the `WindowParams` defaults, unset fields keep the default) and `.window_seed` (default `0`, the value that gives frozen-mode parity with the retired manifests); see `conf/training_mixed.yaml`'s `dataloader:` comment block for the canonical wording.
+
+### Timestamp-aligned text (Mode T)
+
+`timestamp_align_prob` is a `ConversationDataset` constructor arg (default `0.0`), bit-identical to the previous Mode-O-only behavior (PR #39).
+It is the training-side knob for Mode T: on each epoch-mode planned window, the planner flips a coin at this probability, on a dedicated RNG stream that never perturbs the window/chunk-task RNG.
+Mode T is a timestamp-aligned target text: one token per mel frame over the target span, instead of the ordinary Mode O sequence (`<turn>` + turn characters + one `<OTHER>` per off-speaker character, with no timing information).
+Each branch starts as `<OTHER>` for every frame, then each of that branch's own turns overwrites its rounded frame span with a turn block: `<turn>` + the turn's characters, then `<turn_fill>` padding out to the span's end.
+A turn that cannot fit its rounded frame span (too little time for its own `<turn>` + characters, or a same-channel span collision) is unfittable; the planner checks this with a seconds-only predicate before assembly, and when the coin picks a window whose turns don't all fit, the WHOLE window degrades to plain Mode O rather than partially applying Mode T.
+Calibrate the coin against the per-epoch INFO log line `plan_windows` emits whenever `timestamp_align_prob > 0` in epoch mode: `timestamp-text plan: %d mode-T / %d degraded of %d windows` (mode-T count, degraded-to-Mode-O count, total windows planned that epoch).
+The frozen plan (valid/test/inference, `epoch=None`) never applies the coin, matching the chunk-task's own `epoch is None` gate, so those splits are always Mode O.
+`<turn_fill>` is a new vocab token (see "New vocab tokens" above), so a pretrained vocab or checkpoint built before this token existed fails loudly at the sha256/strict-load gates in "Model assembly" below rather than silently misaligning ids; the cluster `create_dataset` re-run already pending for the chunk-task vocab bump (see "Cluster migration" below) covers this migration too.
+Inference-side consumption of Mode T text (`text_format: timestamps`) is not implemented on this branch; it lives in the eval worktree alongside the still-pending `cond_format: special_tokens` work.
 
 ### The epoch-0 batch-count cap
 
@@ -259,7 +274,7 @@ cleaning, and windowing decisions.
 ### Model assembly (`src/build_model.py`, order is load-bearing)
 
 1. Build the DiT/CFM with the F5TTS_Base architecture values and `text_num_embeds` = size of the EXTENDED vocab from step 2.
-2. Load the pretrained checkpoint with text-embedding surgery: every original embedding row is copied bit-exactly (step 2 appended the new tokens at the end), `<turn>` is warm-started from the space character's row and `<OTHER>` from the filler row 0 (F5's internal padding token), each plus small Gaussian noise; every other weight must load exactly (strict load).
+2. Load the pretrained checkpoint with text-embedding surgery: every original embedding row is copied bit-exactly (step 2 appended the five new tokens at the end), `<turn>` is warm-started from the space character's row, and `<OTHER>`/`<speaker_prompt>`/`<prev_chunk>`/`<turn_fill>` each from the filler row 0 (F5's internal padding token, the closest pretrained concept to "no text for me here"), each plus small Gaussian noise; every other weight must load exactly (strict load).
    Before any weight is read, `vocab_meta.json`'s `base_vocab_sha256`/`base_vocab_size` are asserted against the vocab file shipped with the checkpoint.
 3. `inject_exchange` with the configured schedule (POC: `{"1-22": "P+TAC"}`, `TACExchange`).
    Gates are zero-init, so at this instant the model computes exactly N independent pretrained F5 passes.
