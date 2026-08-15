@@ -23,12 +23,15 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
 from egs3.conversational.tts.src.chunked_inference import (
     MODE as CHUNKED_MODE,
     CondComposition,
+    SpecialTokensCond,
     _validated_chunk_cfg,
     call_turns,
     crossfade_concat,
     estimate_turn_secs,
+    min_truncated_prompt_frames,
     run_chunked_inference,
     split_turns,
+    tail_frames,
 )
 from egs3.conversational.tts.src.external_inference import (
     _prompt_turns,
@@ -349,11 +352,11 @@ def _chunk_only_cfg(chunk):
 
 class TestCondCompositionConfig:
     def test_defaults_are_previous_chunk_only(self):
-        _, _, _, comp, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
+        _, _, _, comp, _, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
         assert comp == CondComposition(include_prompt=False, history_chunks=1)
 
     def test_explicit_values_are_parsed(self):
-        _, _, _, comp, _ = _validated_chunk_cfg(
+        _, _, _, comp, _, _ = _validated_chunk_cfg(
             _chunk_only_cfg(
                 {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": 0}
             )
@@ -361,7 +364,7 @@ class TestCondCompositionConfig:
         assert comp == CondComposition(include_prompt=True, history_chunks=0)
 
     def test_all_history_is_minus_one(self):
-        _, _, _, comp, _ = _validated_chunk_cfg(
+        _, _, _, comp, _, _ = _validated_chunk_cfg(
             _chunk_only_cfg(
                 {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": -1}
             )
@@ -379,6 +382,108 @@ class TestCondCompositionConfig:
             _validated_chunk_cfg(
                 _chunk_only_cfg({"turns": 2, "cond_history_chunks": -2})
             )
+
+
+class TestSpecialTokensConfig:
+    def test_absent_cond_format_is_transcripts_mode(self):
+        _, _, _, _, sptok, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
+        assert sptok is None
+
+    def test_special_tokens_defaults(self):
+        _, _, _, _, sptok, _ = _validated_chunk_cfg(
+            _chunk_only_cfg({"target_sec": 25, "cond_format": "special_tokens"})
+        )
+        assert sptok == SpecialTokensCond(prompt_sec=8.0, prev_sec=10.0)
+
+    def test_knobs_are_parsed_and_zero_prev_is_reanchor(self):
+        _, _, _, _, sptok, _ = _validated_chunk_cfg(
+            _chunk_only_cfg(
+                {
+                    "target_sec": 25,
+                    "cond_format": "special_tokens",
+                    "cond_prompt_sec": 4.0,
+                    "cond_prev_sec": 0.0,
+                }
+            )
+        )
+        assert sptok == SpecialTokensCond(prompt_sec=4.0, prev_sec=0.0)
+
+    def test_knobs_require_special_tokens_mode(self):
+        with pytest.raises(ValueError, match="cond_prompt_sec"):
+            _validated_chunk_cfg(_chunk_only_cfg({"turns": 2, "cond_prompt_sec": 4.0}))
+        with pytest.raises(ValueError, match="cond_prev_sec"):
+            _validated_chunk_cfg(_chunk_only_cfg({"turns": 2, "cond_prev_sec": 4.0}))
+
+    def test_transcript_composition_knobs_rejected_in_special_mode(self):
+        with pytest.raises(ValueError, match="cond_include_prompt"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg(
+                    {
+                        "turns": 2,
+                        "cond_format": "special_tokens",
+                        "cond_include_prompt": True,
+                    }
+                )
+            )
+        with pytest.raises(ValueError, match="cond_history_chunks"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg(
+                    {
+                        "turns": 2,
+                        "cond_format": "special_tokens",
+                        "cond_history_chunks": 2,
+                    }
+                )
+            )
+
+    def test_bad_values_rejected(self):
+        with pytest.raises(ValueError, match="cond_format"):
+            _validated_chunk_cfg(_chunk_only_cfg({"turns": 2, "cond_format": "sp"}))
+        with pytest.raises(ValueError, match="cond_prompt_sec"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg(
+                    {
+                        "turns": 2,
+                        "cond_format": "special_tokens",
+                        "cond_prompt_sec": 0.0,
+                    }
+                )
+            )
+        with pytest.raises(ValueError, match="cond_prev_sec"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg(
+                    {"turns": 2, "cond_format": "special_tokens", "cond_prev_sec": -1.0}
+                )
+            )
+
+
+class TestFrameHelpers:
+    FS, HOP = 24000, 256
+
+    def test_min_truncation_uses_shortest_prompt(self):
+        # 4.0 s and 6.0 s prompts, cap 8.0 -> 4.0 s -> 96000 // 256 = 375.
+        assert (
+            min_truncated_prompt_frames(
+                [4 * self.FS, 6 * self.FS], 8.0, self.FS, self.HOP
+            )
+            == 375
+        )
+
+    def test_cap_binds_when_prompts_are_long(self):
+        # cap 3.0 s -> 72000 // 256 = 281 (floor of 281.25).
+        assert (
+            min_truncated_prompt_frames(
+                [4 * self.FS, 6 * self.FS], 3.0, self.FS, self.HOP
+            )
+            == 281
+        )
+
+    def test_tail_frames_floor_and_clamp(self):
+        # 5.0 s tail of ample audio -> 120000 // 256 = 468 (floor of 468.75).
+        assert tail_frames(30 * self.FS, 5.0, self.FS, self.HOP) == 468
+        # less generated audio than prev_sec -> whole tail, floored to hops.
+        assert tail_frames(10000, 5.0, self.FS, self.HOP) == 10000 // self.HOP
+        assert tail_frames(30 * self.FS, 0.0, self.FS, self.HOP) == 0
 
 
 def _chunked_config(testset, inference_dir, chunk, **overrides):

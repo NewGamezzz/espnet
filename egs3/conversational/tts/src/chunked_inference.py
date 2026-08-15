@@ -69,6 +69,21 @@ the off rows of each prompt block with digital zeros.  The top-level
 ``room_tone``) selects the fill there; it is recorded in the meta under
 ``prompt.fill``.
 
+``chunk.cond_format`` selects what a chunk's conditioning is wrapped in:
+``transcripts`` (the default) is everything above - plain-text turns plus the
+``cond_include_prompt`` / ``cond_history_chunks`` composition knobs.
+``special_tokens`` instead wraps the SAME conditioning audio in the
+four-token vocab from the preprocessor's per-frame prefix and switches to two
+time-based knobs in place of the composition knobs, which become illegal:
+``cond_prompt_sec`` (trained range 3-8 s, default 8.0) caps how much of the
+shared prompt every channel contributes - min-truncated across channels so
+the shortest reference never gets padded into format-OOD silence - and
+``cond_prev_sec`` (trained range 2-10 s, default 10.0) caps how much
+generated-audio tail becomes the ``<prev_chunk>`` context, with
+``cond_prev_sec: 0.0`` selecting the type-C re-anchor format (prompt only,
+no prev-chunk audio).  The hygiene knobs above stay orthogonal to both
+formats.
+
 DETERMINISM CONTRACT - a documented departure from ``generate_external``:
 sharding is BY DIALOGUE (a chunk chain cannot cross shards), and each shard
 plans its round batches over its own dialogues, so outputs are a pure
@@ -407,6 +422,29 @@ class CondComposition:
     history_chunks: int = 1
 
 
+@dataclass(frozen=True)
+class SpecialTokensCond:
+    """``cond_format: special_tokens`` knobs (trained ranges: prompt 3-8 s,
+    prev 2-10 s; ``prev_sec = 0.0`` is the type-C re-anchor format)."""
+
+    prompt_sec: float = 8.0
+    prev_sec: float = 10.0
+
+
+def min_truncated_prompt_frames(
+    prompt_samples: Sequence[int], cap_sec: float, fs: int, hop: int
+) -> int:
+    """Shared parallel-prompt length in whole hops: the shortest reference
+    prompt min-truncates every channel (no fill - padding would be
+    format-OOD), further capped by ``cond_prompt_sec``."""
+    return min(min(prompt_samples), int(round(cap_sec * fs))) // hop
+
+
+def tail_frames(total_samples: int, prev_sec: float, fs: int, hop: int) -> int:
+    """Frames of generated-audio tail used as ``<prev_chunk>`` context."""
+    return min(total_samples, int(round(prev_sec * fs))) // hop
+
+
 def _apply_cond_hygiene(
     wav: torch.Tensor,
     *,
@@ -513,13 +551,18 @@ def _plan_dialogue(
 
 def _validated_chunk_cfg(
     cfg,
-) -> tuple[dict[str, Any], float, CondHygiene, CondComposition, bool]:
-    """Return ``(policy, cross_fade_sec, cond, comp, cover_all_speakers)`` from the
-    ``chunk`` block.
+) -> tuple[
+    dict[str, Any], float, CondHygiene, CondComposition, SpecialTokensCond | None, bool
+]:
+    """Return ``(policy, cross_fade_sec, cond, comp, sptok, cover_all_speakers)``
+    from the ``chunk`` block.
 
     The policy stays exactly one of ``turns`` / ``target_sec``;
     ``cross_fade_sec`` is an independent seam knob, ``comp`` is a
-    conditioning-composition knob, ``cover_all_speakers`` is an independent
+    conditioning-composition knob, ``sptok`` is ``None`` for the default
+    ``cond_format: transcripts`` and a :class:`SpecialTokensCond` for
+    ``cond_format: special_tokens`` (the two formats are mutually exclusive -
+    see the module docstring), ``cover_all_speakers`` is an independent
     coverage knob restricted to the ``target_sec`` policy, and the
     conditioning-hygiene knobs (``cond_silence_gate``, ``cond_gate_threshold``,
     ``cond_loudness_norm``) are independent conditioning knobs - all default off,
@@ -542,6 +585,9 @@ def _validated_chunk_cfg(
         "cond_loudness_norm",
         "cond_include_prompt",
         "cond_history_chunks",
+        "cond_format",
+        "cond_prompt_sec",
+        "cond_prev_sec",
         "cover_all_speakers",
     }
     if unknown:
@@ -576,8 +622,39 @@ def _validated_chunk_cfg(
         gate_fill=gate_fill,
         loudness_norm=norm_on,
     )
-    include_prompt = bool(chunk_cfg.pop("cond_include_prompt", False) or False)
+    cond_format_raw = chunk_cfg.pop("cond_format", None)
+    cond_format = "transcripts" if cond_format_raw is None else str(cond_format_raw)
+    if cond_format not in ("transcripts", "special_tokens"):
+        raise ValueError(
+            "chunk.cond_format must be one of ('transcripts', 'special_tokens'), "
+            f"got {cond_format!r}"
+        )
+    special_mode = cond_format == "special_tokens"
+    prompt_sec_raw = chunk_cfg.pop("cond_prompt_sec", None)
+    prev_sec_raw = chunk_cfg.pop("cond_prev_sec", None)
+    if not special_mode:
+        if prompt_sec_raw is not None:
+            raise ValueError(
+                "chunk.cond_prompt_sec requires cond_format: special_tokens"
+            )
+        if prev_sec_raw is not None:
+            raise ValueError("chunk.cond_prev_sec requires cond_format: special_tokens")
+    include_prompt_raw = chunk_cfg.pop("cond_include_prompt", None)
     history_raw = chunk_cfg.pop("cond_history_chunks", None)
+    if special_mode:
+        if include_prompt_raw is not None:
+            raise ValueError(
+                "chunk.cond_include_prompt is a transcripts-format knob, not "
+                "valid with cond_format: special_tokens (the prompt is always "
+                "included)"
+            )
+        if history_raw is not None:
+            raise ValueError(
+                "chunk.cond_history_chunks is a transcripts-format knob, not "
+                "valid with cond_format: special_tokens (history is time-based "
+                "there - see cond_prev_sec)"
+            )
+    include_prompt = bool(include_prompt_raw or False)
     history_chunks = 1 if history_raw is None else int(history_raw)
     if history_chunks < -1:
         raise ValueError(
@@ -589,6 +666,16 @@ def _validated_chunk_cfg(
             "cond_include_prompt: true"
         )
     comp = CondComposition(include_prompt=include_prompt, history_chunks=history_chunks)
+    if special_mode:
+        prompt_sec = 8.0 if prompt_sec_raw is None else float(prompt_sec_raw)
+        prev_sec = 10.0 if prev_sec_raw is None else float(prev_sec_raw)
+        if prompt_sec <= 0:
+            raise ValueError(f"chunk.cond_prompt_sec must be > 0, got {prompt_sec}")
+        if prev_sec < 0:
+            raise ValueError(f"chunk.cond_prev_sec must be >= 0, got {prev_sec}")
+        sptok = SpecialTokensCond(prompt_sec=prompt_sec, prev_sec=prev_sec)
+    else:
+        sptok = None
     set_keys = [k for k, v in chunk_cfg.items() if v is not None]
     if len(set_keys) != 1:
         raise ValueError(
@@ -598,7 +685,7 @@ def _validated_chunk_cfg(
     policy = {k: chunk_cfg[k] for k in set_keys}
     if cover and "target_sec" not in policy:
         raise ValueError("chunk.cover_all_speakers requires the target_sec policy")
-    return policy, cross_fade_sec, cond, comp, cover
+    return policy, cross_fade_sec, cond, comp, sptok, cover
 
 
 def run_chunked_inference(
@@ -620,8 +707,8 @@ def run_chunked_inference(
     mode = cfg.get("mode")
     if mode != MODE:
         raise ValueError(f"expected mode {MODE!r}, got {mode!r}")
-    chunk_cfg, cross_fade_sec, cond, comp, cover_all_speakers = _validated_chunk_cfg(
-        cfg
+    chunk_cfg, cross_fade_sec, cond, comp, sptok, cover_all_speakers = (
+        _validated_chunk_cfg(cfg)
     )
     prompt_fill = str(cfg.get("prompt_fill", "zeros") or "zeros")
     if prompt_fill not in PROMPT_FILLS:
