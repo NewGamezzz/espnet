@@ -6,6 +6,8 @@ from .conftest import FakeTurn
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
     NEW_TOKENS,
+    SPEAKER_PROMPT_TOKEN,
+    TURN_FILL_TOKEN,
     build_branch_texts,
     encode_tokens,
     extend_vocab,
@@ -20,6 +22,14 @@ def write_vocab(tmp_path, tokens):
     path = tmp_path / "vocab.txt"
     path.write_text("\n".join(tokens) + "\n", encoding="utf-8")
     return path
+
+
+@pytest.fixture
+def preproc(tmp_path, base_vocab):
+    """Preprocessor built against the shared small extended vocab (base_vocab
+    + NEW_TOKENS, which includes <turn_fill>)."""
+    vocab = write_vocab(tmp_path, extend_vocab(base_vocab))
+    return ConversationalTextPreprocessor(token_list=vocab)
 
 
 def sample_of(turns, num_channels):
@@ -120,3 +130,48 @@ def test_infill_has_no_prefix(tmp_path, turns_3spk, base_vocab):
     pre = ConversationalTextPreprocessor(token_list=vocab)
     out = pre("uid", sample_of(turns_3spk, 3))
     assert out["text"][0][0].item() == pre.token2id["<turn>"]
+
+
+class TestTimestampPreprocessor:
+    """Mode T (Task 6): timestamp-aligned target text, prefix composition
+    unchanged. Turns are the ``FakeTurn`` fixture used throughout this
+    suite (duck-typed stand-in for sssd.Turn)."""
+
+    def _data(self, turns, extra=None):
+        d = {"turns": turns, "num_channels": 2}
+        d.update(extra or {})
+        return d
+
+    def test_mode_t_text_length_equals_target_frames(self, preproc):
+        turns = [FakeTurn(channel=0, speaker="a", text="hi", start=10.5, end=11.5)]
+        data = self._data(
+            turns, {"timestamp_text": True, "target_t0": 10.0, "target_frames": 187}
+        )
+        out = preproc("uid", data)
+        assert all(t.shape[0] == 187 for t in out["text"])
+
+    def test_mode_t_composes_with_chunk_prefix(self, preproc):
+        turns = [FakeTurn(channel=0, speaker="a", text="hi", start=10.5, end=11.5)]
+        data = self._data(
+            turns,
+            {
+                "timestamp_text": True,
+                "target_t0": 10.0,
+                "target_frames": 187,
+                "prompt_frames": 40,
+                "prev_frames": 10,
+                "cond_frames": 50,
+            },
+        )
+        out = preproc("uid", data)
+        sp_id = preproc.token2id[SPEAKER_PROMPT_TOKEN]
+        fill_id = preproc.token2id[TURN_FILL_TOKEN]
+        for t in out["text"]:
+            assert t.shape[0] == 50 + 187
+            assert t[0].item() == sp_id
+        assert (out["text"][0] == fill_id).sum().item() > 0
+
+    def test_mode_o_unchanged(self, preproc):
+        turns = [FakeTurn(channel=0, speaker="a", text="hi", start=10.5, end=11.5)]
+        out = preproc("uid", self._data(turns))
+        assert out["text"][0].shape[0] == 3  # <turn> + "h" + "i"
