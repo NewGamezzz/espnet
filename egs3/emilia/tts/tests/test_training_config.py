@@ -11,6 +11,11 @@ CONF = Path(__file__).resolve().parents[1] / "conf" / "training_f5_tts_base.yaml
 SMOKE_CONF = (
     Path(__file__).resolve().parents[1] / "conf" / "training_f5_tts_base_smoke.yaml"
 )
+SMOKE_2GPU_CONF = (
+    Path(__file__).resolve().parents[1]
+    / "conf"
+    / "training_f5_tts_base_smoke_2gpu.yaml"
+)
 
 
 @pytest.fixture
@@ -341,3 +346,100 @@ def test_base_and_smoke_logger_targets_both_resolve():
     assert smoke_logger == "lightning.pytorch.loggers.CSVLogger"
     resolve_dotted_path(base_logger)
     resolve_dotted_path(smoke_logger)
+
+
+def test_smoke_2gpu_config_changes_only_device_count_and_paths(monkeypatch):
+    """The 2-GPU smoke must keep every per-rank knob at production values.
+
+    Its whole purpose is to answer "does Base fit on a V100-32" and "how many
+    updates per hour" on 2 GPUs instead of 8. Both answers only transfer if
+    the per-rank work is identical to production: same batch_bins, same
+    min_batch_size on both loaders, and above all the same
+    accumulate_grad_batches, since time per optimizer update is
+    accum micro-steps plus the allreduce. Bumping accum to 16 to restore the
+    307,200-frame global batch would quadruple micro-steps per update and
+    silently destroy the throughput comparison, so this test forbids it.
+
+    Consequence, asserted explicitly below: the 2-GPU config's global batch
+    is 76,800 frames, NOT 307,200. That makes it an instrument and not a
+    training config, which is exactly the intent.
+
+    recipe_dir and vocab_file read from the environment so the file stays
+    free of machine-specific paths; with the variables unset they default to
+    "." and resolve exactly as the 8-GPU smoke does, which is what lets this
+    test diff the two.
+    """
+    monkeypatch.delenv("EMILIA_SMOKE_ROOT", raising=False)
+    monkeypatch.delenv("EMILIA_RECIPE_ROOT", raising=False)
+
+    smoke = _flatten(OmegaConf.to_container(OmegaConf.load(SMOKE_CONF), resolve=True))
+    two = _flatten(
+        OmegaConf.to_container(OmegaConf.load(SMOKE_2GPU_CONF), resolve=True)
+    )
+
+    assert set(smoke) == set(two), "2-GPU smoke adds/drops keys vs. the 8-GPU smoke"
+
+    differing = {k for k in smoke if smoke[k] != two[k]}
+    # Only two keys are changed by hand: num_device and exp_tag. Everything
+    # else listed here is a DERIVED consequence via interpolation --
+    # trainer.devices is ${num_device}; exp_dir/inference_dir and the logger's
+    # name/id/save_dir/version all hang off ${exp_tag} or ${exp_dir}. Listing
+    # them explicitly is what keeps this assertion tight: a genuine divergence
+    # (batch_bins, accum, a sampler knob) still fails.
+    expected = {
+        "num_device",
+        "trainer.devices",
+        "exp_tag",
+        "exp_dir",
+        "inference_dir",
+        "trainer.logger.name",
+        "trainer.logger.id",
+        "trainer.logger.save_dir",
+        "trainer.logger.version",
+    }
+    assert differing <= expected, (
+        f"2-GPU smoke diverges from the 8-GPU smoke in unexpected keys: "
+        f"{sorted(differing - expected)}"
+    )
+    assert two["num_device"] == 2
+
+    # The per-rank knobs that make the measurement transferable.
+    for key in (
+        "trainer.accumulate_grad_batches",
+        "dataloader.train.iter_factory.batches.batch_bins",
+        "dataloader.train.iter_factory.batches.min_batch_size",
+        "dataloader.valid.iter_factory.batches.min_batch_size",
+        "dataloader.train.iter_factory.batches.max_samples",
+    ):
+        assert two[key] == smoke[key], f"{key} must stay at the production value"
+
+    # Instrument, not a training run: a quarter of the production global batch.
+    bins = two["dataloader.train.iter_factory.batches.batch_bins"]
+    accum = two["trainer.accumulate_grad_batches"]
+    n_mels = two["n_mel_channels"]
+    assert bins * accum * two["num_device"] / n_mels == 76800
+
+
+def test_min_batch_size_is_one_on_both_loaders():
+    """min_batch_size is a memory floor, not a topology knob.
+
+    NumElementsArraySampler closes a batch on
+    `current_count * current_length * n_mels > batch_bins` AND
+    `current_count >= min_batch_size`, so any floor above 1 lets a batch of
+    `floor` long utterances cost floor * L_max frames regardless of
+    batch_bins. Emilia's 30s cap puts L_max at 2813 frames; at min_batch_size
+    8 that peaked at 25,317 padded frames against a 4,800 nominal budget and
+    OOM'd a V100-32 (job 43582509).
+
+    Valid is asserted too, and deliberately: it shares train's batch_bins, so
+    a floor left behind there reintroduces the identical batch. The first
+    smoke survived that only because validation does not shuffle and
+    limit_val_batches stopped before the long tail -- luck that evaporates
+    the moment limit_val_batches is raised.
+    """
+    for conf_path in (CONF, SMOKE_CONF, SMOKE_2GPU_CONF):
+        cfg = OmegaConf.load(conf_path)
+        train = cfg.dataloader.train.iter_factory.batches
+        valid = cfg.dataloader.valid.iter_factory.batches
+        assert train.min_batch_size == 1, f"{conf_path.name}: train floor"
+        assert valid.min_batch_size == 1, f"{conf_path.name}: valid floor"
