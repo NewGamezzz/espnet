@@ -6,7 +6,8 @@ through the production assembly path:
 
 * vocab provenance and the appended-token id layout,
 * the surgery loader (every backbone tensor bit-exact, embedding rows
-  bit-exact, exactly two warm-started rows, gates zero after injection),
+  bit-exact, warm-started rows for the new tokens, gates zero after
+  injection),
 * single-channel ODE parity: with zero gates and ``counts=[1]`` the assembled
   multi-branch model must reproduce the baseline ``espnet2`` ``CFM`` output
   on identical inputs and seed (this simultaneously validates checkpoint
@@ -156,7 +157,7 @@ def test_vocab_provenance_accepts_real_vocab_and_rejects_mismatch(assets):
 def test_new_tokens_appended_after_real_vocab(assets):
     base_size = len(assets["base"])
     token2id = make_token2id(assets["ext"])
-    assert assets["ext"][-2:] == list(NEW_TOKENS)
+    assert assets["ext"][-len(NEW_TOKENS) :] == list(NEW_TOKENS)
     assert token2id[TURN_TOKEN] == base_size
     assert token2id[OTHER_TOKEN] == base_size + 1
     # The Emilia vocab carries a literal space token; the surgery warm-starts

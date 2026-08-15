@@ -6,12 +6,14 @@
 1. Build the DiT/CFM with the F5TTS_Base architecture values and
    ``text_num_embeds`` = size of the EXTENDED vocab from step 2.
 2. Load the pretrained F5TTS_Base checkpoint.  The text-embedding weight
-   mismatches in shape by exactly the two appended tokens; every original
-   row is copied bit-exactly and the two new rows are warm-started
-   (``<turn>`` from the space character's row, ``<OTHER>`` from the filler
-   row 0 - F5's internal padding token, the closest pretrained concept to
-   "no text for me here" - each plus small Gaussian noise).  Everything
-   else must load exactly (strict load, zero missing/unexpected keys),
+   mismatches in shape by exactly the appended tokens - two for a legacy
+   checkpoint's vocab, four for the special-token conditioning generation
+   (see ``_vocab_generation``); every original row is copied bit-exactly
+   and the new rows are warm-started (``<turn>`` from the space character's
+   row, the rest from the filler row 0 - F5's internal padding token, the
+   closest pretrained concept to "no text for me here" - each plus small
+   Gaussian noise).  Everything else must load exactly (strict load, zero
+   missing/unexpected keys),
    except the checkpoint's ``mel_spec.mel_stft.*`` DSP buffers, which the
    ported functional MelSpec does not register and which are dropped after
    verification-by-test (see ``load_pretrained_with_surgery``).
@@ -31,12 +33,16 @@ from __future__ import annotations
 import hashlib
 import json
 from pathlib import Path
+from typing import Sequence
 
 import torch
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
+    LEGACY_NEW_TOKENS,
     NEW_TOKENS,
     OTHER_TOKEN,
+    PREV_CHUNK_TOKEN,
+    SPEAKER_PROMPT_TOKEN,
     TURN_TOKEN,
     make_token2id,
 )
@@ -72,6 +78,26 @@ def _as_dict(config) -> dict:
     return dict(config)
 
 
+def _vocab_generation(tokens: Sequence[str]) -> tuple[str, ...]:
+    """The trailing special-token block of an extended vocab.
+
+    Two generations exist: the legacy two-token vocab (<turn>/<OTHER>,
+    every checkpoint before the special-token conditioning run) and the
+    four-token vocab that appends <speaker_prompt>/<prev_chunk>.  The eval
+    recipe must load BOTH - old checkpoints stay comparable while the new
+    run is evaluated - so the tail gate accepts either and reports which
+    one matched instead of hard-coding a length.
+    """
+    if list(tokens[-len(NEW_TOKENS) :]) == list(NEW_TOKENS):
+        return NEW_TOKENS
+    if list(tokens[-len(LEGACY_NEW_TOKENS) :]) == list(LEGACY_NEW_TOKENS):
+        return LEGACY_NEW_TOKENS
+    raise ValueError(
+        f"vocab must end with {NEW_TOKENS} or {LEGACY_NEW_TOKENS}, "
+        f"got {tokens[-len(NEW_TOKENS):]!r}"
+    )
+
+
 def extended_text_embedding(
     pretrained_weight: torch.Tensor,
     tokens: list[str],
@@ -82,15 +108,12 @@ def extended_text_embedding(
 
     ``pretrained_weight`` is the F5TTS_Base ``text_embed`` matrix of shape
     ``(base_size + 1, text_dim)`` (row 0 is the filler token; token id i
-    lives in row i+1).  ``tokens`` is the extended vocab whose last two
-    entries must be ``NEW_TOKENS`` (step 2 appends them at the end, so all
-    original ids - and therefore rows - are unchanged).
+    lives in row i+1).  ``tokens`` is the extended vocab whose last two or
+    four entries must be ``NEW_TOKENS`` (step 2 appends them at the end, so
+    all original ids - and therefore rows - are unchanged).
     """
-    if list(tokens[-2:]) != list(NEW_TOKENS):
-        raise ValueError(
-            f"extended vocab must end with {NEW_TOKENS}, got {tokens[-2:]!r}"
-        )
-    base_size = len(tokens) - len(NEW_TOKENS)
+    new_tokens = _vocab_generation(tokens)
+    base_size = len(tokens) - len(new_tokens)
     if pretrained_weight.shape[0] != base_size + 1:
         raise ValueError(
             f"pretrained embedding has {pretrained_weight.shape[0]} rows, "
@@ -99,8 +122,6 @@ def extended_text_embedding(
         )
     token2id = make_token2id(list(tokens))
     space_row = token2id[" "] + 1
-    turn_row = token2id[TURN_TOKEN] + 1  # == base_size + 1
-    other_row = token2id[OTHER_TOKEN] + 1  # == base_size + 2
 
     def _noise() -> torch.Tensor:
         return noise_scale * torch.randn(
@@ -113,8 +134,15 @@ def extended_text_embedding(
         (len(tokens) + 1, pretrained_weight.shape[1])
     )
     new_weight[: base_size + 1] = pretrained_weight
-    new_weight[turn_row] = pretrained_weight[space_row] + _noise()
-    new_weight[other_row] = pretrained_weight[0] + _noise()
+    new_weight[token2id[TURN_TOKEN] + 1] = pretrained_weight[space_row] + _noise()
+    new_weight[token2id[OTHER_TOKEN] + 1] = pretrained_weight[0] + _noise()
+    if len(new_tokens) == 4:
+        # Audio-only conditioning spans warm-start from the filler row,
+        # F5's learned "audio beyond text" representation (design 2026-08-14).
+        new_weight[token2id[SPEAKER_PROMPT_TOKEN] + 1] = (
+            pretrained_weight[0] + _noise()
+        )
+        new_weight[token2id[PREV_CHUNK_TOKEN] + 1] = pretrained_weight[0] + _noise()
     return new_weight
 
 
@@ -244,11 +272,7 @@ def build_multibranch_f5(
     feats_config = _as_dict(feats_extract)
 
     tokens = read_vocab(vocab_file)
-    if list(tokens[-2:]) != list(NEW_TOKENS):
-        raise ValueError(
-            f"{vocab_file} must be the step-2 extended vocab ending with "
-            f"{NEW_TOKENS}, got {tokens[-2:]!r}"
-        )
+    _vocab_generation(tokens)
 
     if pretrained_ckpt is not None:
         if vocab_meta is None or pretrained_vocab is None:

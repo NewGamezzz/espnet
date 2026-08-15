@@ -16,19 +16,27 @@ import torch
 from omegaconf import OmegaConf
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
+    NEW_TOKENS,
     OTHER_TOKEN,
+    PREV_CHUNK_TOKEN,
+    SPEAKER_PROMPT_TOKEN,
     TURN_TOKEN,
     build_branch_texts,
+    make_token2id,
 )
 from egs3.conversational.tts.src.chunked_inference import (
     MODE as CHUNKED_MODE,
+    SPECIAL_TOKENS_PROMPT_FLOOR_SEC,
     CondComposition,
+    SpecialTokensCond,
     _validated_chunk_cfg,
     call_turns,
     crossfade_concat,
     estimate_turn_secs,
+    min_truncated_prompt_frames,
     run_chunked_inference,
     split_turns,
+    tail_frames,
 )
 from egs3.conversational.tts.src.external_inference import (
     _prompt_turns,
@@ -349,11 +357,11 @@ def _chunk_only_cfg(chunk):
 
 class TestCondCompositionConfig:
     def test_defaults_are_previous_chunk_only(self):
-        _, _, _, comp, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
+        _, _, _, comp, _, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
         assert comp == CondComposition(include_prompt=False, history_chunks=1)
 
     def test_explicit_values_are_parsed(self):
-        _, _, _, comp, _ = _validated_chunk_cfg(
+        _, _, _, comp, _, _ = _validated_chunk_cfg(
             _chunk_only_cfg(
                 {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": 0}
             )
@@ -361,7 +369,7 @@ class TestCondCompositionConfig:
         assert comp == CondComposition(include_prompt=True, history_chunks=0)
 
     def test_all_history_is_minus_one(self):
-        _, _, _, comp, _ = _validated_chunk_cfg(
+        _, _, _, comp, _, _ = _validated_chunk_cfg(
             _chunk_only_cfg(
                 {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": -1}
             )
@@ -379,6 +387,108 @@ class TestCondCompositionConfig:
             _validated_chunk_cfg(
                 _chunk_only_cfg({"turns": 2, "cond_history_chunks": -2})
             )
+
+
+class TestSpecialTokensConfig:
+    def test_absent_cond_format_is_transcripts_mode(self):
+        _, _, _, _, sptok, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
+        assert sptok is None
+
+    def test_special_tokens_defaults(self):
+        _, _, _, _, sptok, _ = _validated_chunk_cfg(
+            _chunk_only_cfg({"target_sec": 25, "cond_format": "special_tokens"})
+        )
+        assert sptok == SpecialTokensCond(prompt_sec=8.0, prev_sec=10.0)
+
+    def test_knobs_are_parsed_and_zero_prev_is_reanchor(self):
+        _, _, _, _, sptok, _ = _validated_chunk_cfg(
+            _chunk_only_cfg(
+                {
+                    "target_sec": 25,
+                    "cond_format": "special_tokens",
+                    "cond_prompt_sec": 4.0,
+                    "cond_prev_sec": 0.0,
+                }
+            )
+        )
+        assert sptok == SpecialTokensCond(prompt_sec=4.0, prev_sec=0.0)
+
+    def test_knobs_require_special_tokens_mode(self):
+        with pytest.raises(ValueError, match="cond_prompt_sec"):
+            _validated_chunk_cfg(_chunk_only_cfg({"turns": 2, "cond_prompt_sec": 4.0}))
+        with pytest.raises(ValueError, match="cond_prev_sec"):
+            _validated_chunk_cfg(_chunk_only_cfg({"turns": 2, "cond_prev_sec": 4.0}))
+
+    def test_transcript_composition_knobs_rejected_in_special_mode(self):
+        with pytest.raises(ValueError, match="cond_include_prompt"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg(
+                    {
+                        "turns": 2,
+                        "cond_format": "special_tokens",
+                        "cond_include_prompt": True,
+                    }
+                )
+            )
+        with pytest.raises(ValueError, match="cond_history_chunks"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg(
+                    {
+                        "turns": 2,
+                        "cond_format": "special_tokens",
+                        "cond_history_chunks": 2,
+                    }
+                )
+            )
+
+    def test_bad_values_rejected(self):
+        with pytest.raises(ValueError, match="cond_format"):
+            _validated_chunk_cfg(_chunk_only_cfg({"turns": 2, "cond_format": "sp"}))
+        with pytest.raises(ValueError, match="cond_prompt_sec"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg(
+                    {
+                        "turns": 2,
+                        "cond_format": "special_tokens",
+                        "cond_prompt_sec": 0.0,
+                    }
+                )
+            )
+        with pytest.raises(ValueError, match="cond_prev_sec"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg(
+                    {"turns": 2, "cond_format": "special_tokens", "cond_prev_sec": -1.0}
+                )
+            )
+
+
+class TestFrameHelpers:
+    FS, HOP = 24000, 256
+
+    def test_min_truncation_uses_shortest_prompt(self):
+        # 4.0 s and 6.0 s prompts, cap 8.0 -> 4.0 s -> 96000 // 256 = 375.
+        assert (
+            min_truncated_prompt_frames(
+                [4 * self.FS, 6 * self.FS], 8.0, self.FS, self.HOP
+            )
+            == 375
+        )
+
+    def test_cap_binds_when_prompts_are_long(self):
+        # cap 3.0 s -> 72000 // 256 = 281 (floor of 281.25).
+        assert (
+            min_truncated_prompt_frames(
+                [4 * self.FS, 6 * self.FS], 3.0, self.FS, self.HOP
+            )
+            == 281
+        )
+
+    def test_tail_frames_floor_and_clamp(self):
+        # 5.0 s tail of ample audio -> 120000 // 256 = 468 (floor of 468.75).
+        assert tail_frames(30 * self.FS, 5.0, self.FS, self.HOP) == 468
+        # less generated audio than prev_sec -> whole tail, floored to hops.
+        assert tail_frames(10000, 5.0, self.FS, self.HOP) == 10000 // self.HOP
+        assert tail_frames(30 * self.FS, 0.0, self.FS, self.HOP) == 0
 
 
 def _chunked_config(testset, inference_dir, chunk, **overrides):
@@ -1530,3 +1640,322 @@ def test_system_dispatch_literal_matches_mode():
     from egs3.conversational.tts.src.system import CHUNKED_MODE as SYSTEM_LITERAL
 
     assert SYSTEM_LITERAL == CHUNKED_MODE
+
+
+# --------------------------------------------------------------------------- #
+# special_tokens conditioning round loop
+# --------------------------------------------------------------------------- #
+def _sptok_chunk(**over):
+    chunk = {"turns": 2, "cond_format": "special_tokens", "cond_prev_sec": 1.0}
+    chunk.update(over)
+    return chunk
+
+
+class TestSpecialTokensInfer:
+    def _run(self, testset, tiny_model, inference_dir, chunk, **overrides):
+        cfg = _chunked_config(testset, inference_dir, chunk, **overrides)
+        stats = run_chunked_inference(
+            cfg,
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+        )
+        return inference_dir / "valid", stats, cfg
+
+    def test_meta_records_mode_and_conditioning_frames(
+        self, testset, tiny_model, tmp_path
+    ):
+        out, stats, _ = self._run(testset, tiny_model, tmp_path / "o", _sptok_chunk())
+        metas = [json.loads(p.read_text()) for p in sorted((out / "meta").glob("*"))]
+        assert metas
+        for meta in metas:
+            ck = meta["chunking"]
+            assert ck["cond_format"] == "special_tokens"
+            assert ck["cond_prompt_sec"] == 8.0 and ck["cond_prev_sec"] == 1.0
+            chunks = ck["chunks"]
+            assert chunks[0]["prev_frames"] == 0
+            # Conditioning prompt: shortest reference prompt (min-truncated),
+            # capped at 8 s, floored to whole hops - recomputed longhand from
+            # the prompt files themselves.
+            record_prompts = meta["prompt"]["turns"]
+            shortest = min(p["duration_sec"] for p in record_prompts)
+            expect_p = int(min(shortest, 8.0) * FS) // HOP
+            assert all(c["prompt_frames"] == expect_p for c in chunks)
+            assert meta["prompt"]["total_frames"] == expect_p
+            # Rounds after the first: 1.0 s tail = 93 frames (93.75 floored),
+            # unless less audio was generated (not the case at turns: 2).
+            for c in chunks[1:]:
+                assert c["prev_frames"] == int(1.0 * FS) // HOP == 93
+
+    def test_prompt_below_trained_floor_flag_and_warning(
+        self, tmp_path, caplog
+    ):
+        # A dedicated testset with one dialogue whose shortest reference
+        # prompt is below the 3 s trained own-speech floor ("shortp", min
+        # 2.0 s) and one at/above it ("longp", min 3.5 s) - the default
+        # `testset` fixture's prompts are all < 3 s, so it cannot exercise
+        # the "absent when P >= floor" side of this contract.
+        dialogues = {
+            "shortp": (
+                ["abc def", "bead cab", "chad face"],
+                [
+                    ("test-clean/1/1/a.flac", "abc", 2.0),
+                    ("test-clean/2/2/b.flac", "de", 2.5),
+                ],
+            ),
+            "longp": (
+                ["gaff bead", "haji dead"],
+                [
+                    ("test-clean/3/3/c.flac", "chad", 3.5),
+                    ("test-clean/4/4/d.flac", "fig", 4.0),
+                ],
+            ),
+        }
+        ts = _write_testset(tmp_path, dialogues=dialogues)
+        model = build_tiny(ts["vocab"])
+        cfg = _chunked_config(ts, tmp_path / "o", _sptok_chunk())
+        with caplog.at_level("WARNING"):
+            run_chunked_inference(
+                cfg,
+                training_config=ts["training_config"],
+                model=model,
+                vocoder=FakeVocoder(),
+            )
+        metas = {
+            p.stem: json.loads(p.read_text())
+            for p in sorted((tmp_path / "o" / "valid" / "meta").glob("*"))
+        }
+        assert set(metas) == {"shortp", "longp"}
+        assert metas["shortp"]["chunking"]["prompt_below_trained_floor"] is True
+        assert "prompt_below_trained_floor" not in metas["longp"]["chunking"]
+
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING" and "shortp" in r.getMessage()
+        ]
+        assert warnings, caplog.text
+        assert f"{SPECIAL_TOKENS_PROMPT_FLOOR_SEC:.1f}s" in warnings[0].getMessage()
+        assert not any("longp" in r.getMessage() for r in caplog.records)
+
+    def test_prompt_files_on_disk_are_full_length(
+        self, testset, tiny_model, tmp_path
+    ):
+        out, _, _ = self._run(testset, tiny_model, tmp_path / "o", _sptok_chunk())
+        metas = [json.loads(p.read_text()) for p in sorted((out / "meta").glob("*"))]
+        for meta in metas:
+            for p, entry in zip(meta["prompt"]["turns"], meta["channels"]):
+                wav, _ = _read_wav(out / entry["prompt_wav"])
+                assert abs(wav.shape[0] / FS - p["duration_sec"]) < 0.05
+
+    def test_zero_prev_sec_is_reanchor_no_history_frames(
+        self, testset, tiny_model, tmp_path
+    ):
+        out, _, _ = self._run(
+            testset, tiny_model, tmp_path / "o", _sptok_chunk(cond_prev_sec=0.0)
+        )
+        metas = [json.loads(p.read_text()) for p in sorted((out / "meta").glob("*"))]
+        for meta in metas:
+            assert all(
+                c["prev_frames"] == 0 for c in meta["chunking"]["chunks"]
+            )
+
+    def test_wav_is_concat_of_chunk_regions(self, testset, tiny_model, tmp_path):
+        out, _, _ = self._run(testset, tiny_model, tmp_path / "o", _sptok_chunk())
+        metas = [json.loads(p.read_text()) for p in sorted((out / "meta").glob("*"))]
+        for meta in metas:
+            total = sum(c["gen_frames"] for c in meta["chunking"]["chunks"]) * HOP
+            wav, _ = _read_wav(out / meta["channels"][0]["gen_wav"])
+            assert wav.shape[0] == total
+
+    def test_special_mode_differs_from_transcripts_mode(
+        self, testset, tiny_model, tmp_path
+    ):
+        out_a, _, _ = self._run(testset, tiny_model, tmp_path / "a", {"turns": 2})
+        out_b, _, _ = self._run(testset, tiny_model, tmp_path / "b", _sptok_chunk())
+        name = sorted((out_a / "wav").glob("*"))[0].name
+        wa, _ = _read_wav(out_a / "wav" / name)
+        wb, _ = _read_wav(out_b / "wav" / name)
+        assert wa.shape != wb.shape or not (wa == wb).all()
+
+    def test_round1_conditioning_is_p_plus_tail_of_h(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        # The meta-only assertions above pin frame COUNTS; this pins the
+        # actual GenerationItem.speech content: P is byte-identical between
+        # rounds (fixed window, never re-derived), and H is the TAIL - not
+        # the head - of round 0's generated audio.
+        import egs3.conversational.tts.src.chunked_inference as ci
+
+        captured = []
+        real = ci.generate_batch
+
+        def spy(model, vocoder, items, **kwargs):
+            out = real(model, vocoder, items, **kwargs)
+            captured.append((items, out))
+            return out
+
+        monkeypatch.setattr(ci, "generate_batch", spy)
+        self._run(testset, tiny_model, tmp_path / "infer", _sptok_chunk())
+
+        # No batching block -> `plan_batches` returns `[[i] for i in
+        # indices]` verbatim (its documented no-batching path), so call
+        # order is exactly the (shard-local) dialogue order: "000" (3
+        # turns, 2 chunks) then "001" (2 turns, 1 chunk) at round 0, then
+        # "000" again at round 1 - "001" never gets a second chunk at
+        # turns=2.  (The fabricated prompts are all the same fixed-frequency
+        # sine per `_write_flac`, so content alone cannot disambiguate
+        # dialogues here - order is the only reliable handle.)
+        assert len(captured) == 3
+        item0, wav0 = captured[0][0][0], captured[0][1][0][0]
+        item1 = captured[2][0][0]
+
+        p_total = item1.prompt_frames  # p_frames + prev_frames, the TOTAL
+        p_frames = item0.prompt_frames  # round 0's P is prev_frames=0, so
+        # its own prompt_frames IS p_frames.
+        prev_frames = p_total - p_frames
+        assert prev_frames > 0
+
+        # P is byte-identical between round 0 and round 1 (fixed window,
+        # never re-derived from generated audio).
+        assert torch.equal(
+            item0.speech[:, : p_frames * HOP].cpu(),
+            item1.speech[:, : p_frames * HOP].cpu(),
+        )
+        # H is the TAIL of round 0's generated audio (not the head).
+        tail = wav0[:, wav0.shape[1] - prev_frames * HOP :].cpu()
+        h_span = item1.speech[:, p_frames * HOP : p_total * HOP].cpu()
+        assert torch.equal(h_span, tail)
+
+        # The generated region past the conditioning span is still zeros.
+        gen_region = item1.speech[:, p_total * HOP :]
+        assert torch.equal(gen_region, torch.zeros_like(gen_region))
+
+    def test_hygiene_engages_on_h_only_not_round0(
+        self, testset, tiny_model, tmp_path
+    ):
+        # H (round >= 1's generated-audio tail) goes through the hygiene
+        # knobs; P (round 0's parallel real-prompt span) is exempt exactly
+        # like the transcripts format's prompt segment - this exercises the
+        # special-mode anchor construction from full prompt wavs, which the
+        # meta-only frame-count tests above never touch.
+        out, _, _ = self._run(
+            testset,
+            tiny_model,
+            tmp_path / "o",
+            _sptok_chunk(cond_loudness_norm=True),
+        )
+        metas = [json.loads(p.read_text()) for p in sorted((out / "meta").glob("*"))]
+        assert metas
+        n_round_ge1 = 0
+        for meta in metas:
+            n = meta["num_channels"]
+            for c in meta["chunking"]["chunks"]:
+                if c["round"] == 0:
+                    assert "conditioning" not in c
+                else:
+                    assert len(c["conditioning"]["gains"]) == n
+                    n_round_ge1 += 1
+        assert n_round_ge1 > 0
+
+    def test_round1_text_prefix_is_speaker_prompt_then_prev_chunk(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        # Pins that the preprocessor receives P-only prompt_frames (not the
+        # P+H total): the first p_frames entries of every branch's text row
+        # must be <speaker_prompt>, the next prev_frames must be
+        # <prev_chunk> - same spy/capture pattern as
+        # test_round1_conditioning_is_p_plus_tail_of_h above.
+        import egs3.conversational.tts.src.chunked_inference as ci
+
+        captured = []
+        real = ci.generate_batch
+
+        def spy(model, vocoder, items, **kwargs):
+            out = real(model, vocoder, items, **kwargs)
+            captured.append((items, out))
+            return out
+
+        monkeypatch.setattr(ci, "generate_batch", spy)
+        self._run(testset, tiny_model, tmp_path / "infer", _sptok_chunk())
+
+        assert len(captured) == 3
+        item0 = captured[0][0][0]
+        item1 = captured[2][0][0]
+
+        p_total = item1.prompt_frames  # p_frames + prev_frames, the TOTAL
+        p_frames = item0.prompt_frames  # round 0's P is prev_frames=0, so
+        # its own prompt_frames IS p_frames.
+        prev_frames = p_total - p_frames
+        assert prev_frames > 0
+
+        token2id = make_token2id(
+            Path(testset["vocab"]).read_text(encoding="utf-8").splitlines()
+        )
+        sp_id = token2id[SPEAKER_PROMPT_TOKEN]
+        pc_id = token2id[PREV_CHUNK_TOKEN]
+
+        text = item1.text.cpu()
+        for branch in range(text.shape[0]):
+            row = text[branch]
+            assert torch.equal(
+                row[:p_frames], torch.full((p_frames,), sp_id, dtype=row.dtype)
+            )
+            assert torch.equal(
+                row[p_frames : p_frames + prev_frames],
+                torch.full((prev_frames,), pc_id, dtype=row.dtype),
+            )
+
+    def test_special_tokens_rejects_legacy_vocab(
+        self, testset, tiny_model, tmp_path
+    ):
+        # A 2-token vocab file next to the testset's real one.
+        legacy = tmp_path / "legacy_vocab.txt"
+        tokens = Path(testset["vocab"]).read_text().splitlines()
+        assert tokens[-4:] == list(NEW_TOKENS)
+        legacy.write_text("\n".join(tokens[:-4] + tokens[-4:-2]) + "\n")
+        cfg = _chunked_config(testset, tmp_path / "o", _sptok_chunk())
+        tc = OmegaConf.create(
+            OmegaConf.to_container(testset["training_config"], resolve=True)
+        )
+        tc.dataset.preprocessor.token_list = str(legacy)
+        with pytest.raises(ValueError, match="special_tokens needs a vocab"):
+            run_chunked_inference(
+                cfg, training_config=tc, model=tiny_model, vocoder=FakeVocoder()
+            )
+
+    def test_special_tokens_rejects_room_tone_prompt_fill(
+        self, testset, tiny_model, tmp_path
+    ):
+        cfg = _chunked_config(
+            testset, tmp_path / "o", _sptok_chunk(), prompt_fill="room_tone"
+        )
+        with pytest.raises(ValueError, match="prompt_fill has no effect"):
+            run_chunked_inference(
+                cfg,
+                training_config=testset["training_config"],
+                model=tiny_model,
+                vocoder=FakeVocoder(),
+            )
+
+    def test_explicit_transcripts_mode_is_bit_identical_to_default(
+        self, testset, tiny_model, tmp_path
+    ):
+        out_a, _, _ = self._run(testset, tiny_model, tmp_path / "a", {"turns": 2})
+        out_b, _, _ = self._run(
+            testset, tiny_model, tmp_path / "b",
+            {"turns": 2, "cond_format": "transcripts"},
+        )
+        names = sorted(p.name for p in (out_a / "wav").glob("*"))
+        assert names
+        for name in names:
+            # Byte-identical, not merely close: an explicit
+            # `cond_format: transcripts` must take the exact same code path
+            # as omitting the key (rtol=0.0, atol=0.0 - house precedent in
+            # test_preprocessing_parity.py).
+            torch.testing.assert_close(
+                _read_wav(out_a / "wav" / name),
+                _read_wav(out_b / "wav" / name),
+                rtol=0.0,
+                atol=0.0,
+            )

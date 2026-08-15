@@ -67,7 +67,61 @@ The same OOD-silence problem exists at round 0: ``_prompt_blocks`` fills
 the off rows of each prompt block with digital zeros.  The top-level
 ``prompt_fill`` config key (``zeros``, the default - bit-identical - or
 ``room_tone``) selects the fill there; it is recorded in the meta under
-``prompt.fill``.
+``prompt.fill``.  ``prompt_fill`` is a ``transcripts``-format knob only:
+``special_tokens``'s parallel P span (below) has no off rows to fill, so
+any value other than the ``zeros`` default is rejected outright rather
+than silently doing nothing.
+
+``chunk.cond_format`` selects what a chunk's conditioning is wrapped in:
+``transcripts`` (the default) is everything above - plain-text turns plus the
+``cond_include_prompt`` / ``cond_history_chunks`` composition knobs.
+``special_tokens`` instead wraps the SAME conditioning audio in the
+four-token vocab from the preprocessor's per-frame prefix and switches to two
+time-based knobs in place of the composition knobs, which become illegal:
+``cond_prompt_sec`` (trained range 3-8 s, default 8.0) caps how much of the
+shared prompt every channel contributes - min-truncated across channels so
+the shortest reference never gets padded into format-OOD silence - and
+``cond_prev_sec`` (trained range 2-10 s, default 10.0) caps how much
+generated-audio tail becomes the ``<prev_chunk>`` context, with
+``cond_prev_sec: 0.0`` selecting the type-C re-anchor format (prompt only,
+no prev-chunk audio).  The chunk itself being generated is the third leg of
+the trained distribution: the training run's chunk-task windows were drawn
+with ``target_sec`` in 15-35 s, so ``chunk.target_sec`` (the SAME top-level
+knob the chunk policy above uses to size chunks) should be set inside that
+range to keep the packed CEILING under the trained window - realized chunk
+length can still fall short (a short final chunk) or exceed it (an
+oversized single turn, a ``cover_all_speakers`` hold-open) per the
+chunk-policy caveats above; ``chunk.turns`` chunking gives no such ceiling
+at all.  Training also degraded prev-context spans under ~2 s to the
+prompt-only format, while inference feeds whatever tail exists regardless of
+length; under the campaign's ``target_sec`` 15-35 s policy chunk 0 always
+exceeds the 10 s max prev window so this cannot bind, but under
+``chunk.turns`` short chunks can produce a sub-2 s ``H``.  The hygiene knobs
+above stay orthogonal to both formats.
+Checkpoint/format pairing is enforced, not assumed: ``special_tokens``
+requires the training config's vocab to contain
+``<speaker_prompt>``/``<prev_chunk>`` (checked with ``read_vocab``), so a
+legacy vocab predating special-token conditioning is rejected before any
+model use rather than silently mis-tokenizing.
+
+In ``special_tokens`` mode the round loop's conditioning is a fixed-shape
+window, not a growing chain: round 0 fixes ``P`` (the shared min-truncated
+prompt span, one real row per channel) once, and every later round k
+conditions on ``[P, H]`` where ``H`` is the ``cond_prev_sec``-capped tail of
+ALL generated audio so far - never the running chain history the
+``transcripts`` format uses.  The full ODE window handed to the model is the
+conditioning prefixed onto the chunk it generates: ``[P | target]`` at round
+0 and ``[P | H | target]`` at every round k thereafter (``cond_prev_sec: 0.0``
+collapses the round-k window back to ``[P | target]``, the re-anchor case).
+Only ``H`` passes through the hygiene knobs (``P`` is real audio and the
+norm's own anchor, so it is exempt exactly like the transcripts format's
+prompt segment).  The prompt wav written to disk stays the FULL,
+untruncated reference - only the conditioning span is capped - so
+``sim_o`` and the rest of the metric contract are unaffected.  Text for
+each round covers only that round's own chunk (no transcript ever
+describes a conditioning region); the P/H frame counts are conveyed to
+the model purely through the ``<speaker_prompt>``/``<prev_chunk>``
+prefix the preprocessor prepends.
 
 DETERMINISM CONTRACT - a documented departure from ``generate_external``:
 sharding is BY DIALOGUE (a chunk chain cannot cross shards), and each shard
@@ -93,6 +147,11 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 
 from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
+from egs3.conversational.tts.dataset.preprocessing.text import (
+    PREV_CHUNK_TOKEN,
+    SPEAKER_PROMPT_TOKEN,
+)
+from egs3.conversational.tts.dataset.preprocessor import read_vocab
 from egs3.conversational.tts.src.external_inference import (
     ACTIVE_RMS_FRAME_SEC,
     ACTIVE_RMS_THRESHOLD,
@@ -130,6 +189,10 @@ from egs3.conversational.tts.src.inference import _reference_texts, _write_scp
 logger = logging.getLogger(__name__)
 
 MODE = "generate_external_chunked"
+
+# Mirrors the training-side own-speech floor: P spans below this were
+# reverted to the infill format, so the model never saw P < 3 s.
+SPECIAL_TOKENS_PROMPT_FLOOR_SEC = 3.0
 
 
 def estimate_turn_secs(
@@ -407,6 +470,29 @@ class CondComposition:
     history_chunks: int = 1
 
 
+@dataclass(frozen=True)
+class SpecialTokensCond:
+    """``cond_format: special_tokens`` knobs (trained ranges: prompt 3-8 s,
+    prev 2-10 s; ``prev_sec = 0.0`` is the type-C re-anchor format)."""
+
+    prompt_sec: float = 8.0
+    prev_sec: float = 10.0
+
+
+def min_truncated_prompt_frames(
+    prompt_samples: Sequence[int], cap_sec: float, fs: int, hop: int
+) -> int:
+    """Shared parallel-prompt length in whole hops: the shortest reference
+    prompt min-truncates every channel (no fill - padding would be
+    format-OOD), further capped by ``cond_prompt_sec``."""
+    return min(min(prompt_samples), int(round(cap_sec * fs))) // hop
+
+
+def tail_frames(total_samples: int, prev_sec: float, fs: int, hop: int) -> int:
+    """Frames of generated-audio tail used as ``<prev_chunk>`` context."""
+    return min(total_samples, int(round(prev_sec * fs))) // hop
+
+
 def _apply_cond_hygiene(
     wav: torch.Tensor,
     *,
@@ -513,13 +599,18 @@ def _plan_dialogue(
 
 def _validated_chunk_cfg(
     cfg,
-) -> tuple[dict[str, Any], float, CondHygiene, CondComposition, bool]:
-    """Return ``(policy, cross_fade_sec, cond, comp, cover_all_speakers)`` from the
-    ``chunk`` block.
+) -> tuple[
+    dict[str, Any], float, CondHygiene, CondComposition, SpecialTokensCond | None, bool
+]:
+    """Return ``(policy, cross_fade_sec, cond, comp, sptok, cover_all_speakers)``
+    from the ``chunk`` block.
 
     The policy stays exactly one of ``turns`` / ``target_sec``;
     ``cross_fade_sec`` is an independent seam knob, ``comp`` is a
-    conditioning-composition knob, ``cover_all_speakers`` is an independent
+    conditioning-composition knob, ``sptok`` is ``None`` for the default
+    ``cond_format: transcripts`` and a :class:`SpecialTokensCond` for
+    ``cond_format: special_tokens`` (the two formats are mutually exclusive -
+    see the module docstring), ``cover_all_speakers`` is an independent
     coverage knob restricted to the ``target_sec`` policy, and the
     conditioning-hygiene knobs (``cond_silence_gate``, ``cond_gate_threshold``,
     ``cond_loudness_norm``) are independent conditioning knobs - all default off,
@@ -542,6 +633,9 @@ def _validated_chunk_cfg(
         "cond_loudness_norm",
         "cond_include_prompt",
         "cond_history_chunks",
+        "cond_format",
+        "cond_prompt_sec",
+        "cond_prev_sec",
         "cover_all_speakers",
     }
     if unknown:
@@ -576,8 +670,39 @@ def _validated_chunk_cfg(
         gate_fill=gate_fill,
         loudness_norm=norm_on,
     )
-    include_prompt = bool(chunk_cfg.pop("cond_include_prompt", False) or False)
+    cond_format_raw = chunk_cfg.pop("cond_format", None)
+    cond_format = "transcripts" if cond_format_raw is None else str(cond_format_raw)
+    if cond_format not in ("transcripts", "special_tokens"):
+        raise ValueError(
+            "chunk.cond_format must be one of ('transcripts', 'special_tokens'), "
+            f"got {cond_format!r}"
+        )
+    special_mode = cond_format == "special_tokens"
+    prompt_sec_raw = chunk_cfg.pop("cond_prompt_sec", None)
+    prev_sec_raw = chunk_cfg.pop("cond_prev_sec", None)
+    if not special_mode:
+        if prompt_sec_raw is not None:
+            raise ValueError(
+                "chunk.cond_prompt_sec requires cond_format: special_tokens"
+            )
+        if prev_sec_raw is not None:
+            raise ValueError("chunk.cond_prev_sec requires cond_format: special_tokens")
+    include_prompt_raw = chunk_cfg.pop("cond_include_prompt", None)
     history_raw = chunk_cfg.pop("cond_history_chunks", None)
+    if special_mode:
+        if include_prompt_raw is not None:
+            raise ValueError(
+                "chunk.cond_include_prompt is a transcripts-format knob, not "
+                "valid with cond_format: special_tokens (the prompt is always "
+                "included)"
+            )
+        if history_raw is not None:
+            raise ValueError(
+                "chunk.cond_history_chunks is a transcripts-format knob, not "
+                "valid with cond_format: special_tokens (history is time-based "
+                "there - see cond_prev_sec)"
+            )
+    include_prompt = bool(include_prompt_raw or False)
     history_chunks = 1 if history_raw is None else int(history_raw)
     if history_chunks < -1:
         raise ValueError(
@@ -589,6 +714,16 @@ def _validated_chunk_cfg(
             "cond_include_prompt: true"
         )
     comp = CondComposition(include_prompt=include_prompt, history_chunks=history_chunks)
+    if special_mode:
+        prompt_sec = 8.0 if prompt_sec_raw is None else float(prompt_sec_raw)
+        prev_sec = 10.0 if prev_sec_raw is None else float(prev_sec_raw)
+        if prompt_sec <= 0:
+            raise ValueError(f"chunk.cond_prompt_sec must be > 0, got {prompt_sec}")
+        if prev_sec < 0:
+            raise ValueError(f"chunk.cond_prev_sec must be >= 0, got {prev_sec}")
+        sptok = SpecialTokensCond(prompt_sec=prompt_sec, prev_sec=prev_sec)
+    else:
+        sptok = None
     set_keys = [k for k, v in chunk_cfg.items() if v is not None]
     if len(set_keys) != 1:
         raise ValueError(
@@ -598,7 +733,7 @@ def _validated_chunk_cfg(
     policy = {k: chunk_cfg[k] for k in set_keys}
     if cover and "target_sec" not in policy:
         raise ValueError("chunk.cover_all_speakers requires the target_sec policy")
-    return policy, cross_fade_sec, cond, comp, cover
+    return policy, cross_fade_sec, cond, comp, sptok, cover
 
 
 def run_chunked_inference(
@@ -620,13 +755,18 @@ def run_chunked_inference(
     mode = cfg.get("mode")
     if mode != MODE:
         raise ValueError(f"expected mode {MODE!r}, got {mode!r}")
-    chunk_cfg, cross_fade_sec, cond, comp, cover_all_speakers = _validated_chunk_cfg(
-        cfg
+    chunk_cfg, cross_fade_sec, cond, comp, sptok, cover_all_speakers = (
+        _validated_chunk_cfg(cfg)
     )
     prompt_fill = str(cfg.get("prompt_fill", "zeros") or "zeros")
     if prompt_fill not in PROMPT_FILLS:
         raise ValueError(
             f"prompt_fill must be one of {PROMPT_FILLS}, got {prompt_fill!r}"
+        )
+    if sptok is not None and prompt_fill != "zeros":
+        raise ValueError(
+            "prompt_fill has no effect under cond_format: special_tokens "
+            "(the parallel prompt span has no off rows); remove the key"
         )
 
     if training_config is None:
@@ -640,12 +780,23 @@ def run_chunked_inference(
     hop = int(training_config.hop_length)
 
     testset = cfg.testset
+    token_list = OmegaConf.to_container(training_config, resolve=True)["dataset"][
+        "preprocessor"
+    ]["token_list"]
+    if sptok is not None:
+        tokens = read_vocab(token_list)
+        missing = {SPEAKER_PROMPT_TOKEN, PREV_CHUNK_TOKEN} - set(tokens)
+        if missing:
+            raise ValueError(
+                f"cond_format: special_tokens needs a vocab containing "
+                f"{sorted(missing)}; this training config's vocab predates "
+                "special-token conditioning, so the checkpoint cannot have "
+                "been trained with it"
+            )
     records = load_covomix2_testset(
         testset.root,
         testset.librispeech_root,
-        OmegaConf.to_container(training_config, resolve=True)["dataset"][
-            "preprocessor"
-        ]["token_list"],
+        token_list,
         num_channels=int(testset.get("num_channels", 2)),
     )
 
@@ -681,6 +832,17 @@ def run_chunked_inference(
     # the last H history chunks) + chunk k.
     def _chain_cost(idx: int) -> float:
         plan = plans[idx]
+        if sptok is not None:
+            # special_tokens: round 0 conditions on the min-truncated,
+            # cap-bound prompt span; round k > 0 conditions on that same
+            # prompt plus a time-capped generated-audio tail - mirrors the
+            # round loop's P/H assembly without touching any audio.
+            lp = min(min(prompt_secs[idx]), sptok.prompt_sec)
+            cost = lp + plan.chunk_secs[0]
+            for k in range(1, plan.n_chunks):
+                lh = min(sptok.prev_sec, sum(plan.chunk_secs[:k]))
+                cost += lp + lh + plan.chunk_secs[k]
+            return cost
         prompt_sec = sum(prompt_secs[idx])
         cost = prompt_sec + plan.chunk_secs[0]
         for k in range(1, plan.n_chunks):
@@ -769,7 +931,75 @@ def run_chunked_inference(
             record = records[idx]
             n = record.num_channels
             cond_info: dict[str, list[float]] = {}
-            if rnd == 0:
+            prev_frames = 0
+            if sptok is not None:
+                if rnd == 0:
+                    prompt_wavs = [
+                        _load_prompt_wav(p.audio_path, fs) for p in record.prompts
+                    ]
+                    state[idx]["prompt_wavs"] = prompt_wavs
+                    p_frames = min_truncated_prompt_frames(
+                        [w.shape[0] for w in prompt_wavs], sptok.prompt_sec, fs, hop
+                    )
+                    state[idx]["p_frames"] = p_frames
+                    p_sec = p_frames * hop / fs
+                    if p_sec < SPECIAL_TOKENS_PROMPT_FLOOR_SEC:
+                        logger.warning(
+                            "%s: conditioning prompt is %.3fs, below the "
+                            "%.1fs trained own-speech floor for P - training "
+                            "reverted such spans to the infill format, so "
+                            "this is format-OOD conditioning",
+                            record.dialogue_id,
+                            p_sec,
+                            SPECIAL_TOKENS_PROMPT_FLOOR_SEC,
+                        )
+                        state[idx]["prompt_below_trained_floor"] = True
+                    # Parallel P span (window-as-chunk format): every row is
+                    # its own channel's REAL prompt, min-truncated to the
+                    # shared length - no fill rows exist by construction.
+                    state[idx]["P"] = torch.stack(
+                        [w[: p_frames * hop] for w in prompt_wavs]
+                    )
+                    if cond.loudness_norm:
+                        state[idx]["cond_targets"] = [
+                            active_rms(w, fs) for w in prompt_wavs
+                        ]
+                    if cond.silence_gate and cond.gate_fill == "room_tone":
+                        state[idx]["cond_fill"] = [
+                            room_tone(w, fs) for w in prompt_wavs
+                        ]
+                    prev_frames = 0
+                    prompt_raw = state[idx]["P"]
+                else:
+                    # Deliberately the RAW per-chunk concat, not the
+                    # crossfaded assembly `crossfade_concat` builds for the
+                    # written wav: conditioning always uses raw chunk audio,
+                    # matching the transcripts path's convention (there too
+                    # ``comp`` history is sliced from `state[idx]["chunk_wavs"]`
+                    # directly) - the fade is assembly-only.
+                    gen_all = torch.cat(state[idx]["chunk_wavs"], dim=1)
+                    prev_frames = tail_frames(
+                        gen_all.shape[1], sptok.prev_sec, fs, hop
+                    )
+                    segments = [state[idx]["P"]]
+                    if prev_frames > 0:
+                        hseg = gen_all[:, gen_all.shape[1] - prev_frames * hop :]
+                        if cond.enabled:
+                            # Hygiene exists for degraded GENERATED audio; the
+                            # prompt segment is real and is the norm's own
+                            # gain anchor, so it stays exempt (same exemption
+                            # as the transcripts path).
+                            hseg, cond_info = _apply_cond_hygiene(
+                                hseg,
+                                fs=fs,
+                                cond=cond,
+                                targets=state[idx].get("cond_targets"),
+                                fill=state[idx].get("cond_fill"),
+                                speech_regions_fn=speech_regions_fn,
+                            )
+                        segments.append(hseg)
+                    prompt_raw = torch.cat(segments, dim=1)
+            elif rnd == 0:
                 prompt_wavs = [
                     _load_prompt_wav(p.audio_path, fs) for p in record.prompts
                 ]
@@ -826,21 +1056,33 @@ def run_chunked_inference(
             prompt_frames = prompt_raw.shape[1] // hop
             prompt_trimmed = prompt_raw[:, : prompt_frames * hop]
             if rnd == 0:
+                # In special mode prompt_raw IS state[idx]["P"], already
+                # hop-aligned to p_frames * hop, so prompt_frames == p_frames
+                # here - no special-casing needed.
                 state[idx]["prompt_frames0"] = prompt_frames
             gen_frames = plans[idx].gen_frames[rnd]
             speech = torch.cat(
                 [prompt_trimmed, torch.zeros(n, gen_frames * hop)], dim=1
             ).to(device)
-            sample = {
-                "turns": call_turns(
-                    record,
-                    plans[idx].ranges,
-                    rnd,
-                    include_prompt=comp.include_prompt,
-                    history_chunks=comp.history_chunks,
-                ),
-                "num_channels": n,
-            }
+            if sptok is not None:
+                a, b = plans[idx].ranges[rnd]
+                sample = {
+                    "turns": list(record.turns[a:b]),
+                    "num_channels": n,
+                    "prompt_frames": state[idx]["p_frames"],
+                    "prev_frames": prev_frames,
+                }
+            else:
+                sample = {
+                    "turns": call_turns(
+                        record,
+                        plans[idx].ranges,
+                        rnd,
+                        include_prompt=comp.include_prompt,
+                        history_chunks=comp.history_chunks,
+                    ),
+                    "num_channels": n,
+                }
             sample = preprocessor(record.dialogue_id, sample)
             text = pad_branch_text(sample, device)
             prepared_inputs[idx] = {
@@ -852,6 +1094,9 @@ def run_chunked_inference(
                 ),
                 "gen_frames": gen_frames,
                 "cond_info": cond_info,
+                "sptok_frames": (
+                    (state[idx]["p_frames"], prev_frames) if sptok is not None else None
+                ),
             }
             round_costs[idx] = (prompt_frames + gen_frames) * hop / fs
 
@@ -903,6 +1148,10 @@ def run_chunked_inference(
                 }
                 if prepared_inputs[idx]["cond_info"]:
                     chunk_entry["conditioning"] = prepared_inputs[idx]["cond_info"]
+                if prepared_inputs[idx]["sptok_frames"] is not None:
+                    meta_p, meta_prev = prepared_inputs[idx]["sptok_frames"]
+                    chunk_entry["prompt_frames"] = meta_p
+                    chunk_entry["prev_frames"] = meta_prev
                 state[idx]["chunk_meta"].append(chunk_entry)
 
     meta_lines: list[str] = []
@@ -922,7 +1171,11 @@ def run_chunked_inference(
             gen_rel = f"wav/{wid}_ch{ch}.wav"
             prompt_rel = f"prompt/{wid}_ch{ch}.wav"
             write_wav(test_dir / gen_rel, gen_full[ch], fs)
-            write_wav(test_dir / prompt_rel, st["blocks"][ch][ch], fs)
+            write_wav(
+                test_dir / prompt_rel,
+                st["prompt_wavs"][ch] if sptok is not None else st["blocks"][ch][ch],
+                fs,
+            )
             channels.append(
                 {
                     "gen_wav": gen_rel,
@@ -958,6 +1211,20 @@ def run_chunked_inference(
                 "policy": chunk_cfg,
                 "cover_all_speakers": cover_all_speakers,
                 "cross_fade_sec": cross_fade_sec,
+                "cond_format": "special_tokens" if sptok else "transcripts",
+                **(
+                    {
+                        "cond_prompt_sec": sptok.prompt_sec,
+                        "cond_prev_sec": sptok.prev_sec,
+                    }
+                    if sptok is not None
+                    else {}
+                ),
+                **(
+                    {"prompt_below_trained_floor": True}
+                    if sptok is not None and st.get("prompt_below_trained_floor")
+                    else {}
+                ),
                 "cond_include_prompt": comp.include_prompt,
                 "cond_history_chunks": comp.history_chunks,
                 "cond_silence_gate": cond.silence_gate,
