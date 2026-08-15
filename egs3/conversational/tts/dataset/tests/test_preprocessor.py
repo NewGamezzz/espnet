@@ -6,9 +6,10 @@ from .conftest import FakeTurn
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
     NEW_TOKENS,
+    PREV_CHUNK_TOKEN,
     SPEAKER_PROMPT_TOKEN,
-    TURN_FILL_TOKEN,
     build_branch_texts,
+    build_branch_texts_timestamped,
     encode_tokens,
     extend_vocab,
 )
@@ -143,14 +144,30 @@ class TestTimestampPreprocessor:
         return d
 
     def test_mode_t_text_length_equals_target_frames(self, preproc):
+        """Full id-sequence parity against build_branch_texts_timestamped as
+        ground truth, the Mode T analogue of
+        test_matches_manual_encoding_three_channels: pins the exact
+        frame-rounded turn position (start=10.5, target_t0=10.0 -> frame 47:
+        branch 0 reads OTHER*47, <turn>, h, i, <turn_fill>*91, OTHER*46) and
+        that the non-owning branch is OTHER_TOKEN*187 throughout."""
         turns = [FakeTurn(channel=0, speaker="a", text="hi", start=10.5, end=11.5)]
         data = self._data(
             turns, {"timestamp_text": True, "target_t0": 10.0, "target_frames": 187}
         )
         out = preproc("uid", data)
         assert all(t.shape[0] == 187 for t in out["text"])
+        expected = [
+            encode_tokens(branch, preproc.token2id)
+            for branch in build_branch_texts_timestamped(turns, 2, 10.0, 187)
+        ]
+        for t, exp in zip(out["text"], expected):
+            assert torch.equal(t, torch.tensor(exp, dtype=torch.long))
 
     def test_mode_t_composes_with_chunk_prefix(self, preproc):
+        """Same full-sequence parity as above, with the P/H prefix prepended
+        to the ground truth for both branches - pins that the prefix and the
+        frame-aligned target text compose byte-for-byte, not just that a
+        prefix token and some <turn_fill> appear somewhere."""
         turns = [FakeTurn(channel=0, speaker="a", text="hi", start=10.5, end=11.5)]
         data = self._data(
             turns,
@@ -164,12 +181,15 @@ class TestTimestampPreprocessor:
             },
         )
         out = preproc("uid", data)
-        sp_id = preproc.token2id[SPEAKER_PROMPT_TOKEN]
-        fill_id = preproc.token2id[TURN_FILL_TOKEN]
         for t in out["text"]:
             assert t.shape[0] == 50 + 187
-            assert t[0].item() == sp_id
-        assert (out["text"][0] == fill_id).sum().item() > 0
+        prefix = [SPEAKER_PROMPT_TOKEN] * 40 + [PREV_CHUNK_TOKEN] * 10
+        expected = [
+            encode_tokens(prefix + branch, preproc.token2id)
+            for branch in build_branch_texts_timestamped(turns, 2, 10.0, 187)
+        ]
+        for t, exp in zip(out["text"], expected):
+            assert torch.equal(t, torch.tensor(exp, dtype=torch.long))
 
     def test_mode_o_unchanged(self, preproc):
         turns = [FakeTurn(channel=0, speaker="a", text="hi", start=10.5, end=11.5)]
