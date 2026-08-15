@@ -1635,3 +1635,142 @@ def test_system_dispatch_literal_matches_mode():
     from egs3.conversational.tts.src.system import CHUNKED_MODE as SYSTEM_LITERAL
 
     assert SYSTEM_LITERAL == CHUNKED_MODE
+
+
+# --------------------------------------------------------------------------- #
+# special_tokens conditioning round loop
+# --------------------------------------------------------------------------- #
+def _sptok_chunk(**over):
+    chunk = {"turns": 2, "cond_format": "special_tokens", "cond_prev_sec": 1.0}
+    chunk.update(over)
+    return chunk
+
+
+class TestSpecialTokensInfer:
+    def _run(self, testset, tiny_model, inference_dir, chunk, **overrides):
+        cfg = _chunked_config(testset, inference_dir, chunk, **overrides)
+        stats = run_chunked_inference(
+            cfg,
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+        )
+        return inference_dir / "valid", stats, cfg
+
+    def test_meta_records_mode_and_conditioning_frames(
+        self, testset, tiny_model, tmp_path
+    ):
+        out, stats, _ = self._run(testset, tiny_model, tmp_path / "o", _sptok_chunk())
+        metas = [json.loads(p.read_text()) for p in sorted((out / "meta").glob("*"))]
+        assert metas
+        for meta in metas:
+            ck = meta["chunking"]
+            assert ck["cond_format"] == "special_tokens"
+            assert ck["cond_prompt_sec"] == 8.0 and ck["cond_prev_sec"] == 1.0
+            chunks = ck["chunks"]
+            assert chunks[0]["prev_frames"] == 0
+            # Conditioning prompt: shortest reference prompt (min-truncated),
+            # capped at 8 s, floored to whole hops - recomputed longhand from
+            # the prompt files themselves.
+            record_prompts = meta["prompt"]["turns"]
+            shortest = min(p["duration_sec"] for p in record_prompts)
+            expect_p = int(min(shortest, 8.0) * FS) // HOP
+            assert all(c["prompt_frames"] == expect_p for c in chunks)
+            assert meta["prompt"]["total_frames"] == expect_p
+            # Rounds after the first: 1.0 s tail = 93 frames (93.75 floored),
+            # unless less audio was generated (not the case at turns: 2).
+            for c in chunks[1:]:
+                assert c["prev_frames"] == int(1.0 * FS) // HOP == 93
+
+    def test_prompt_files_on_disk_are_full_length(
+        self, testset, tiny_model, tmp_path
+    ):
+        out, _, _ = self._run(testset, tiny_model, tmp_path / "o", _sptok_chunk())
+        metas = [json.loads(p.read_text()) for p in sorted((out / "meta").glob("*"))]
+        for meta in metas:
+            for p, entry in zip(meta["prompt"]["turns"], meta["channels"]):
+                wav, _ = _read_wav(out / entry["prompt_wav"])
+                assert abs(wav.shape[0] / FS - p["duration_sec"]) < 0.05
+
+    def test_zero_prev_sec_is_reanchor_no_history_frames(
+        self, testset, tiny_model, tmp_path
+    ):
+        out, _, _ = self._run(
+            testset, tiny_model, tmp_path / "o", _sptok_chunk(cond_prev_sec=0.0)
+        )
+        metas = [json.loads(p.read_text()) for p in sorted((out / "meta").glob("*"))]
+        for meta in metas:
+            assert all(
+                c["prev_frames"] == 0 for c in meta["chunking"]["chunks"]
+            )
+
+    def test_wav_is_concat_of_chunk_regions(self, testset, tiny_model, tmp_path):
+        out, _, _ = self._run(testset, tiny_model, tmp_path / "o", _sptok_chunk())
+        metas = [json.loads(p.read_text()) for p in sorted((out / "meta").glob("*"))]
+        for meta in metas:
+            total = sum(c["gen_frames"] for c in meta["chunking"]["chunks"]) * HOP
+            wav, _ = _read_wav(out / meta["channels"][0]["gen_wav"])
+            assert wav.shape[0] == total
+
+    def test_special_mode_differs_from_transcripts_mode(
+        self, testset, tiny_model, tmp_path
+    ):
+        out_a, _, _ = self._run(testset, tiny_model, tmp_path / "a", {"turns": 2})
+        out_b, _, _ = self._run(testset, tiny_model, tmp_path / "b", _sptok_chunk())
+        name = sorted((out_a / "wav").glob("*"))[0].name
+        wa, _ = _read_wav(out_a / "wav" / name)
+        wb, _ = _read_wav(out_b / "wav" / name)
+        assert wa.shape != wb.shape or not (wa == wb).all()
+
+    def test_round1_conditioning_is_p_plus_tail_of_h(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        # The meta-only assertions above pin frame COUNTS; this pins the
+        # actual GenerationItem.speech content: P is byte-identical between
+        # rounds (fixed window, never re-derived), and H is the TAIL - not
+        # the head - of round 0's generated audio.
+        import egs3.conversational.tts.src.chunked_inference as ci
+
+        captured = []
+        real = ci.generate_batch
+
+        def spy(model, vocoder, items, **kwargs):
+            out = real(model, vocoder, items, **kwargs)
+            captured.append((items, out))
+            return out
+
+        monkeypatch.setattr(ci, "generate_batch", spy)
+        self._run(testset, tiny_model, tmp_path / "infer", _sptok_chunk())
+
+        # No batching block -> `plan_batches` returns `[[i] for i in
+        # indices]` verbatim (its documented no-batching path), so call
+        # order is exactly the (shard-local) dialogue order: "000" (3
+        # turns, 2 chunks) then "001" (2 turns, 1 chunk) at round 0, then
+        # "000" again at round 1 - "001" never gets a second chunk at
+        # turns=2.  (The fabricated prompts are all the same fixed-frequency
+        # sine per `_write_flac`, so content alone cannot disambiguate
+        # dialogues here - order is the only reliable handle.)
+        assert len(captured) == 3
+        item0, wav0 = captured[0][0][0], captured[0][1][0][0]
+        item1 = captured[2][0][0]
+
+        p_total = item1.prompt_frames  # p_frames + prev_frames, the TOTAL
+        p_frames = item0.prompt_frames  # round 0's P is prev_frames=0, so
+        # its own prompt_frames IS p_frames.
+        prev_frames = p_total - p_frames
+        assert prev_frames > 0
+
+        # P is byte-identical between round 0 and round 1 (fixed window,
+        # never re-derived from generated audio).
+        assert torch.equal(
+            item0.speech[:, : p_frames * HOP].cpu(),
+            item1.speech[:, : p_frames * HOP].cpu(),
+        )
+        # H is the TAIL of round 0's generated audio (not the head).
+        tail = wav0[:, wav0.shape[1] - prev_frames * HOP :].cpu()
+        h_span = item1.speech[:, p_frames * HOP : p_total * HOP].cpu()
+        assert torch.equal(h_span, tail)
+
+        # The generated region past the conditioning span is still zeros.
+        gen_region = item1.speech[:, p_total * HOP :]
+        assert torch.equal(gen_region, torch.zeros_like(gen_region))

@@ -84,6 +84,21 @@ generated-audio tail becomes the ``<prev_chunk>`` context, with
 no prev-chunk audio).  The hygiene knobs above stay orthogonal to both
 formats.
 
+In ``special_tokens`` mode the round loop's conditioning is a fixed-shape
+window, not a growing chain: round 0 fixes ``P`` (the shared min-truncated
+prompt span, one real row per channel) once, and every later round k
+conditions on ``[P, H]`` where ``H`` is the ``cond_prev_sec``-capped tail of
+ALL generated audio so far - never the running chain history the
+``transcripts`` format uses.  Only ``H`` passes through the hygiene knobs
+(``P`` is real audio and the norm's own anchor, so it is exempt exactly like
+the transcripts format's prompt segment).  The prompt wav written to disk
+stays the FULL, untruncated reference - only the conditioning span is capped
+- so ``sim_o`` and the rest of the metric contract are unaffected.  Text for
+each round covers only that round's own chunk (no transcript ever describes
+a conditioning region); the P/H frame counts are conveyed to the model
+purely through the ``<speaker_prompt>``/``<prev_chunk>`` prefix the
+preprocessor prepends.
+
 DETERMINISM CONTRACT - a documented departure from ``generate_external``:
 sharding is BY DIALOGUE (a chunk chain cannot cross shards), and each shard
 plans its round batches over its own dialogues, so outputs are a pure
@@ -768,6 +783,17 @@ def run_chunked_inference(
     # the last H history chunks) + chunk k.
     def _chain_cost(idx: int) -> float:
         plan = plans[idx]
+        if sptok is not None:
+            # special_tokens: round 0 conditions on the min-truncated,
+            # cap-bound prompt span; round k > 0 conditions on that same
+            # prompt plus a time-capped generated-audio tail - mirrors the
+            # round loop's P/H assembly without touching any audio.
+            lp = min(min(prompt_secs[idx]), sptok.prompt_sec)
+            cost = lp + plan.chunk_secs[0]
+            for k in range(1, plan.n_chunks):
+                lh = min(sptok.prev_sec, sum(plan.chunk_secs[:k]))
+                cost += lp + lh + plan.chunk_secs[k]
+            return cost
         prompt_sec = sum(prompt_secs[idx])
         cost = prompt_sec + plan.chunk_secs[0]
         for k in range(1, plan.n_chunks):
@@ -856,7 +882,57 @@ def run_chunked_inference(
             record = records[idx]
             n = record.num_channels
             cond_info: dict[str, list[float]] = {}
-            if rnd == 0:
+            prev_frames = 0
+            if sptok is not None:
+                if rnd == 0:
+                    prompt_wavs = [
+                        _load_prompt_wav(p.audio_path, fs) for p in record.prompts
+                    ]
+                    state[idx]["prompt_wavs"] = prompt_wavs
+                    p_frames = min_truncated_prompt_frames(
+                        [w.shape[0] for w in prompt_wavs], sptok.prompt_sec, fs, hop
+                    )
+                    state[idx]["p_frames"] = p_frames
+                    # Parallel P span (window-as-chunk format): every row is
+                    # its own channel's REAL prompt, min-truncated to the
+                    # shared length - no fill rows exist by construction.
+                    state[idx]["P"] = torch.stack(
+                        [w[: p_frames * hop] for w in prompt_wavs]
+                    )
+                    if cond.loudness_norm:
+                        state[idx]["cond_targets"] = [
+                            active_rms(w, fs) for w in prompt_wavs
+                        ]
+                    if cond.silence_gate and cond.gate_fill == "room_tone":
+                        state[idx]["cond_fill"] = [
+                            room_tone(w, fs) for w in prompt_wavs
+                        ]
+                    prev_frames = 0
+                    prompt_raw = state[idx]["P"]
+                else:
+                    gen_all = torch.cat(state[idx]["chunk_wavs"], dim=1)
+                    prev_frames = tail_frames(
+                        gen_all.shape[1], sptok.prev_sec, fs, hop
+                    )
+                    segments = [state[idx]["P"]]
+                    if prev_frames > 0:
+                        hseg = gen_all[:, gen_all.shape[1] - prev_frames * hop :]
+                        if cond.enabled:
+                            # Hygiene exists for degraded GENERATED audio; the
+                            # prompt segment is real and is the norm's own
+                            # gain anchor, so it stays exempt (same exemption
+                            # as the transcripts path).
+                            hseg, cond_info = _apply_cond_hygiene(
+                                hseg,
+                                fs=fs,
+                                cond=cond,
+                                targets=state[idx].get("cond_targets"),
+                                fill=state[idx].get("cond_fill"),
+                                speech_regions_fn=speech_regions_fn,
+                            )
+                        segments.append(hseg)
+                    prompt_raw = torch.cat(segments, dim=1)
+            elif rnd == 0:
                 prompt_wavs = [
                     _load_prompt_wav(p.audio_path, fs) for p in record.prompts
                 ]
@@ -913,21 +989,33 @@ def run_chunked_inference(
             prompt_frames = prompt_raw.shape[1] // hop
             prompt_trimmed = prompt_raw[:, : prompt_frames * hop]
             if rnd == 0:
+                # In special mode prompt_raw IS state[idx]["P"], already
+                # hop-aligned to p_frames * hop, so prompt_frames == p_frames
+                # here - no special-casing needed.
                 state[idx]["prompt_frames0"] = prompt_frames
             gen_frames = plans[idx].gen_frames[rnd]
             speech = torch.cat(
                 [prompt_trimmed, torch.zeros(n, gen_frames * hop)], dim=1
             ).to(device)
-            sample = {
-                "turns": call_turns(
-                    record,
-                    plans[idx].ranges,
-                    rnd,
-                    include_prompt=comp.include_prompt,
-                    history_chunks=comp.history_chunks,
-                ),
-                "num_channels": n,
-            }
+            if sptok is not None:
+                a, b = plans[idx].ranges[rnd]
+                sample = {
+                    "turns": list(record.turns[a:b]),
+                    "num_channels": n,
+                    "prompt_frames": state[idx]["p_frames"],
+                    "prev_frames": prev_frames,
+                }
+            else:
+                sample = {
+                    "turns": call_turns(
+                        record,
+                        plans[idx].ranges,
+                        rnd,
+                        include_prompt=comp.include_prompt,
+                        history_chunks=comp.history_chunks,
+                    ),
+                    "num_channels": n,
+                }
             sample = preprocessor(record.dialogue_id, sample)
             text = pad_branch_text(sample, device)
             prepared_inputs[idx] = {
@@ -939,6 +1027,9 @@ def run_chunked_inference(
                 ),
                 "gen_frames": gen_frames,
                 "cond_info": cond_info,
+                "sptok_frames": (
+                    (state[idx]["p_frames"], prev_frames) if sptok is not None else None
+                ),
             }
             round_costs[idx] = (prompt_frames + gen_frames) * hop / fs
 
@@ -990,6 +1081,10 @@ def run_chunked_inference(
                 }
                 if prepared_inputs[idx]["cond_info"]:
                     chunk_entry["conditioning"] = prepared_inputs[idx]["cond_info"]
+                if prepared_inputs[idx]["sptok_frames"] is not None:
+                    meta_p, meta_prev = prepared_inputs[idx]["sptok_frames"]
+                    chunk_entry["prompt_frames"] = meta_p
+                    chunk_entry["prev_frames"] = meta_prev
                 state[idx]["chunk_meta"].append(chunk_entry)
 
     meta_lines: list[str] = []
@@ -1009,7 +1104,11 @@ def run_chunked_inference(
             gen_rel = f"wav/{wid}_ch{ch}.wav"
             prompt_rel = f"prompt/{wid}_ch{ch}.wav"
             write_wav(test_dir / gen_rel, gen_full[ch], fs)
-            write_wav(test_dir / prompt_rel, st["blocks"][ch][ch], fs)
+            write_wav(
+                test_dir / prompt_rel,
+                st["prompt_wavs"][ch] if sptok is not None else st["blocks"][ch][ch],
+                fs,
+            )
             channels.append(
                 {
                     "gen_wav": gen_rel,
@@ -1045,6 +1144,15 @@ def run_chunked_inference(
                 "policy": chunk_cfg,
                 "cover_all_speakers": cover_all_speakers,
                 "cross_fade_sec": cross_fade_sec,
+                "cond_format": "special_tokens" if sptok else "transcripts",
+                **(
+                    {
+                        "cond_prompt_sec": sptok.prompt_sec,
+                        "cond_prev_sec": sptok.prev_sec,
+                    }
+                    if sptok is not None
+                    else {}
+                ),
                 "cond_include_prompt": comp.include_prompt,
                 "cond_history_chunks": comp.history_chunks,
                 "cond_silence_gate": cond.silence_gate,
