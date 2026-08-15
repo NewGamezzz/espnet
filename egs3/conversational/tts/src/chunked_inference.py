@@ -67,7 +67,10 @@ The same OOD-silence problem exists at round 0: ``_prompt_blocks`` fills
 the off rows of each prompt block with digital zeros.  The top-level
 ``prompt_fill`` config key (``zeros``, the default - bit-identical - or
 ``room_tone``) selects the fill there; it is recorded in the meta under
-``prompt.fill``.
+``prompt.fill``.  ``prompt_fill`` is a ``transcripts``-format knob only:
+``special_tokens``'s parallel P span (below) has no off rows to fill, so
+any value other than the ``zeros`` default is rejected outright rather
+than silently doing nothing.
 
 ``chunk.cond_format`` selects what a chunk's conditioning is wrapped in:
 ``transcripts`` (the default) is everything above - plain-text turns plus the
@@ -82,7 +85,11 @@ the shortest reference never gets padded into format-OOD silence - and
 generated-audio tail becomes the ``<prev_chunk>`` context, with
 ``cond_prev_sec: 0.0`` selecting the type-C re-anchor format (prompt only,
 no prev-chunk audio).  The hygiene knobs above stay orthogonal to both
-formats.
+formats.  Checkpoint/format pairing is enforced, not assumed:
+``special_tokens`` requires the training config's vocab to contain
+``<speaker_prompt>``/``<prev_chunk>`` (checked with ``read_vocab``), so a
+legacy vocab predating special-token conditioning is rejected before any
+model use rather than silently mis-tokenizing.
 
 In ``special_tokens`` mode the round loop's conditioning is a fixed-shape
 window, not a growing chain: round 0 fixes ``P`` (the shared min-truncated

@@ -1894,7 +1894,16 @@ class TestSpecialTokensInfer:
             testset, tiny_model, tmp_path / "b",
             {"turns": 2, "cond_format": "transcripts"},
         )
-        for name in sorted(p.name for p in (out_a / "wav").glob("*")):
+        names = sorted(p.name for p in (out_a / "wav").glob("*"))
+        assert names
+        for name in names:
+            # Byte-identical, not merely close: an explicit
+            # `cond_format: transcripts` must take the exact same code path
+            # as omitting the key (rtol=0.0, atol=0.0 - house precedent in
+            # test_preprocessing_parity.py).
             torch.testing.assert_close(
-                _read_wav(out_a / "wav" / name), _read_wav(out_b / "wav" / name)
+                _read_wav(out_a / "wav" / name),
+                _read_wav(out_b / "wav" / name),
+                rtol=0.0,
+                atol=0.0,
             )
