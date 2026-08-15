@@ -120,6 +120,12 @@ class TestVocabExtension:
         assert "a" in charset and "?" in charset
         assert "<blank>" not in charset
 
+    def test_extend_vocab_appends_four_tokens_in_order(self):
+        base = ["a", "b", "<space>"]
+        out = extend_vocab(base)
+        assert out[:3] == base
+        assert out[3:] == ["<turn>", "<OTHER>", "<speaker_prompt>", "<prev_chunk>"]
+
 
 class TestNormalizeAndEncode:
     def test_whitespace_collapse_and_oov_drop(self, base_vocab):

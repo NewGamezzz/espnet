@@ -14,6 +14,7 @@ from .conftest import (
 )
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
+    NEW_TOKENS,
     OTHER_TOKEN,
     TURN_TOKEN,
     make_token2id,
@@ -145,7 +146,7 @@ def test_vocab_provenance(tmp_path):
 def test_builder_rejects_non_extended_vocab(tmp_path):
     bad = tmp_path / "bad_vocab.txt"
     bad.write_text("\n".join(BASE_TOKENS) + "\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="extended vocab"):
+    with pytest.raises(ValueError, match="vocab must end with"):
         build_multibranch_f5(
             vocab_file=str(bad),
             arch=TINY_ARCH,
@@ -207,3 +208,39 @@ def test_builder_zero_init_gates(ext_vocab_file):
     assert all(
         m.ctx is model.cfm.ctx for m in model.modules() if isinstance(m, ExchangedBlock)
     )
+
+
+def test_extended_embedding_four_new_rows():
+    base = ["x", " ", "y"]
+    tokens = base + list(NEW_TOKENS)
+    weight = torch.randn(len(base) + 1, 8)
+    out = extended_text_embedding(weight, tokens, noise_scale=0.0)
+    assert out.shape == (len(tokens) + 1, 8)
+    torch.testing.assert_close(out[: len(base) + 1], weight)
+    space_row = base.index(" ") + 1
+    torch.testing.assert_close(out[len(base) + 1], weight[space_row])  # <turn>
+    torch.testing.assert_close(out[len(base) + 2], weight[0])          # <OTHER>
+    torch.testing.assert_close(out[len(base) + 3], weight[0])          # <speaker_prompt>
+    torch.testing.assert_close(out[len(base) + 4], weight[0])          # <prev_chunk>
+
+
+def test_extended_embedding_still_accepts_legacy_two_token_vocab():
+    # Every pre-special-token checkpoint ships a vocab ending <turn>/<OTHER>;
+    # the eval branch must keep loading them (control run, all old ckpts).
+    base = ["x", " ", "y"]
+    tokens = base + ["<turn>", "<OTHER>"]
+    weight = torch.randn(len(base) + 1, 8)
+    out = extended_text_embedding(weight, tokens, noise_scale=0.0)
+    assert out.shape == (len(tokens) + 1, 8)
+    space_row = base.index(" ") + 1
+    torch.testing.assert_close(out[len(base) + 1], weight[space_row])
+    torch.testing.assert_close(out[len(base) + 2], weight[0])
+
+
+def test_vocab_generation_detects_both_and_rejects_garbage():
+    from egs3.conversational.tts.src.build_model import _vocab_generation
+
+    assert _vocab_generation(["a", *NEW_TOKENS]) == NEW_TOKENS
+    assert _vocab_generation(["a", "<turn>", "<OTHER>"]) == ("<turn>", "<OTHER>")
+    with pytest.raises(ValueError):
+        _vocab_generation(["a", "<turn>", "<speaker_prompt>"])
