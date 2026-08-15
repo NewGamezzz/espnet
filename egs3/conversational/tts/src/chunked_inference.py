@@ -92,7 +92,12 @@ range to keep the packed CEILING under the trained window - realized chunk
 length can still fall short (a short final chunk) or exceed it (an
 oversized single turn, a ``cover_all_speakers`` hold-open) per the
 chunk-policy caveats above; ``chunk.turns`` chunking gives no such ceiling
-at all.  The hygiene knobs above stay orthogonal to both formats.
+at all.  Training also degraded prev-context spans under ~2 s to the
+prompt-only format, while inference feeds whatever tail exists regardless of
+length; under the campaign's ``target_sec`` 15-35 s policy chunk 0 always
+exceeds the 10 s max prev window so this cannot bind, but under
+``chunk.turns`` short chunks can produce a sub-2 s ``H``.  The hygiene knobs
+above stay orthogonal to both formats.
 Checkpoint/format pairing is enforced, not assumed: ``special_tokens``
 requires the training config's vocab to contain
 ``<speaker_prompt>``/``<prev_chunk>`` (checked with ``read_vocab``), so a
@@ -184,6 +189,10 @@ from egs3.conversational.tts.src.inference import _reference_texts, _write_scp
 logger = logging.getLogger(__name__)
 
 MODE = "generate_external_chunked"
+
+# Mirrors the training-side own-speech floor: P spans below this were
+# reverted to the infill format, so the model never saw P < 3 s.
+SPECIAL_TOKENS_PROMPT_FLOOR_SEC = 3.0
 
 
 def estimate_turn_secs(
@@ -933,6 +942,18 @@ def run_chunked_inference(
                         [w.shape[0] for w in prompt_wavs], sptok.prompt_sec, fs, hop
                     )
                     state[idx]["p_frames"] = p_frames
+                    p_sec = p_frames * hop / fs
+                    if p_sec < SPECIAL_TOKENS_PROMPT_FLOOR_SEC:
+                        logger.warning(
+                            "%s: conditioning prompt is %.3fs, below the "
+                            "%.1fs trained own-speech floor for P - training "
+                            "reverted such spans to the infill format, so "
+                            "this is format-OOD conditioning",
+                            record.dialogue_id,
+                            p_sec,
+                            SPECIAL_TOKENS_PROMPT_FLOOR_SEC,
+                        )
+                        state[idx]["prompt_below_trained_floor"] = True
                     # Parallel P span (window-as-chunk format): every row is
                     # its own channel's REAL prompt, min-truncated to the
                     # shared length - no fill rows exist by construction.
@@ -950,6 +971,12 @@ def run_chunked_inference(
                     prev_frames = 0
                     prompt_raw = state[idx]["P"]
                 else:
+                    # Deliberately the RAW per-chunk concat, not the
+                    # crossfaded assembly `crossfade_concat` builds for the
+                    # written wav: conditioning always uses raw chunk audio,
+                    # matching the transcripts path's convention (there too
+                    # ``comp`` history is sliced from `state[idx]["chunk_wavs"]`
+                    # directly) - the fade is assembly-only.
                     gen_all = torch.cat(state[idx]["chunk_wavs"], dim=1)
                     prev_frames = tail_frames(
                         gen_all.shape[1], sptok.prev_sec, fs, hop
@@ -1191,6 +1218,11 @@ def run_chunked_inference(
                         "cond_prev_sec": sptok.prev_sec,
                     }
                     if sptok is not None
+                    else {}
+                ),
+                **(
+                    {"prompt_below_trained_floor": True}
+                    if sptok is not None and st.get("prompt_below_trained_floor")
                     else {}
                 ),
                 "cond_include_prompt": comp.include_prompt,

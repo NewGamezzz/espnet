@@ -26,6 +26,7 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
 )
 from egs3.conversational.tts.src.chunked_inference import (
     MODE as CHUNKED_MODE,
+    SPECIAL_TOKENS_PROMPT_FLOOR_SEC,
     CondComposition,
     SpecialTokensCond,
     _validated_chunk_cfg,
@@ -1685,6 +1686,57 @@ class TestSpecialTokensInfer:
             # unless less audio was generated (not the case at turns: 2).
             for c in chunks[1:]:
                 assert c["prev_frames"] == int(1.0 * FS) // HOP == 93
+
+    def test_prompt_below_trained_floor_flag_and_warning(
+        self, tmp_path, caplog
+    ):
+        # A dedicated testset with one dialogue whose shortest reference
+        # prompt is below the 3 s trained own-speech floor ("shortp", min
+        # 2.0 s) and one at/above it ("longp", min 3.5 s) - the default
+        # `testset` fixture's prompts are all < 3 s, so it cannot exercise
+        # the "absent when P >= floor" side of this contract.
+        dialogues = {
+            "shortp": (
+                ["abc def", "bead cab", "chad face"],
+                [
+                    ("test-clean/1/1/a.flac", "abc", 2.0),
+                    ("test-clean/2/2/b.flac", "de", 2.5),
+                ],
+            ),
+            "longp": (
+                ["gaff bead", "haji dead"],
+                [
+                    ("test-clean/3/3/c.flac", "chad", 3.5),
+                    ("test-clean/4/4/d.flac", "fig", 4.0),
+                ],
+            ),
+        }
+        ts = _write_testset(tmp_path, dialogues=dialogues)
+        model = build_tiny(ts["vocab"])
+        cfg = _chunked_config(ts, tmp_path / "o", _sptok_chunk())
+        with caplog.at_level("WARNING"):
+            run_chunked_inference(
+                cfg,
+                training_config=ts["training_config"],
+                model=model,
+                vocoder=FakeVocoder(),
+            )
+        metas = {
+            p.stem: json.loads(p.read_text())
+            for p in sorted((tmp_path / "o" / "valid" / "meta").glob("*"))
+        }
+        assert set(metas) == {"shortp", "longp"}
+        assert metas["shortp"]["chunking"]["prompt_below_trained_floor"] is True
+        assert "prompt_below_trained_floor" not in metas["longp"]["chunking"]
+
+        warnings = [
+            r
+            for r in caplog.records
+            if r.levelname == "WARNING" and "shortp" in r.getMessage()
+        ]
+        assert warnings, caplog.text
+        assert f"{SPECIAL_TOKENS_PROMPT_FLOOR_SEC:.1f}s" in warnings[0].getMessage()
+        assert not any("longp" in r.getMessage() for r in caplog.records)
 
     def test_prompt_files_on_disk_are_full_length(
         self, testset, tiny_model, tmp_path
