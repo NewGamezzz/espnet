@@ -6,12 +6,13 @@
 1. Build the DiT/CFM with the F5TTS_Base architecture values and
    ``text_num_embeds`` = size of the EXTENDED vocab from step 2.
 2. Load the pretrained F5TTS_Base checkpoint.  The text-embedding weight
-   mismatches in shape by exactly the four appended tokens; every original
-   row is copied bit-exactly and the four new rows are warm-started
+   mismatches in shape by exactly the five appended tokens; every original
+   row is copied bit-exactly and the five new rows are warm-started
    (``<turn>`` from the space character's row; ``<OTHER>``,
-   ``<speaker_prompt>``, and ``<prev_chunk>`` from the filler row 0 - F5's
-   internal padding token, the closest pretrained concept to "no text for
-   me here" - each plus small Gaussian noise).  Everything
+   ``<speaker_prompt>``, ``<prev_chunk>``, and ``<turn_fill>`` from the
+   filler row 0 - F5's internal padding token, the closest pretrained
+   concept to "no text for me here" - each plus small Gaussian noise).
+   Everything
    else must load exactly (strict load, zero missing/unexpected keys),
    except the checkpoint's ``mel_spec.mel_stft.*`` DSP buffers, which the
    ported functional MelSpec does not register and which are dropped after

@@ -89,7 +89,7 @@ def test_embedding_surgery_rows():
         assert diff.abs().max() < 5 * noise_scale
 
 
-def test_extended_embedding_four_new_rows():
+def test_extended_embedding_five_new_rows():
     base = ["x", " ", "y"]
     tokens = base + list(NEW_TOKENS)
     weight = torch.randn(len(base) + 1, 8)

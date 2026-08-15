@@ -6,8 +6,8 @@ from .conftest import FakeTurn
 from egs3.conversational.tts.dataset.preprocessing.text import (
     NEW_TOKENS,
     OTHER_TOKEN,
-    TURN_TOKEN,
     TURN_FILL_TOKEN,
+    TURN_TOKEN,
     build_branch_texts,
     encode_tokens,
     extend_vocab,
@@ -113,12 +113,6 @@ class TestVocabExtension:
         extended = extend_vocab(base)
         assert extended[:3] == base
         assert extended[3:] == list(NEW_TOKENS)
-
-    def test_extend_vocab_appends_four_tokens_in_order(self):
-        base = ["a", "b", "<space>"]
-        out = extend_vocab(base)
-        assert out[:3] == base
-        assert out[3:] == ["<turn>", "<OTHER>", "<speaker_prompt>", "<prev_chunk>", "<turn_fill>"]
 
     def test_new_token_constants(self):
         from egs3.conversational.tts.dataset.preprocessing.text import (

@@ -169,12 +169,10 @@ def render_tokens(tokens: Sequence[str]) -> str:
     """Human-readable one-line rendering: ``<turn>`` -> ``|``, ``<OTHER>`` ->
     ``#``, ``<turn_fill>`` -> ``_``."""
     return "".join(
-        "|"
-        if t == TURN_TOKEN
-        else "#"
-        if t == OTHER_TOKEN
-        else "_"
-        if t == TURN_FILL_TOKEN
-        else t
+        (
+            "|"
+            if t == TURN_TOKEN
+            else "#" if t == OTHER_TOKEN else "_" if t == TURN_FILL_TOKEN else t
+        )
         for t in tokens
     )
