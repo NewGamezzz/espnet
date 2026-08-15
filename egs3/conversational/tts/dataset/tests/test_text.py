@@ -86,7 +86,7 @@ class TestNoLeak:
             for turn, seg in zip(turns_3spk, segments):
                 assert ids[pos] == turn_id
                 pos += 1
-                seg_ids = ids[pos : pos + len(seg)]
+                seg_ids = ids[pos : pos + len(seg)]  # noqa: E203
                 if turn.channel != i:
                     assert set(seg_ids) == {other_id}
                     hidden_ids = {token2id[c] for c in turn.text}
@@ -101,7 +101,7 @@ class TestVocabExtension:
     def test_base_ids_preserved_and_new_ids_at_end(self, base_vocab):
         extended = extend_vocab(base_vocab)
         assert extended[: len(base_vocab)] == base_vocab
-        assert extended[len(base_vocab) :] == list(NEW_TOKENS)
+        assert extended[len(base_vocab) :] == list(NEW_TOKENS)  # noqa: E203
 
     def test_new_tokens_is_five_tuple_ending_with_turn_fill(self):
         assert len(NEW_TOKENS) == 5
@@ -248,3 +248,51 @@ class TestTimestampAssembly:
         turns = [_turn(0, "x", 0.0, 99.0)]
         spans = turn_frame_spans(turns, t0=0.0, target_frames=100)
         assert spans == [(0, 100)]
+
+    def test_timestamp_fits_implies_build_succeeds(self):
+        """Verify: timestamp_fits True => build_branch_texts_timestamped succeeds.
+
+        Tests with realistic non-zero t0, exact rounding ties, and boundary turns.
+        """
+        from egs3.conversational.tts.dataset.preprocessing.text import (
+            FRAMES_PER_SECOND,
+            build_branch_texts_timestamped,
+            timestamp_fits,
+        )
+
+        # Realistic non-zero session time offset.
+        t0 = 1837.44
+        t1 = 1839.44  # 2 second span
+        fps = FRAMES_PER_SECOND
+        base_frames = int((t1 - t0) * fps)  # 187
+        frame_offsets = [
+            base_frames - 1,
+            base_frames,
+            base_frames + 1,
+        ]  # Test safety margin
+
+        # Layout 1: turn starting exactly at t0 (boundary case)
+        layout1 = [_turn(0, "hello", t0, t0 + 0.5)]
+
+        # Layout 2: exact .5-frame rounding tie at t0 + 0.5/fps
+        # Rounds to frame 47 (0.5 * 93.75)
+        layout2 = [_turn(0, "test", t0 + 0.5 / fps, t0 + 1.5 / fps)]
+
+        # Layout 3: multiple channels with turns
+        layout3 = [
+            _turn(0, "abc", t0, t0 + 0.5),
+            _turn(1, "de", t0 + 0.5, t0 + 1.0),
+        ]
+
+        for layout in [layout1, layout2, layout3]:
+            for target_frames in frame_offsets:
+                # Only test if timestamp_fits says it fits
+                if timestamp_fits(layout, t0, t1, fps):
+                    # build_branch_texts_timestamped must succeed
+                    num_channels = max(t.channel for t in layout) + 1
+                    branches = build_branch_texts_timestamped(
+                        layout, num_channels, t0, target_frames, fps
+                    )
+                    # Each branch has exactly target_frames tokens
+                    for branch in branches:
+                        assert len(branch) == target_frames

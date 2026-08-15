@@ -10,8 +10,8 @@ This module is pure except for ``normalize_text``, which delegates to the
 pretrained checkpoint's own tokenizer (``espnet2.text.f5_pinyin``, backed by
 ``rjieba``/``pypinyin``) so fine-tuning text matches the F5TTS_Base
 pretraining distribution by construction.  No torch, no config access.
-``turns`` arguments are duck-typed and only need ``channel`` and ``text``
-attributes.
+``turns`` arguments are duck-typed and only need ``channel``, ``text``,
+``start``, and ``end`` attributes.
 """
 
 from __future__ import annotations
@@ -182,14 +182,17 @@ def render_tokens(tokens: Sequence[str]) -> str:
 # dataset asserts its fs/hop matches this whenever Mode T is enabled; keeping
 # the constant here makes the pure assembly functions importable without any
 # dataset config.
-FRAMES_PER_SECOND = 93.75
+FRAMES_PER_SECOND: float = 93.75
 
 
 def turn_frame_spans(
     turns: Sequence, t0: float, target_frames: int, fps: float = FRAMES_PER_SECOND
 ) -> list[tuple[int, int]]:
     """Per-turn ``[start_frame, end_frame)`` spans relative to the target
-    start, rounded to the frame grid and clamped to ``[0, target_frames]``."""
+    start, rounded to the frame grid. Start is clamped to 0 (lower bound only);
+    end is clamped to target_frames (upper bound only). A turn entirely before
+    the target yields (0, -N); one entirely after yields (M, target_frames).
+    Callers must treat non-positive-length spans as unfittable."""
     spans = []
     for turn in turns:
         s = int(round((turn.start - t0) * fps))
@@ -263,7 +266,7 @@ def build_branch_texts_timestamped(
                 f"rounded turn spans overlap on channel {turn.channel} at frame {s}"
             )
         seq = branches[turn.channel]
-        seq[s : s + len(block)] = block
-        seq[s + len(block) : e] = [TURN_FILL_TOKEN] * (e - s - len(block))
+        seq[s : s + len(block)] = block  # noqa: E203
+        seq[s + len(block) : e] = [TURN_FILL_TOKEN] * (e - s - len(block))  # noqa: E203
         last_end[turn.channel] = e
     return branches
