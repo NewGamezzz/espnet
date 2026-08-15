@@ -275,11 +275,28 @@ class DataLoaderBuilder:
                 )
                 batches = batches[:keep]
                 total_batches = len(batches)
+            # NOTE: espnet2 requires len(batch) >= world_size because its
+            # iterators SPLIT each batch across ranks, so a batch smaller than
+            # world_size would leave a rank with nothing. espnet3 does not do
+            # that -- the slice below hands each rank whole, disjoint batches,
+            # and the only DDP hazard is ranks disagreeing on how MANY batches
+            # they will iterate, which the remainder-drop above already
+            # removes. Carrying espnet2's guard here therefore forbade nothing
+            # unsafe and instead forced min_batch_size >= world_size, which
+            # under numel batching is a memory bug: min_batch_size becomes a
+            # floor the sampler cannot go below, so peak padded frames per
+            # batch is max(natural_batch, min_batch_size) * max_length and
+            # batch_bins stops bounding memory at all. Measured on Emilia
+            # (30s cap, 8 GPUs, batch_bins=480000): the floor bound 72% of
+            # batches and drove peak frames to 25,317 against a 4,800 nominal
+            # budget -- 5.3x over -- which OOM'd F5-TTS Base on a V100-32.
+            # The same config with min_batch_size=2 peaks at 8,439 frames.
+            # Only a genuinely empty batch is unrecoverable here.
             for batch in batches:
-                if len(batch) < world_size:
+                if len(batch) == 0:
                     raise RuntimeError(
-                        "The batch-size must be equal or more than world_size:"
-                        f"{len(batch)} < {world_size}"
+                        f"[{mode}] batch sampler produced an empty batch; "
+                        "every batch must contain at least one example"
                     )
             batches = batches[rank::world_size]
             if mode not in _LOGGED_DISTRIBUTED_BATCHES:

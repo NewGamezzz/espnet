@@ -510,6 +510,89 @@ def test_iter_factory_drops_tail_batches_for_ddp(monkeypatch, rank):
     assert all(batch[0] != 8 for batch in iterator)
 
 
+@pytest.mark.parametrize("rank", [0, 1, 2, 3])
+def test_iter_factory_allows_batches_smaller_than_world_size(monkeypatch, rank):
+    """A batch smaller than world_size is legal: ranks get whole batches.
+
+    espnet2 splits each batch across ranks, so it must reject len(batch) <
+    world_size. espnet3 slices batches[rank::world_size] instead, giving every
+    rank whole, disjoint batches, so batch size and world size are unrelated.
+    Rejecting small batches here forced min_batch_size >= world_size, which
+    under numel batching turns min_batch_size into a floor that overrides
+    batch_bins and makes peak memory unbounded by it.
+    """
+    import espnet3.components.data.dataloader as dl
+
+    # 8 batches of 2 against world_size=4: every batch is half of world_size.
+    def _fake_build_batch_sampler(**kwargs):
+        return [[2 * i, 2 * i + 1] for i in range(8)]
+
+    monkeypatch.setattr(dl, "build_batch_sampler", _fake_build_batch_sampler)
+    monkeypatch.setattr(dl.torch.distributed, "get_world_size", lambda: 4)
+    monkeypatch.setattr(dl.torch.distributed, "get_rank", lambda: rank)
+
+    config = OmegaConf.create(
+        {
+            "dataloader": {
+                "train": {
+                    "iter_factory": {
+                        "_target_": (
+                            "test.espnet3.components.data."
+                            "test_dataloader_builder.DummyIterFactory"
+                        ),
+                        "batches": {"dummy": 1},
+                    }
+                }
+            }
+        }
+    )
+
+    organizer = build_organizer(DUMMY_DATASET_TARGET)
+    builder = DataLoaderBuilder(
+        dataset=organizer.train, config=config, collate_fn=None, num_device=4, epoch=0
+    )
+    iterator = builder.build("train")
+
+    # 8 batches / 4 ranks = 2 each, and the ranks partition the batches.
+    assert len(iterator) == 2
+    assert [batch[0] for batch in iterator] == [2 * rank, 2 * rank + 8]
+
+
+def test_iter_factory_rejects_empty_batch(monkeypatch):
+    """An empty batch is the one case that is still unrecoverable."""
+    import espnet3.components.data.dataloader as dl
+
+    def _fake_build_batch_sampler(**kwargs):
+        return [[0, 1], [], [2, 3], [4, 5]]
+
+    monkeypatch.setattr(dl, "build_batch_sampler", _fake_build_batch_sampler)
+    monkeypatch.setattr(dl.torch.distributed, "get_world_size", lambda: 2)
+    monkeypatch.setattr(dl.torch.distributed, "get_rank", lambda: 0)
+
+    config = OmegaConf.create(
+        {
+            "dataloader": {
+                "train": {
+                    "iter_factory": {
+                        "_target_": (
+                            "test.espnet3.components.data."
+                            "test_dataloader_builder.DummyIterFactory"
+                        ),
+                        "batches": {"dummy": 1},
+                    }
+                }
+            }
+        }
+    )
+
+    organizer = build_organizer(DUMMY_DATASET_TARGET)
+    builder = DataLoaderBuilder(
+        dataset=organizer.train, config=config, collate_fn=None, num_device=2, epoch=0
+    )
+    with pytest.raises(RuntimeError, match="empty batch"):
+        builder.build("train")
+
+
 # --- Multiple Iterator Mode (Sharded Dataset) ---
 
 
