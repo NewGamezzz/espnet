@@ -185,3 +185,66 @@ class TestNormalizeAndEncode:
         tokens = [TURN_TOKEN, "h", "i", TURN_FILL_TOKEN, OTHER_TOKEN]
         rendered = render_tokens(tokens)
         assert rendered == "|hi_#"
+
+
+def _turn(channel, text, start, end):
+    return FakeTurn(
+        channel=channel, speaker=f"spk{channel}", text=text, start=start, end=end
+    )
+
+
+class TestTimestampAssembly:
+    def test_single_turn_layout(self):
+        # 2.0 s target = 187 frames at 93.75 fps; one turn [0.5, 1.5) = frames 47..141.
+        turns = [_turn(0, "hi", 10.5, 11.5)]
+        from egs3.conversational.tts.dataset.preprocessing.text import (
+            build_branch_texts_timestamped,
+        )
+
+        out = build_branch_texts_timestamped(turns, 2, t0=10.0, target_frames=187)
+        a, b = out
+        assert len(a) == len(b) == 187
+        assert a[47] == TURN_TOKEN
+        assert a[48:50] == ["h", "i"]
+        assert a[50:141] == [TURN_FILL_TOKEN] * 91
+        assert a[:47] == [OTHER_TOKEN] * 47 and a[141:] == [OTHER_TOKEN] * 46
+        assert b == [OTHER_TOKEN] * 187  # non-owner branch is all <OTHER>
+
+    def test_overlapping_turns_are_independent_per_branch(self):
+        from egs3.conversational.tts.dataset.preprocessing.text import (
+            build_branch_texts_timestamped,
+        )
+
+        turns = [_turn(0, "abc", 0.0, 1.0), _turn(1, "de", 0.5, 1.5)]
+        out = build_branch_texts_timestamped(turns, 2, t0=0.0, target_frames=187)
+        assert (
+            out[0][0] == TURN_TOKEN and out[1][47] == TURN_TOKEN
+        )  # round(0.5 * 93.75) = 47
+
+    def test_unfittable_turn_raises(self):
+        from egs3.conversational.tts.dataset.preprocessing.text import (
+            build_branch_texts_timestamped,
+        )
+
+        turns = [_turn(0, "way too much text", 0.0, 0.05)]  # 4 frames, needs 18
+        with pytest.raises(ValueError, match="does not fit"):
+            build_branch_texts_timestamped(turns, 1, t0=0.0, target_frames=187)
+
+    def test_timestamp_fits_normal_and_defective(self):
+        from egs3.conversational.tts.dataset.preprocessing.text import (
+            timestamp_fits,
+        )
+
+        good = [_turn(0, "hello there", 0.0, 2.0)]
+        bad = [_turn(0, "I'm gonna go.", 0.0, 0.01)]
+        assert timestamp_fits(good, t0=0.0, t1=2.0)
+        assert not timestamp_fits(bad, t0=0.0, t1=2.0)
+
+    def test_spans_clamped_to_target(self):
+        from egs3.conversational.tts.dataset.preprocessing.text import (
+            turn_frame_spans,
+        )
+
+        turns = [_turn(0, "x", 0.0, 99.0)]
+        spans = turn_frame_spans(turns, t0=0.0, target_frames=100)
+        assert spans == [(0, 100)]
