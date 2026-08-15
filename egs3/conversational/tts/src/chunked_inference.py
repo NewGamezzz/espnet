@@ -84,8 +84,14 @@ the shortest reference never gets padded into format-OOD silence - and
 ``cond_prev_sec`` (trained range 2-10 s, default 10.0) caps how much
 generated-audio tail becomes the ``<prev_chunk>`` context, with
 ``cond_prev_sec: 0.0`` selecting the type-C re-anchor format (prompt only,
-no prev-chunk audio).  The hygiene knobs above stay orthogonal to both
-formats.  Checkpoint/format pairing is enforced, not assumed:
+no prev-chunk audio).  The chunk itself being generated is the third leg of
+the trained distribution: the training run's chunk-task windows were drawn
+with ``target_sec`` in 15-35 s, so ``chunk.target_sec`` (the SAME top-level
+knob the chunk policy above uses to size chunks) should stay in that range
+for a ``special_tokens`` checkpoint - ``chunk.turns`` chunking has no such
+guarantee and may drift the model out of its trained window length.  The
+hygiene knobs above stay orthogonal to both formats.  Checkpoint/format
+pairing is enforced, not assumed:
 ``special_tokens`` requires the training config's vocab to contain
 ``<speaker_prompt>``/``<prev_chunk>`` (checked with ``read_vocab``), so a
 legacy vocab predating special-token conditioning is rejected before any
@@ -96,9 +102,13 @@ window, not a growing chain: round 0 fixes ``P`` (the shared min-truncated
 prompt span, one real row per channel) once, and every later round k
 conditions on ``[P, H]`` where ``H`` is the ``cond_prev_sec``-capped tail of
 ALL generated audio so far - never the running chain history the
-``transcripts`` format uses.  Only ``H`` passes through the hygiene knobs
-(``P`` is real audio and the norm's own anchor, so it is exempt exactly like
-the transcripts format's prompt segment).  The prompt wav written to disk
+``transcripts`` format uses.  The full ODE window handed to the model is the
+conditioning prefixed onto the chunk it generates: ``[P | target]`` at round
+0 and ``[P | H | target]`` at every round k thereafter (``cond_prev_sec: 0.0``
+collapses the round-k window back to ``[P | target]``, the re-anchor case).
+Only ``H`` passes through the hygiene knobs (``P`` is real audio and the
+norm's own anchor, so it is exempt exactly like the transcripts format's
+prompt segment).  The prompt wav written to disk
 stays the FULL, untruncated reference - only the conditioning span is capped
 - so ``sim_o`` and the rest of the metric contract are unaffected.  Text for
 each round covers only that round's own chunk (no transcript ever describes
