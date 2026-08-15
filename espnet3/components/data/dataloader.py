@@ -212,8 +212,8 @@ class DataLoaderBuilder:
             )
         if config.iter_factory is not None:
             factory_config = OmegaConf.to_container(config.iter_factory, resolve=True)
-            return self._build_iter_factory(factory_config, dataset)
-        return self._build_standard_dataloader(config, dataset)
+            return self._build_iter_factory(factory_config, dataset, mode=mode)
+        return self._build_standard_dataloader(config, dataset, mode=mode)
 
     def _build_standard_dataloader(self, dataloader_config, dataset=None, mode="train"):
         if dataset is None:

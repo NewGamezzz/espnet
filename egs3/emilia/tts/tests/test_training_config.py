@@ -443,3 +443,31 @@ def test_min_batch_size_is_one_on_both_loaders():
         valid = cfg.dataloader.valid.iter_factory.batches
         assert train.min_batch_size == 1, f"{conf_path.name}: train floor"
         assert valid.min_batch_size == 1, f"{conf_path.name}: valid floor"
+
+
+def test_num_workers_is_inside_iter_factory():
+    """num_workers/pin_memory must live INSIDE iter_factory or they do nothing.
+
+    espnet3's DataLoaderBuilder._build_iter_factory instantiates only the
+    `iter_factory` block, so keys placed as siblings of it are silently
+    ignored -- no error, no warning, just single-process data loading. The
+    2-GPU smoke (job 43635433) ran that way and spent iter_time=0.624s per
+    step waiting on the loader against train_time=1.751s of compute, 26% of
+    every step decoding mp3 on the main process.
+    """
+    for conf_path in (CONF, SMOKE_CONF, SMOKE_2GPU_CONF):
+        cfg = OmegaConf.load(conf_path)
+        for mode in ("train", "valid"):
+            block = cfg.dataloader[mode]
+            assert "num_workers" not in block, (
+                f"{conf_path.name}: dataloader.{mode}.num_workers is a sibling "
+                "of iter_factory, where espnet3 ignores it"
+            )
+            assert "pin_memory" not in block, (
+                f"{conf_path.name}: dataloader.{mode}.pin_memory is a sibling "
+                "of iter_factory, where espnet3 ignores it"
+            )
+            assert block.iter_factory.num_workers > 0, (
+                f"{conf_path.name}: dataloader.{mode}.iter_factory.num_workers"
+            )
+            assert block.iter_factory.pin_memory is True

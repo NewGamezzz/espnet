@@ -183,10 +183,17 @@ dataloader:
     float_pad_value: 0.0
   train:
     num_shards: 1
-    num_workers: 4
-    pin_memory: true
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+      # INSIDE iter_factory, not beside it. espnet3's _build_iter_factory
+      # instantiates ONLY the iter_factory block, so num_workers/pin_memory
+      # placed as siblings of it are silently dead -- the 2-GPU smoke (job
+      # 43635433) ran with num_workers=0 and paid iter_time=0.624s of
+      # dataloader wait against train_time=1.751s, i.e. 26% of every step
+      # spent decoding mp3 on the main process. egs3/libritts's config
+      # documents this same trap.
+      num_workers: 4
+      pin_memory: true
       shuffle: true
       collate_fn: ${dataloader.collate_fn}
       batches:
@@ -238,10 +245,17 @@ dataloader:
         max_samples: 64        # upstream F5-TTS's cap (Sec. B.7)
   valid:
     num_shards: 1
-    num_workers: 4
-    pin_memory: true
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+      # INSIDE iter_factory, not beside it. espnet3's _build_iter_factory
+      # instantiates ONLY the iter_factory block, so num_workers/pin_memory
+      # placed as siblings of it are silently dead -- the 2-GPU smoke (job
+      # 43635433) ran with num_workers=0 and paid iter_time=0.624s of
+      # dataloader wait against train_time=1.751s, i.e. 26% of every step
+      # spent decoding mp3 on the main process. egs3/libritts's config
+      # documents this same trap.
+      num_workers: 4
+      pin_memory: true
       shuffle: false
       collate_fn: ${dataloader.collate_fn}
       batches:
