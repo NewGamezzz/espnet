@@ -6,6 +6,9 @@ from .conftest import FakeTurn
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
     NEW_TOKENS,
+    PREV_CHUNK_TOKEN,
+    SPEAKER_PROMPT_TOKEN,
+    TURN_TOKEN,
     build_branch_texts,
     encode_tokens,
     extend_vocab,
@@ -28,6 +31,16 @@ def sample_of(turns, num_channels):
         "num_channels": num_channels,
         "turns": list(turns),
     }
+
+
+@pytest.fixture
+def turns_2spk() -> list[FakeTurn]:
+    """Two-channel turn list, so branch 0 and branch 1 diverge after any
+    shared prefix (used by the chunk-task prefix tests)."""
+    return [
+        FakeTurn(0, "spk_a", "hi", 0.0, 1.0),
+        FakeTurn(1, "spk_b", "yo", 1.2, 2.0),
+    ]
 
 
 def test_literal_space_token_line(tmp_path):
@@ -69,3 +82,39 @@ def test_oov_fails_loudly(tmp_path):
     pre = ConversationalTextPreprocessor(token_list=vocab)
     with pytest.raises(KeyError, match="not in vocab"):
         pre("uid", sample_of([FakeTurn(0, "spk", "abz", 0.0, 1.0)], 1))
+
+
+def test_chunk_task_prefix_per_frame(tmp_path, turns_2spk, base_vocab):
+    vocab = write_vocab(tmp_path, extend_vocab(base_vocab))
+    pre = ConversationalTextPreprocessor(token_list=vocab)
+    sample = sample_of(turns_2spk, 2)
+    sample["prompt_frames"] = 5
+    sample["prev_frames"] = 3
+    out = pre("uid", sample)
+    sp = pre.token2id[SPEAKER_PROMPT_TOKEN]
+    pc = pre.token2id[PREV_CHUNK_TOKEN]
+    for t in out["text"]:
+        assert t[:5].tolist() == [sp] * 5
+        assert t[5:8].tolist() == [pc] * 3
+    a, b = out["text"]
+    assert not torch.equal(a[8:], b[8:])  # target region still branch-specific
+
+
+def test_prev_frames_zero_gives_prompt_only_prefix(tmp_path, turns_2spk, base_vocab):
+    vocab = write_vocab(tmp_path, extend_vocab(base_vocab))
+    pre = ConversationalTextPreprocessor(token_list=vocab)
+    sample = sample_of(turns_2spk, 2)
+    sample["prompt_frames"] = 4
+    sample["prev_frames"] = 0
+    out = pre("uid", sample)
+    sp = pre.token2id[SPEAKER_PROMPT_TOKEN]
+    tn = pre.token2id[TURN_TOKEN]
+    assert out["text"][0][:4].tolist() == [sp] * 4
+    assert out["text"][0][4].item() == tn
+
+
+def test_infill_has_no_prefix(tmp_path, turns_2spk, base_vocab):
+    vocab = write_vocab(tmp_path, extend_vocab(base_vocab))
+    pre = ConversationalTextPreprocessor(token_list=vocab)
+    out = pre("uid", sample_of(turns_2spk, 2))
+    assert out["text"][0][0].item() == pre.token2id[TURN_TOKEN]
