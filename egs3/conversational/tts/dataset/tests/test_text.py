@@ -252,7 +252,7 @@ class TestTimestampAssembly:
     def test_timestamp_fits_implies_build_succeeds(self):
         """Verify: timestamp_fits True => build_branch_texts_timestamped succeeds.
 
-        Tests with realistic non-zero t0, exact rounding ties, and boundary turns.
+        Tests with realistic non-zero t0, exact banker's rounding, and boundary cases.
         """
         from egs3.conversational.tts.dataset.preprocessing.text import (
             FRAMES_PER_SECOND,
@@ -260,39 +260,64 @@ class TestTimestampAssembly:
             timestamp_fits,
         )
 
-        # Realistic non-zero session time offset.
-        t0 = 1837.44
-        t1 = 1839.44  # 2 second span
         fps = FRAMES_PER_SECOND
-        base_frames = int((t1 - t0) * fps)  # 187
-        frame_offsets = [
-            base_frames - 1,
-            base_frames,
-            base_frames + 1,
-        ]  # Test safety margin
 
         # Layout 1: turn starting exactly at t0 (boundary case)
-        layout1 = [_turn(0, "hello", t0, t0 + 0.5)]
-
-        # Layout 2: exact .5-frame rounding tie at t0 + 0.5/fps
-        # Rounds to frame 47 (0.5 * 93.75)
-        layout2 = [_turn(0, "test", t0 + 0.5 / fps, t0 + 1.5 / fps)]
-
-        # Layout 3: multiple channels with turns
-        layout3 = [
-            _turn(0, "abc", t0, t0 + 0.5),
-            _turn(1, "de", t0 + 0.5, t0 + 1.0),
+        t0_1 = 1837.44
+        t1_1 = t0_1 + 20.0
+        layout1 = [_turn(0, "hello", t0_1, t0_1 + 0.5)]
+        frame_offsets_1 = [
+            int((t1_1 - t0_1) * fps) - 1,
+            int((t1_1 - t0_1) * fps),
+            int((t1_1 - t0_1) * fps) + 1,
         ]
 
-        for layout in [layout1, layout2, layout3]:
+        # Layout 2: exact .5-frame rounding tie exercising banker's rounding.
+        # Both 2.0 * 93.75 and 6.0 * 93.75 are exactly .5, so round-half-to-even
+        # sends 187.5 -> 188 and 562.5 -> 562. Span (188, 562) = 374 frames fits
+        # the 9-token block ["<turn>" + "tie case"].
+        t0_2 = 1837.44
+        t1_2 = t0_2 + 20.0
+        turn_a = _turn(0, "hi", t0_2, t0_2 + 1.0)
+        turn_b = _turn(1, "tie case", t0_2 + 2.0, t0_2 + 6.0)
+        # Guard tie exactness so float drift can never make the test vacuous.
+        assert (turn_b.start - t0_2) * fps == 187.5
+        assert (turn_b.end - t0_2) * fps == 562.5
+        layout2 = [turn_a, turn_b]
+        assert timestamp_fits(layout2, t0_2, t1_2)  # Must pass, not gated.
+        frame_offsets_2 = [
+            int((t1_2 - t0_2) * fps) - 1,
+            int((t1_2 - t0_2) * fps),
+            int((t1_2 - t0_2) * fps) + 1,
+        ]
+
+        # Layout 3: multiple channels with turns
+        t0_3 = 1837.44
+        t1_3 = t0_3 + 20.0
+        layout3 = [
+            _turn(0, "abc", t0_3, t0_3 + 0.5),
+            _turn(1, "de", t0_3 + 0.5, t0_3 + 1.0),
+        ]
+        frame_offsets_3 = [
+            int((t1_3 - t0_3) * fps) - 1,
+            int((t1_3 - t0_3) * fps),
+            int((t1_3 - t0_3) * fps) + 1,
+        ]
+
+        # Test each layout.
+        for layout, t0, t1, frame_offsets in [
+            (layout1, t0_1, t1_1, frame_offsets_1),
+            (layout2, t0_2, t1_2, frame_offsets_2),
+            (layout3, t0_3, t1_3, frame_offsets_3),
+        ]:
             for target_frames in frame_offsets:
-                # Only test if timestamp_fits says it fits
-                if timestamp_fits(layout, t0, t1, fps):
-                    # build_branch_texts_timestamped must succeed
-                    num_channels = max(t.channel for t in layout) + 1
-                    branches = build_branch_texts_timestamped(
-                        layout, num_channels, t0, target_frames, fps
-                    )
-                    # Each branch has exactly target_frames tokens
-                    for branch in branches:
-                        assert len(branch) == target_frames
+                num_channels = max(t.channel for t in layout) + 1
+                branches = build_branch_texts_timestamped(
+                    layout, num_channels, t0, target_frames, fps
+                )
+                # Each branch has exactly target_frames tokens.
+                for branch in branches:
+                    assert len(branch) == target_frames
+                # For layout2, verify the banker's rounding lands at frame 188.
+                if layout is layout2:
+                    assert branches[1][188] == TURN_TOKEN
