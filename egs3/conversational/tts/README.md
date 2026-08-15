@@ -20,7 +20,7 @@ Input branch 2: <turn> <OTHER>*30 <turn> Good. What about you? <turn> <OTHER>*35
 
 Rules (fixed by design, see `dataset/preprocessing/text.py`):
 
-- Turn ORDER only: no timestamps, durations, or alignment information ever appear in the token sequence.
+- Turn ORDER only, Mode O (the default, `timestamp_align_prob == 0.0`): no timestamps, durations, or alignment information appear in the token sequence. Mode T is the timestamp-aligned alternative (see "Timestamp-aligned text (Mode T)" below).
 - One `<OTHER>` per character preserves the conversation's length budget without using timestamps.
 - `<OTHER>` is a new vocab token, distinct from F5's internal filler ("another speaker is talking" vs "text has ended").
 - Turn markers carry NO speaker identity: a single `<turn>` token precedes every turn, identical across branches and speakers, so no vocab token depends on the speaker count.
@@ -43,7 +43,10 @@ Because the line index IS the token id, the vocab file itself carries no header 
 ```
 
 `base_vocab_size` and `base_vocab_sha256` are a provenance guard: before loading pretrained weights, training asserts them against the vocab shipped with the checkpoint, so a build against the wrong base vocab fails before it can corrupt the text-embedding alignment.
-`<turn_fill>` bumped `total_size` from 2549 to 2550: a vocab or checkpoint built before this token existed fails loudly at these same sha256/strict-load gates rather than silently misaligning ids, and the fix is the cluster `create_dataset` re-run already pending for the chunk-task vocab bump (see "Cluster migration" below).
+`<turn_fill>` bumped `total_size` from 2549 to 2550, so a vocab built before this token existed has only four trailing tokens instead of five.
+That mismatch fails loudly at `src/build_model.py`'s `tokens[-len(NEW_TOKENS):] != NEW_TOKENS` assertion (checked in both `build_multibranch_f5` and `extended_text_embedding`, before any weight is read), rather than silently misaligning ids.
+The `base_vocab_sha256`/`base_vocab_size` provenance check above does NOT catch this: it hashes only the unchanged base vocab bytes, so it is blind to how many tokens were appended.
+The fix is the cluster `create_dataset` re-run already pending for the chunk-task vocab bump (see "Cluster migration" below).
 
 ## Building
 
@@ -156,7 +159,7 @@ Each branch starts as `<OTHER>` for every frame, then each of that branch's own 
 A turn that cannot fit its rounded frame span (too little time for its own `<turn>` + characters, or a same-channel span collision) is unfittable; the planner checks this with a seconds-only predicate before assembly, and when the coin picks a window whose turns don't all fit, the WHOLE window degrades to plain Mode O rather than partially applying Mode T.
 Calibrate the coin against the per-epoch INFO log line `plan_windows` emits whenever `timestamp_align_prob > 0` in epoch mode: `timestamp-text plan: %d mode-T / %d degraded of %d windows` (mode-T count, degraded-to-Mode-O count, total windows planned that epoch).
 The frozen plan (valid/test/inference, `epoch=None`) never applies the coin, matching the chunk-task's own `epoch is None` gate, so those splits are always Mode O.
-`<turn_fill>` is a new vocab token (see "New vocab tokens" above), so a pretrained vocab or checkpoint built before this token existed fails loudly at the sha256/strict-load gates in "Model assembly" below rather than silently misaligning ids; the cluster `create_dataset` re-run already pending for the chunk-task vocab bump (see "Cluster migration" below) covers this migration too.
+`<turn_fill>` is a new vocab token, so a vocab built before this token existed fails loudly at `src/build_model.py`'s `NEW_TOKENS` tail assertion (see "New vocab tokens" above for the exact gate, and why the sha256 provenance check does not catch it) rather than silently misaligning ids; the cluster `create_dataset` re-run already pending for the chunk-task vocab bump (see "Cluster migration" below) covers this migration too.
 Inference-side consumption of Mode T text (`text_format: timestamps`) is not implemented on this branch; it lives in the eval worktree alongside the still-pending `cond_format: special_tokens` work.
 
 ### The epoch-0 batch-count cap
@@ -304,6 +307,8 @@ With `online=True` (train) `set_epoch` also drives a fresh per-epoch window PLAN
 | `dataset.*.data_src_args.min_active_speakers` | `2` | drop windows with fewer active speakers (knob, not a rebuild; relax if per-channel quality drifts) |
 | `dataloader.train.batch_bins` | `3000000` | packed row budget in sample-rows (N x T_24k, padded); a 60 s N=2 window costs 2.88M and must fit alone (`min_batch_size: 1`), so this is effectively the floor; effective batch is scaled via `trainer.accumulate_grad_batches` |
 | `dataloader.train.min_batch_size` | `1` | counts conversations, not rows |
+
+`timestamp_align_prob` (Mode T's coin probability) is not in this table: it is a `ConversationDataset` constructor arg only, not set by any shipped `conf/*.yaml` (default `0.0`), documented under "Timestamp-aligned text (Mode T)" above.
 
 ### Running the smoke training
 
