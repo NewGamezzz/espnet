@@ -87,12 +87,14 @@ generated-audio tail becomes the ``<prev_chunk>`` context, with
 no prev-chunk audio).  The chunk itself being generated is the third leg of
 the trained distribution: the training run's chunk-task windows were drawn
 with ``target_sec`` in 15-35 s, so ``chunk.target_sec`` (the SAME top-level
-knob the chunk policy above uses to size chunks) should stay in that range
-for a ``special_tokens`` checkpoint - ``chunk.turns`` chunking has no such
-guarantee and may drift the model out of its trained window length.  The
-hygiene knobs above stay orthogonal to both formats.  Checkpoint/format
-pairing is enforced, not assumed:
-``special_tokens`` requires the training config's vocab to contain
+knob the chunk policy above uses to size chunks) should be set inside that
+range to keep the packed CEILING under the trained window - realized chunk
+length can still fall short (a short final chunk) or exceed it (an
+oversized single turn, a ``cover_all_speakers`` hold-open) per the
+chunk-policy caveats above; ``chunk.turns`` chunking gives no such ceiling
+at all.  The hygiene knobs above stay orthogonal to both formats.
+Checkpoint/format pairing is enforced, not assumed: ``special_tokens``
+requires the training config's vocab to contain
 ``<speaker_prompt>``/``<prev_chunk>`` (checked with ``read_vocab``), so a
 legacy vocab predating special-token conditioning is rejected before any
 model use rather than silently mis-tokenizing.
@@ -108,13 +110,13 @@ conditioning prefixed onto the chunk it generates: ``[P | target]`` at round
 collapses the round-k window back to ``[P | target]``, the re-anchor case).
 Only ``H`` passes through the hygiene knobs (``P`` is real audio and the
 norm's own anchor, so it is exempt exactly like the transcripts format's
-prompt segment).  The prompt wav written to disk
-stays the FULL, untruncated reference - only the conditioning span is capped
-- so ``sim_o`` and the rest of the metric contract are unaffected.  Text for
-each round covers only that round's own chunk (no transcript ever describes
-a conditioning region); the P/H frame counts are conveyed to the model
-purely through the ``<speaker_prompt>``/``<prev_chunk>`` prefix the
-preprocessor prepends.
+prompt segment).  The prompt wav written to disk stays the FULL,
+untruncated reference - only the conditioning span is capped - so
+``sim_o`` and the rest of the metric contract are unaffected.  Text for
+each round covers only that round's own chunk (no transcript ever
+describes a conditioning region); the P/H frame counts are conveyed to
+the model purely through the ``<speaker_prompt>``/``<prev_chunk>``
+prefix the preprocessor prepends.
 
 DETERMINISM CONTRACT - a documented departure from ``generate_external``:
 sharding is BY DIALOGUE (a chunk chain cannot cross shards), and each shard
