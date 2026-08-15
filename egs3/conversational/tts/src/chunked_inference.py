@@ -123,6 +123,11 @@ from omegaconf import OmegaConf
 from tqdm import tqdm
 
 from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
+from egs3.conversational.tts.dataset.preprocessing.text import (
+    PREV_CHUNK_TOKEN,
+    SPEAKER_PROMPT_TOKEN,
+)
+from egs3.conversational.tts.dataset.preprocessor import read_vocab
 from egs3.conversational.tts.src.external_inference import (
     ACTIVE_RMS_FRAME_SEC,
     ACTIVE_RMS_THRESHOLD,
@@ -730,6 +735,11 @@ def run_chunked_inference(
         raise ValueError(
             f"prompt_fill must be one of {PROMPT_FILLS}, got {prompt_fill!r}"
         )
+    if sptok is not None and prompt_fill != "zeros":
+        raise ValueError(
+            "prompt_fill has no effect under cond_format: special_tokens "
+            "(the parallel prompt span has no off rows); remove the key"
+        )
 
     if training_config is None:
         train_path = Path(cfg.training_config)
@@ -742,12 +752,23 @@ def run_chunked_inference(
     hop = int(training_config.hop_length)
 
     testset = cfg.testset
+    token_list = OmegaConf.to_container(training_config, resolve=True)["dataset"][
+        "preprocessor"
+    ]["token_list"]
+    if sptok is not None:
+        tokens = read_vocab(token_list)
+        missing = {SPEAKER_PROMPT_TOKEN, PREV_CHUNK_TOKEN} - set(tokens)
+        if missing:
+            raise ValueError(
+                f"cond_format: special_tokens needs a vocab containing "
+                f"{sorted(missing)}; this training config's vocab predates "
+                "special-token conditioning, so the checkpoint cannot have "
+                "been trained with it"
+            )
     records = load_covomix2_testset(
         testset.root,
         testset.librispeech_root,
-        OmegaConf.to_container(training_config, resolve=True)["dataset"][
-            "preprocessor"
-        ]["token_list"],
+        token_list,
         num_channels=int(testset.get("num_channels", 2)),
     )
 

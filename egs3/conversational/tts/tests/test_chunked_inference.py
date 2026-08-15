@@ -16,9 +16,13 @@ import torch
 from omegaconf import OmegaConf
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
+    NEW_TOKENS,
     OTHER_TOKEN,
+    PREV_CHUNK_TOKEN,
+    SPEAKER_PROMPT_TOKEN,
     TURN_TOKEN,
     build_branch_texts,
+    make_token2id,
 )
 from egs3.conversational.tts.src.chunked_inference import (
     MODE as CHUNKED_MODE,
@@ -1774,3 +1778,123 @@ class TestSpecialTokensInfer:
         # The generated region past the conditioning span is still zeros.
         gen_region = item1.speech[:, p_total * HOP :]
         assert torch.equal(gen_region, torch.zeros_like(gen_region))
+
+    def test_hygiene_engages_on_h_only_not_round0(
+        self, testset, tiny_model, tmp_path
+    ):
+        # H (round >= 1's generated-audio tail) goes through the hygiene
+        # knobs; P (round 0's parallel real-prompt span) is exempt exactly
+        # like the transcripts format's prompt segment - this exercises the
+        # special-mode anchor construction from full prompt wavs, which the
+        # meta-only frame-count tests above never touch.
+        out, _, _ = self._run(
+            testset,
+            tiny_model,
+            tmp_path / "o",
+            _sptok_chunk(cond_loudness_norm=True),
+        )
+        metas = [json.loads(p.read_text()) for p in sorted((out / "meta").glob("*"))]
+        assert metas
+        n_round_ge1 = 0
+        for meta in metas:
+            n = meta["num_channels"]
+            for c in meta["chunking"]["chunks"]:
+                if c["round"] == 0:
+                    assert "conditioning" not in c
+                else:
+                    assert len(c["conditioning"]["gains"]) == n
+                    n_round_ge1 += 1
+        assert n_round_ge1 > 0
+
+    def test_round1_text_prefix_is_speaker_prompt_then_prev_chunk(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        # Pins that the preprocessor receives P-only prompt_frames (not the
+        # P+H total): the first p_frames entries of every branch's text row
+        # must be <speaker_prompt>, the next prev_frames must be
+        # <prev_chunk> - same spy/capture pattern as
+        # test_round1_conditioning_is_p_plus_tail_of_h above.
+        import egs3.conversational.tts.src.chunked_inference as ci
+
+        captured = []
+        real = ci.generate_batch
+
+        def spy(model, vocoder, items, **kwargs):
+            out = real(model, vocoder, items, **kwargs)
+            captured.append((items, out))
+            return out
+
+        monkeypatch.setattr(ci, "generate_batch", spy)
+        self._run(testset, tiny_model, tmp_path / "infer", _sptok_chunk())
+
+        assert len(captured) == 3
+        item0 = captured[0][0][0]
+        item1 = captured[2][0][0]
+
+        p_total = item1.prompt_frames  # p_frames + prev_frames, the TOTAL
+        p_frames = item0.prompt_frames  # round 0's P is prev_frames=0, so
+        # its own prompt_frames IS p_frames.
+        prev_frames = p_total - p_frames
+        assert prev_frames > 0
+
+        token2id = make_token2id(
+            Path(testset["vocab"]).read_text(encoding="utf-8").splitlines()
+        )
+        sp_id = token2id[SPEAKER_PROMPT_TOKEN]
+        pc_id = token2id[PREV_CHUNK_TOKEN]
+
+        text = item1.text.cpu()
+        for branch in range(text.shape[0]):
+            row = text[branch]
+            assert torch.equal(
+                row[:p_frames], torch.full((p_frames,), sp_id, dtype=row.dtype)
+            )
+            assert torch.equal(
+                row[p_frames : p_frames + prev_frames],
+                torch.full((prev_frames,), pc_id, dtype=row.dtype),
+            )
+
+    def test_special_tokens_rejects_legacy_vocab(
+        self, testset, tiny_model, tmp_path
+    ):
+        # A 2-token vocab file next to the testset's real one.
+        legacy = tmp_path / "legacy_vocab.txt"
+        tokens = Path(testset["vocab"]).read_text().splitlines()
+        assert tokens[-4:] == list(NEW_TOKENS)
+        legacy.write_text("\n".join(tokens[:-4] + tokens[-4:-2]) + "\n")
+        cfg = _chunked_config(testset, tmp_path / "o", _sptok_chunk())
+        tc = OmegaConf.create(
+            OmegaConf.to_container(testset["training_config"], resolve=True)
+        )
+        tc.dataset.preprocessor.token_list = str(legacy)
+        with pytest.raises(ValueError, match="special_tokens needs a vocab"):
+            run_chunked_inference(
+                cfg, training_config=tc, model=tiny_model, vocoder=FakeVocoder()
+            )
+
+    def test_special_tokens_rejects_room_tone_prompt_fill(
+        self, testset, tiny_model, tmp_path
+    ):
+        cfg = _chunked_config(
+            testset, tmp_path / "o", _sptok_chunk(), prompt_fill="room_tone"
+        )
+        with pytest.raises(ValueError, match="prompt_fill has no effect"):
+            run_chunked_inference(
+                cfg,
+                training_config=testset["training_config"],
+                model=tiny_model,
+                vocoder=FakeVocoder(),
+            )
+
+    def test_explicit_transcripts_mode_is_bit_identical_to_default(
+        self, testset, tiny_model, tmp_path
+    ):
+        out_a, _, _ = self._run(testset, tiny_model, tmp_path / "a", {"turns": 2})
+        out_b, _, _ = self._run(
+            testset, tiny_model, tmp_path / "b",
+            {"turns": 2, "cond_format": "transcripts"},
+        )
+        for name in sorted(p.name for p in (out_a / "wav").glob("*")):
+            torch.testing.assert_close(
+                _read_wav(out_a / "wav" / name), _read_wav(out_b / "wav" / name)
+            )
