@@ -4,6 +4,7 @@ from ..preprocessing.chunk_task import ChunkTaskParams
 from ..preprocessing.planner import WindowParams, plan_session, plan_sessions
 from ..preprocessing.sessions import SessionRecord
 from ..preprocessing.sssd import Recording, Turn
+from ..preprocessing.text import timestamp_fits
 from ..preprocessing.windows import build_windows, to_json
 
 # Long two-channel session with clean alternation and real gaps so several
@@ -501,3 +502,109 @@ class TestChunkTaskPlanning:
         assert stats.n_chunk_prompt_only == 1
         assert stats.n_chunk_full == 0
         assert stats.n_chunk_degraded == 0
+
+
+class TestTimestampCoin:
+    def test_prob_zero_is_bit_parity(self):
+        s = _session()
+        base, base_stats = plan_session(s, params=PARAMS, seed=0, epoch=3)
+        same, same_stats = plan_session(
+            s, params=PARAMS, seed=0, epoch=3, timestamp_align_prob=0.0
+        )
+        assert base == same
+        # The coin's only observable side channel is the counters (Mode T
+        # uses its own rng stream, so a gate bug that still draws-and-skips
+        # would leave records untouched but pollute these) - weaker checks
+        # that only compare records would miss it, per the file's own
+        # test_frozen_mode_never_chunks convention.
+        assert base_stats.n_timestamp_windows == 0
+        assert base_stats.n_timestamp_degraded == 0
+        assert same_stats.n_timestamp_windows == 0
+        assert same_stats.n_timestamp_degraded == 0
+
+    def test_coin_changes_flags_not_windows(self):
+        s = _session()
+        base, _ = plan_session(s, params=PARAMS, seed=0, epoch=3)
+        flagged, stats = plan_session(
+            s, params=PARAMS, seed=0, epoch=3, timestamp_align_prob=1.0
+        )
+        assert [(r.t0, r.t1, r.chunk_task) for r in base] == [
+            (r.t0, r.t1, r.chunk_task) for r in flagged
+        ]
+        assert stats.n_timestamp_windows + stats.n_timestamp_degraded == len(flagged)
+        assert all(
+            r.timestamp_text == fits
+            for r, fits in zip(
+                flagged,
+                [timestamp_fits(r.turns, r.t0, r.t1) for r in base],
+            )
+        )
+
+    def test_frozen_mode_never_flags(self):
+        s = _session()
+        records, stats = plan_session(
+            s, params=PARAMS, seed=0, epoch=None, timestamp_align_prob=1.0
+        )
+        assert not any(r.timestamp_text for r in records)
+        # Same weaker-check trap as above: epoch=None must never even draw
+        # the coin, not just discard a heads result.
+        assert stats.n_timestamp_windows == 0
+        assert stats.n_timestamp_degraded == 0
+
+    def test_deterministic_across_calls(self):
+        s = _session()
+        a, _ = plan_session(s, params=PARAMS, seed=0, epoch=3, timestamp_align_prob=0.5)
+        b, _ = plan_session(s, params=PARAMS, seed=0, epoch=3, timestamp_align_prob=0.5)
+        assert [r.timestamp_text for r in a] == [r.timestamp_text for r in b]
+
+    def test_atomic_path_can_flag(self):
+        # BIT-PARITY routing check: the atomic early return must also go
+        # through the coin, not just the chunking/non-chunking tails.
+        t = Turn(channel=0, speaker="sp", text="hi", start=0.0, end=3.2)
+        s = _session(
+            atomic=True, window_id="w1", num_channels=1, turns=(t,), duration=3.2
+        )
+        records, stats = plan_session(
+            s, params=PARAMS, seed=0, epoch=3, timestamp_align_prob=1.0
+        )
+        assert records[0].timestamp_text is True
+        assert stats.n_timestamp_windows == 1
+        assert stats.n_timestamp_degraded == 0
+
+    def test_atomic_path_can_degrade(self):
+        # One sub-0.05 s turn carrying far more text than its frame span can
+        # hold: timestamp_fits must reject it, so a coin-heads draw degrades
+        # back to Mode O instead of flagging timestamp_text.
+        t = Turn(channel=0, speaker="sp", text="x" * 200, start=0.0, end=0.03)
+        s = _session(
+            atomic=True, window_id="w1", num_channels=1, turns=(t,), duration=0.03
+        )
+        records, stats = plan_session(
+            s, params=PARAMS, seed=0, epoch=3, timestamp_align_prob=1.0
+        )
+        assert stats.n_timestamp_degraded >= 1
+        assert records[0].timestamp_text is False
+
+    def test_plan_sessions_forwards_prob_and_merges_stats(self):
+        # Mirrors test_plan_sessions_merges_chunk_stats_and_threads_chunk_params:
+        # a dropped timestamp_align_prob kwarg in the plan_sessions loop body
+        # would leave both counters at 0 while every single-session test
+        # above still passes untouched.
+        s1, s2 = _session(session_id="a"), _session(session_id="b")
+        both, total = plan_sessions(
+            [s1, s2], params=PARAMS, seed=0, epoch=3, timestamp_align_prob=1.0
+        )
+        only1, stats1 = plan_session(
+            s1, params=PARAMS, seed=0, epoch=3, timestamp_align_prob=1.0
+        )
+        only2, stats2 = plan_session(
+            s2, params=PARAMS, seed=0, epoch=3, timestamp_align_prob=1.0
+        )
+        assert both == only1 + only2
+        assert total.n_timestamp_windows == (
+            stats1.n_timestamp_windows + stats2.n_timestamp_windows
+        )
+        assert total.n_timestamp_degraded == (
+            stats1.n_timestamp_degraded + stats2.n_timestamp_degraded
+        )
+        assert total.n_timestamp_windows > 0

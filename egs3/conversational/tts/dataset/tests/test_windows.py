@@ -1,5 +1,6 @@
 """Tests for turn merging (AC3) and utterance-boundary windowing (AC4, AC5)."""
 
+import dataclasses
 import gzip
 import json
 import random
@@ -17,6 +18,7 @@ from egs3.conversational.tts.dataset.preprocessing.sssd import (
     session_speakers,
 )
 from egs3.conversational.tts.dataset.preprocessing.windows import (
+    WindowingStats,
     _gap_at,
     blocked_intervals,
     build_windows,
@@ -425,6 +427,52 @@ class TestWindowDeterminism:
         assert d["channel_speech_sec"] == list(w.channel_speech_sec)
         assert d["exchange_count"] == w.exchange_count
         assert from_json(d) == w
+
+    def test_timestamp_text_default_false_and_roundtrip(self):
+        rec = make_recording(120.0)
+        turns = dialogue_turns(120.0)
+        records, _ = build_windows(
+            "sess1", rec, turns, rng=random.Random("s"), **WINDOW_KW
+        )
+        w = records[0]
+        assert w.timestamp_text is False
+
+        flagged = dataclasses.replace(w, timestamp_text=True)
+        assert flagged.timestamp_text is True
+        d = to_json(flagged)
+        assert d["timestamp_text"] is True
+        assert from_json(d).timestamp_text is True
+
+        # Old manifests written before this field existed have no key at
+        # all; the record must still round-trip, defaulting to False.
+        d.pop("timestamp_text", None)
+        assert from_json(d).timestamp_text is False
+
+    def test_timestamp_text_false_omitted_from_json(self):
+        rec = make_recording(120.0)
+        turns = dialogue_turns(120.0)
+        records, _ = build_windows(
+            "sess1", rec, turns, rng=random.Random("s"), **WINDOW_KW
+        )
+        w = records[0]
+        assert "timestamp_text" not in to_json(w)
+
+
+class TestWindowingStatsMerge:
+    """Mode T stats counters are additive and default to 0 (AC unaffected
+    unless a recipe opts into the timestamp-text knob)."""
+
+    def test_defaults_are_zero(self):
+        stats = WindowingStats()
+        assert stats.n_timestamp_windows == 0
+        assert stats.n_timestamp_degraded == 0
+
+    def test_merge_sums_timestamp_counters(self):
+        a = WindowingStats(n_timestamp_windows=3, n_timestamp_degraded=1)
+        b = WindowingStats(n_timestamp_windows=2, n_timestamp_degraded=2)
+        a.merge(b)
+        assert a.n_timestamp_windows == 5
+        assert a.n_timestamp_degraded == 3
 
 
 class TestSpeakerActivity:

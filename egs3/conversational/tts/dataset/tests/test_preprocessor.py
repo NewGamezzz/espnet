@@ -6,7 +6,10 @@ from .conftest import FakeTurn
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
     NEW_TOKENS,
+    PREV_CHUNK_TOKEN,
+    SPEAKER_PROMPT_TOKEN,
     build_branch_texts,
+    build_branch_texts_timestamped,
     encode_tokens,
     extend_vocab,
 )
@@ -20,6 +23,14 @@ def write_vocab(tmp_path, tokens):
     path = tmp_path / "vocab.txt"
     path.write_text("\n".join(tokens) + "\n", encoding="utf-8")
     return path
+
+
+@pytest.fixture
+def preproc(tmp_path, base_vocab):
+    """Preprocessor built against the shared small extended vocab (base_vocab
+    + NEW_TOKENS, which includes <turn_fill>)."""
+    vocab = write_vocab(tmp_path, extend_vocab(base_vocab))
+    return ConversationalTextPreprocessor(token_list=vocab)
 
 
 def sample_of(turns, num_channels):
@@ -120,3 +131,67 @@ def test_infill_has_no_prefix(tmp_path, turns_3spk, base_vocab):
     pre = ConversationalTextPreprocessor(token_list=vocab)
     out = pre("uid", sample_of(turns_3spk, 3))
     assert out["text"][0][0].item() == pre.token2id["<turn>"]
+
+
+class TestTimestampPreprocessor:
+    """Mode T (Task 6): timestamp-aligned target text, prefix composition
+    unchanged. Turns are the ``FakeTurn`` fixture used throughout this
+    suite (duck-typed stand-in for sssd.Turn)."""
+
+    def _data(self, turns, extra=None):
+        d = {"turns": turns, "num_channels": 2}
+        d.update(extra or {})
+        return d
+
+    def test_mode_t_text_length_equals_target_frames(self, preproc):
+        """Full id-sequence parity against build_branch_texts_timestamped as
+        ground truth, the Mode T analogue of
+        test_matches_manual_encoding_three_channels: pins the exact
+        frame-rounded turn position (start=10.5, target_t0=10.0 -> frame 47:
+        branch 0 reads OTHER*47, <turn>, h, i, <turn_fill>*91, OTHER*46) and
+        that the non-owning branch is OTHER_TOKEN*187 throughout."""
+        turns = [FakeTurn(channel=0, speaker="a", text="hi", start=10.5, end=11.5)]
+        data = self._data(
+            turns, {"timestamp_text": True, "target_t0": 10.0, "target_frames": 187}
+        )
+        out = preproc("uid", data)
+        assert all(t.shape[0] == 187 for t in out["text"])
+        expected = [
+            encode_tokens(branch, preproc.token2id)
+            for branch in build_branch_texts_timestamped(turns, 2, 10.0, 187)
+        ]
+        for t, exp in zip(out["text"], expected):
+            assert torch.equal(t, torch.tensor(exp, dtype=torch.long))
+
+    def test_mode_t_composes_with_chunk_prefix(self, preproc):
+        """Same full-sequence parity as above, with the P/H prefix prepended
+        to the ground truth for both branches - pins that the prefix and the
+        frame-aligned target text compose byte-for-byte, not just that a
+        prefix token and some <turn_fill> appear somewhere."""
+        turns = [FakeTurn(channel=0, speaker="a", text="hi", start=10.5, end=11.5)]
+        data = self._data(
+            turns,
+            {
+                "timestamp_text": True,
+                "target_t0": 10.0,
+                "target_frames": 187,
+                "prompt_frames": 40,
+                "prev_frames": 10,
+                "cond_frames": 50,
+            },
+        )
+        out = preproc("uid", data)
+        for t in out["text"]:
+            assert t.shape[0] == 50 + 187
+        prefix = [SPEAKER_PROMPT_TOKEN] * 40 + [PREV_CHUNK_TOKEN] * 10
+        expected = [
+            encode_tokens(prefix + branch, preproc.token2id)
+            for branch in build_branch_texts_timestamped(turns, 2, 10.0, 187)
+        ]
+        for t, exp in zip(out["text"], expected):
+            assert torch.equal(t, torch.tensor(exp, dtype=torch.long))
+
+    def test_mode_o_unchanged(self, preproc):
+        turns = [FakeTurn(channel=0, speaker="a", text="hi", start=10.5, end=11.5)]
+        out = preproc("uid", self._data(turns))
+        assert out["text"][0].shape[0] == 3  # <turn> + "h" + "i"
