@@ -17,6 +17,17 @@ surviving window (same rng, after exclusion-span filtering) to attach a
 0``, and ``session.atomic`` all take the exact pre-chunk-task code path with
 identical RNG construction and zero extra draws - the bit-parity guarantee
 the golden tests in test_parity.py depend on.
+
+Timestamp-aligned text mode (Mode T, text.py) hooks in similarly but through
+its OWN dedicated rng stream, never the shared window/chunk-task rng above:
+``timestamp_align_prob == 0`` (the default) or ``epoch is None`` takes the
+exact pre-Mode-T code path - atomic early return, non-chunking return, and
+chunk-task tail alike - with zero extra draws on the window/chunk-task rng,
+so it never perturbs bit-parity.  When live, every surviving record (in
+record order, atomic sessions included) draws one coin from
+``random.Random(f"{seed}:textmode:{session_id}:epoch{epoch}")``; a heads coin
+flags ``timestamp_text=True`` iff ``timestamp_fits`` passes, else the record
+stays Mode O and the degrade counter increments.
 """
 
 from __future__ import annotations
@@ -29,6 +40,7 @@ from typing import Iterable
 from .chunk_task import ChunkTaskParams, draw_chunk_task
 from .sessions import SessionRecord
 from .sssd import Recording
+from .text import timestamp_fits
 from .windows import WindowingStats, WindowRecord, build_windows
 
 
@@ -86,6 +98,35 @@ def _window_rng(seed: int, session_id: str, epoch: int | None) -> random.Random:
     return random.Random(f"{seed}:window:{session_id}:epoch{epoch}")
 
 
+def _textmode_rng(seed: int, session_id: str, epoch: int) -> random.Random:
+    # Dedicated stream: Mode T coins must never perturb the window/chunk rng
+    # (bit-parity), so they get their own Random keyed like _window_rng.
+    return random.Random(f"{seed}:textmode:{session_id}:epoch{epoch}")
+
+
+def _apply_timestamp_coin(
+    records: list[WindowRecord],
+    stats: WindowingStats,
+    session: SessionRecord,
+    seed: int,
+    epoch: int | None,
+    timestamp_align_prob: float,
+) -> list[WindowRecord]:
+    if timestamp_align_prob <= 0 or epoch is None or not records:
+        return records
+    rng = _textmode_rng(seed, session.session_id, epoch)
+    out = []
+    for record in records:
+        if rng.random() < timestamp_align_prob:
+            if timestamp_fits(record.turns, record.t0, record.t1):
+                record = dataclasses.replace(record, timestamp_text=True)
+                stats.n_timestamp_windows += 1
+            else:
+                stats.n_timestamp_degraded += 1
+        out.append(record)
+    return out
+
+
 def plan_session(
     session: SessionRecord,
     *,
@@ -93,11 +134,12 @@ def plan_session(
     seed: int,
     epoch: int | None,
     chunk_params: ChunkTaskParams | None = None,
+    timestamp_align_prob: float = 0.0,
 ) -> tuple[list[WindowRecord], WindowingStats]:
     if session.atomic:
         stats = WindowingStats()
         stats.n_windows = 1
-        return [
+        records = [
             WindowRecord(
                 window_id=session.window_id or f"{session.session_id}_w00000",
                 session_id=session.session_id,
@@ -108,7 +150,13 @@ def plan_session(
                 t1=session.duration,
                 turns=session.turns,
             )
-        ], stats
+        ]
+        return (
+            _apply_timestamp_coin(
+                records, stats, session, seed, epoch, timestamp_align_prob
+            ),
+            stats,
+        )
 
     rec = Recording(
         id=session.session_id,
@@ -152,7 +200,12 @@ def plan_session(
                 else:
                     surviving.append(record)
             records = surviving
-        return records, stats
+        return (
+            _apply_timestamp_coin(
+                records, stats, session, seed, epoch, timestamp_align_prob
+            ),
+            stats,
+        )
 
     # Chunk-task mode: one rng constructed once, the per-session coin drawn
     # FIRST from it, then the same rng object flows to build_windows and to
@@ -216,7 +269,12 @@ def plan_session(
             chunked_records.append(dataclasses.replace(record, chunk_task=plan))
         records = chunked_records
 
-    return records, stats
+    return (
+        _apply_timestamp_coin(
+            records, stats, session, seed, epoch, timestamp_align_prob
+        ),
+        stats,
+    )
 
 
 def plan_sessions(
@@ -226,6 +284,7 @@ def plan_sessions(
     seed: int,
     epoch: int | None,
     chunk_params: ChunkTaskParams | None = None,
+    timestamp_align_prob: float = 0.0,
 ) -> tuple[list[WindowRecord], WindowingStats]:
     all_records: list[WindowRecord] = []
     total = WindowingStats()
@@ -236,6 +295,7 @@ def plan_sessions(
             seed=seed,
             epoch=epoch,
             chunk_params=chunk_params,
+            timestamp_align_prob=timestamp_align_prob,
         )
         all_records.extend(records)
         total.merge(stats)
