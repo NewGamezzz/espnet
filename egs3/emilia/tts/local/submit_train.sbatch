@@ -114,7 +114,8 @@
 # ---------------------------------------------------------------------------
 
 set -euo pipefail
-cd /ocean/projects/cis210027p/ttrachu/development/espnet_proj/espnet_emilia
+ROOT=/ocean/projects/cis210027p/ttrachu/development/espnet_proj/espnet_emilia
+cd "$ROOT"
 # `set -e`/`set -u` are disabled across the activation ONLY. activate_python.sh
 # runs `eval "$(pixi shell-hook)"`, whose output references unset variables, so
 # under `set -u` the job aborts before producing any output: observed on PSC as
@@ -123,7 +124,15 @@ cd /ocean/projects/cis210027p/ttrachu/development/espnet_proj/espnet_emilia
 set +eu
 source tools/activate_python.sh
 set -eu
-cd egs3/emilia/tts
+# Absolute, and re-anchored to $ROOT. activate_python.sh runs
+# `eval "$(pixi shell-hook)"`, which leaves the shell in the pixi manifest's
+# own tools/ directory -- and because tools/ is shared across the espnet
+# trees on this allocation, that is a DIFFERENT tree
+# (espnet_f5_libritts/tools), not this one. A relative `cd egs3/emilia/tts`
+# after the activation therefore resolves against the wrong root and the job
+# dies before it starts: observed as job 43630646, which failed in seconds
+# with `cd: egs3/emilia/tts: No such file or directory`.
+cd "$ROOT/egs3/emilia/tts"
 
 # 1) Chain-depth cap, checked before anything else (including the quota
 #    guard): if this job's own depth already reached the cap, stop here,
