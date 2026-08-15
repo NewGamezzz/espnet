@@ -115,6 +115,15 @@ set -eu
 # with `cd: egs3/emilia/tts: No such file or directory`.
 cd "$ROOT/egs3/emilia/tts"
 
+# Guards the failure mode that is NOT peak allocation: the allocator. Peak
+# allocated at the configured batch_bins is 24.81 GiB of 31.73 under 2-rank
+# DDP (parity/mem_probe.py), but peak *reserved* runs higher as
+# variable-length batches fragment the pool. The LibriTTS F5 Small run failed
+# exactly there -- it survived 950 steps, then OOM'd with only 22.60 GiB
+# allocated against 7.45 GiB reserved-but-unallocated. expandable_segments
+# lets the allocator grow a segment instead of stranding it.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
 # Offline CSV logger: espnet3 installs LearningRateMonitor unconditionally,
 # and Lightning refuses that callback with logger: false.
 srun python run.py --stages train \

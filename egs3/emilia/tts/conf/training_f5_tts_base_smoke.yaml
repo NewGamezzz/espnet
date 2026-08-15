@@ -201,14 +201,40 @@ dataloader:
         # frames, batch_bins=480000 / 100 mels = 4800 frames/batch).
         type: numel_array
         batch_size: 1          # required by signature, unused for "numel_array"
-        min_batch_size: 8      # >= world_size (8 GPUs); dataloader.py rejects smaller
-        # numel sampler's trailing remainder batch can be 1-7 samples with
-        # drop_last=False, which would trip the world_size check at an
-        # epoch boundary.
+        # 1, NOT world_size. min_batch_size is a FLOOR the sampler may not
+        # close below, and the sampler closes on
+        #   current_count * current_length * n_mels > batch_bins
+        # so any floor above 1 lets a batch of `floor` long utterances cost
+        # floor * L_max frames no matter what batch_bins says -- batch_bins
+        # stops bounding memory. Emilia's 30s cap makes L_max 2813 frames,
+        # and the first GPU smoke (job 43582509) OOM'd exactly this way:
+        # min_batch_size 8 bound 72% of batches and peaked at 25,317 padded
+        # frames against a 4,800 nominal budget.
+        #
+        # At 1 the floor never forces an overshoot, so peak padded frames is
+        # batch_bins/n_mels plus one length gap in the ascending sort.
+        # Measured on the smoke corpus (116,152 utts): peak 11,990 frames vs
+        # 9,600 nominal, and 24.81 GiB of a V100-32's 31.73 under real 2-rank
+        # DDP (parity/mem_probe.py, job 43631681). The gap term shrinks as
+        # the corpus grows, so the full 37M-utterance run peaks no higher.
+        #
+        # It costs essentially nothing: exactly ONE batch of 9,997 comes out
+        # smaller than 4 samples (a single batch of 1), and the batch count
+        # is unchanged from min_batch_size 4 (9,997 vs 9,996). F5 conditions
+        # via AdaLN and has no BatchNorm, so a batch of 1 is well-defined.
+        min_batch_size: 1
+        # The original rationale here (keeping the trailing 1-7 sample
+        # remainder from tripping espnet3's len(batch) >= world_size check)
+        # is obsolete: that check was espnet2's, wrong for espnet3, and has
+        # been removed. Retained anyway -- at ~101k batches per epoch a
+        # ragged final batch buys nothing, and espnet3 drops tail batches to
+        # align ranks regardless.
         drop_last: true
         shape_files:
           - ${stats_dir}/train/feats_shape
-        batch_bins: 480000     # 480000 * 8 accum * 8 gpu / 100 mels = 307200
+        # Same value as egs3/libritts/tts/conf/training_f5_tts_small.yaml,
+        # i.e. a per-GPU budget already proven on a V100-32.
+        batch_bins: 960000     # 960000 * 4 accum * 8 gpu / 100 mels = 307200
         max_samples: 64        # upstream F5-TTS's cap (Sec. B.7)
   valid:
     num_shards: 1
@@ -221,9 +247,14 @@ dataloader:
       batches:
         type: ${dataloader.train.iter_factory.batches.type}
         batch_size: 1          # required by signature, unused for "numel_array"
-        # Same world_size floor as train: validation runs distributed
-        # across all GPUs too, so it needs the identical guard.
-        min_batch_size: 8
+        # Must track train's floor. Validation shares train's batch_bins, so
+        # a floor left at 8 here reintroduces exactly the 25,317-frame batch
+        # that OOM'd. That it did not OOM in the first smoke was luck, not
+        # safety: the valid loader does not shuffle, so it walks the
+        # length-sorted order short-to-long and limit_val_batches stops it
+        # before the long tail -- which silently stops protecting anything
+        # the moment limit_val_batches is raised.
+        min_batch_size: 1
         drop_last: true
         shape_files:
           - ${stats_dir}/valid/feats_shape
@@ -238,7 +269,7 @@ trainer:
   accelerator: auto
   devices: ${num_device}
   num_nodes: ${num_nodes}
-  accumulate_grad_batches: 8
+  accumulate_grad_batches: 4
   # Smoke-only: stop well short of the paper's target, just enough steps to
   # exercise warmup, a validation pass and a stable-state throughput window.
   max_steps: 200
