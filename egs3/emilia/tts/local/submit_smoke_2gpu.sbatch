@@ -46,12 +46,17 @@
 #    trace. Expected peak is 24.81 GiB of 31.73 (parity/mem_probe.py under
 #    2-rank DDP), so a peak materially above that means the corpus subset's
 #    length distribution differs from what the sampler was measured on.
-# 3. THE GUARD REMOVAL, END TO END: min_batch_size is 1 while world_size is
-#    2, which espnet2's len(batch) >= world_size check used to reject. The
-#    "[train] distributed batches: world_size=2, rank=..., total=...,
-#    per_rank=..." line appearing at all is the confirmation; a RuntimeError
-#    reading "The batch-size must be equal or more than world_size" means the
-#    espnet3 tree on this machine is stale and predates commit 342ce1bd06.
+# 3. WHAT THIS RUN DOES *NOT* PROVE: it does not exercise the removed
+#    len(batch) >= world_size guard. With drop_last: true the only sub-4
+#    batch (the trailing remainder) is dropped, so realized batch sizes run
+#    4..35 and nothing is below world_size=2. Verified with parity/precheck.py.
+#    The guard matters at PRODUCTION width instead: at world_size 8, the ~2000
+#    batches of size 4-6 in this distribution all sit below world_size and
+#    would have been rejected outright. So the 8-GPU run depends on commit
+#    342ce1bd06 being present in the espnet3 tree, and this 2-GPU run cannot
+#    catch its absence. Check directly before launching production:
+#      grep -c 'must be equal or more than world_size' \
+#        espnet3/components/data/dataloader.py     # must print 0
 # 4. DATALOADER STARVATION: MetricsLogger separates iter_time (which includes
 #    dataloader wait) from forward/backward/optim_step. If iter_time is a
 #    large fraction, raise dataloader num_workers -- but note 2 tasks x 5 cpus

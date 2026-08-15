@@ -14,10 +14,12 @@
 #      so updates/hour transfers directly, modulo allreduce cost growing from
 #      2 ranks to 8.
 #
-# It also exercises something no unit test can: min_batch_size (1) is BELOW
-# world_size (2), which espnet2's len(batch) >= world_size guard used to
-# forbid. That guard was wrong for espnet3 and has been removed; this run is
-# the end-to-end confirmation.
+# WHAT IT DOES NOT COVER. It does not exercise the removed
+# len(batch) >= world_size guard, despite min_batch_size being 1: drop_last
+# drops the single sub-4 batch, so realized sizes are 4..35 and none fall
+# below world_size=2. That guard binds at production width instead, where
+# world_size is 8 and the ~2000 batches of size 4-6 all sit below it. Only
+# the 8-GPU run demonstrates it end to end.
 #
 # GLOBAL BATCH IS DELIBERATELY NOT 307,200 HERE. num_device 2 x accum 4 x
 # batch_bins 960000 / 100 mels = 76,800 mel-frames per update, a quarter of
