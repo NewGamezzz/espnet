@@ -72,6 +72,13 @@ class ConversationDataset(TorchDataset):
     mel frames of ``hop`` samples.  Ordinary infill records carry none of them,
     so nothing downstream of the untouched majority path changes.
 
+    Records flagged by the planner's Mode T coin
+    (``WindowRecord.timestamp_text``, see ``preprocessing.text``) carry three
+    more keys: ``timestamp_text`` (``True``), ``target_t0`` (``record.t0``,
+    seconds) and ``target_frames`` (the target span's length in mel frames,
+    ``cond_frames`` already excluded for chunk-task records). Mode O records -
+    the default, ``timestamp_align_prob`` at ``0.0`` - carry none of them.
+
     No token ids here: tokenization lives in the recipe preprocessor
     (``preprocessor.ConversationalTextPreprocessor``), which derives the
     per-branch ``text`` tensors from ``turns``.  Because ``channel`` is
@@ -108,6 +115,14 @@ class ConversationDataset(TorchDataset):
     for valid/test/inference never chunks, mirroring the planner's own
     ``epoch is None`` gate.  ``None`` (the default) disables the chunk task
     entirely, same as an all-zero ``ChunkTaskParams``.
+
+    ``timestamp_align_prob`` is the training-side knob for Mode T
+    (``preprocessing.text``, the planner's per-window coin): ``0.0`` (the
+    default) is bit-identical to today's Mode-O-only behavior. A non-zero
+    value requires ``fs / hop`` to equal the Mode T frame grid
+    (``preprocessing.text.FRAMES_PER_SECOND``, 93.75 at the defaults) - raised
+    eagerly in ``__init__`` rather than surfacing as a silent frame-boundary
+    drift downstream.
     """
 
     def __init__(
@@ -125,10 +140,20 @@ class ConversationDataset(TorchDataset):
         window_params: dict | None = None,
         window_seed: int = 0,
         chunk_task: dict | None = None,
+        timestamp_align_prob: float = 0.0,
     ) -> None:
         self.split = split
         self.fs = int(fs if fs is not None else _DATASET_CFG["sample_rate"])
         self.hop = int(hop)
+        self.timestamp_align_prob = float(timestamp_align_prob)
+        if self.timestamp_align_prob > 0:
+            from .preprocessing.text import FRAMES_PER_SECOND
+
+            if abs(self.fs / self.hop - FRAMES_PER_SECOND) > 1e-6:
+                raise ValueError(
+                    f"timestamp_align_prob requires fs/hop == {FRAMES_PER_SECOND} "
+                    f"frames/s (the Mode T grid), got {self.fs}/{self.hop}"
+                )
         self.permute_channels = (
             permute_channels if permute_channels is not None else split == "train"
         )
@@ -199,6 +224,9 @@ class ConversationDataset(TorchDataset):
             seed=self.window_seed,
             epoch=epoch,
             chunk_params=chunk_params,
+            timestamp_align_prob=(
+                self.timestamp_align_prob if epoch is not None else 0.0
+            ),
         )
         if chunk_params is not None and chunk_params.chunk_task_prob > 0:
             # All five numbers come from plan_sessions' pre-filter stats, i.e.
@@ -215,6 +243,13 @@ class ConversationDataset(TorchDataset):
                 stats.n_chunk_prompt_only,
                 stats.n_chunk_degraded,
                 stats.n_chunk_fallback_infill,
+                stats.n_windows,
+            )
+        if epoch is not None and self.timestamp_align_prob > 0:
+            logger.info(
+                "timestamp-text plan: %d mode-T / %d degraded of %d windows",
+                stats.n_timestamp_windows,
+                stats.n_timestamp_degraded,
                 stats.n_windows,
             )
         if self.min_active_speakers > 1:
@@ -360,6 +395,13 @@ class ConversationDataset(TorchDataset):
         # Only chunk-task records grow keys: an ordinary infill sample stays
         # exactly the dict every existing consumer already expects.
         sample.update(chunk_frames)
+        if record.timestamp_text:
+            cond = chunk_frames.get("cond_frames", 0)
+            sample.update(
+                timestamp_text=True,
+                target_t0=record.t0,
+                target_frames=speech.shape[1] // self.hop - cond,
+            )
         if self.inference:
             sample.update(
                 session_id=record.session_id,

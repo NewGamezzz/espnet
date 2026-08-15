@@ -2,6 +2,7 @@
 collator (AC5-AC8)."""
 
 import dataclasses
+import math
 
 import pytest
 import torch
@@ -24,6 +25,7 @@ from egs3.conversational.tts.dataset.preprocessing.sessions import (
 )
 from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
 from egs3.conversational.tts.dataset.preprocessing.text import (
+    FRAMES_PER_SECOND,
     OTHER_TOKEN,
     TURN_TOKEN,
     build_branch_texts,
@@ -890,3 +892,67 @@ class TestChunkTaskAssembly:
         s = ds.load_window(dataclasses.replace(record, chunk_task=plan))
         assert s["prompt_frames"] == round(3.3 * ds.fs) // ds.hop
         assert s["speech"].shape[0] == record.num_channels
+
+    def test_timestamp_text_key_in_chunk_task_sample(self, tmp_path):
+        """Mode T composes with the chunk task: target_frames excludes the
+        conditioning block, matching cond_frames' own semantics."""
+        ds, record = _make_dataset_with_session(tmp_path)
+        plan = ChunkTaskPlan(
+            kind="full",
+            prev_span=(record.t0 - 4.0, record.t0),
+            prompt_spans=_spans_outside(record, lp=3.5),
+        )
+        rec = dataclasses.replace(record, chunk_task=plan, timestamp_text=True)
+        ds._fixed_perm = [1, 0]
+        s = ds.load_window(rec)
+        assert s["target_frames"] == s["speech"].shape[1] // ds.hop - s["cond_frames"]
+
+
+class TestTimestampMode:
+    """Task 5: Mode T knob, fps gate, per-sample target keys, plan log."""
+
+    def test_infill_mode_t_sample_keys(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path, timestamp_align_prob=1.0)
+        record = dataclasses.replace(ds.records[0], timestamp_text=True)
+        sample = ds.load_window(record)
+        assert sample["timestamp_text"] is True
+        assert sample["target_t0"] == record.t0
+        assert sample["target_frames"] == sample["speech"].shape[1] // ds.hop
+
+    def test_mode_o_sample_has_no_new_keys(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path)
+        sample = ds.load_window(ds.records[0])
+        assert "timestamp_text" not in sample and "target_frames" not in sample
+
+    def test_fps_mismatch_rejected(self, fake_corpus, tmp_path):
+        with pytest.raises(ValueError, match="93.75"):
+            _make_dataset(fake_corpus, tmp_path, timestamp_align_prob=0.5, hop=300)
+
+    def test_knob_reaches_planner_in_epoch_mode_only(self, fake_corpus, tmp_path):
+        """__init__'s frozen plan (plan_windows(None)) never flags Mode T,
+        mirroring the chunk-task gate; an epoch-mode plan_windows call does,
+        with the knob wired all the way to plan_sessions."""
+        ds = _make_dataset(fake_corpus, tmp_path, timestamp_align_prob=1.0)
+        assert not any(r.timestamp_text for r in ds.records)
+        assert any(r.timestamp_text for r in ds.plan_windows(3))
+
+    def test_target_frames_within_planner_fit_bound(self, tmp_path):
+        """Design invariant ruled during Task 2's review: the planner's fit
+        predicate checks turns against floor((t1 - t0) * fps) - 1 frames, one
+        frame of safety below the plain seconds estimate, precisely because
+        the actual assembled frame count (speech.shape[1] // hop, after edge
+        rounding and 48 -> 24 kHz resampling) can land a frame either side of
+        that estimate. target_frames must never undershoot the bound the
+        planner already verified the window's turns fit inside."""
+        ds, record = _make_dataset_with_session(tmp_path)  # 48 kHz source
+        rec = dataclasses.replace(record, timestamp_text=True)
+        sample = ds.load_window(rec)
+        bound = math.floor((record.t1 - record.t0) * FRAMES_PER_SECOND) - 1
+        assert sample["target_frames"] >= bound
+        # A fractional-second t1 forces the edge-rounding jitter the bound is
+        # meant to absorb: CHUNK_T0/T1 above land on a whole 2:1 decimation
+        # (no jitter), so this is the case that actually exercises it.
+        odd = dataclasses.replace(record, t1=record.t0 + 9.9137, timestamp_text=True)
+        odd_sample = ds.load_window(odd)
+        odd_bound = math.floor((odd.t1 - odd.t0) * FRAMES_PER_SECOND) - 1
+        assert odd_sample["target_frames"] >= odd_bound
