@@ -271,12 +271,13 @@ def test_mask_kwargs_all_false_bit_identical():
 def test_context_rows_fully_observed_and_loss_excluded():
     multibranch = make_multibranch(make_dit(seed=0)).eval()
     mel, text, lens = make_packed_mels([2], seed=3, t=40)
+    context_rows = torch.tensor([True, False])
     loss, stats, extras = multibranch(
         mel,
         text,
         counts=[2],
         lens=lens,
-        context_rows=torch.tensor([True, False]),
+        context_rows=context_rows,
     )
     # Context row: never masked -> cond carries the full ground-truth mel.
     assert not extras["rand_span_mask"][0].any()
@@ -285,6 +286,10 @@ def test_context_rows_fully_observed_and_loss_excluded():
     assert "loss_ch0" not in stats
     assert "loss_ch1" in stats
     assert torch.isfinite(loss)
+    # extras pins the validated context_rows/independent_mask tensors so a
+    # rename/swap of either kwarg is caught.
+    torch.testing.assert_close(extras["context_rows"], context_rows)
+    assert extras["independent_mask"] is None
 
 
 def test_context_all_rows_of_a_conversation_raises():

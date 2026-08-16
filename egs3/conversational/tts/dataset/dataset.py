@@ -509,6 +509,11 @@ def collate_conversations(
     offset = 0
     for s, n in zip(samples, counts):
         for r in s.get("context_rows", []):
+            if not 0 <= r < n:
+                raise ValueError(
+                    f"context_rows index {r} out of range for window "
+                    f"{s['window_id']!r} with {n} channels"
+                )
             context_rows[offset + r] = True
         offset += n
     independent_mask = torch.tensor(

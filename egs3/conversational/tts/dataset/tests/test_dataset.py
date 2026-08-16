@@ -464,6 +464,17 @@ def test_collate_mask_flags_mixed():
     assert batch["independent_mask"].dtype == torch.bool
 
 
+def test_collate_context_rows_out_of_range_raises():
+    """Task (fix wave): an out-of-range context_rows index must not silently
+    tag the next conversation's row - it should raise, naming the window_id,
+    the bad index, and the channel count."""
+    s_bad = _sample(num_channels=2, window_id="bad")
+    s_bad["context_rows"] = [3]
+    s_next = _sample(num_channels=2, window_id="next")
+    with pytest.raises(ValueError, match=r"\b3\b.*bad.*\b2\b"):
+        collate_conversations([s_bad, s_next], text_pad_value=-1)
+
+
 def test_collate_mask_flags_sentinel_default():
     """Task 4: sentinel default - all-False tensors when no mask flags present."""
     batch = collate_conversations(

@@ -737,6 +737,37 @@ class TestMaskCoin:
         assert stats.n_independent_windows == 1
         assert stats.n_context_windows == 0
 
+    def test_context_subset_draw_at_n3(self):
+        rec = WindowRecord(
+            window_id="w",
+            session_id="s",
+            audio_relpath="a.flac",
+            num_channels=3,
+            sample_rate=48000,
+            t0=0.0,
+            t1=3.0,
+            turns=(
+                Turn(channel=0, speaker="s0", text="hi", start=0.0, end=1.0),
+                Turn(channel=1, speaker="s1", text="yo", start=1.0, end=2.0),
+                Turn(channel=2, speaker="s2", text="hey", start=2.0, end=3.0),
+            ),
+        )
+        stats = WindowingStats()
+        out = _apply_mask_coin(
+            [rec],
+            stats,
+            SimpleNamespace(session_id="s"),
+            0,
+            1,
+            1.0,
+            0.0,
+        )
+        chans = out[0].context_channels
+        assert 1 <= len(chans) <= 2
+        assert all(c in range(3) for c in chans)
+        assert list(chans) == sorted(set(chans))
+        assert out[0].independent_mask is False
+
     def test_mask_coin_composes_with_chunk_task(self):
         # Same fixture/seed/epoch/params as TestChunkTaskPlanning's
         # test_chunk_sessions_use_chunk_window_range_and_attach_plans, which

@@ -296,7 +296,10 @@ class MultiBranchCFM(CFM):
             "cond": cond,
             "pred": pred,
             "rand_span_mask": rand_span_mask,
-            # frac_lengths is the random draw (discarded if cond_frames >= 0)
+            # frac_lengths is the shared random draw (discarded if
+            # cond_frames >= 0, and also discarded per-row for override rows:
+            # independent conversations' rows and context conversations'
+            # target rows, which draw their own row_frac_lengths instead)
             "frac_lengths": frac_lengths,
             "time": time,
             "context_rows": ctx_rows_t,
