@@ -393,3 +393,32 @@ def test_chunk_context_composition():
     expected = torch.zeros_like(span[1])
     expected[12 : int(lens[1])] = True
     assert torch.equal(span[1], expected)
+
+
+def test_model_forward_passes_mask_kwargs():
+    """MultiBranchF5.forward forwards the two batch keys to the CFM."""
+    from egs3.conversational.tts.src.model import MultiBranchF5
+
+    class _RecordingCFM(torch.nn.Module):
+        def forward(self, feats, text, **kwargs):
+            self.seen = kwargs
+            return feats.sum() * 0.0, {}, {}
+
+    class _IdentityFeats(torch.nn.Module):
+        def forward(self, speech, lengths):
+            return speech.unsqueeze(-1), lengths
+
+    cfm = _RecordingCFM()
+    model = MultiBranchF5(cfm=cfm, feats_extract=_IdentityFeats())
+    ctx = torch.tensor([True, False])
+    ind = torch.tensor([False])
+    model(
+        counts=[2],
+        speech=torch.zeros(2, 64),
+        speech_lengths=torch.tensor([64, 64]),
+        text=torch.zeros(2, 3, dtype=torch.long),
+        context_rows=ctx,
+        independent_mask=ind,
+    )
+    assert torch.equal(cfm.seen["context_rows"], ctx)
+    assert torch.equal(cfm.seen["independent_mask"], ind)
