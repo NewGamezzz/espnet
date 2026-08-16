@@ -135,17 +135,32 @@ def _lookup_by_lang(mapping: dict, lang: str, what: str):
         ) from None
 
 
-def repetition_found(text: str, length: int = 2) -> bool:
-    """True if any ``length``-word n-gram occurs more than once."""
-    words = text.split()
-    if len(words) < length:
-        return False
-    seen: set = set()
-    for i in range(len(words) - length + 1):
-        ngram = tuple(words[i : i + length])
-        if ngram in seen:
+def repetition_found(text: str, length: int = 2, tolerance: int = 10) -> bool:
+    """True if any ``length``-CHARACTER substring occurs more than ``tolerance`` times.
+
+    Verbatim port of ``f5_tts.model.utils.repetition_found``. Both details
+    below are load-bearing and an earlier version of this file got both
+    wrong, so they are spelled out:
+
+    - The n-grams are **characters**, sliced straight off the string, not
+      words. Emilia's ZH text carries no spaces, so a word-based version
+      degenerates to a single token and the filter becomes a silent no-op
+      for the entire Chinese half of the corpus.
+    - The threshold is ``count > tolerance`` with ``tolerance=10``, not
+      "appears twice". A word-based, appears-twice version rejects ordinary
+      English such as "I went to the store and I went to the store again",
+      which upstream keeps.
+
+    Callers pass ``length=4`` for EN and leave the default 2 for ZH, matching
+    upstream's ``repetition_found(text, length=4)`` and ``repetition_found(text)``.
+    """
+    pattern_count: dict = {}
+    for i in range(len(text) - length + 1):
+        pattern = text[i : i + length]
+        pattern_count[pattern] = pattern_count.get(pattern, 0) + 1
+    for count in pattern_count.values():
+        if count > tolerance:
             return True
-        seen.add(ngram)
     return False
 
 

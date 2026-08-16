@@ -51,16 +51,76 @@ def test_en_cross_language_chars_rejected(bad):
     assert (keep, reason) == (False, "charfilter")
 
 
-def test_en_repetition_uses_length_four():
-    """Upstream uses length=4 for EN, length=2 for ZH."""
-    assert filters.repetition_found("a b c d a b c d", length=4) is True
-    assert filters.repetition_found("a b c d e f g h", length=4) is False
-    # A 2-gram repeat must NOT trip the EN rule.
-    assert filters.repetition_found("a b x y a b q r", length=4) is False
+def _upstream_repetition_found(text, length=2, tolerance=10):
+    """Verbatim f5_tts.model.utils.repetition_found, as the reference oracle.
+
+    Duplicated here on purpose: F5-TTS is not an import dependency of this
+    recipe, and the point of the tests below is to pin our port against
+    upstream's actual algorithm rather than against our own restatement of
+    it. An earlier version of dataset/filters.py claimed to be a port and
+    was not, and the tests that accompanied it encoded the divergence as
+    expected behaviour instead of catching it.
+    """
+    pattern_count = {}
+    for i in range(len(text) - length + 1):
+        pattern = text[i : i + length]
+        pattern_count[pattern] = pattern_count.get(pattern, 0) + 1
+    return any(count > tolerance for count in pattern_count.values())
 
 
-def test_zh_repetition_uses_length_two():
-    assert filters.repetition_found("你好 世界 你好 世界", length=2) is True
+def test_repetition_counts_characters_not_words():
+    """The n-grams are character slices. This is what breaks ZH if got wrong.
+
+    Emilia's Chinese text carries no spaces, so a word-based implementation
+    collapses to a single token and the filter silently never fires for the
+    entire Chinese half of the corpus.
+    """
+    assert filters.repetition_found("啊" * 15, length=2) is True
+    assert filters.repetition_found("今天天气很好我们一起去公园散步吧", length=2) is False
+
+
+def test_repetition_tolerance_is_ten_not_one():
+    """`count > tolerance` with tolerance=10, not "appears twice".
+
+    Ordinary English repeats short phrases; upstream keeps it. An
+    appears-twice rule rejects this sentence, which is a large and silent
+    over-filtering of the English half.
+    """
+    text = "I went to the store and I went to the store again yesterday."
+    assert filters.repetition_found(text, length=4) is False
+    assert _upstream_repetition_found(text, length=4) is False
+
+    # 11 occurrences of a 2-gram trips it; 10 does not.
+    assert filters.repetition_found("ab" * 10, length=2) is False
+    assert filters.repetition_found("ab" * 11, length=2) is True
+
+
+def test_repetition_matches_upstream_on_random_text():
+    """Differential test against the upstream oracle.
+
+    Case-by-case assertions are what let the original divergence through:
+    each one was individually true of the wrong implementation. Random
+    differential testing over the alphabet the corpus actually uses is what
+    catches a wrong algorithm rather than a wrong example.
+    """
+    import random
+    import string
+
+    rng = random.Random(0)
+    alphabet = string.ascii_lowercase + " ,.!?" + "你好今天气很我们去公园散步吧啊"
+    for _ in range(4000):
+        text = "".join(rng.choice(alphabet) for _ in range(rng.randint(0, 120)))
+        for length in (2, 4):
+            assert filters.repetition_found(text, length=length) is (
+                _upstream_repetition_found(text, length=length)
+            ), (length, text)
+
+
+def test_en_uses_length_four_and_zh_length_two():
+    """The per-language lengths match upstream's call sites:
+    `repetition_found(text, length=4)` for EN, `repetition_found(text)` for ZH."""
+    assert filters._REPETITION_LENGTH_BY_LANG["EN"] == 4
+    assert filters._REPETITION_LENGTH_BY_LANG["ZH"] == 2
 
 
 def test_zh_punctuation_is_normalized():
@@ -107,8 +167,17 @@ def test_duration_bounds_are_f5_emilia_bounds(dur, expected):
 
 
 def test_strict_filters_are_off_by_default():
-    """D3: filter_text.py rules must not fire unless explicitly enabled."""
-    rec = _rec(speaker="EN_B00000_S00000", text="ooooooooooooooo dear")
+    """D3: filter_text.py rules must not fire unless explicitly enabled.
+
+    The example must trip ONLY the strict rules. It used to be
+    "ooooooooooooooo dear", which stopped isolating them once
+    repetition_found was corrected to upstream's algorithm: the 15-character
+    run of "o" contains 12 occurrences of the 4-gram "oooo", past
+    tolerance=10, so upstream's own repetition rule now rejects it too and
+    the test could no longer tell the two filters apart. A 15-digit run
+    trips _LONG_DIGITS while its 4-grams repeat at most twice.
+    """
+    rec = _rec(speaker="EN_B00000_S00000", text="123456789012345 dear")
     assert filters.keep_utterance(rec, "EN", 0.3, 30.0, strict=False)[0] is True
     assert filters.keep_utterance(rec, "EN", 0.3, 30.0, strict=True) == (
         False,
