@@ -75,6 +75,13 @@ class WindowRecord:
     # Mode T (timestamp-aligned target text, design 2026-08-15): set by the
     # planner's per-window coin; False = Mode O, today's order-only format.
     timestamp_text: bool = False
+    # Per-channel masking (design 2026-08-15): set by the planner's per-window
+    # mask coin (planner._apply_mask_coin). context_channels holds ORIGINAL
+    # channel ids (pre-permutation) that train fully observed and excluded
+    # from the loss; independent_mask=True draws frac_lengths per row instead
+    # of per conversation. Defaults = today's shared-span behavior.
+    context_channels: "tuple[int, ...] | None" = None
+    independent_mask: bool = False
     # Derived from turns/num_channels, never passed in: always consistent
     # with the stored (rounded) turn times, including after from_json.
     num_active_speakers: int = field(init=False)
@@ -463,6 +470,11 @@ def to_json(w: WindowRecord) -> dict:
     # windows (the overwhelming majority) leave golden manifests unchanged.
     if w.timestamp_text:
         d["timestamp_text"] = True
+    # Same omit-when-default convention as chunk_task/timestamp_text above.
+    if w.context_channels is not None:
+        d["context_channels"] = list(w.context_channels)
+    if w.independent_mask:
+        d["independent_mask"] = True
     return d
 
 
@@ -487,6 +499,12 @@ def from_json(d: dict) -> WindowRecord:
         ),
         chunk_task=plan_from_json(d["chunk_task"]) if "chunk_task" in d else None,
         timestamp_text=d.get("timestamp_text", False),
+        context_channels=(
+            tuple(int(c) for c in d["context_channels"])
+            if "context_channels" in d
+            else None
+        ),
+        independent_mask=d.get("independent_mask", False),
     )
 
 
