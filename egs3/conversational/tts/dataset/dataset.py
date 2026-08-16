@@ -502,6 +502,20 @@ def collate_conversations(
         [s.get("cond_frames", -1) for s in samples], dtype=torch.long
     )
 
+    # Per-channel mask flags (design 2026-08-15), packed row-major to match
+    # the speech/text rows. Keys ALWAYS present so an all-False batch is a
+    # well-formed sentinel, same convention as cond_frames above.
+    context_rows = torch.zeros(m, dtype=torch.bool)
+    offset = 0
+    for s, n in zip(samples, counts):
+        for r in s.get("context_rows", []):
+            context_rows[offset + r] = True
+        offset += n
+    independent_mask = torch.tensor(
+        [bool(s.get("independent_mask", False)) for s in samples],
+        dtype=torch.bool,
+    )
+
     return {
         "counts": counts,
         "speech": speech,
@@ -510,5 +524,7 @@ def collate_conversations(
         "text": text,
         "text_lengths": text_lengths,
         "cond_frames": cond_frames,
+        "context_rows": context_rows,
+        "independent_mask": independent_mask,
         "window_ids": [s["window_id"] for s in samples],
     }

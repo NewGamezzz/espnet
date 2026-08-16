@@ -446,6 +446,33 @@ def test_collate_cond_frames_mixed():
     assert batch["cond_frames"].dtype == torch.long
 
 
+def test_collate_mask_flags_mixed():
+    """Task 4: per-channel mask flags packed row-major. Batch has context_rows
+    (bool R,) and independent_mask (bool B,), ALWAYS present (all-False sentinel)."""
+    s_ctx = _sample(num_channels=2, window_id="ctx")
+    s_ctx["context_rows"] = [1]
+    s_ind = _sample(num_channels=3, window_id="ind")
+    s_ind["independent_mask"] = True
+    s_plain = _sample(num_channels=2, window_id="plain")
+    batch = collate_conversations([s_ctx, s_ind, s_plain], text_pad_value=-1)
+    # Packed row-major: conv0 rows 0-1, conv1 rows 2-4, conv2 rows 5-6.
+    assert batch["context_rows"].tolist() == [
+        False, True, False, False, False, False, False,
+    ]
+    assert batch["context_rows"].dtype == torch.bool
+    assert batch["independent_mask"].tolist() == [False, True, False]
+    assert batch["independent_mask"].dtype == torch.bool
+
+
+def test_collate_mask_flags_sentinel_default():
+    """Task 4: sentinel default - all-False tensors when no mask flags present."""
+    batch = collate_conversations(
+        [_sample(num_channels=2)], text_pad_value=-1
+    )
+    assert batch["context_rows"].tolist() == [False, False]
+    assert batch["independent_mask"].tolist() == [False]
+
+
 def test_collate_mixed_channel_counts():
     """N=1 (LibriTTS-style) and N=2 windows pack into one batch."""
     samples = [
