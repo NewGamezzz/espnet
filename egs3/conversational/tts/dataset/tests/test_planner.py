@@ -1,11 +1,17 @@
 import random
+from types import SimpleNamespace
 
 from ..preprocessing.chunk_task import ChunkTaskParams
-from ..preprocessing.planner import WindowParams, plan_session, plan_sessions
+from ..preprocessing.planner import (
+    WindowParams,
+    _apply_mask_coin,
+    plan_session,
+    plan_sessions,
+)
 from ..preprocessing.sessions import SessionRecord
 from ..preprocessing.sssd import Recording, Turn
 from ..preprocessing.text import timestamp_fits
-from ..preprocessing.windows import build_windows, to_json
+from ..preprocessing.windows import WindowRecord, WindowingStats, build_windows, to_json
 
 # Long two-channel session with clean alternation and real gaps so several
 # windows fit (window params shrunk so the 60 s session yields multiple).
@@ -608,3 +614,175 @@ class TestTimestampCoin:
             stats1.n_timestamp_degraded + stats2.n_timestamp_degraded
         )
         assert total.n_timestamp_windows > 0
+
+
+class TestMaskCoin:
+    def test_zero_probs_never_touch_the_stream(self, monkeypatch):
+        from ..preprocessing import planner as planner_mod
+
+        def _boom(*a, **kw):
+            raise AssertionError("maskmode rng must not be constructed")
+
+        monkeypatch.setattr(planner_mod, "_maskmode_rng", _boom)
+        records, _ = plan_session(
+            _session(), params=PARAMS, seed=0, epoch=3
+        )
+        assert all(r.context_channels is None for r in records)
+        assert all(not r.independent_mask for r in records)
+
+    def test_frozen_mode_never_flags(self):
+        records, stats = plan_session(
+            _session(),
+            params=PARAMS,
+            seed=0,
+            epoch=None,
+            context_channel_prob=1.0,
+            independent_mask_prob=1.0,
+        )
+        assert all(r.context_channels is None for r in records)
+        assert all(not r.independent_mask for r in records)
+        assert stats.n_context_windows == 0
+        assert stats.n_independent_windows == 0
+
+    def test_context_prob_one_flags_every_window(self):
+        records, stats = plan_session(
+            _session(),
+            params=PARAMS,
+            seed=0,
+            epoch=2,
+            context_channel_prob=1.0,
+            independent_mask_prob=1.0,
+        )
+        assert records
+        for r in records:
+            # N=2 windows: k ~ U{1..1}, a proper nonempty subset.
+            assert r.context_channels is not None
+            assert len(r.context_channels) == 1
+            assert r.context_channels[0] in (0, 1)
+            # Layered coin: a context hit never also flags independent.
+            assert r.independent_mask is False
+        assert stats.n_context_windows == len(records)
+        assert stats.n_independent_windows == 0
+
+    def test_independent_prob_one_flags_every_window(self):
+        records, stats = plan_session(
+            _session(),
+            params=PARAMS,
+            seed=0,
+            epoch=2,
+            context_channel_prob=0.0,
+            independent_mask_prob=1.0,
+        )
+        assert records
+        assert all(r.independent_mask for r in records)
+        assert all(r.context_channels is None for r in records)
+        assert stats.n_independent_windows == len(records)
+
+    def test_mask_stream_does_not_perturb_windows(self):
+        plain, _ = plan_session(_session(), params=PARAMS, seed=0, epoch=2)
+        flagged, _ = plan_session(
+            _session(),
+            params=PARAMS,
+            seed=0,
+            epoch=2,
+            context_channel_prob=1.0,
+        )
+
+        def strip(d):
+            d = dict(d)
+            d.pop("context_channels", None)
+            d.pop("independent_mask", None)
+            return d
+        assert [strip(to_json(r)) for r in flagged] == [
+            to_json(r) for r in plain
+        ]
+
+    def test_deterministic_across_calls(self):
+        a, _ = plan_session(
+            _session(), params=PARAMS, seed=0, epoch=2,
+            context_channel_prob=0.5, independent_mask_prob=0.5,
+        )
+        b, _ = plan_session(
+            _session(), params=PARAMS, seed=0, epoch=2,
+            context_channel_prob=0.5, independent_mask_prob=0.5,
+        )
+        assert [to_json(r) for r in a] == [to_json(r) for r in b]
+
+    def test_single_channel_context_hit_degrades_to_independent(self):
+        rec = WindowRecord(
+            window_id="w",
+            session_id="s",
+            audio_relpath="a.flac",
+            num_channels=1,
+            sample_rate=48000,
+            t0=0.0,
+            t1=3.0,
+            turns=(
+                Turn(channel=0, speaker="s0", text="hi", start=0.0, end=1.0),
+            ),
+        )
+        stats = WindowingStats()
+        out = _apply_mask_coin(
+            [rec],
+            stats,
+            SimpleNamespace(session_id="s"),
+            0,
+            1,
+            1.0,
+            1.0,
+        )
+        assert out[0].context_channels is None
+        assert out[0].independent_mask is True
+        assert stats.n_context_degraded == 1
+        assert stats.n_independent_windows == 1
+        assert stats.n_context_windows == 0
+
+    def test_context_subset_draw_at_n3(self):
+        rec = WindowRecord(
+            window_id="w",
+            session_id="s",
+            audio_relpath="a.flac",
+            num_channels=3,
+            sample_rate=48000,
+            t0=0.0,
+            t1=3.0,
+            turns=(
+                Turn(channel=0, speaker="s0", text="hi", start=0.0, end=1.0),
+                Turn(channel=1, speaker="s1", text="yo", start=1.0, end=2.0),
+                Turn(channel=2, speaker="s2", text="hey", start=2.0, end=3.0),
+            ),
+        )
+        stats = WindowingStats()
+        out = _apply_mask_coin(
+            [rec],
+            stats,
+            SimpleNamespace(session_id="s"),
+            0,
+            1,
+            1.0,
+            0.0,
+        )
+        chans = out[0].context_channels
+        assert 1 <= len(chans) <= 2
+        assert all(c in range(3) for c in chans)
+        assert list(chans) == sorted(set(chans))
+        assert out[0].independent_mask is False
+
+    def test_mask_coin_composes_with_chunk_task(self):
+        # Same fixture/seed/epoch/params as TestChunkTaskPlanning's
+        # test_chunk_sessions_use_chunk_window_range_and_attach_plans, which
+        # is hand-verified to attach chunk plans to 2 windows.
+        records, _ = plan_session(
+            _session(),
+            params=WindowParams(),
+            seed=3,
+            epoch=5,
+            chunk_params=ChunkTaskParams(
+                chunk_task_prob=1.0, prompt_only_prob=0.0
+            ),
+            context_channel_prob=1.0,
+        )
+        assert any(
+            r.chunk_task is not None and r.context_channels is not None
+            for r in records
+        )

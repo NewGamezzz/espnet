@@ -446,6 +446,44 @@ def test_collate_cond_frames_mixed():
     assert batch["cond_frames"].dtype == torch.long
 
 
+def test_collate_mask_flags_mixed():
+    """Task 4: per-channel mask flags packed row-major. Batch has context_rows
+    (bool R,) and independent_mask (bool B,), ALWAYS present (all-False sentinel)."""
+    s_ctx = _sample(num_channels=2, window_id="ctx")
+    s_ctx["context_rows"] = [1]
+    s_ind = _sample(num_channels=3, window_id="ind")
+    s_ind["independent_mask"] = True
+    s_plain = _sample(num_channels=2, window_id="plain")
+    batch = collate_conversations([s_ctx, s_ind, s_plain], text_pad_value=-1)
+    # Packed row-major: conv0 rows 0-1, conv1 rows 2-4, conv2 rows 5-6.
+    assert batch["context_rows"].tolist() == [
+        False, True, False, False, False, False, False,
+    ]
+    assert batch["context_rows"].dtype == torch.bool
+    assert batch["independent_mask"].tolist() == [False, True, False]
+    assert batch["independent_mask"].dtype == torch.bool
+
+
+def test_collate_context_rows_out_of_range_raises():
+    """Task (fix wave): an out-of-range context_rows index must not silently
+    tag the next conversation's row - it should raise, naming the window_id,
+    the bad index, and the channel count."""
+    s_bad = _sample(num_channels=2, window_id="bad")
+    s_bad["context_rows"] = [3]
+    s_next = _sample(num_channels=2, window_id="next")
+    with pytest.raises(ValueError, match=r"\b3\b.*bad.*\b2\b"):
+        collate_conversations([s_bad, s_next], text_pad_value=-1)
+
+
+def test_collate_mask_flags_sentinel_default():
+    """Task 4: sentinel default - all-False tensors when no mask flags present."""
+    batch = collate_conversations(
+        [_sample(num_channels=2)], text_pad_value=-1
+    )
+    assert batch["context_rows"].tolist() == [False, False]
+    assert batch["independent_mask"].tolist() == [False]
+
+
 def test_collate_mixed_channel_counts():
     """N=1 (LibriTTS-style) and N=2 windows pack into one batch."""
     samples = [
@@ -561,6 +599,63 @@ class TestSessionBacked:
         with caplog.at_level("INFO", logger="egs3.conversational.tts.dataset.dataset"):
             ds.plan_windows(epoch=None)
         assert not any("chunk-task plan:" in r.message for r in caplog.records)
+
+    def test_mask_probs_flow_to_plans(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path, context_channel_prob=1.0)
+        frozen = ds.plan_windows(epoch=None)
+        assert all(r.context_channels is None for r in frozen)
+        epoch_plan = ds.plan_windows(epoch=0)
+        assert any(r.context_channels is not None for r in epoch_plan)
+
+    def test_mask_probs_disabled_by_default(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path)
+        assert ds.context_channel_prob == 0.0
+        assert ds.independent_mask_prob == 0.0
+        plan = ds.plan_windows(epoch=0)
+        assert all(r.context_channels is None for r in plan)
+        assert all(not r.independent_mask for r in plan)
+
+    def test_mask_plan_log_line(self, fake_corpus, tmp_path, caplog):
+        ds = _make_dataset(fake_corpus, tmp_path, independent_mask_prob=1.0)
+        with caplog.at_level(
+            "INFO", logger="egs3.conversational.tts.dataset.dataset"
+        ):
+            ds.plan_windows(epoch=0)
+        assert any("mask plan:" in r.message for r in caplog.records)
+        caplog.clear()
+        with caplog.at_level(
+            "INFO", logger="egs3.conversational.tts.dataset.dataset"
+        ):
+            ds.plan_windows(epoch=None)
+        assert not any("mask plan:" in r.message for r in caplog.records)
+
+    def test_context_rows_remapped_by_perm(self, fake_corpus, tmp_path):
+        import dataclasses as _dc
+
+        ds = _make_dataset(fake_corpus, tmp_path)
+        record = next(r for r in ds.records if r.num_channels == 2)
+        record = _dc.replace(record, context_channels=(0,))
+        ds._fixed_perm = [1, 0]
+        sample = ds.load_window(record)
+        # perm [1, 0]: row 0 holds original channel 1, row 1 holds original
+        # channel 0 - so original context channel 0 is row 1.
+        assert sample["context_rows"] == [1]
+        assert "independent_mask" not in sample
+
+    def test_independent_mask_sample_key(self, fake_corpus, tmp_path):
+        import dataclasses as _dc
+
+        ds = _make_dataset(fake_corpus, tmp_path)
+        record = _dc.replace(ds.records[0], independent_mask=True)
+        sample = ds.load_window(record)
+        assert sample["independent_mask"] is True
+        assert "context_rows" not in sample
+
+    def test_plain_sample_has_no_mask_keys(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path)
+        sample = ds.load_window(ds.records[0])
+        assert "context_rows" not in sample
+        assert "independent_mask" not in sample
 
 
 # --------------------------------------------------------------------------

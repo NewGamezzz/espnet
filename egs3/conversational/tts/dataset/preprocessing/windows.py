@@ -75,6 +75,13 @@ class WindowRecord:
     # Mode T (timestamp-aligned target text, design 2026-08-15): set by the
     # planner's per-window coin; False = Mode O, today's order-only format.
     timestamp_text: bool = False
+    # Per-channel masking (design 2026-08-15): set by the planner's per-window
+    # mask coin (planner._apply_mask_coin). context_channels holds ORIGINAL
+    # channel ids (pre-permutation) that train fully observed and excluded
+    # from the loss; independent_mask=True draws frac_lengths per row instead
+    # of per conversation. Defaults = today's shared-span behavior.
+    context_channels: "tuple[int, ...] | None" = None
+    independent_mask: bool = False
     # Derived from turns/num_channels, never passed in: always consistent
     # with the stored (rounded) turn times, including after from_json.
     num_active_speakers: int = field(init=False)
@@ -131,6 +138,13 @@ class WindowingStats:
     # coin-heads windows degraded back to Mode O by the fit predicate.
     n_timestamp_windows: int = 0
     n_timestamp_degraded: int = 0
+    # Per-channel mask coin outcomes (planner._apply_mask_coin): windows
+    # flagged with a context_channels subset, windows flagged
+    # independent_mask, and context-coin heads degraded because the window
+    # has a single channel (they fall through to the independent coin).
+    n_context_windows: int = 0
+    n_independent_windows: int = 0
+    n_context_degraded: int = 0
 
     def merge(self, other: "WindowingStats") -> None:
         self.n_windows += other.n_windows
@@ -150,6 +164,9 @@ class WindowingStats:
         self.n_chunk_fallback_infill += other.n_chunk_fallback_infill
         self.n_timestamp_windows += other.n_timestamp_windows
         self.n_timestamp_degraded += other.n_timestamp_degraded
+        self.n_context_windows += other.n_context_windows
+        self.n_independent_windows += other.n_independent_windows
+        self.n_context_degraded += other.n_context_degraded
 
 
 def blocked_intervals(
@@ -463,6 +480,11 @@ def to_json(w: WindowRecord) -> dict:
     # windows (the overwhelming majority) leave golden manifests unchanged.
     if w.timestamp_text:
         d["timestamp_text"] = True
+    # Same omit-when-default convention as chunk_task/timestamp_text above.
+    if w.context_channels is not None:
+        d["context_channels"] = list(w.context_channels)
+    if w.independent_mask:
+        d["independent_mask"] = True
     return d
 
 
@@ -487,6 +509,12 @@ def from_json(d: dict) -> WindowRecord:
         ),
         chunk_task=plan_from_json(d["chunk_task"]) if "chunk_task" in d else None,
         timestamp_text=d.get("timestamp_text", False),
+        context_channels=(
+            tuple(int(c) for c in d["context_channels"])
+            if "context_channels" in d
+            else None
+        ),
+        independent_mask=d.get("independent_mask", False),
     )
 
 

@@ -18,6 +18,7 @@ from egs3.conversational.tts.dataset.preprocessing.sssd import (
     session_speakers,
 )
 from egs3.conversational.tts.dataset.preprocessing.windows import (
+    WindowRecord,
     WindowingStats,
     _gap_at,
     blocked_intervals,
@@ -818,6 +819,48 @@ class TestSnapStart:
         )
         assert a == b
         assert sa == sb
+
+
+def _mask_record(**kw):
+    base = dict(
+        window_id="w0",
+        session_id="s",
+        audio_relpath="a.flac",
+        num_channels=2,
+        sample_rate=48000,
+        t0=0.0,
+        t1=3.0,
+        turns=(
+            Turn(channel=0, speaker="s0", text="hi", start=0.0, end=1.0),
+            Turn(channel=1, speaker="s1", text="yo", start=1.5, end=2.5),
+        ),
+    )
+    base.update(kw)
+    return WindowRecord(**base)
+
+
+class TestMaskFields:
+    """Per-channel masking fields and JSON round-trip."""
+
+    def test_mask_fields_default_keys_omitted(self):
+        d = to_json(_mask_record())
+        assert "context_channels" not in d
+        assert "independent_mask" not in d
+        rec = from_json(d)
+        assert rec.context_channels is None
+        assert rec.independent_mask is False
+
+    def test_context_channels_json_round_trip(self):
+        d = to_json(_mask_record(context_channels=(1,)))
+        assert d["context_channels"] == [1]
+        assert "independent_mask" not in d
+        back = from_json(d)
+        assert back.context_channels == (1,)
+
+    def test_independent_mask_json_round_trip(self):
+        d = to_json(_mask_record(independent_mask=True))
+        assert d["independent_mask"] is True
+        assert from_json(d).independent_mask is True
 
 
 class TestWriteWindowManifestAtomicity:

@@ -41,6 +41,8 @@ class MultiBranchF5(nn.Module):
         text: torch.Tensor,
         text_lengths: torch.Tensor = None,
         cond_frames: torch.Tensor = None,
+        context_rows: torch.Tensor = None,
+        independent_mask: torch.Tensor = None,
         **kwargs,
     ) -> Tuple[torch.Tensor, Dict[str, torch.Tensor], torch.Tensor]:
         """Flow-matching training/validation step on one packed batch.
@@ -54,10 +56,20 @@ class MultiBranchF5(nn.Module):
             cond_frames: ``[B]`` long, -1 sentinel; chunk-task conversations'
                 deterministic span boundary (collate_conversations, Task 8).
                 Passed through to ``MultiBranchCFM.forward`` verbatim.
+            context_rows: ``[R]`` bool, packed row-major; rows trained fully
+                observed and excluded from the loss (collate_conversations).
+            independent_mask: ``[B]`` bool; conversations drawing
+                frac_lengths per row (collate_conversations).
         """
         feats, feats_lengths = self.feats_extract(speech, speech_lengths)
         loss, ch_stats, _ = self.cfm(
-            feats, text, counts=counts, lens=feats_lengths, cond_frames=cond_frames
+            feats,
+            text,
+            counts=counts,
+            lens=feats_lengths,
+            cond_frames=cond_frames,
+            context_rows=context_rows,
+            independent_mask=independent_mask,
         )
         stats = {"loss": loss.detach(), **ch_stats}
         weight = loss.new_tensor(len(counts))  # conversations, not rows
