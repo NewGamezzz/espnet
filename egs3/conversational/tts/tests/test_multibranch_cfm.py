@@ -241,3 +241,134 @@ def test_sample_seed_reproducible_and_channels_independent():
     assert torch.equal(out1, out2)  # reproducible
     generated = out1[:, 4:, :]  # past the prompt region
     assert not torch.equal(generated[0], generated[1])  # independent noise
+
+
+def test_mask_kwargs_all_false_bit_identical():
+    """All-False context_rows/independent_mask must consume identical RNG and
+    produce bit-identical loss/mask to omitting the kwargs (same guarantee as
+    the cond_frames sentinel)."""
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([2], seed=9, t=40)
+
+    torch.manual_seed(0)
+    ref_loss, _, ref_extras = multibranch(mel, text, counts=[2], lens=lens)
+
+    torch.manual_seed(0)
+    new_loss, _, new_extras = multibranch(
+        mel,
+        text,
+        counts=[2],
+        lens=lens,
+        context_rows=torch.tensor([False, False]),
+        independent_mask=torch.tensor([False]),
+    )
+    torch.testing.assert_close(ref_loss, new_loss)
+    assert torch.equal(
+        ref_extras["rand_span_mask"], new_extras["rand_span_mask"]
+    )
+
+
+def test_context_rows_fully_observed_and_loss_excluded():
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([2], seed=3, t=40)
+    loss, stats, extras = multibranch(
+        mel,
+        text,
+        counts=[2],
+        lens=lens,
+        context_rows=torch.tensor([True, False]),
+    )
+    # Context row: never masked -> cond carries the full ground-truth mel.
+    assert not extras["rand_span_mask"][0].any()
+    torch.testing.assert_close(extras["cond"][0], mel[0])
+    # Zero loss frames on ch0 -> its stats key is skipped, ch1's is present.
+    assert "loss_ch0" not in stats
+    assert "loss_ch1" in stats
+    assert torch.isfinite(loss)
+
+
+def test_context_all_rows_of_a_conversation_raises():
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([2], seed=3, t=40)
+    with pytest.raises(ValueError, match="every row"):
+        multibranch(
+            mel,
+            text,
+            counts=[2],
+            lens=lens,
+            context_rows=torch.tensor([True, True]),
+        )
+
+
+def test_mask_kwarg_shape_mismatches_raise():
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([2], seed=3, t=40)
+    with pytest.raises(ValueError, match="context_rows"):
+        multibranch(
+            mel, text, counts=[2], lens=lens,
+            context_rows=torch.tensor([True]),
+        )
+    with pytest.raises(ValueError, match="independent_mask"):
+        multibranch(
+            mel, text, counts=[2], lens=lens,
+            independent_mask=torch.tensor([False, False]),
+        )
+
+
+def test_independent_rows_draw_their_own_spans(monkeypatch):
+    """With the span start pinned, per-row frac_lengths of different sizes
+    must yield per-row masks of different lengths."""
+    monkeypatch.setattr(
+        mb_mod, "mask_from_frac_lengths", deterministic_span_mask
+    )
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([2], seed=5, t=40)
+    _, _, extras = multibranch(
+        mel,
+        text,
+        counts=[2],
+        lens=lens,
+        independent_mask=torch.tensor([True]),
+        row_frac_lengths=torch.tensor([0.3, 0.8]),
+    )
+    sums = extras["rand_span_mask"].sum(dim=1)
+    assert sums[0] != sums[1]
+
+
+def test_independent_is_noop_on_chunk_conversations():
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([2], seed=5, t=40)
+    torch.manual_seed(0)
+    _, _, ref = multibranch(
+        mel, text, counts=[2], lens=lens, cond_frames=torch.tensor([12])
+    )
+    torch.manual_seed(0)
+    _, _, new = multibranch(
+        mel,
+        text,
+        counts=[2],
+        lens=lens,
+        cond_frames=torch.tensor([12]),
+        independent_mask=torch.tensor([True]),
+    )
+    assert torch.equal(ref["rand_span_mask"], new["rand_span_mask"])
+
+
+def test_chunk_context_composition():
+    """Chunk x context: the context row is observed past cond_frames, the
+    target row keeps the deterministic [cond_frames, len) span."""
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([2], seed=5, t=40)
+    _, _, extras = multibranch(
+        mel,
+        text,
+        counts=[2],
+        lens=lens,
+        cond_frames=torch.tensor([12]),
+        context_rows=torch.tensor([True, False]),
+    )
+    span = extras["rand_span_mask"]
+    assert not span[0].any()
+    expected = torch.zeros_like(span[1])
+    expected[12 : int(lens[1])] = True
+    assert torch.equal(span[1], expected)

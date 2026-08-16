@@ -54,6 +54,13 @@ class MultiBranchCFM(CFM):
        and returns ``(loss, stats, extras)`` instead of CFM's
        ``(loss, cond, pred)``; ``extras`` carries ``cond``/``pred`` plus the
        sampled quantities.
+    8. Per-channel mask regimes (design 2026-08-15): optional
+       ``context_rows``/``independent_mask``/``row_frac_lengths`` kwargs.
+       Context rows are never masked (their cond is the full mel, zero loss
+       frames, stats key skipped); independent conversations draw
+       frac_lengths per row; a deterministic chunk span (cond_frames >= 0)
+       still wins for target rows, and context rows are forced observed
+       LAST, so chunk x context composes. None/all-False = bit-parity.
     """
 
     def __init__(self, transformer, ctx: BranchContext | None = None, **kwargs):
@@ -75,6 +82,9 @@ class MultiBranchCFM(CFM):
         time=None,  # (B,) pre-sampled flow times (tests only)
         x0=None,  # (R, T, d) pre-sampled noise (tests only)
         cond_frames=None,  # (B,) long, -1 sentinel: chunk-task deterministic span
+        context_rows=None,  # (R,) bool: rows trained fully observed, no loss
+        independent_mask=None,  # (B,) bool: per-row frac draws
+        row_frac_lengths=None,  # (R,) pre-sampled per-row fracs (tests only)
     ):
         # handle raw wave
         if inp.ndim == 2:
@@ -143,6 +153,88 @@ class MultiBranchCFM(CFM):
         rand_span_mask = conv_span_mask.repeat_interleave(counts_t, dim=0)
         rand_span_mask &= mask
 
+        # --- Per-channel mask regimes (design 2026-08-15) ------------------
+        # None or all-False kwargs are bit-identical to omitting them: the
+        # shared draw above already happened unconditionally, and the per-row
+        # draw below only fires for flagged conversations.
+        det_conv = (
+            cond_frames >= 0
+            if cond_frames is not None
+            else torch.zeros(n_conv, dtype=torch.bool, device=device)
+        )
+        conv_id = torch.arange(n_conv, device=device).repeat_interleave(
+            counts_t
+        )
+        ctx_rows_t = None
+        if context_rows is not None:
+            ctx_rows_t = torch.as_tensor(
+                context_rows, dtype=torch.bool, device=device
+            )
+            if ctx_rows_t.numel() != rows:
+                raise ValueError(
+                    f"context_rows has {ctx_rows_t.numel()} entries for "
+                    f"{rows} packed rows"
+                )
+        ind_conv = None
+        if independent_mask is not None:
+            ind_conv = torch.as_tensor(
+                independent_mask, dtype=torch.bool, device=device
+            )
+            if ind_conv.numel() != n_conv:
+                raise ValueError(
+                    f"independent_mask has {ind_conv.numel()} entries for "
+                    f"{n_conv} conversations"
+                )
+        ctx_conv = torch.zeros(n_conv, dtype=torch.bool, device=device)
+        if ctx_rows_t is not None and bool(ctx_rows_t.any()):
+            ctx_counts = torch.zeros(
+                n_conv, dtype=torch.long, device=device
+            )
+            ctx_counts.index_add_(0, conv_id, ctx_rows_t.long())
+            if bool(((ctx_counts > 0) & (ctx_counts == counts_t)).any()):
+                raise ValueError(
+                    "context_rows marks every row of at least one "
+                    "conversation; a context window needs >= 1 target row"
+                )
+            ctx_conv = ctx_counts > 0
+        # Rows that replace the shared span with their OWN draw: rows of
+        # independent conversations plus target rows of context
+        # conversations - except conversations carrying a deterministic
+        # chunk span (cond_frames >= 0), which wins exactly as it wins over
+        # the shared draw above.
+        flagged_conv = ctx_conv.clone()
+        if ind_conv is not None:
+            flagged_conv |= ind_conv
+        override_rows = (flagged_conv & ~det_conv).repeat_interleave(counts_t)
+        if ctx_rows_t is not None:
+            override_rows &= ~ctx_rows_t
+        if bool(override_rows.any()):
+            if row_frac_lengths is None:
+                row_fracs = (
+                    torch.zeros(
+                        (int(override_rows.sum()),), device=device
+                    )
+                    .float()
+                    .uniform_(*self.frac_lengths_mask)
+                )
+            else:
+                row_fracs = torch.as_tensor(
+                    row_frac_lengths, device=device
+                ).float()[override_rows]
+            row_span = mask_from_frac_lengths(
+                lens[override_rows], row_fracs
+            )
+            row_span = F.pad(
+                row_span, (0, seq_len - row_span.shape[1]), value=False
+            )
+            rand_span_mask[override_rows] = (
+                row_span & mask[override_rows]
+            )
+        if ctx_rows_t is not None and bool(ctx_rows_t.any()):
+            # Context rows: fully observed, zero loss frames - forced LAST
+            # so it wins over shared, per-row, and deterministic spans.
+            rand_span_mask[ctx_rows_t] = False
+
         # mel is x1
         x1 = inp
 
@@ -194,7 +286,11 @@ class MultiBranchCFM(CFM):
         stats = {}
         for k in range(int(counts_t.max())):
             sel = row_pos == k
-            stats[f"loss_ch{k}"] = loss_full[sel][rand_span_mask[sel]].mean().detach()
+            sel_span = rand_span_mask[sel]
+            if bool(sel_span.any()):
+                stats[f"loss_ch{k}"] = (
+                    loss_full[sel][sel_span].mean().detach()
+                )
 
         extras = {
             "cond": cond,
@@ -203,6 +299,8 @@ class MultiBranchCFM(CFM):
             # frac_lengths is the random draw (discarded if cond_frames >= 0)
             "frac_lengths": frac_lengths,
             "time": time,
+            "context_rows": ctx_rows_t,
+            "independent_mask": ind_conv,
         }
         return loss, stats, extras
 
