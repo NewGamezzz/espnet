@@ -562,6 +562,63 @@ class TestSessionBacked:
             ds.plan_windows(epoch=None)
         assert not any("chunk-task plan:" in r.message for r in caplog.records)
 
+    def test_mask_probs_flow_to_plans(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path, context_channel_prob=1.0)
+        frozen = ds.plan_windows(epoch=None)
+        assert all(r.context_channels is None for r in frozen)
+        epoch_plan = ds.plan_windows(epoch=0)
+        assert any(r.context_channels is not None for r in epoch_plan)
+
+    def test_mask_probs_disabled_by_default(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path)
+        assert ds.context_channel_prob == 0.0
+        assert ds.independent_mask_prob == 0.0
+        plan = ds.plan_windows(epoch=0)
+        assert all(r.context_channels is None for r in plan)
+        assert all(not r.independent_mask for r in plan)
+
+    def test_mask_plan_log_line(self, fake_corpus, tmp_path, caplog):
+        ds = _make_dataset(fake_corpus, tmp_path, independent_mask_prob=1.0)
+        with caplog.at_level(
+            "INFO", logger="egs3.conversational.tts.dataset.dataset"
+        ):
+            ds.plan_windows(epoch=0)
+        assert any("mask plan:" in r.message for r in caplog.records)
+        caplog.clear()
+        with caplog.at_level(
+            "INFO", logger="egs3.conversational.tts.dataset.dataset"
+        ):
+            ds.plan_windows(epoch=None)
+        assert not any("mask plan:" in r.message for r in caplog.records)
+
+    def test_context_rows_remapped_by_perm(self, fake_corpus, tmp_path):
+        import dataclasses as _dc
+
+        ds = _make_dataset(fake_corpus, tmp_path)
+        record = next(r for r in ds.records if r.num_channels == 2)
+        record = _dc.replace(record, context_channels=(0,))
+        ds._fixed_perm = [1, 0]
+        sample = ds.load_window(record)
+        # perm [1, 0]: row 0 holds original channel 1, row 1 holds original
+        # channel 0 - so original context channel 0 is row 1.
+        assert sample["context_rows"] == [1]
+        assert "independent_mask" not in sample
+
+    def test_independent_mask_sample_key(self, fake_corpus, tmp_path):
+        import dataclasses as _dc
+
+        ds = _make_dataset(fake_corpus, tmp_path)
+        record = _dc.replace(ds.records[0], independent_mask=True)
+        sample = ds.load_window(record)
+        assert sample["independent_mask"] is True
+        assert "context_rows" not in sample
+
+    def test_plain_sample_has_no_mask_keys(self, fake_corpus, tmp_path):
+        ds = _make_dataset(fake_corpus, tmp_path)
+        sample = ds.load_window(ds.records[0])
+        assert "context_rows" not in sample
+        assert "independent_mask" not in sample
+
 
 # --------------------------------------------------------------------------
 # Chunk-task assembly ([P | H | target]) fixtures

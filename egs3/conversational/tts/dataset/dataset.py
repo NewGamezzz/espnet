@@ -123,6 +123,14 @@ class ConversationDataset(TorchDataset):
     (``preprocessing.text.FRAMES_PER_SECOND``, 93.75 at the defaults) - raised
     eagerly in ``__init__`` rather than surfacing as a silent frame-boundary
     drift downstream.
+
+    ``context_channel_prob`` / ``independent_mask_prob`` are the training-side
+    per-channel masking knobs (``preprocessing.planner._apply_mask_coin``,
+    design 2026-08-15): ``0.0`` (the defaults) is bit-identical to today's
+    shared-span behavior, and the frozen plan (valid/test/inference) never
+    flags. Flagged samples carry ``context_rows`` (post-permutation row
+    indices trained fully observed / loss-excluded) or ``independent_mask``
+    (per-row span draws in the CFM).
     """
 
     def __init__(
@@ -141,11 +149,15 @@ class ConversationDataset(TorchDataset):
         window_seed: int = 0,
         chunk_task: dict | None = None,
         timestamp_align_prob: float = 0.0,
+        context_channel_prob: float = 0.0,
+        independent_mask_prob: float = 0.0,
     ) -> None:
         self.split = split
         self.fs = int(fs if fs is not None else _DATASET_CFG["sample_rate"])
         self.hop = int(hop)
         self.timestamp_align_prob = float(timestamp_align_prob)
+        self.context_channel_prob = float(context_channel_prob)
+        self.independent_mask_prob = float(independent_mask_prob)
         if self.timestamp_align_prob > 0:
             from .preprocessing.text import FRAMES_PER_SECOND
 
@@ -227,6 +239,12 @@ class ConversationDataset(TorchDataset):
             timestamp_align_prob=(
                 self.timestamp_align_prob if epoch is not None else 0.0
             ),
+            context_channel_prob=(
+                self.context_channel_prob if epoch is not None else 0.0
+            ),
+            independent_mask_prob=(
+                self.independent_mask_prob if epoch is not None else 0.0
+            ),
         )
         if chunk_params is not None and chunk_params.chunk_task_prob > 0:
             # All five numbers come from plan_sessions' pre-filter stats, i.e.
@@ -252,6 +270,22 @@ class ConversationDataset(TorchDataset):
                 "timestamp-text plan: %d mode-T / %d degraded of %d windows",
                 stats.n_timestamp_windows,
                 stats.n_timestamp_degraded,
+                stats.n_windows,
+            )
+        if epoch is not None and (
+            self.context_channel_prob > 0 or self.independent_mask_prob > 0
+        ):
+            # Same pre-min_active_speakers-filter caveat as the two lines
+            # above: counts come from plan_sessions' stats.
+            logger.info(
+                "mask plan: %d context / %d independent / %d shared / "
+                "%d degraded of %d windows",
+                stats.n_context_windows,
+                stats.n_independent_windows,
+                stats.n_windows
+                - stats.n_context_windows
+                - stats.n_independent_windows,
+                stats.n_context_degraded,
                 stats.n_windows,
             )
         if self.min_active_speakers > 1:
@@ -404,6 +438,16 @@ class ConversationDataset(TorchDataset):
                 target_t0=record.t0,
                 target_frames=speech.shape[1] // self.hop - cond,
             )
+        # Per-channel mask flags (design 2026-08-15): keys exist only when the
+        # planner's mask coin flagged the window, so ordinary samples keep the
+        # exact dict every existing consumer expects. context_rows holds
+        # POST-permutation row indices (same remap as turns above).
+        if record.context_channels is not None:
+            sample["context_rows"] = sorted(
+                inv[c] for c in record.context_channels
+            )
+        if record.independent_mask:
+            sample["independent_mask"] = True
         if self.inference:
             sample.update(
                 session_id=record.session_id,
