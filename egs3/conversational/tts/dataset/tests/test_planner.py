@@ -1,4 +1,3 @@
-import dataclasses
 import random
 from types import SimpleNamespace
 
@@ -688,6 +687,7 @@ class TestMaskCoin:
             epoch=2,
             context_channel_prob=1.0,
         )
+
         def strip(d):
             d = dict(d)
             d.pop("context_channels", None)
