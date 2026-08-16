@@ -335,6 +335,27 @@ def test_independent_rows_draw_their_own_spans(monkeypatch):
     assert sums[0] != sums[1]
 
 
+def test_context_target_rows_draw_their_own_spans(monkeypatch):
+    """Context conversations' non-context (target) rows also get per-row
+    frac draws - distinct from the shared conversation-level span."""
+    monkeypatch.setattr(
+        mb_mod, "mask_from_frac_lengths", deterministic_span_mask
+    )
+    multibranch = make_multibranch(make_dit(seed=0)).eval()
+    mel, text, lens = make_packed_mels([3], seed=5, t=40)
+    _, _, extras = multibranch(
+        mel,
+        text,
+        counts=[3],
+        lens=lens,
+        context_rows=torch.tensor([True, False, False]),
+        row_frac_lengths=torch.tensor([0.0, 0.3, 0.8]),
+    )
+    sums = extras["rand_span_mask"].sum(dim=1)
+    assert sums[0] == 0
+    assert sums[1] != sums[2]
+
+
 def test_independent_is_noop_on_chunk_conversations():
     multibranch = make_multibranch(make_dit(seed=0)).eval()
     mel, text, lens = make_packed_mels([2], seed=5, t=40)
