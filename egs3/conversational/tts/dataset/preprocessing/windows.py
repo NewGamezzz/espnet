@@ -138,6 +138,13 @@ class WindowingStats:
     # coin-heads windows degraded back to Mode O by the fit predicate.
     n_timestamp_windows: int = 0
     n_timestamp_degraded: int = 0
+    # Per-channel mask coin outcomes (planner._apply_mask_coin): windows
+    # flagged with a context_channels subset, windows flagged
+    # independent_mask, and context-coin heads degraded because the window
+    # has a single channel (they fall through to the independent coin).
+    n_context_windows: int = 0
+    n_independent_windows: int = 0
+    n_context_degraded: int = 0
 
     def merge(self, other: "WindowingStats") -> None:
         self.n_windows += other.n_windows
@@ -157,6 +164,9 @@ class WindowingStats:
         self.n_chunk_fallback_infill += other.n_chunk_fallback_infill
         self.n_timestamp_windows += other.n_timestamp_windows
         self.n_timestamp_degraded += other.n_timestamp_degraded
+        self.n_context_windows += other.n_context_windows
+        self.n_independent_windows += other.n_independent_windows
+        self.n_context_degraded += other.n_context_degraded
 
 
 def blocked_intervals(

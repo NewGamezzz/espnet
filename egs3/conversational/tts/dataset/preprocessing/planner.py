@@ -28,6 +28,15 @@ record order, atomic sessions included) draws one coin from
 ``random.Random(f"{seed}:textmode:{session_id}:epoch{epoch}")``; a heads coin
 flags ``timestamp_text=True`` iff ``timestamp_fits`` passes, else the record
 stays Mode O and the degrade counter increments.
+
+Per-channel mask regimes (design 2026-08-15) hook in last, through their OWN
+dedicated rng stream ``random.Random(f"{seed}:maskmode:{sid}:epoch{e}")``:
+both probs 0 (the default) or ``epoch is None`` takes the exact prior code
+path with zero extra draws. When live, every surviving record draws a
+layered coin, context first: a context hit on an N >= 2 window attaches a
+uniform proper subset ``context_channels`` (k ~ U{1..N-1}); a context hit on
+an N = 1 window degrades (counted) and falls through to the independent
+coin, which flags ``independent_mask``.
 """
 
 from __future__ import annotations
@@ -127,6 +136,59 @@ def _apply_timestamp_coin(
     return out
 
 
+def _maskmode_rng(seed: int, session_id: str, epoch: int) -> random.Random:
+    # Dedicated stream like _textmode_rng: mask coins must never perturb the
+    # window/chunk-task or text-mode rngs (bit-parity).
+    return random.Random(f"{seed}:maskmode:{session_id}:epoch{epoch}")
+
+
+def _apply_mask_coin(
+    records: list[WindowRecord],
+    stats: WindowingStats,
+    session: SessionRecord,
+    seed: int,
+    epoch: int | None,
+    context_channel_prob: float,
+    independent_mask_prob: float,
+) -> list[WindowRecord]:
+    """Per-window layered mask coin (design 2026-08-15), context first.
+
+    Draw order per record is deterministic given the record sequence: one
+    context coin (only if its prob > 0), then on a context hit with N >= 2
+    one randint + one sample for the subset, else one independent coin (only
+    if its prob > 0). Zero draws when both probs are 0 or epoch is None, so
+    frozen mode and default configs never construct the rng at all.
+    """
+    if epoch is None or not records:
+        return records
+    if context_channel_prob <= 0 and independent_mask_prob <= 0:
+        return records
+    rng = _maskmode_rng(seed, session.session_id, epoch)
+    out = []
+    for record in records:
+        ctx_hit = (
+            context_channel_prob > 0
+            and rng.random() < context_channel_prob
+        )
+        if ctx_hit and record.num_channels >= 2:
+            k = rng.randint(1, record.num_channels - 1)
+            chans = tuple(sorted(rng.sample(range(record.num_channels), k)))
+            record = dataclasses.replace(record, context_channels=chans)
+            stats.n_context_windows += 1
+        else:
+            if ctx_hit:
+                # A 1-channel window cannot spare a fully observed row.
+                stats.n_context_degraded += 1
+            if (
+                independent_mask_prob > 0
+                and rng.random() < independent_mask_prob
+            ):
+                record = dataclasses.replace(record, independent_mask=True)
+                stats.n_independent_windows += 1
+        out.append(record)
+    return out
+
+
 def plan_session(
     session: SessionRecord,
     *,
@@ -135,6 +197,8 @@ def plan_session(
     epoch: int | None,
     chunk_params: ChunkTaskParams | None = None,
     timestamp_align_prob: float = 0.0,
+    context_channel_prob: float = 0.0,
+    independent_mask_prob: float = 0.0,
 ) -> tuple[list[WindowRecord], WindowingStats]:
     if session.atomic:
         stats = WindowingStats()
@@ -151,12 +215,19 @@ def plan_session(
                 turns=session.turns,
             )
         ]
-        return (
-            _apply_timestamp_coin(
-                records, stats, session, seed, epoch, timestamp_align_prob
-            ),
-            stats,
+        records = _apply_timestamp_coin(
+            records, stats, session, seed, epoch, timestamp_align_prob
         )
+        records = _apply_mask_coin(
+            records,
+            stats,
+            session,
+            seed,
+            epoch,
+            context_channel_prob,
+            independent_mask_prob,
+        )
+        return records, stats
 
     rec = Recording(
         id=session.session_id,
@@ -200,12 +271,19 @@ def plan_session(
                 else:
                     surviving.append(record)
             records = surviving
-        return (
-            _apply_timestamp_coin(
-                records, stats, session, seed, epoch, timestamp_align_prob
-            ),
-            stats,
+        records = _apply_timestamp_coin(
+            records, stats, session, seed, epoch, timestamp_align_prob
         )
+        records = _apply_mask_coin(
+            records,
+            stats,
+            session,
+            seed,
+            epoch,
+            context_channel_prob,
+            independent_mask_prob,
+        )
+        return records, stats
 
     # Chunk-task mode: one rng constructed once, the per-session coin drawn
     # FIRST from it, then the same rng object flows to build_windows and to
@@ -269,12 +347,19 @@ def plan_session(
             chunked_records.append(dataclasses.replace(record, chunk_task=plan))
         records = chunked_records
 
-    return (
-        _apply_timestamp_coin(
-            records, stats, session, seed, epoch, timestamp_align_prob
-        ),
-        stats,
+    records = _apply_timestamp_coin(
+        records, stats, session, seed, epoch, timestamp_align_prob
     )
+    records = _apply_mask_coin(
+        records,
+        stats,
+        session,
+        seed,
+        epoch,
+        context_channel_prob,
+        independent_mask_prob,
+    )
+    return records, stats
 
 
 def plan_sessions(
@@ -285,6 +370,8 @@ def plan_sessions(
     epoch: int | None,
     chunk_params: ChunkTaskParams | None = None,
     timestamp_align_prob: float = 0.0,
+    context_channel_prob: float = 0.0,
+    independent_mask_prob: float = 0.0,
 ) -> tuple[list[WindowRecord], WindowingStats]:
     all_records: list[WindowRecord] = []
     total = WindowingStats()
@@ -296,6 +383,8 @@ def plan_sessions(
             epoch=epoch,
             chunk_params=chunk_params,
             timestamp_align_prob=timestamp_align_prob,
+            context_channel_prob=context_channel_prob,
+            independent_mask_prob=independent_mask_prob,
         )
         all_records.extend(records)
         total.merge(stats)
