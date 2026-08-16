@@ -52,15 +52,19 @@ def test_smoke_sbatch_uses_smoke_config():
     assert "training_f5_tts_base_smoke.yaml" in text
 
 
-def test_smoke_sbatch_documents_corrected_success_criterion():
-    """The plan's original Task 11 step 6 wording ("len(batches) unchanged")
-    is unsatisfiable once max_samples=64 (Task 12) is active; the sbatch
-    header must carry the corrected form so whoever runs the smoke doesn't
-    read a correct result as a regression."""
+def test_smoke_sbatch_documents_sampler_construction_cost():
+    """Sampler construction is paid on every restart of a chained run.
+
+    Replaces an earlier assertion about a max_samples=64 success criterion,
+    which went away with the custom sampler. What still matters is that
+    whoever runs the smoke knows to measure how long the stock `numel`
+    sampler takes to build and how much host RSS it holds -- roughly 12 GB
+    and ~4 minutes per rank extrapolated to 37M utterances.
+    """
     text = SMOKE.read_text()
-    assert "RSS fell" in text
-    assert "batch count increased only at the short end" in text
-    assert "no batch" in text and "exceeds 64" in text
+    assert "PEAK HOST RSS" in text
+    assert "stock `numel` sampler" in text
+    assert "EVERY restart" in text
 
 
 def test_train_sbatch_runs_quota_guard_before_training():

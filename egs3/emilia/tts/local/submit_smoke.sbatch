@@ -42,11 +42,10 @@
 #    `nvidia-smi --query-gpu=memory.used --format=csv -l 30 > logs/gpu_%j.csv &`
 #    (backgrounded, killed after srun returns) for a time series.
 #
-# 3. PEAK HOST RSS and WALL TIME OF SAMPLER CONSTRUCTION, which gates
-#    Task 12 (already shipped -- NumElementsArraySampler with max_samples=64
-#    is already the config's dataloader.train.iter_factory.batches.type).
-#    This still matters for a months-long chained run, which restarts often
-#    and pays sampler-construction cost every restart:
+# 3. PEAK HOST RSS and WALL TIME OF SAMPLER CONSTRUCTION. The recipe uses
+#    the stock `numel` sampler, whose cost at full corpus size is real:
+#    extrapolated to 37M utterances it is roughly 12 GB and ~4 minutes per
+#    rank, paid on EVERY restart of a chained months-long run. Watch it:
 #      - Peak RSS per rank: `sacct -j <jobid> --format=JobID,MaxRSS,MaxRSSNode`
 #        (per-task RSS is only available per srun step, not per Slurm task,
 #        on some PSC accounting configs -- fall back to
@@ -76,17 +75,6 @@
 #    them), so raising num_workers past what's implied by
 #    --cpus-per-task requires also raising --cpus-per-task, which lowers
 #    how many ranks fit per node.
-#
-# ---------------------------------------------------------------------------
-# Task 12 (numel_array / max_samples=64) success criterion, corrected:
-# ---------------------------------------------------------------------------
-# The plan's original wording ("confirm peak RSS fell and len(batches) is
-# unchanged from the stock run") is UNSATISFIABLE: with max_samples=64
-# active, len(batches) MUST increase, because the cap splits the short end
-# of the length-sorted order into more, smaller batches. Corrected
-# criterion, from the four measurements above:
-#   RSS fell; batch count increased only at the short end; no batch
-#   exceeds 64.
 #
 # ---------------------------------------------------------------------------
 # Poll on a log marker, not pgrep (an ssh-wrapped `pgrep -f` matches its own

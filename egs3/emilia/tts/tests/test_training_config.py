@@ -170,24 +170,34 @@ def test_create_shape_block_has_manifest_paths(cfg):
     assert "valid" in manifest_paths
 
 
-def test_train_uses_numel_array_with_upstream_max_samples_cap(cfg):
-    """Task 12: NumElementsArraySampler with upstream's max_samples=64 cap,
-    fixing the 300+-sample batches an uncapped numel sampler would produce
-    at the short end of Emilia's length-sorted order (spec 6.1)."""
-    batches = cfg.dataloader.train.iter_factory.batches
-    assert batches.type == "numel_array"
-    assert batches.max_samples == 64
+def test_both_loaders_use_the_stock_numel_sampler(cfg):
+    """Stock espnet2 `numel`, the same sampler the LibriTTS F5 recipe uses.
 
+    An earlier revision shipped a custom numpy-backed sampler carrying
+    upstream F5-TTS's per-batch cap of 64 samples. Both of its
+    justifications were measured on the real corpus and neither survived:
 
-def test_valid_also_uses_numel_array_with_max_samples_cap(cfg):
-    """Valid inherits type via interpolation from train; max_samples is set
-    explicitly too. With sort_batch's ascending default, validation's first
-    limit_val_batches batches are exactly the short-utterance region where
-    an uncapped batch would be largest, so the same OOM risk as train
-    applies to validation, just earlier."""
-    batches = cfg.dataloader.valid.iter_factory.batches
-    assert batches.type == "numel_array"
-    assert batches.max_samples == 64
+    - The cap is inert. It was argued from Emilia's 0.3s duration floor
+      (28 frames, so 340+ samples in a short-end batch), but Emilia ships
+      3-30s segments and this corpus's shortest utterance is 3.004s. The
+      builder's own duration histogram has its first four bins empty.
+      Realized batch sizes run 1..35 and 0 of 9,997 batches reach 64.
+    - The memory saving is real but unneeded: extrapolated to 37M
+      utterances it is ~4.3 GB vs ~12.4 GB per rank, so ~35 GB vs ~100 GB
+      across 8 ranks on a 515 GB node. Stock is also faster to construct
+      at every size measured.
+
+    The two samplers produce identical partitions at 116k/500k/2M/8M
+    utterances, so dropping the custom one was not a behavioural change.
+    Pinned here so it is not reintroduced without new evidence.
+    """
+    for mode in ("train", "valid"):
+        batches = cfg.dataloader[mode].iter_factory.batches
+        assert batches.type == "numel", mode
+        assert "max_samples" not in batches, (
+            f"{mode}: max_samples belongs to the removed custom sampler; "
+            "stock numel has no such argument and would raise"
+        )
 
 
 def test_smoke_config_only_differs_from_base_in_five_places():
@@ -409,7 +419,7 @@ def test_smoke_2gpu_config_changes_only_device_count_and_paths(monkeypatch):
         "dataloader.train.iter_factory.batches.batch_bins",
         "dataloader.train.iter_factory.batches.min_batch_size",
         "dataloader.valid.iter_factory.batches.min_batch_size",
-        "dataloader.train.iter_factory.batches.max_samples",
+        "dataloader.train.iter_factory.batches.type",
     ):
         assert two[key] == smoke[key], f"{key} must stay at the production value"
 
@@ -423,7 +433,7 @@ def test_smoke_2gpu_config_changes_only_device_count_and_paths(monkeypatch):
 def test_min_batch_size_is_one_on_both_loaders():
     """min_batch_size is a memory floor, not a topology knob.
 
-    NumElementsArraySampler closes a batch on
+    The numel sampler closes a batch on
     `current_count * current_length * n_mels > batch_bins` AND
     `current_count >= min_batch_size`, so any floor above 1 lets a batch of
     `floor` long utterances cost floor * L_max frames regardless of

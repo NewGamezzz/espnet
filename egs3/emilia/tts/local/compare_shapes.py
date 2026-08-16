@@ -40,10 +40,8 @@ def compare(
     err = np.array([a[k] - c[k] for k in keys], dtype=np.int64)
 
     def batches(path):
-        # Deliberately the stock sampler, not NumElementsArraySampler: this
-        # isolates the shape-file difference from the max_samples cap (Task
-        # 12 already pins array-vs-stock equivalence on its own), and runs
-        # with the cap disabled so it pins the packing rule exactly.
+        # The stock sampler, which is what the recipe configs now use, so
+        # this comparison exercises the same packing rule training does.
         sampler = NumElementsBatchSampler(
             batch_bins=batch_bins,
             shape_files=[path],

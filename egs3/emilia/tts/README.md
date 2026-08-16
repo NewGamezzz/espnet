@@ -136,8 +136,7 @@ partial manifest.
 
 The paper's Base run is 8x A100 at 38,400 frames/GPU with no gradient
 accumulation: **307,200 mel frames per optimizer update**.
-The `numel`/`numel_array` batch sampler counts `T * D` (D = 100 mel
-channels), so:
+The stock `numel` batch sampler counts `T * D` (D = 100 mel channels), so:
 
 ```
 batch_bins = 30,720,000 / (accumulate_grad_batches * num_device)
@@ -160,13 +159,15 @@ batch_bins = 30,720,000 / (8 * 4) = 960000
 
 Two constraints that don't change with GPU count:
 
-- `min_batch_size` must stay `>= num_device` (the world_size floor
-  `espnet3/components/data/dataloader.py:281` enforces; the smaller the
-  world_size, the more headroom there is here).
-- `max_samples: 64` (upstream's hard per-batch sample cap, `numel_array`'s
-  addition over stock `numel`) is **independent of GPU count** and does
-  not need re-solving; it bounds the short end of the length-sorted batch
-  order regardless of how many GPUs are training.
+- `min_batch_size` is **1**, and must not be raised to track
+  `num_device`. It is a floor the sampler may not close below, so any
+  value above 1 lets a batch of `min_batch_size` long utterances cost
+  `min_batch_size * L_max` frames no matter what `batch_bins` says, at
+  which point `batch_bins` stops bounding memory. That is what OOM'd the
+  first GPU smoke. espnet2's `len(batch) >= world_size` guard, which used
+  to force the floor upward, was removed: espnet3 hands each rank whole
+  batches via `batches[rank::world_size]` and never splits one, so batch
+  size and world size are unrelated.
 
 ## Precision: fp32, no exceptions
 
@@ -223,31 +224,37 @@ exact grep targets are in `local/submit_smoke.sbatch`'s header comment):
 1. **Updates/hour** at production `batch_bins`, extrapolated to the
    1,200,000-update paper target.
 2. **Peak GPU memory** per rank, confirming Base fits on V100-32 in fp32.
-3. **Peak host RSS and wall time of sampler construction.** This is what
-   Task 12's `NumElementsArraySampler` (already shipped, `type:
-   numel_array` in both configs) exists to keep low across a months-long
-   chained run that restarts often.
+3. **Peak host RSS and wall time of sampler construction**, paid on every
+   restart of a chained months-long run. The stock `numel` sampler builds
+   a Python dict over every utterance; extrapolated to 37M that is roughly
+   12 GB and ~4 minutes per rank.
 4. **mp3 decode throughput** as a fraction of step time, read straight off
    `MetricsLogger`'s `iter_time` vs. `forward_time`/`backward_time`/
    `optim_step_time` split. If the loader is starving the GPU, the fix is
-   to raise `dataloader.train.num_workers` (currently 4) -- **but** the
+   to raise `dataloader.train.iter_factory.num_workers` (currently 4;
+   note it must live INSIDE `iter_factory` or espnet3 ignores it) -- **but** the
    smoke's own `--ntasks-per-node=8 --cpus-per-task=5` already uses all 40
    cores of the node (8 ranks x 5 CPUs), so raising `num_workers` requires
    also raising `--cpus-per-task`, which reduces how many ranks fit on the
    node. It is not a free lever on a single-node job.
 
-**Corrected success criterion for `numel_array`/`max_samples: 64` (Task
-12):** the plan's original wording -- "confirm peak RSS fell and
-`len(batches)` is unchanged from the stock run" -- is unsatisfiable as
-written.
-With `max_samples: 64` active, `len(batches)` **must** increase, because
-the cap splits the short end of the length-sorted order into more, smaller
-batches.
-The corrected form, which is what `local/submit_smoke.sbatch`'s header and
-the tests actually check for:
+**On the sampler.** An earlier revision of this recipe shipped a custom
+numpy-backed sampler (`numel_array`) carrying upstream F5-TTS's per-batch
+cap of 64 samples. It was dropped after both justifications were measured
+against the real corpus and neither held.
 
-> RSS fell; batch count increased only at the short end; no batch exceeds
-> 64.
+The cap is inert: it was argued from Emilia's 0.3s duration floor (28
+frames, so 340+ samples in a short-end batch), but Emilia ships 3-30s
+segments and this corpus's shortest utterance is 3.004s -- the builder's
+own duration histogram has its first four bins empty. Realized batch sizes
+run 1..35 and **0 of 9,997 batches reach 64**.
+
+The memory saving was real but not needed: extrapolated to 37M utterances,
+~4.3 GB vs ~12.4 GB per rank, so ~35 GB vs ~100 GB across 8 ranks on a
+515 GB node. Stock is also faster to construct at every size measured.
+
+The two produce identical partitions at 116k / 500k / 2M / 8M utterances,
+so the switch back to stock `numel` was not a behavioural change.
 
 ## Chained training and the quota guard
 

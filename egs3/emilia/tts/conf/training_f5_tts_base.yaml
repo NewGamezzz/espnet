@@ -176,17 +176,23 @@ dataloader:
       shuffle: true
       collate_fn: ${dataloader.collate_fn}
       batches:
-        # numel_array is NumElementsArraySampler
-        # (espnet2/samplers/num_elements_array_sampler.py): a numpy-backed
-        # drop-in for numel's NumElementsBatchSampler, adding the upstream
-        # max_samples cap below. Equivalent to "numel" batch-for-batch when
-        # max_samples is unset (see
-        # test/espnet2/samplers/test_num_elements_array_sampler.py); with
-        # it set, caps batches that would otherwise exceed 300+ samples at
-        # the short end of Emilia's length-sorted order (0.3s floor = 28
-        # frames, batch_bins=480000 / 100 mels = 4800 frames/batch).
-        type: numel_array
-        batch_size: 1          # required by signature, unused for "numel_array"
+        # Stock espnet2 sampler, same as the LibriTTS F5 recipe. An earlier
+        # revision used a custom numpy-backed variant carrying upstream
+        # F5-TTS's per-batch sample cap of 64; both justifications for it
+        # were measured and neither held:
+        #   - The cap is inert. It was argued from Emilia's 0.3s duration
+        #     floor (28 frames -> 340+ samples in a short-end batch), but
+        #     Emilia ships 3-30s segments and this corpus's minimum is
+        #     3.004s, so realized batch sizes run 1..35 and 0 of 9,997
+        #     batches ever reach 64.
+        #   - The memory saving is real but not needed: ~4.3 GB vs ~12.4 GB
+        #     per rank extrapolated to 37M utterances, i.e. ~35 GB vs
+        #     ~100 GB across 8 ranks on a 515 GB node. Stock is also faster
+        #     to construct at every size measured.
+        # The two produce identical partitions at 116k/500k/2M/8M
+        # utterances, so this is not a behavioural change.
+        type: numel
+        batch_size: 1          # required by signature, unused for "numel"
         # 1, NOT world_size. min_batch_size is a FLOOR the sampler may not
         # close below, and the sampler closes on
         #   current_count * current_length * n_mels > batch_bins
@@ -221,7 +227,6 @@ dataloader:
         # Same value as egs3/libritts/tts/conf/training_f5_tts_small.yaml,
         # i.e. a per-GPU budget already proven on a V100-32.
         batch_bins: 960000     # 960000 * 4 accum * 8 gpu / 100 mels = 307200
-        max_samples: 64        # upstream F5-TTS's cap (Sec. B.7)
   valid:
     num_shards: 1
     iter_factory:
@@ -239,7 +244,7 @@ dataloader:
       collate_fn: ${dataloader.collate_fn}
       batches:
         type: ${dataloader.train.iter_factory.batches.type}
-        batch_size: 1          # required by signature, unused for "numel_array"
+        batch_size: 1          # required by signature, unused for "numel"
         # Must track train's floor. Validation shares train's batch_bins, so
         # a floor left at 8 here reintroduces exactly the 25,317-frame batch
         # that OOM'd. That it did not OOM in the first smoke was luck, not
@@ -252,11 +257,6 @@ dataloader:
         shape_files:
           - ${stats_dir}/valid/feats_shape
         batch_bins: ${dataloader.train.iter_factory.batches.batch_bins}
-        # Also capped: with the default sort_batch=ascending, validation
-        # iterates short-to-long, so limit_val_batches's first N batches are
-        # exactly the short-utterance region where an uncapped batch would
-        # be largest - the same OOM risk as train, just earlier.
-        max_samples: ${dataloader.train.iter_factory.batches.max_samples}
 
 trainer:
   accelerator: auto
