@@ -1,9 +1,9 @@
 #!/bin/bash
 #SBATCH --job-name=emilia_f5_train
-#SBATCH --partition=GPU
-#SBATCH --gres=gpu:v100-32:8
+#SBATCH --partition=GPU-small
+#SBATCH --gres=gpu:v100-32:4
 #SBATCH --nodes=1
-#SBATCH --ntasks-per-node=8
+#SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=5
 #SBATCH --time=48:00:00
 #SBATCH --output=logs/train_%j.out
@@ -112,6 +112,20 @@
 # see README.md's "Rank-0 OOM masquerading as an NCCL timeout" section and
 # `collect_stacks.sh` from the same memory note for live triage.
 # ---------------------------------------------------------------------------
+
+# 4 x v100-32 on GPU-small, matching conf/training_f5_tts_base.yaml's
+# num_device: 4 and accumulate_grad_batches: 8, which with batch_bins 960000
+# gives 4 * 8 * 960000 / 100 = 307,200 mel-frames per optimizer update -- the
+# paper's Sec. 4 figure for the Base model behind Tables 1 and 2, verified
+# against the paper text rather than inherited from a comment.
+#
+# GPU-small is a SINGLE node (v001) with 8 v100-32 shared against the LibriTTS
+# F5 Small training. A 4-GPU request needs 4 of them free; check before
+# submitting, or the job simply queues:
+#   scontrol show node v001 | tr ' ' '\n' | grep AllocTRES
+#
+# ntasks-per-node MUST equal the GPU count: Lightning DDP spawns one process
+# per rank via srun, and a mismatch either strands GPUs or oversubscribes them.
 
 set -euo pipefail
 ROOT=/ocean/projects/cis210027p/ttrachu/development/espnet_proj/espnet_emilia

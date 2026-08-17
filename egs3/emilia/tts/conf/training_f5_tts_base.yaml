@@ -9,7 +9,7 @@
 #     corpus-derived char vocab, so the trained checkpoint stays token-list
 #     compatible with the official F5TTS_Base release (decision D7).
 #
-# Global batch: batch_bins(960000) * accumulate_grad_batches(4) * num_device(8)
+# Global batch: batch_bins(960000) * accumulate_grad_batches(8) * num_device(4)
 # / n_mel_channels(100) == 307200 mel-frames/update, matching the paper's
 # "batch size of 307,200 audio frames (0.91 hours)" (Sec. B.7) exactly.
 #
@@ -21,7 +21,7 @@
 # check_val_every_n_epoch (spec 6.2).
 task: espnet2.tasks.tts.TTSTask
 
-num_device: 8
+num_device: 4
 num_nodes: 1
 
 recipe_dir: .
@@ -226,7 +226,7 @@ dataloader:
           - ${stats_dir}/train/feats_shape
         # Same value as egs3/libritts/tts/conf/training_f5_tts_small.yaml,
         # i.e. a per-GPU budget already proven on a V100-32.
-        batch_bins: 960000     # 960000 * 4 accum * 8 gpu / 100 mels = 307200
+        batch_bins: 960000     # 960000 * 8 accum * 4 gpu / 100 mels = 307200
   valid:
     num_shards: 1
     iter_factory:
@@ -262,7 +262,7 @@ trainer:
   accelerator: auto
   devices: ${num_device}
   num_nodes: ${num_nodes}
-  accumulate_grad_batches: 4
+  accumulate_grad_batches: 8
   # Real optimizer-update count isn't fixed under numel batching, so stop
   # explicitly at the paper's target instead of relying on max_epochs.
   max_steps: 1200000

@@ -371,7 +371,7 @@ def test_smoke_2gpu_config_changes_only_device_count_and_paths(monkeypatch):
     silently destroy the throughput comparison, so this test forbids it.
 
     Consequence, asserted explicitly below: the 2-GPU config's global batch
-    is 76,800 frames, NOT 307,200. That makes it an instrument and not a
+    is 153,600 frames, NOT 307,200. That makes it an instrument and not a
     training config, which is exactly the intent.
 
     recipe_dir and vocab_file read from the environment so the file stays
@@ -423,11 +423,11 @@ def test_smoke_2gpu_config_changes_only_device_count_and_paths(monkeypatch):
     ):
         assert two[key] == smoke[key], f"{key} must stay at the production value"
 
-    # Instrument, not a training run: a quarter of the production global batch.
+    # Instrument, not a training run: half the production global batch.
     bins = two["dataloader.train.iter_factory.batches.batch_bins"]
     accum = two["trainer.accumulate_grad_batches"]
     n_mels = two["n_mel_channels"]
-    assert bins * accum * two["num_device"] / n_mels == 76800
+    assert bins * accum * two["num_device"] / n_mels == 153600
 
 
 def test_min_batch_size_is_one_on_both_loaders():
