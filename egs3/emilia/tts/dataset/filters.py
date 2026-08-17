@@ -175,7 +175,18 @@ def normalize_text(text: str, lang: str) -> str:
     that would only show up once, at a random position, somewhere across
     37M rows.
     """
-    text = text.strip()
+    # NO .strip(). Upstream stores obj["text"] exactly as Emilia ships it, and
+    # 100% of EN records carry a LEADING SPACE, which F5's vocab tokenizes as a
+    # real token (index 0). Stripping it changed the conditioning sequence on
+    # every English utterance -- " You can help..." tokenizes to
+    # [' ', 'Y', 'o', 'u', ...] upstream but ['Y', 'o', 'u', ...] for us. The
+    # official F5TTS_Base checkpoint was trained with that space present, and
+    # decision D7 keeps this recipe token-list compatible with it.
+    #
+    # The \n/\r/\t replacement stays: it is what TSV actually requires, since
+    # builder.py writes this as the last unquoted field of a tab-separated row.
+    # Leading and trailing SPACES are TSV-safe and are deliberately preserved;
+    # dataset.py reads with line.rstrip("\n").split("\t", 4), which keeps them.
     text = text.translate(_ROW_BREAKING_WHITESPACE_TABLE)
     if lang == "ZH":
         text = text.translate(ZH_PUNCT_TABLE)
@@ -207,7 +218,11 @@ def keep_utterance(
     Returns ``(keep, reason)``; ``reason`` is ``""`` when kept.
     """
     speaker = record["speaker"]
-    text = record["text"].strip()
+    # Raw, unstripped, matching upstream, which passes obj["text"] straight
+    # to the char filters and repetition_found. Measured to change nothing:
+    # 0 decision flips over 215,806 real records (job 43760108), because a
+    # single boundary character cannot move a count past tolerance=10.
+    text = record["text"]
     duration = float(record["duration"])
 
     blocklist = _lookup_by_lang(_BLOCKLIST_BY_LANG, lang, "blocklist")

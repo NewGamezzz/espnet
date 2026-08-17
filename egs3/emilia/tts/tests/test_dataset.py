@@ -106,3 +106,55 @@ def test_n_frames_is_analytic(built):
 def test_missing_manifest_raises(tmp_path, built):
     with pytest.raises(FileNotFoundError):
         EmiliaDataset(split="test", recipe_dir=built, load_speech=False)
+
+
+def test_leading_space_survives_the_tsv_round_trip(tmp_path):
+    """A leading space must reach the model, not just the manifest.
+
+    normalize_text deliberately stops stripping so our text matches
+    upstream's. That is only worth anything if the space survives being
+    written into a tab-separated row and read back out: builder.py writes the
+    text as the last unquoted field, and dataset.py parses with
+    line.rstrip("\n").split("\t", 4) -- which preserves leading and trailing
+    spaces but would be broken by a naive .strip() on either side.
+    """
+    from egs3.emilia.tts.dataset.dataset import EmiliaDataset
+
+    recipe = tmp_path / "recipe"
+    manifest = recipe / "data" / "manifest"
+    manifest.mkdir(parents=True)
+    (recipe / "dataset").mkdir(parents=True)
+
+    text = " You can help my mother and you- No. "
+    (manifest / "shards.txt").write_text("EN/EN-B000120\n", "utf-8")
+    (manifest / "train.tsv").write_text(
+        f"EN_B00012_S00001_W000000\t0\tEN\t1.0\t{text}\n", "utf-8"
+    )
+    (recipe / "dataset" / "config.yaml").write_text(
+        """
+builder:
+  corpus_root: /nonexistent
+  langs: [EN, ZH]
+  data_path: data
+  val_ratio: 0.01
+  seed: 42
+  min_duration: 0.3
+  max_duration: 30.0
+  strict_text_filters: false
+  audio_suffix: .wav
+  manifest_paths:
+    train: manifest/train.tsv
+    valid: manifest/valid.tsv
+  shard_table_path: manifest/shards.txt
+dataset:
+  split_manifest_paths:
+    train: manifest/train.tsv
+    valid: manifest/valid.tsv
+""",
+        "utf-8",
+    )
+
+    ds = EmiliaDataset(split="train", recipe_dir=str(recipe), load_speech=False)
+    assert ds[0]["text"] == text, repr(ds[0]["text"])
+    assert ds[0]["text"].startswith(" ")
+    assert ds[0]["text"].endswith(" ")

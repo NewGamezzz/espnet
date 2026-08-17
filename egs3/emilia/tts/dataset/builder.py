@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
 import random
 from collections import Counter
 from concurrent.futures import ProcessPoolExecutor
@@ -139,17 +140,36 @@ class EmiliaBuilder(DatasetBuilder):
         rows: list = []
         dropped: Counter = Counter()
         n_workers = int(os.environ.get("EMILIA_BUILD_WORKERS", "1"))
-        if n_workers > 1:
-            with ProcessPoolExecutor(max_workers=n_workers) as ex:
-                results = ex.map(_scan_shard, jobs)
-                for shard_rows, shard_dropped in results:
-                    rows.extend(shard_rows)
-                    dropped.update(shard_dropped)
-        else:
-            for job in jobs:
-                shard_rows, shard_dropped = _scan_shard(job)
+        # Progress logging is not cosmetic here: the full corpus is ~2,060
+        # shards and ~38.1M utterances, the parent accumulates every row in
+        # memory, and nothing is written until the loop below finishes. A run
+        # that dies on walltime loses all of it, so an operator needs to see
+        # the rate early enough to resize the job rather than discover at hour
+        # 47 that it was never going to finish.
+        t_start = time.time()
+        n_jobs = len(jobs)
+        log_every = max(1, n_jobs // 100)
+
+        def _accumulate(iterator):
+            for done, (shard_rows, shard_dropped) in enumerate(iterator, 1):
                 rows.extend(shard_rows)
                 dropped.update(shard_dropped)
+                if done % log_every == 0 or done == n_jobs:
+                    elapsed = time.time() - t_start
+                    rate = len(rows) / elapsed if elapsed else 0.0
+                    eta = (n_jobs - done) * (elapsed / done) if done else 0.0
+                    logger.info(
+                        "create_dataset: %d/%d shards | %d rows kept | "
+                        "%.0f utt/s | elapsed %.1f h | ETA %.1f h",
+                        done, n_jobs, len(rows), rate,
+                        elapsed / 3600.0, eta / 3600.0,
+                    )
+
+        if n_workers > 1:
+            with ProcessPoolExecutor(max_workers=n_workers) as ex:
+                _accumulate(ex.map(_scan_shard, jobs))
+        else:
+            _accumulate(_scan_shard(job) for job in jobs)
 
         # ex.map preserves input order, so `rows` is already deterministic.
         rng = random.Random(int(cfg["seed"]))

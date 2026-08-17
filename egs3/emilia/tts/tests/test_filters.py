@@ -246,3 +246,42 @@ def test_unknown_lang_raises_before_any_language_specific_work():
         filters._lookup_by_lang(
             filters._REPETITION_LENGTH_BY_LANG, "FR", "repetition length"
         )
+
+
+def test_normalize_text_preserves_leading_and_trailing_spaces():
+    """Upstream stores obj["text"] verbatim; we must not strip it.
+
+    100% of Emilia EN records carry a leading space, and F5's vocab tokenizes
+    a space as a real token (index 0), so stripping changed the conditioning
+    sequence on every English utterance. The official F5TTS_Base checkpoint
+    was trained with the space present, and D7 keeps this recipe token-list
+    compatible with it.
+    """
+    raw = " You can help my mother and you- No. "
+    assert filters.normalize_text(raw, "EN") == raw
+
+    # ZH still gets punctuation widened, but the leading space survives.
+    assert filters.normalize_text(" 你好,世界!", "ZH") == " 你好，世界！"
+
+
+def test_normalize_text_still_kills_row_breaking_whitespace():
+    """Newlines/CR/tabs must go: builder.py writes this as the last unquoted
+    field of a TSV row, so a literal one would split or shift the row. Spaces
+    are TSV-safe and are deliberately kept."""
+    out = filters.normalize_text("a\nb\tc\rd", "EN")
+    assert out == "a b c d"
+    assert "\n" not in out and "\t" not in out and "\r" not in out
+
+
+def test_filters_see_the_raw_unstripped_text():
+    """keep_utterance passes record["text"] through untouched, as upstream does.
+
+    Verified to change no decision: 0 flips over 215,806 real records
+    (job 43760108), since one boundary character cannot move a character
+    n-gram count past tolerance=10.
+    """
+    import inspect
+
+    src = inspect.getsource(filters.keep_utterance)
+    assert 'record["text"]\n' in src or 'text = record["text"]' in src
+    assert '.strip()' not in src
