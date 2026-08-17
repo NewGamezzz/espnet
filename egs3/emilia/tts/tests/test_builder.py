@@ -390,3 +390,103 @@ def test_multi_worker_build_matches_single_worker(recipe, monkeypatch):
     EmiliaBuilder().build(recipe_dir=recipe)
     assert (data / "train.tsv").read_text("utf-8") == sequential_train
     assert (data / "valid.tsv").read_text("utf-8") == sequential_valid
+
+
+# --- resumability -----------------------------------------------------------
+
+
+def _cache_dir(recipe: Path) -> Path:
+    return recipe / "data" / "manifest" / ".shard_cache"
+
+
+def test_build_checkpoints_every_shard(recipe):
+    """Each shard leaves a .tsv and a .json behind, so work is never redone."""
+    EmiliaBuilder().build(recipe_dir=recipe)
+    cache = _cache_dir(recipe)
+    tsvs = sorted(cache.glob("*.tsv"))
+    metas = sorted(cache.glob("*.json"))
+    metas = [m for m in metas if m.name != "fingerprint.json"]
+    assert tsvs, "no shard checkpoints written"
+    assert len(tsvs) == len(metas)
+    assert (cache / "fingerprint.json").is_file()
+    # no temp files survive a clean run
+    assert not list(cache.glob("*.tmp"))
+
+
+def test_resume_reuses_cached_shards_and_gives_identical_output(recipe, monkeypatch):
+    """A resumed build must produce byte-identical manifests.
+
+    Simulates the walltime kill this exists for: build once, delete the final
+    manifests but KEEP the shard cache, then rebuild. The second run must scan
+    nothing and still reproduce the same train/valid split, since the split is
+    a seeded shuffle over rows read back in shard-index order.
+    """
+    import egs3.emilia.tts.dataset.builder as builder_mod
+
+    EmiliaBuilder().build(recipe_dir=recipe)
+    train = (recipe / "data" / "manifest" / "train.tsv").read_text("utf-8")
+    valid = (recipe / "data" / "manifest" / "valid.tsv").read_text("utf-8")
+
+    (recipe / "data" / "manifest" / "train.tsv").unlink()
+    (recipe / "data" / "manifest" / "valid.tsv").unlink()
+
+    calls = []
+    real = builder_mod._scan_shard
+
+    def counting(args):
+        calls.append(args[1])
+        return real(args)
+
+    monkeypatch.setattr(builder_mod, "_scan_shard", counting)
+    EmiliaBuilder().build(recipe_dir=recipe)
+
+    assert calls == [], f"resumed run rescanned shards {calls}"
+    assert (recipe / "data" / "manifest" / "train.tsv").read_text("utf-8") == train
+    assert (recipe / "data" / "manifest" / "valid.tsv").read_text("utf-8") == valid
+
+
+def test_partial_cache_only_rescans_missing_shards(recipe, monkeypatch):
+    """Deleting one shard's checkpoint rescans exactly that shard."""
+    import egs3.emilia.tts.dataset.builder as builder_mod
+
+    EmiliaBuilder().build(recipe_dir=recipe)
+    expected = (recipe / "data" / "manifest" / "train.tsv").read_text("utf-8")
+
+    cache = _cache_dir(recipe)
+    victim = sorted(cache.glob("*.tsv"))[0]
+    idx = int(victim.stem)
+    victim.unlink()
+    (cache / f"{idx:06d}.json").unlink()
+
+    calls = []
+    real = builder_mod._scan_shard
+
+    def counting(args):
+        calls.append(args[1])
+        return real(args)
+
+    monkeypatch.setattr(builder_mod, "_scan_shard", counting)
+    EmiliaBuilder().build(recipe_dir=recipe)
+
+    assert calls == [idx], f"expected only shard {idx} rescanned, got {calls}"
+    assert (recipe / "data" / "manifest" / "train.tsv").read_text("utf-8") == expected
+
+
+def test_stale_cache_is_refused_not_silently_reused(recipe):
+    """Changing a filter-relevant setting must invalidate the cache loudly.
+
+    Silently reusing shards built under different duration bounds or filter
+    semantics would mix incompatible rows across a 38M-row corpus, and nothing
+    downstream could detect it.
+    """
+    import yaml
+
+    EmiliaBuilder().build(recipe_dir=recipe)
+
+    cfg_path = recipe / "dataset" / "config.yaml"
+    cfg = yaml.safe_load(cfg_path.read_text("utf-8"))
+    cfg["builder"]["min_duration"] = 1.5  # was 0.3
+    cfg_path.write_text(yaml.safe_dump(cfg), "utf-8")
+
+    with pytest.raises(RuntimeError, match="different settings"):
+        EmiliaBuilder().build(recipe_dir=recipe)

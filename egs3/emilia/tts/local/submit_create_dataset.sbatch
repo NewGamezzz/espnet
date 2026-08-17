@@ -4,7 +4,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=1
 #SBATCH --cpus-per-task=128
-#SBATCH --time=48:00:00
+#SBATCH --time=72:00:00
 #SBATCH --output=logs/create_dataset_%j.out
 #
 # Builds the full-corpus manifests: ~2,060 shard dirs, 38,105,568 utterances.
@@ -19,13 +19,26 @@
 # EMILIA_BUILD_WORKERS is 120, not 128: the parent process does the
 # accumulate-and-write and should not be fighting its own pool for cores.
 #
-# MEMORY. dataset/builder.py accumulates EVERY row in the parent before
-# writing anything (rows.extend per shard, then one shuffle, then the split).
-# At ~450 bytes/row that is roughly 19 GB resident at peak, comfortably inside
-# a 240 GB node -- but it also means NOTHING IS WRITTEN UNTIL THE END. A job
-# killed on walltime loses all of it. That is why the builder now logs
-# "create_dataset: N/M shards | ... | ETA X h" every 1% of shards: check the
-# ETA in the first ten minutes, and resubmit larger if it does not fit.
+# RESUMABLE. Each worker checkpoints its shard to
+# data/manifest/.shard_cache/{idx}.tsv plus a {idx}.json written last, both
+# via temp+rename. A run killed on walltime therefore loses only the shards
+# in flight: RESUBMITTING THIS EXACT SCRIPT PICKS UP WHERE IT STOPPED and
+# logs "resuming, N/M shards already cached". Nothing else to do.
+#
+# The cache is fingerprinted on corpus_root, langs, duration bounds,
+# strict_text_filters, audio_suffix and _FILTER_VERSION. Change any of them
+# and the build REFUSES to start rather than silently mixing rows produced
+# under different filter semantics -- delete .shard_cache to rebuild.
+#
+# 72h is the RM QOS ceiling (rmpartition MaxWall=3-00:00:00). With resume,
+# overrunning it is an inconvenience rather than a lost run.
+#
+# MEMORY is no longer a factor: the parent holds only counts during the scan,
+# and the final split streams the cached shards straight to disk instead of
+# materialising ~38.1M rows (~19 GB).
+#
+# Watch "create_dataset: N/M shards ... ETA X h" (every 1% of shards) to see
+# the real rate early.
 #
 # `#SBATCH --output=logs/create_dataset_%j.out` needs logs/ to exist first.
 #

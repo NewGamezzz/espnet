@@ -27,6 +27,17 @@ from espnet3.utils.config_utils import load_config_with_defaults
 
 logger = logging.getLogger(__name__)
 
+# Bump whenever a change to dataset/filters.py alters which rows a shard
+# yields, or what text is stored. It is part of the shard-cache fingerprint,
+# so bumping it invalidates every cached shard instead of silently mixing rows
+# produced under different filter semantics.
+#
+# 2: repetition_found corrected to upstream's character n-grams with
+#    tolerance=10 (was word n-grams rejecting on a second occurrence), and
+#    normalize_text/keep_utterance stopped stripping, so the leading space
+#    Emilia ships on every EN record is preserved as upstream does.
+_FILTER_VERSION = 2
+
 _HIST_BINS = 50
 
 
@@ -35,16 +46,23 @@ def _load_cfg(recipe_dir: Path) -> dict:
     return load_config_with_defaults(str(cfg_path), resolve=False)["builder"]
 
 
-def _scan_shard(args) -> tuple[list, Counter]:
-    """Read one shard directory. Runs in a worker process."""
-    shard_rel, shard_idx, lang, corpus_root, lo, hi, strict, audio_suffix = args
+def _scan_shard(args) -> tuple[int, Counter]:
+    """Read one shard directory and checkpoint it. Runs in a worker process.
+
+    Returns ``(n_rows, dropped)`` rather than the rows themselves: the rows go
+    to a per-shard cache file, so they never cross the process boundary and the
+    parent never has to hold the whole corpus in memory.
+    """
+    (shard_rel, shard_idx, lang, corpus_root, lo, hi, strict, audio_suffix,
+     cache_dir) = args
     shard_dir = Path(corpus_root) / "emilia" / shard_rel
     rows: list = []
     dropped: Counter = Counter()
     try:
         names = os.listdir(shard_dir)
     except OSError:
-        return rows, dropped
+        dropped["unreadable_shard"] += 1
+        names = []
 
     audios = {n for n in names if n.endswith(audio_suffix)}
     for name in names:
@@ -75,7 +93,29 @@ def _scan_shard(args) -> tuple[list, Counter]:
         )
     # Sort within the shard so the build is order-independent across workers.
     rows.sort(key=lambda r: r[0])
-    return rows, dropped
+
+    # Checkpoint this shard. The full build is ~2,060 shards and 15-20 hours;
+    # without this a walltime kill loses everything, because the parent used to
+    # hold all ~38.1M rows in memory and write nothing until the very end.
+    #
+    # The .json is written LAST and both writes are atomic (temp + os.replace),
+    # so the presence of the .json is the completion marker: a job killed
+    # mid-write leaves either no .json or a stale temp file, never a truncated
+    # pair that a resumed run would mistake for finished work.
+    tsv_path = Path(cache_dir) / f"{shard_idx:06d}.tsv"
+    meta_path = Path(cache_dir) / f"{shard_idx:06d}.json"
+    tmp = tsv_path.with_suffix(".tsv.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        for utt_id, idx, lg, duration, text in rows:
+            fh.write(f"{utt_id}\t{idx}\t{lg}\t{duration!r}\t{text}\n")
+    os.replace(tmp, tsv_path)
+
+    tmp = meta_path.with_suffix(".json.tmp")
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"n_rows": len(rows), "dropped": dict(dropped)}, fh)
+    os.replace(tmp, meta_path)
+
+    return len(rows), dropped
 
 
 class EmiliaBuilder(DatasetBuilder):
@@ -132,13 +172,67 @@ class EmiliaBuilder(DatasetBuilder):
             for d in sorted(p.name for p in lang_dir.iterdir() if p.is_dir()):
                 shard_rels.append((f"{lang}/{d}", lang))
 
-        jobs = [
-            (rel, idx, lang, str(corpus_root), lo, hi, strict, audio_suffix)
+        manifest_dir = data_dir / "manifest"
+        manifest_dir.mkdir(parents=True, exist_ok=True)
+        cache_dir = manifest_dir / ".shard_cache"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+
+        # A stale cache is worse than no cache: it would silently mix rows
+        # produced by different filter settings. Fingerprint everything that
+        # changes which rows a shard yields, and refuse to reuse a cache built
+        # under different terms rather than guessing.
+        fingerprint = {
+            "corpus_root": str(corpus_root),
+            "langs": list(cfg["langs"]),
+            "min_duration": lo,
+            "max_duration": hi,
+            "strict_text_filters": strict,
+            "audio_suffix": audio_suffix,
+            "filter_version": _FILTER_VERSION,
+        }
+        fp_path = cache_dir / "fingerprint.json"
+        if fp_path.is_file():
+            previous = json.loads(fp_path.read_text(encoding="utf-8"))
+            if previous != fingerprint:
+                raise RuntimeError(
+                    "Shard cache at %s was built with different settings and "
+                    "cannot be reused.\n  cached: %s\n  current: %s\n"
+                    "Delete the directory to rebuild from scratch."
+                    % (cache_dir, previous, fingerprint)
+                )
+        else:
+            fp_path.write_text(json.dumps(fingerprint, indent=2), encoding="utf-8")
+
+        all_jobs = [
+            (rel, idx, lang, str(corpus_root), lo, hi, strict, audio_suffix,
+             str(cache_dir))
             for idx, (rel, lang) in enumerate(shard_rels)
         ]
+        # The .json is written last by the worker, so it marks a complete pair.
+        done_meta: dict[int, dict] = {}
+        jobs = []
+        for job in all_jobs:
+            idx = job[1]
+            meta_path = cache_dir / f"{idx:06d}.json"
+            tsv_path = cache_dir / f"{idx:06d}.tsv"
+            if meta_path.is_file() and tsv_path.is_file():
+                try:
+                    done_meta[idx] = json.loads(meta_path.read_text(encoding="utf-8"))
+                    continue
+                except (OSError, json.JSONDecodeError):
+                    pass  # unreadable -> rescan it
+            jobs.append(job)
+        if done_meta:
+            logger.info(
+                "create_dataset: resuming, %d/%d shards already cached in %s",
+                len(done_meta), len(all_jobs), cache_dir,
+            )
 
-        rows: list = []
         dropped: Counter = Counter()
+        n_rows_total = 0
+        for meta in done_meta.values():
+            n_rows_total += int(meta["n_rows"])
+            dropped.update(meta.get("dropped", {}))
         n_workers = int(os.environ.get("EMILIA_BUILD_WORKERS", "1"))
         # Progress logging is not cosmetic here: the full corpus is ~2,060
         # shards and ~38.1M utterances, the parent accumulates every row in
@@ -151,17 +245,20 @@ class EmiliaBuilder(DatasetBuilder):
         log_every = max(1, n_jobs // 100)
 
         def _accumulate(iterator):
-            for done, (shard_rows, shard_dropped) in enumerate(iterator, 1):
-                rows.extend(shard_rows)
+            nonlocal n_rows_total
+            scanned = 0
+            for done, (shard_n, shard_dropped) in enumerate(iterator, 1):
+                n_rows_total += shard_n
+                scanned += shard_n
                 dropped.update(shard_dropped)
                 if done % log_every == 0 or done == n_jobs:
                     elapsed = time.time() - t_start
-                    rate = len(rows) / elapsed if elapsed else 0.0
+                    rate = scanned / elapsed if elapsed else 0.0
                     eta = (n_jobs - done) * (elapsed / done) if done else 0.0
                     logger.info(
-                        "create_dataset: %d/%d shards | %d rows kept | "
-                        "%.0f utt/s | elapsed %.1f h | ETA %.1f h",
-                        done, n_jobs, len(rows), rate,
+                        "create_dataset: %d/%d shards this run | %d rows kept "
+                        "total | %.0f utt/s | elapsed %.1f h | ETA %.1f h",
+                        done, n_jobs, n_rows_total, rate,
                         elapsed / 3600.0, eta / 3600.0,
                     )
 
@@ -171,9 +268,11 @@ class EmiliaBuilder(DatasetBuilder):
         else:
             _accumulate(_scan_shard(job) for job in jobs)
 
-        # ex.map preserves input order, so `rows` is already deterministic.
+        # Cache files are read back in shard-index order, which is the same
+        # order ex.map produced, so the assembly below is deterministic whether
+        # this was one run or a resumed chain of them.
         rng = random.Random(int(cfg["seed"]))
-        order = list(range(len(rows)))
+        order = list(range(n_rows_total))
         rng.shuffle(order)
         n_total = len(order)
         if n_total > 1:
@@ -182,33 +281,45 @@ class EmiliaBuilder(DatasetBuilder):
             n_val = 0
         val_idx = set(order[:n_val])
 
-        manifest_dir = data_dir / "manifest"
-        manifest_dir.mkdir(parents=True, exist_ok=True)
-
         train_path = data_dir / cfg["manifest_paths"]["train"]
         valid_path = data_dir / cfg["manifest_paths"]["valid"]
+        # Stream the cached shards straight through to the split, rather than
+        # materialising ~38.1M rows (~19 GB) to iterate once. Also collects the
+        # duration stats in the same pass, so the corpus is read exactly once.
+        total_seconds = 0.0
+        hist = [0] * _HIST_BINS
+        width = (hi - lo) / _HIST_BINS
+        i = 0
         with (
             train_path.open("w", encoding="utf-8") as ftr,
             valid_path.open("w", encoding="utf-8") as fva,
         ):
-            for i, (utt_id, shard_idx, lang, duration, text) in enumerate(rows):
-                line = f"{utt_id}\t{shard_idx}\t{lang}\t{duration!r}\t{text}\n"
-                (fva if i in val_idx else ftr).write(line)
+            for idx in range(len(shard_rels)):
+                shard_tsv = cache_dir / f"{idx:06d}.tsv"
+                if not shard_tsv.is_file():
+                    continue
+                with shard_tsv.open("r", encoding="utf-8") as fh:
+                    for line in fh:
+                        (fva if i in val_idx else ftr).write(line)
+                        duration = float(line.split("\t", 4)[3])
+                        total_seconds += duration
+                        b = min(int((duration - lo) / width), _HIST_BINS - 1)
+                        hist[max(b, 0)] += 1
+                        i += 1
+        if i != n_rows_total:
+            raise RuntimeError(
+                f"shard cache holds {i} rows but the scan counted "
+                f"{n_rows_total}; the cache in {cache_dir} is inconsistent"
+            )
 
         (data_dir / cfg["shard_table_path"]).write_text(
             "\n".join(rel for rel, _ in shard_rels) + "\n", encoding="utf-8"
         )
 
-        total_seconds = sum(r[3] for r in rows)
-        hist = [0] * _HIST_BINS
-        width = (hi - lo) / _HIST_BINS
-        for r in rows:
-            b = min(int((r[3] - lo) / width), _HIST_BINS - 1)
-            hist[max(b, 0)] += 1
         (manifest_dir / "report.json").write_text(
             json.dumps(
                 {
-                    "kept": len(rows),
+                    "kept": n_rows_total,
                     "dropped": dict(dropped),
                     "total_hours": total_seconds / 3600.0,
                     "duration_histogram": hist,
@@ -222,7 +333,7 @@ class EmiliaBuilder(DatasetBuilder):
 
         logger.info(
             "EmiliaBuilder: kept %d, dropped %s, %.1f hours",
-            len(rows),
+            n_rows_total,
             dict(dropped),
             total_seconds / 3600.0,
         )
