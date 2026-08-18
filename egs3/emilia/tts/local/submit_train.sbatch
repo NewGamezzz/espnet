@@ -5,7 +5,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks-per-node=4
 #SBATCH --cpus-per-task=5
-#SBATCH --time=48:00:00
+#SBATCH --time=08:00:00
 #SBATCH --output=logs/train_%j.out
 #
 # Production Base training, chained across Bridges-2's walltime limit.
@@ -113,6 +113,19 @@
 # `collect_stacks.sh` from the same memory note for live triage.
 # ---------------------------------------------------------------------------
 
+# 8h walltime, because that is GPU-small's ceiling: the gpusmallpartition QOS
+# caps MaxWall at 08:00:00 and a longer --time is rejected outright at
+# submission. GPU-shared would allow 48h; the trade was decided in favour of
+# GPU-small's dedicated node.
+#
+# That makes this a ~300-segment chain for 1.2M updates, so MAX_CHAIN_DEPTH is
+# 800 rather than 500: at the measured floor of ~324 updates/hour an 8h segment
+# is ~2,600 updates, which needs ~460 hops, and a cap of 500 could stop the run
+# just short of the target. 800 still bounds a runaway.
+#
+# Per-segment overhead is small: sampler construction on the real 37.5M-row
+# shape file measured 207.9 s (job 43823280), i.e. 0.7% of an 8h segment.
+#
 # 4 x v100-32 on GPU-small, matching conf/training_f5_tts_base.yaml's
 # num_device: 4 and accumulate_grad_batches: 8, which with batch_bins 960000
 # gives 4 * 8 * 960000 / 100 = 307,200 mel-frames per optimizer update -- the
@@ -161,7 +174,7 @@ export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 #    guard): if this job's own depth already reached the cap, stop here,
 #    unconditionally, without training or queuing a further hop.
 CHAIN_DEPTH="${CHAIN_DEPTH:-0}"
-MAX_CHAIN_DEPTH="${MAX_CHAIN_DEPTH:-500}"
+MAX_CHAIN_DEPTH="${MAX_CHAIN_DEPTH:-800}"
 if (( CHAIN_DEPTH >= MAX_CHAIN_DEPTH )); then
     echo "ABORT: chain depth $CHAIN_DEPTH reached MAX_CHAIN_DEPTH=$MAX_CHAIN_DEPTH;" \
         "not resubmitting. Investigate before raising the cap." >&2
