@@ -205,3 +205,54 @@ def test_train_sbatch_passes_ckpt_path_conditionally():
     assert ckpt_check_idx < srun_idx
     assert '--ckpt_path "$LAST_CKPT"' in body
     assert '"${CKPT_ARGS[@]}"' in body
+
+
+def test_every_job_script_exports_pythonpath():
+    """Every sbatch that runs run.py must put THIS tree on PYTHONPATH first.
+
+    The pixi env's installed espnet lives in a different tree
+    (espnet_f5_libritts), so without an explicit PYTHONPATH `espnet3` and
+    `egs3` resolve from THERE while src/ and dataset/ load from here. The
+    result is a half-mixed import graph that dies with
+    `ModuleNotFoundError: No module named 'egs3.emilia'` -- which is exactly
+    how the first real training job failed (43825659), on every rank, after
+    passing its own pre-flight artifact checks. Those checks test that files
+    exist on disk, not that the code is importable.
+
+    It also carries pylibs/, which holds rjieba: absent from the shared env
+    and imported lazily by F5PinyinPreprocessor, so omitting it fails
+    mid-training rather than at startup.
+    """
+    import re
+
+    local_dir = Path(__file__).resolve().parents[1] / "local"
+    scripts = sorted(local_dir.glob("*.sbatch"))
+    assert scripts, "no sbatch scripts found"
+
+    checked = 0
+    for script in scripts:
+        text = script.read_text(encoding="utf-8")
+        if "run.py" not in text and "parity/" not in text:
+            continue
+        checked += 1
+        m = re.search(r'^export PYTHONPATH=.*$', text, re.MULTILINE)
+        assert m, f"{script.name} runs a recipe entry point but never exports PYTHONPATH"
+        line = m.group(0)
+        assert "$ROOT/pylibs" in line, f"{script.name}: pylibs missing from PYTHONPATH"
+        assert "$ROOT:" in line or '"$ROOT"' in line, (
+            f"{script.name}: repo root missing from PYTHONPATH -- espnet3/egs3 "
+            "would resolve from the installed espnet in another tree"
+        )
+        # ...and before the first real invocation. Match an executable line,
+        # not a mention: these headers discuss run.py in prose, and an earlier
+        # version of this test compared against a comment.
+        invocation = re.search(
+            r'^\s*(srun[^\n]*\s)?python[^\n]*\b(run\.py|parity/)',
+            text, re.MULTILINE,
+        )
+        assert invocation, f"{script.name}: no python invocation found"
+        assert text.index(line) < invocation.start(), (
+            f"{script.name}: PYTHONPATH is exported after the first python "
+            "invocation"
+        )
+    assert checked >= 3, f"expected several job scripts, checked {checked}"

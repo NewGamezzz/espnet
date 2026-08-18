@@ -103,6 +103,12 @@ set -eu
 # with `cd: egs3/emilia/tts: No such file or directory`.
 cd "$ROOT/egs3/emilia/tts"
 
+# Same omission that killed the first real training job (43825659): without
+# this, `espnet3` and `egs3` resolve out of the pixi env's installed espnet in
+# the espnet_f5_libritts tree, and `egs3.emilia` does not exist there. Also
+# puts pylibs/ (rjieba) on the path.
+export PYTHONPATH="$ROOT/pylibs:$ROOT:$ROOT/egs3/emilia/tts:${PYTHONPATH:-}"
+
 # Guards the failure mode that is NOT peak allocation: the allocator. Peak
 # allocated at the configured batch_bins is 24.81 GiB of 31.73 under 2-rank
 # DDP (parity/mem_probe.py), but peak *reserved* runs higher as

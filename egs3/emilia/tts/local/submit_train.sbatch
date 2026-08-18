@@ -161,6 +161,19 @@ set -eu
 # with `cd: egs3/emilia/tts: No such file or directory`.
 cd "$ROOT/egs3/emilia/tts"
 
+# MUST be set, and set BEFORE the config-reading python block below, which
+# already imports espnet3. Without it, `espnet3` and `egs3` resolve out of the
+# pixi env's installed espnet -- which lives in the espnet_f5_libritts tree --
+# so training imported espnet3 from THAT tree while loading src/ and dataset/
+# from this one, and died with `ModuleNotFoundError: No module named
+# 'egs3.emilia'` on every rank (job 43825659). It also silently bypassed the
+# espnet3 fixes this branch carries, and pylibs/ (rjieba, absent from the
+# shared env and needed lazily by F5PinyinPreprocessor).
+#
+# The pre-flight check below does NOT catch this: it tests that artifacts
+# exist on disk, not that the code is importable.
+export PYTHONPATH="$ROOT/pylibs:$ROOT:$ROOT/egs3/emilia/tts:${PYTHONPATH:-}"
+
 # Guards the failure mode that is NOT peak allocation: the allocator. Peak
 # allocated at the configured batch_bins is 24.81 GiB of 31.73 under 2-rank
 # DDP (parity/mem_probe.py), but peak *reserved* runs higher as
