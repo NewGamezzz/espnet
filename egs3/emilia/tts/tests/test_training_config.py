@@ -481,3 +481,41 @@ def test_num_workers_is_inside_iter_factory():
                 f"{conf_path.name}: dataloader.{mode}.iter_factory.num_workers"
             )
             assert block.iter_factory.pin_memory is True
+
+
+def test_checkpointing_is_step_based_not_epoch_based():
+    """last.ckpt must be written far more often than once per epoch.
+
+    espnet3's default last-checkpoint callback uses
+    save_on_train_epoch_end=True, so without an explicit
+    save_every_n_train_steps it fires ONLY at an epoch boundary. This recipe's
+    epoch is 784,770 batches per rank -- about 14.8 days at the measured
+    0.61 it/s -- against an 8-hour GPU-small walltime, so that boundary is
+    never reached. Every chained segment would be killed before writing
+    anything, and its successor would restart from step 0: ~300 jobs, ~100
+    GPU-days, zero accumulated progress, and no error anywhere, because
+    submit_train.sbatch resumes off exp/last.ckpt and would simply keep
+    finding none.
+
+    The interval must also comfortably fit inside one walltime segment. At
+    ~275 updates/hour an 8h segment is ~2,200 updates, so the interval has to
+    be well under that or the guarantee is void.
+    """
+    for conf_path in (CONF, SMOKE_CONF, SMOKE_2GPU_CONF):
+        cfg = OmegaConf.load(conf_path)
+        n = cfg.trainer.get("save_every_n_train_steps", None)
+        assert n is not None, (
+            f"{conf_path.name}: save_every_n_train_steps unset -- checkpoints "
+            "would only be written at epoch end, which this run never reaches"
+        )
+        assert 0 < n <= 1000, f"{conf_path.name}: implausible interval {n}"
+
+    # ~2,200 updates fit in an 8h segment at the measured rate; require the
+    # interval to leave room for several saves within one segment.
+    base = OmegaConf.load(CONF)
+    updates_per_segment = 8 * 275
+    saves = updates_per_segment / base.trainer.save_every_n_train_steps
+    assert saves >= 4, (
+        f"only ~{saves:.1f} checkpoint(s) per 8h segment; too few to make a "
+        "walltime kill cheap"
+    )

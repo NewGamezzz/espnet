@@ -4,7 +4,7 @@ import logging
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import List, Tuple, Union
+from typing import List, Tuple, Union, Optional
 
 import torch
 from lightning.pytorch.callbacks import (
@@ -403,6 +403,7 @@ def get_default_callbacks(
     best_model_criterion: Union[List[Tuple[str, int, str]], List[List]] = [
         ("valid/loss", 3, "min")
     ],
+    save_every_n_train_steps: Optional[int] = None,
 ) -> List[Callback]:
     """Return a list of callbacks tailored for most training workflows.
 
@@ -440,12 +441,24 @@ def get_default_callbacks(
         ... )
         >>> trainer = Trainer(callbacks=callbacks, ...)
     """
+    # save_every_n_train_steps is REQUIRED for any run whose epoch is longer
+    # than its walltime. Without it this callback fires only at train-epoch
+    # end, so a job killed at walltime writes nothing at all and its
+    # successor restarts from step 0 -- a chain that burns GPU-months and
+    # accumulates no progress. Emilia is the concrete case: one epoch is
+    # 784,770 batches (~14.8 days) against an 8-hour GPU-small walltime, so
+    # the epoch boundary is never reached.
+    #
+    # monitor is None here, so save_top_k defaults to 1: each save writes
+    # step{step}.ckpt, removes the previous one, and relinks last.ckpt.
+    # Disk stays bounded no matter how often this fires.
     last_ckpt_callback = ModelCheckpoint(
         dirpath=exp_dir,
         save_last="link",
         filename="step{step}",
         auto_insert_metric_name=False,
         save_on_train_epoch_end=True,
+        every_n_train_steps=save_every_n_train_steps,
         save_weights_only=False,
     )
 

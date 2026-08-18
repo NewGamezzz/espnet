@@ -335,6 +335,7 @@ trainer:
   # Smoke-only: stop well short of the paper's target, just enough steps to
   # exercise warmup, a validation pass and a stable-state throughput window.
   max_steps: 200
+  save_every_n_train_steps: 200
   val_check_interval: 100        # smoke-only: one validation pass mid-run
   limit_val_batches: 5           # smoke-only: a handful of batches, not 200
   log_every_n_steps: 50

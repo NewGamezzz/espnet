@@ -97,6 +97,7 @@ class ESPnet3LightningTrainer:
             exp_dir,
             self.config.log_every_n_steps,
             OmegaConf.to_container(best_model_criterion),
+            getattr(self.config, "save_every_n_train_steps", None),
         )
         if getattr(self.config, "callbacks", None):
             assert isinstance(
