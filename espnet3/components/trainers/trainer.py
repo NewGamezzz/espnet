@@ -146,6 +146,12 @@ class ESPnet3LightningTrainer:
             "profiler",
             "plugins",
             "callbacks",
+            # Consumed above by get_default_callbacks, not a Lightning Trainer
+            # argument. Everything left in trainer_config is splatted into
+            # lightning.Trainer(**trainer_config), so any espnet3-only key must
+            # be removed here or the run dies at construction with
+            # "Trainer.__init__() got an unexpected keyword argument".
+            "save_every_n_train_steps",
         ):
             self._del_config_key_on(trainer_config, key)
 

@@ -519,3 +519,50 @@ def test_checkpointing_is_step_based_not_epoch_based():
         f"only ~{saves:.1f} checkpoint(s) per 8h segment; too few to make a "
         "walltime kill cheap"
     )
+
+
+def test_every_trainer_key_is_accepted_by_lightning_or_espnet3():
+    """Guard the splat: trainer.py does lightning.Trainer(**trainer_config).
+
+    espnet3 deep-copies the whole `trainer:` block, deletes a fixed list of
+    keys it consumes itself, and passes everything else straight to Lightning.
+    So any key that is neither a Lightning Trainer argument nor on that
+    deletion list kills the run at construction with
+    "Trainer.__init__() got an unexpected keyword argument" -- which is
+    exactly how job 43834480 died after save_every_n_train_steps was added
+    under `trainer:` without being excluded.
+
+    This is a config/code contract that no amount of YAML-only checking can
+    see, so it is asserted against Lightning's real signature.
+    """
+    import inspect
+    import pathlib
+    import re
+
+    import lightning
+
+    lightning_args = set(inspect.signature(lightning.Trainer.__init__).parameters)
+    # Read the deletion list from espnet3's SOURCE rather than restating it.
+    # A hardcoded copy here would pass even if trainer.py stopped deleting the
+    # key, which is the exact failure this test exists to catch.
+    import espnet3.components.trainers.trainer as trainer_mod
+
+    src = pathlib.Path(trainer_mod.__file__).read_text(encoding="utf-8")
+    block = re.search(
+        r"trainer_config = copy\.deepcopy\(self\.config\).*?for key in \((.*?)\):",
+        src,
+        re.DOTALL,
+    )
+    assert block, "could not locate trainer.py's key-deletion list"
+    espnet3_consumed = set(re.findall(r'"([a-z_]+)"', block.group(1)))
+    assert "callbacks" in espnet3_consumed, espnet3_consumed
+    allowed = lightning_args | espnet3_consumed
+
+    for conf_path in (CONF, SMOKE_CONF, SMOKE_2GPU_CONF):
+        cfg = OmegaConf.load(conf_path)
+        for key in cfg.trainer.keys():
+            assert key in allowed, (
+                f"{conf_path.name}: trainer.{key} is neither a Lightning "
+                "Trainer argument nor removed by espnet3 before the splat; "
+                "it will raise TypeError at Trainer construction"
+            )
