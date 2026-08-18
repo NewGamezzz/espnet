@@ -183,6 +183,24 @@ export PYTHONPATH="$ROOT/pylibs:$ROOT:$ROOT/egs3/emilia/tts:${PYTHONPATH:-}"
 # lets the allocator grow a segment instead of stranding it.
 export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 
+# Single node, so there is no inter-node traffic and InfiniBand has no
+# legitimate role -- but NCCL will still choose it for GPU pairs that lack a
+# P2P path, and that is what hung job 43826521.
+#
+# GPU-small is shared, so Slurm can hand out a 4-GPU set that straddles both
+# PCIe root complexes. Diagnostic 43832550 caught exactly that:
+#     rank 0 busId 16000   rank 1 busId 3a000
+#     rank 2 busId 3b000   rank 3 busId 89000
+#     0<->1, 1<->2  via P2P/CUMEM
+#     0<->3, 2<->3  via NET/IB/*/GDRDMA      <-- over the fabric, same chassis
+# That link completed 455 collectives and then stalled forever, which is why
+# the failure looked like a mid-training deadlock rather than a startup error.
+#
+# Disabling IB forces NCCL to fall back to shared memory for the non-P2P
+# pairs. SHM is slower than NVLink but is reliable and stays on-node, and for
+# a single-node job it costs nothing that IB was providing.
+export NCCL_IB_DISABLE=1
+
 # 1) Chain-depth cap, checked before anything else (including the quota
 #    guard): if this job's own depth already reached the cap, stop here,
 #    unconditionally, without training or queuing a further hop.
