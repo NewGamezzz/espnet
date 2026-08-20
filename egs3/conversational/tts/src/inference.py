@@ -94,6 +94,10 @@ import torch
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
+from egs3.conversational.tts.src.eval_manifest import (
+    load_eval_manifest,
+    spans_match,
+)
 from egs3.conversational.tts.src.generation import (
     build_dataset,
     build_preprocessor,
@@ -185,8 +189,43 @@ def _in_duration_band(duration: float, min_duration, max_duration) -> bool:
     return True
 
 
-def _select_indices(records, selection) -> list[int]:
-    """Filtered, seeded, capped window indices (sorted for determinism)."""
+def _select_indices(records, selection, pinned_rows=None) -> list[int]:
+    """Filtered, seeded, capped window indices (sorted for determinism).
+
+    ``pinned_rows`` (a frozen eval manifest's window rows) supersedes the
+    whole draw: filter, cap and seed are all ignored and the listed windows
+    run in MANIFEST ORDER.  Each row's ``session_id`` / ``t0`` / ``t1`` are
+    checked against the split, so a manifest built against different data
+    raises instead of silently scoring different windows.
+    """
+    if pinned_rows is not None:
+        by_id = {r.window_id: i for i, r in enumerate(records)}
+        indices = []
+        for row in pinned_rows:
+            wid = row["window_id"]
+            if wid not in by_id:
+                raise ValueError(
+                    f"eval manifest names window {wid!r}, which is not in "
+                    f"this split ({len(records)} windows)"
+                )
+            idx = by_id[wid]
+            record = records[idx]
+            for key, actual in (("t0", record.t0), ("t1", record.t1)):
+                if key in row and not spans_match(row[key], actual):
+                    raise ValueError(
+                        f"eval manifest {wid}: {key} is {row[key]} but the "
+                        f"split says {actual} - the manifest was built "
+                        f"against different data"
+                    )
+            if "session_id" in row and row["session_id"] != record.session_id:
+                raise ValueError(
+                    f"eval manifest {wid}: session_id is "
+                    f"{row['session_id']!r} but the split says "
+                    f"{record.session_id!r}"
+                )
+            indices.append(idx)
+        return indices
+
     n_active = int(selection.num_active_speakers)
     eligible = [
         i
@@ -203,6 +242,65 @@ def _select_indices(records, selection) -> list[int]:
         rng = random.Random(int(selection.get("seed", 0)))
         eligible = sorted(rng.sample(eligible, int(num_windows)))
     return eligible
+
+
+def _resolve_pinned_turns(pool_turns, prompts, record) -> list[Any]:
+    """Turn a manifest row's pinned prompt spans into this session's turns.
+
+    Every channel must be named exactly once - the project rule that every
+    speaker carries a voice reference is not negotiable by manifest - every
+    span must match exactly one pool turn, and no span may touch the
+    evaluated window, so target leakage stays impossible even when a
+    manifest asks for it.
+    """
+    by_channel: dict[int, Any] = {}
+    for entry in prompts:
+        ch = int(entry["channel"])
+        if ch in by_channel:
+            raise ValueError(f"{record.window_id}: channel {ch} pinned twice")
+        by_channel[ch] = entry
+    missing = [c for c in range(record.num_channels) if c not in by_channel]
+    if missing:
+        raise ValueError(
+            f"{record.window_id}: no pinned prompt for channel(s) {missing} "
+            "- every channel needs a voice reference"
+        )
+    extra = sorted(c for c in by_channel if c >= record.num_channels)
+    if extra:
+        raise ValueError(
+            f"{record.window_id}: pinned prompt for channel(s) {extra}, but "
+            f"the window has {record.num_channels}"
+        )
+
+    selected: list[Any] = []
+    for ch in range(record.num_channels):
+        entry = by_channel[ch]
+        start, end = float(entry["start"]), float(entry["end"])
+        if _overlaps(start, end, record.t0, record.t1):
+            raise ValueError(
+                f"{record.window_id}: pinned prompt for channel {ch} "
+                f"({start}-{end}) overlaps the evaluated window "
+                f"({record.t0}-{record.t1}) - target leakage"
+            )
+        matches = [
+            t
+            for t in pool_turns
+            if int(t.channel) == ch
+            and spans_match(t.start, start)
+            and spans_match(t.end, end)
+        ]
+        if not matches:
+            raise ValueError(
+                f"{record.window_id}: no pool turn on channel {ch} at "
+                f"{start}-{end} - the corpus has moved under this manifest"
+            )
+        if len(matches) > 1:
+            raise ValueError(
+                f"{record.window_id}: pinned span {start}-{end} on channel "
+                f"{ch} matches {len(matches)} pool turns"
+            )
+        selected.append(matches[0])
+    return selected
 
 
 def _reference_texts(turns, num_channels: int) -> list[str]:
@@ -280,7 +378,22 @@ def run_inference(
         dataset_root=cfg.dataset.get("dataset_root"),
     )
     pools = _build_turn_pools(dataset.records)
-    indices = _select_indices(dataset.records, cfg.selection)
+    manifest_path = cfg.selection.get("manifest")
+    pinned_rows = None
+    pinned_prompts: dict[str, Any] = {}
+    if manifest_path:
+        eval_header, pinned_rows = load_eval_manifest(manifest_path)
+        pinned_prompts = {r["window_id"]: r["prompts"] for r in pinned_rows}
+        logger.info(
+            "infer selection: FROZEN eval manifest %s (%d windows, split=%s, "
+            "source=%s md5=%s) - selection/prompt seeds are inert",
+            manifest_path,
+            len(pinned_rows),
+            eval_header.get("split"),
+            eval_header.get("source_manifest"),
+            eval_header.get("source_manifest_md5"),
+        )
+    indices = _select_indices(dataset.records, cfg.selection, pinned_rows)
     logger.info(
         "infer selection: %d/%d windows (split=%s, mode=%s, seed=%s)",
         len(indices),
@@ -329,21 +442,28 @@ def run_inference(
 
         selected: list[Any] = []
         skip_channel: int | None = None
-        for ch in range(record.num_channels):
-            turn = _select_prompt_turn(
-                pool_turns,
-                ch,
-                record.t0,
-                record.t1,
-                turn_min,
-                turn_max,
-                prompt_seed,
-                record.window_id,
+        if record.window_id in pinned_prompts:
+            # A frozen manifest already made this choice; an unresolvable
+            # pin is an error, never a fall back to the ladder.
+            selected = _resolve_pinned_turns(
+                pool_turns, pinned_prompts[record.window_id], record
             )
-            if turn is None:
-                skip_channel = ch
-                break
-            selected.append(turn)
+        else:
+            for ch in range(record.num_channels):
+                turn = _select_prompt_turn(
+                    pool_turns,
+                    ch,
+                    record.t0,
+                    record.t1,
+                    turn_min,
+                    turn_max,
+                    prompt_seed,
+                    record.window_id,
+                )
+                if turn is None:
+                    skip_channel = ch
+                    break
+                selected.append(turn)
         if skip_channel is not None:
             n_skipped += 1
             logger.info(

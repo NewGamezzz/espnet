@@ -112,6 +112,9 @@ class ConversationDataset(TorchDataset):
                 raise KeyError(f"unknown split {split!r} and no manifest_path given")
             manifest_path = data_dir / _DATASET_CFG["split_manifest_paths"][split]
         manifest_path = Path(manifest_path)
+        # Kept for provenance: a frozen eval manifest records which window
+        # manifest (and md5) it was built from.
+        self.manifest_path = manifest_path
         if not manifest_path.is_file():
             raise FileNotFoundError(
                 f"window manifest not found: {manifest_path}. Run the SSSD "
