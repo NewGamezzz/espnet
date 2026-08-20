@@ -35,11 +35,26 @@ What differs from the conversational path
   the baseline has no error accumulation to accumulate - which is the point.
 * **The timeline is a concatenation.**  Turn t starts exactly where turn
   t-1 ended.  Channel k carries its own turns and DIGITAL SILENCE elsewhere;
-  the mixdown is the sum.
-  Consequence to state whenever these runs are reported: overlap and gap are
-  exactly 0 per minute BY CONSTRUCTION.  Those are not scores this baseline
-  did badly on, they are structural facts about what a concatenative system
-  can express.
+  the mixdown is the sum, so the AUDIO has exactly zero simultaneous speech.
+
+DO NOT REPORT THIS BASELINE'S ``overlap_per_min`` AS OVERLAP
+------------------------------------------------------------
+The waveforms are strictly exclusive - verified on real output: zero samples
+where both channels are non-zero, each channel exactly 0.0 wherever the other
+is active - and the metric still scores ~11 overlaps/min.  Measured cause
+(``scripts/baseline_overlap_diag.py``): the metric's Silero segmenter marks
+speech BEYOND the audio's non-zero support, by +0.325 s before the first
+non-zero sample and +0.23 to +0.39 s after the last one.  With zero-gap
+concatenation that padding cannot fall into silence - the neighbouring
+channel's speech starts exactly where this one stops - so every turn boundary
+manufactures one spurious overlap of ~0.35-0.77 s.  The counts line up
+one-for-one: a 13-turn dialogue has 12 boundaries and scores exactly 12
+overlap events.
+
+So this baseline's overlap is uninterpretable and its gap is deflated.  Quote
+the layout instead.  Note also that padding of ~0.7 s combined would still
+swamp an inserted gap of the real SSSD median (0.416 s), so a gapped variant
+would not fix this either.
 
 Duration
 --------
@@ -487,6 +502,12 @@ def run_concat_baseline(
                 "engine": "stock F5 (counts=[1], zero-init gates)",
                 "prompt_policy": "fixed per-speaker reference",
                 "layout": "back-to-back, zero gap",
+                # Measured, not asserted: the audio never overlaps, but the
+                # metric's VAD pads past the signal support and manufactures
+                # one spurious overlap per turn boundary.  See the module
+                # docstring before quoting overlap_per_min from this run.
+                "audio_overlap": "zero by construction",
+                "metric_overlap_is_a_vad_artifact": True,
                 "n_turns": len(turn_wavs),
                 **i.extra_meta,
             },
