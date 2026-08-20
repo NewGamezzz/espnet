@@ -7,7 +7,9 @@ a matching checkout.  See ``src/eval_manifest.py`` for the format and why
 the seed alone is not enough.
 
 Reads no audio: the window manifest carries every turn span the prompt
-ladder needs, so this runs on a login node in seconds.
+ladder needs.  It is still not a login-node job on a shared filesystem - the
+cold ``torch`` import alone runs into minutes, and freezing a full split adds
+a few more - so submit it (a CPU partition is enough, no GPU is used).
 
 Slicing exists because ``src/inference.py`` has no shard support (that lives
 only in the chunked path).  A slice is the header plus a contiguous run of
@@ -31,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import time
 from pathlib import Path
 
 from omegaconf import OmegaConf
@@ -94,7 +97,18 @@ def main(argv=None) -> int:
         OmegaConf.load(args.training_config) if args.training_config else None
     )
 
+    # Progress, not decoration: the build imports torch through
+    # src/generation.py, which is minutes-slow cold on a shared filesystem,
+    # and everything else here is silent until the manifest is complete - so
+    # a healthy run and a hung one look identical without these lines.
+    print(
+        f"freezing {cfg.dataset.split} selection "
+        "(first call imports torch; minutes on a shared filesystem) ...",
+        flush=True,
+    )
+    started = time.time()
     header, rows = build_eval_manifest(cfg, training_config=training_config)
+    print(f"... selection frozen in {time.time() - started:.0f}s", flush=True)
     write_eval_manifest(args.out, header, rows)
     print(json.dumps(header, indent=2))
     print(f"wrote {args.out} ({len(rows)} windows)")
