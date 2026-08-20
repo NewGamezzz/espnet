@@ -237,6 +237,25 @@ def split_turns(
     return ranges
 
 
+def whole_dialogue_fits(
+    prompt_secs: Sequence[float],
+    turn_secs: Sequence[float],
+    unchunked_max_sec: float | None,
+) -> bool:
+    """True when this dialogue is short enough to generate in ONE call.
+
+    The budget covers the prompt PLUS the predicted generated audio, because
+    both live in the same conditioning tensor - the model's grounding
+    degrades with the total length it has to carry, not with the generated
+    part alone.  ``None`` disables the policy, which is the default and
+    leaves the packer bit-identically in charge.
+    """
+    if unchunked_max_sec is None:
+        return False
+    total = float(sum(prompt_secs)) + float(sum(turn_secs))
+    return total <= float(unchunked_max_sec)
+
+
 def crossfade_concat(
     chunk_wavs: Sequence[torch.Tensor], fade_samples: int
 ) -> torch.Tensor:
@@ -473,6 +492,7 @@ class _ChunkPlan:
     chunk_secs: list[float]
     gen_frames: list[int]
     oversized: list[bool]
+    whole: bool = False
 
     @property
     def n_chunks(self) -> int:
@@ -494,20 +514,41 @@ def _plan_dialogue(
         record, prompt_secs, duration_scale=duration_scale, speed=speed
     )
     target = chunk_cfg.get("target_sec")
-    ranges = split_turns(
-        turn_secs,
-        turns=chunk_cfg.get("turns"),
-        target_sec=target,
-        channels=[t.channel for t in record.turns],
-        num_channels=record.num_channels,
-        cover_all_speakers=cover_all_speakers,
+    whole = whole_dialogue_fits(
+        prompt_secs, turn_secs, chunk_cfg.get("unchunked_max_sec")
     )
+    if whole:
+        # One chunk over every turn IS unchunked generation: round 0 is
+        # conditioned only on the real prompts, so no generated audio ever
+        # feeds a later call.  The hygiene knobs are inert here for the same
+        # reason, but `prompt_fill` still applies - which is why this is
+        # built inside the chunked path rather than by dispatching to the
+        # unchunked mode, whose zero-filled prompt rows measured worse.
+        ranges = [(0, len(turn_secs))]
+    else:
+        ranges = split_turns(
+            turn_secs,
+            turns=chunk_cfg.get("turns"),
+            target_sec=target,
+            channels=[t.channel for t in record.turns],
+            num_channels=record.num_channels,
+            cover_all_speakers=cover_all_speakers,
+        )
     chunk_secs = [sum(turn_secs[a:b]) for a, b in ranges]
     return _ChunkPlan(
         ranges=ranges,
         chunk_secs=chunk_secs,
         gen_frames=[max(1, round(sec * fs / hop)) for sec in chunk_secs],
-        oversized=[target is not None and sec > float(target) for sec in chunk_secs],
+        # `oversized` means the packer could not respect the target.  Under
+        # the whole-dialogue policy the target does not apply at all, so
+        # flagging it would inflate the oversized counters with dialogues
+        # that are behaving exactly as configured.
+        oversized=(
+            [False]
+            if whole
+            else [target is not None and sec > float(target) for sec in chunk_secs]
+        ),
+        whole=whole,
     )
 
 
@@ -543,10 +584,17 @@ def _validated_chunk_cfg(
         "cond_include_prompt",
         "cond_history_chunks",
         "cover_all_speakers",
+        "unchunked_max_sec",
     }
     if unknown:
         raise ValueError(f"unknown chunk keys: {sorted(unknown)}")
     cover = bool(chunk_cfg.pop("cover_all_speakers", False) or False)
+    # Popped like the other independent knobs so the "exactly one packing
+    # policy" check below still sees exactly one key, then folded back into
+    # the returned policy so the meta records which budget was in force.
+    unchunked_raw = chunk_cfg.pop("unchunked_max_sec", None)
+    if unchunked_raw is not None and float(unchunked_raw) <= 0:
+        raise ValueError(f"chunk.unchunked_max_sec must be > 0, got {unchunked_raw}")
     cross_fade_sec = float(chunk_cfg.pop("cross_fade_sec", None) or 0.0)
     if cross_fade_sec < 0:
         raise ValueError(f"chunk.cross_fade_sec must be >= 0, got {cross_fade_sec}")
@@ -596,6 +644,8 @@ def _validated_chunk_cfg(
             f"got {chunk_cfg}"
         )
     policy = {k: chunk_cfg[k] for k in set_keys}
+    if unchunked_raw is not None:
+        policy["unchunked_max_sec"] = float(unchunked_raw)
     if cover and "target_sec" not in policy:
         raise ValueError("chunk.cover_all_speakers requires the target_sec policy")
     return policy, cross_fade_sec, cond, comp, cover
@@ -965,6 +1015,7 @@ def run_chunked_inference(
                 "cond_gate_fill": cond.gate_fill,
                 "cond_loudness_norm": cond.loudness_norm,
                 "n_chunks": plan.n_chunks,
+                "whole_dialogue": plan.whole,
                 "oversized": list(plan.oversized),
                 "chunks": st["chunk_meta"],
             },

@@ -1530,3 +1530,114 @@ def test_system_dispatch_literal_matches_mode():
     from egs3.conversational.tts.src.system import CHUNKED_MODE as SYSTEM_LITERAL
 
     assert SYSTEM_LITERAL == CHUNKED_MODE
+
+
+# --------------------------------------------------------------------------- #
+# Hybrid policy: generate short dialogues in ONE call, chunk the rest
+# --------------------------------------------------------------------------- #
+class TestWholeDialogueFits:
+    """The budget covers prompt + predicted generated audio, because the
+    prompt occupies the same conditioning tensor the generated region does -
+    a dialogue is only 'short enough for one call' counting both."""
+
+    def _fits(self, prompt, turns, budget):
+        from egs3.conversational.tts.src.chunked_inference import (
+            whole_dialogue_fits,
+        )
+
+        return whole_dialogue_fits(prompt, turns, budget)
+
+    def test_disabled_by_default(self):
+        assert self._fits([1.0, 1.0], [2.0], None) is False
+
+    def test_prompt_counts_towards_the_budget(self):
+        # Generated audio alone is 10 s, well under; with the 6 s of prompt
+        # it is 16 s and over a 15 s budget.
+        assert self._fits([3.0, 3.0], [5.0, 5.0], 15.0) is False
+        assert self._fits([3.0, 3.0], [5.0, 5.0], 20.0) is True
+
+    def test_boundary_is_inclusive(self):
+        assert self._fits([1.0, 1.0], [8.0], 10.0) is True
+        assert self._fits([1.0, 1.0], [8.0001], 10.0) is False
+
+
+class TestHybridChunking:
+    def _run(self, testset, tiny_model, inference_dir, chunk, **overrides):
+        cfg = _chunked_config(testset, inference_dir, chunk, **overrides)
+        stats = run_chunked_inference(
+            cfg,
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+        )
+        return inference_dir / "valid", stats, cfg
+
+    def test_generous_budget_collapses_the_dialogue_to_one_chunk(
+        self, testset, tiny_model, tmp_path
+    ):
+        # target_sec 0.001 alone would make every turn its own chunk (see
+        # TestChunkedInfer); a huge unchunked budget overrides it entirely.
+        test_dir, stats, _ = self._run(
+            testset,
+            tiny_model,
+            tmp_path / "infer_whole",
+            {"target_sec": 0.001, "unchunked_max_sec": 10000.0},
+        )
+        meta = json.loads((test_dir / "meta/000.json").read_text("utf-8"))
+        chunking = meta["chunking"]
+        assert chunking["n_chunks"] == 1
+        assert chunking["whole_dialogue"] is True
+        assert [(c["turn_start"], c["turn_end"]) for c in chunking["chunks"]] == [
+            (0, 3)
+        ]
+        # Not "oversized": the target does not apply when the whole dialogue
+        # is deliberately generated in one call.
+        assert chunking["oversized"] == [False]
+        assert stats["n_rounds"] == 1
+
+    def test_tight_budget_leaves_the_packer_in_charge(
+        self, testset, tiny_model, tmp_path
+    ):
+        test_dir, stats, _ = self._run(
+            testset,
+            tiny_model,
+            tmp_path / "infer_tight",
+            {"target_sec": 0.001, "unchunked_max_sec": 0.0001},
+        )
+        meta = json.loads((test_dir / "meta/000.json").read_text("utf-8"))
+        assert meta["chunking"]["n_chunks"] == 3
+        assert meta["chunking"]["whole_dialogue"] is False
+        assert meta["chunking"]["oversized"] == [True, True, True]
+
+    def test_budget_is_recorded_in_the_policy(self, testset, tiny_model, tmp_path):
+        test_dir, _, _ = self._run(
+            testset,
+            tiny_model,
+            tmp_path / "infer_policy",
+            {"target_sec": 0.001, "unchunked_max_sec": 10000.0},
+        )
+        meta = json.loads((test_dir / "meta/000.json").read_text("utf-8"))
+        assert meta["chunking"]["policy"] == {
+            "target_sec": 0.001,
+            "unchunked_max_sec": 10000.0,
+        }
+
+    def test_absent_budget_keeps_the_old_plan_and_meta_flag(
+        self, testset, tiny_model, tmp_path
+    ):
+        test_dir, _, _ = self._run(
+            testset, tiny_model, tmp_path / "infer_off", {"turns": 2}
+        )
+        meta = json.loads((test_dir / "meta/000.json").read_text("utf-8"))
+        assert meta["chunking"]["policy"] == {"turns": 2}
+        assert meta["chunking"]["n_chunks"] == 2
+        assert meta["chunking"]["whole_dialogue"] is False
+
+    def test_non_positive_budget_is_rejected(self, testset, tiny_model, tmp_path):
+        with pytest.raises(ValueError, match="unchunked_max_sec"):
+            self._run(
+                testset,
+                tiny_model,
+                tmp_path / "infer_bad",
+                {"target_sec": 25.0, "unchunked_max_sec": -1.0},
+            )
