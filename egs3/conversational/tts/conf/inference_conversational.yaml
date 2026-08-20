@@ -44,7 +44,18 @@ dataset:
   dataset_root: null    # null -> $SSSD_ROOT / dataset config default
 
 # Window selection: filter, then a seeded, capped draw (logged + reproducible).
+#
+# `manifest` supersedes ALL of the keys below plus the prompt ladder: it points
+# at a frozen eval manifest (see src/eval_manifest.py) naming the windows and
+# pinning each channel's prompt turn as an explicit session-absolute span. Use
+# it whenever a run must be reproducible OUTSIDE this checkout - the seeds only
+# reproduce under identical code, identical window manifest and identical
+# corpus files, which is exactly what sharing with a collaborator breaks. Build
+# one with local/make_eval_manifest.py; a slice of one is itself a valid
+# manifest, which is how a long run is split across jobs (this path has no
+# shard_count of its own).
 selection:
+  manifest: null        # frozen eval manifest path; null = seeded draw below
   num_active_speakers: 2
   min_duration: null    # optional duration band (seconds); null = no bound
   max_duration: null
