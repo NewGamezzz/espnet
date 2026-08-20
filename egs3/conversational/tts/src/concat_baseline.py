@@ -489,7 +489,15 @@ def run_concat_baseline(
             "sample_rate": fs,
             "num_channels": n,
             "window_duration_sec": round(total_samples / fs, 6),
-            "has_reference_audio": source == "sssd",
+            # False for BOTH sources: this field means "an aligned gt_wav is
+            # written next to gen_wav", and the baseline never writes one.
+            # The SSSD source has reference audio in the corpus, but the
+            # concatenated timeline is not aligned to it (25.13 s vs a 27.76 s
+            # GT window on the first test dialogue, because the GT carries
+            # inter-turn silence and overlap this layout cannot express), so
+            # claiming reference audio here would invite a reference-based
+            # metric to score a GT event set no other run would reproduce.
+            "has_reference_audio": False,
             "turn_times": "concatenated",
             "rtf": (
                 round(elapsed_total / (total_samples / fs), 6)
