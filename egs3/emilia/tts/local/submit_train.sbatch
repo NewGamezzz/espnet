@@ -214,8 +214,20 @@ export NCCL_IB_DISABLE=1
 #    This cannot misfire on the legitimate handoff: the successor is queued
 #    with --dependency=afterany on its parent, so the parent has already
 #    terminated before the successor starts and cannot be seen RUNNING.
-SIBLINGS=$(squeue -u "$USER" -n emilia_f5_train -t RUNNING -h -o '%i' 2>/dev/null \
-    | grep -v "^${SLURM_JOB_ID}$" | wc -l)
+#    NO PIPELINE HERE, deliberately. The first version of this guard was
+#    `squeue ... | grep -v "^$SLURM_JOB_ID$" | wc -l`, which under this
+#    script's `set -euo pipefail` aborts the job whenever there are NO
+#    siblings: grep matches nothing, exits 1, pipefail propagates it, set -e
+#    kills the script. That is the normal case, so the guard broke every
+#    launch -- job 44075353 died in 3 seconds with a 0-byte log. A loop over
+#    the ids has no such failure mode.
+SIBLING_IDS=$(squeue -u "$USER" -n emilia_f5_train -t RUNNING -h -o '%i' 2>/dev/null || true)
+SIBLINGS=0
+for _sid in $SIBLING_IDS; do
+    if [[ "$_sid" != "$SLURM_JOB_ID" ]]; then
+        SIBLINGS=$((SIBLINGS + 1))
+    fi
+done
 if (( SIBLINGS > 0 )); then
     echo "ABORT: $SIBLINGS other emilia_f5_train job(s) already RUNNING:"
     squeue -u "$USER" -n emilia_f5_train -t RUNNING -o '%.10i %.11M %.14R' || true

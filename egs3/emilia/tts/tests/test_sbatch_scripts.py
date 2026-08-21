@@ -297,3 +297,38 @@ def test_train_chain_cannot_fork_into_concurrent_trainers():
     # the guard has to exit, not merely warn
     tail = text[guard_at:submit_at]
     assert "exit 0" in tail, "duplicate guard does not exit"
+
+
+def test_sbatch_scripts_have_no_pipefail_traps():
+    """A pipeline whose last stage can legitimately exit non-zero is fatal here.
+
+    Every job script runs under `set -euo pipefail`, so
+    `cmd | grep ... | wc -l` aborts the whole job when grep matches nothing --
+    which for a "is anything else running?" check is the NORMAL case. The
+    first duplicate-chain guard did exactly that and killed job 44075353 in
+    3 seconds with a 0-byte log, before any diagnostic output could be
+    written.
+
+    grep is the dangerous one: it exits 1 on "no matches selected", which is
+    an ordinary result rather than an error. Any grep in a command
+    substitution must therefore be guarded with `|| true` or avoided.
+    """
+    import re
+
+    local_dir = Path(__file__).resolve().parents[1] / "local"
+    offenders = []
+    for script in sorted(local_dir.glob("*.sbatch")):
+        text = script.read_text(encoding="utf-8")
+        if "pipefail" not in text:
+            continue
+        for i, line in enumerate(text.splitlines(), 1):
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            # command substitution containing a grep, without an || true escape
+            if re.search(r'\$\(.*\bgrep\b', stripped) and "|| true" not in stripped:
+                offenders.append(f"{script.name}:{i}: {stripped}")
+    assert not offenders, (
+        "grep inside $(...) under `set -euo pipefail` aborts the job when it "
+        "matches nothing:\n  " + "\n  ".join(offenders)
+    )
