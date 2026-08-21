@@ -204,6 +204,26 @@ export NCCL_IB_DISABLE=1
 # 1) Chain-depth cap, checked before anything else (including the quota
 #    guard): if this job's own depth already reached the cap, stop here,
 #    unconditionally, without training or queuing a further hop.
+# 0) Duplicate-chain guard. If another job of this name is already RUNNING,
+#    this one belongs to a forked chain: exit WITHOUT training and WITHOUT
+#    queuing a successor, so the surplus chain terminates here instead of
+#    self-perpetuating. Two trainers sharing exp_dir corrupt each other's
+#    checkpoints -- they race on last.ckpt and Lightning silently writes
+#    "-v1" variants rather than failing.
+#
+#    This cannot misfire on the legitimate handoff: the successor is queued
+#    with --dependency=afterany on its parent, so the parent has already
+#    terminated before the successor starts and cannot be seen RUNNING.
+SIBLINGS=$(squeue -u "$USER" -n emilia_f5_train -t RUNNING -h -o '%i' 2>/dev/null \
+    | grep -v "^${SLURM_JOB_ID}$" | wc -l)
+if (( SIBLINGS > 0 )); then
+    echo "ABORT: $SIBLINGS other emilia_f5_train job(s) already RUNNING:"
+    squeue -u "$USER" -n emilia_f5_train -t RUNNING -o '%.10i %.11M %.14R' || true
+    echo "This is a duplicate chain. Exiting without training and without" \
+        "resubmitting, so it dies here rather than forking further."
+    exit 0
+fi
+
 CHAIN_DEPTH="${CHAIN_DEPTH:-0}"
 MAX_CHAIN_DEPTH="${MAX_CHAIN_DEPTH:-800}"
 if (( CHAIN_DEPTH >= MAX_CHAIN_DEPTH )); then
@@ -305,8 +325,20 @@ fi
 #    forwards CHAIN_DEPTH (and everything else already in this job's
 #    environment) to the next job; without it, CHAIN_DEPTH would silently
 #    reset to 0 on every hop and the cap in step 1 would never bind.
+# `singleton` is not optional. --dependency=afterany fires on CANCELLATION as
+# well as success/failure (documented above), so every `scancel` of a running
+# job releases its already-queued successor, which then queues its own -- a
+# cancelled chain does not die, it forks. Combined with manual resubmissions,
+# that produced 90 jobs and, on 2026-08-21, TWO training jobs writing the same
+# exp_dir concurrently: Lightning wrote step8000-v1.ckpt and step9200-v1.ckpt
+# because the un-suffixed names already existed, and last.ckpt ended up
+# pointing at the LAGGING job's step while another was 50 steps ahead.
+#
+# `singleton` tells Slurm to hold this job until no other job of the same name
+# and user is running, so duplicate chains serialise instead of racing. The
+# guard in step 0 then prunes them down to one.
 sbatch --export=ALL,CHAIN_DEPTH=$((CHAIN_DEPTH + 1)) \
-    --dependency=afterany:"$SLURM_JOB_ID" \
+    --dependency=afterany:"$SLURM_JOB_ID",singleton \
     local/submit_train.sbatch
 
 # 7) Train. If this dies for any reason -- clean completion short of

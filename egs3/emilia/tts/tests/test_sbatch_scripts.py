@@ -256,3 +256,44 @@ def test_every_job_script_exports_pythonpath():
             "invocation"
         )
     assert checked >= 3, f"expected several job scripts, checked {checked}"
+
+
+def test_train_chain_cannot_fork_into_concurrent_trainers():
+    """Two trainers must never share exp_dir, and a cancelled chain must die.
+
+    --dependency=afterany fires on CANCELLATION as well as success and
+    failure, so `scancel` on a running job releases its already-queued
+    successor, which queues its own. A cancelled chain forks rather than
+    dying. On 2026-08-21 that had produced 90 jobs and two concurrent
+    trainers writing one exp_dir: Lightning emitted step8000-v1.ckpt and
+    step9200-v1.ckpt because the plain names already existed, and last.ckpt
+    pointed at the lagging job while another ran 50 steps ahead.
+
+    Two independent defences, both asserted:
+      1. successors carry `singleton`, so Slurm refuses to run two jobs of
+         this name concurrently;
+      2. a job that finds a RUNNING sibling exits without training AND
+         without resubmitting, pruning surplus chains to one.
+    """
+    text = TRAIN.read_text(encoding="utf-8")
+
+    assert "--dependency=afterany:" in text
+    assert "singleton" in text, (
+        "successor submission lacks `singleton`; two chains could train "
+        "concurrently into the same exp_dir"
+    )
+    resubmit = [ln for ln in text.splitlines() if "--dependency=afterany:" in ln]
+    assert resubmit and all("singleton" in ln for ln in resubmit), (
+        f"every afterany resubmission must also be singleton: {resubmit}"
+    )
+
+    assert "SIBLINGS=" in text, "no duplicate-chain guard"
+    guard_at = text.index("SIBLINGS=")
+    submit_at = text.index("--dependency=afterany:")
+    assert guard_at < submit_at, (
+        "the duplicate guard must run BEFORE the successor is queued, or a "
+        "duplicate chain resubmits itself before noticing it is a duplicate"
+    )
+    # the guard has to exit, not merely warn
+    tail = text[guard_at:submit_at]
+    assert "exit 0" in tail, "duplicate guard does not exit"
