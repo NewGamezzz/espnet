@@ -16,6 +16,7 @@ from .conftest import (
 from egs3.conversational.tts.dataset.preprocessing.text import (
     NEW_TOKENS,
     OTHER_TOKEN,
+    TIMESTAMP_NEW_TOKENS,
     TURN_TOKEN,
     make_token2id,
 )
@@ -244,3 +245,31 @@ def test_vocab_generation_detects_both_and_rejects_garbage():
     assert _vocab_generation(["a", "<turn>", "<OTHER>"]) == ("<turn>", "<OTHER>")
     with pytest.raises(ValueError):
         _vocab_generation(["a", "<turn>", "<speaker_prompt>"])
+
+
+def test_extended_embedding_five_token_timestamp_vocab():
+    # Timestamp-era checkpoints (PR #42 onward, e.g. the all-on run) append
+    # <turn_fill> after the conditioning tokens; the eval branch must load
+    # them.  <turn_fill> warm-starts from the filler row 0, same as the
+    # other audio-only tokens (training-branch init, verified).
+    base = ["x", " ", "y"]
+    tokens = base + list(TIMESTAMP_NEW_TOKENS)
+    weight = torch.randn(len(base) + 1, 8)
+    out = extended_text_embedding(weight, tokens, noise_scale=0.0)
+    assert out.shape == (len(tokens) + 1, 8)
+    torch.testing.assert_close(out[: len(base) + 1], weight)
+    space_row = base.index(" ") + 1
+    torch.testing.assert_close(out[len(base) + 1], weight[space_row])  # <turn>
+    for offset in range(2, 6):  # <OTHER>, <speaker_prompt>, <prev_chunk>, <turn_fill>
+        torch.testing.assert_close(out[len(base) + offset], weight[0])
+
+
+def test_vocab_generation_detects_timestamp_generation():
+    from egs3.conversational.tts.src.build_model import _vocab_generation
+
+    assert _vocab_generation(["a", *TIMESTAMP_NEW_TOKENS]) == TIMESTAMP_NEW_TOKENS
+    # A 4-token tail still matches its own generation and is never mistaken
+    # for a truncated 5-token one.
+    assert _vocab_generation(["a", *NEW_TOKENS]) == NEW_TOKENS
+    with pytest.raises(ValueError):
+        _vocab_generation(["a", *NEW_TOKENS, "<bogus>"])

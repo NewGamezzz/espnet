@@ -159,3 +159,18 @@ class TestNormalizeAndEncode:
         assert rendered == "|good afternoon. how are you?|" + "#" * len(
             turns_3spk[1].text
         )
+
+
+def test_timestamp_generation_constants_and_extend_vocab_parity():
+    # The 5-token generation is NEW_TOKENS plus <turn_fill> (timestamp
+    # PR #42's vocab); extend_vocab must STILL append only NEW_TOKENS so
+    # every eval fixture and golden stays byte-stable - the eval recipe
+    # never builds a 5-token vocab, it only loads one.
+    from egs3.conversational.tts.dataset.preprocessing.text import (
+        TIMESTAMP_NEW_TOKENS,
+        TURN_FILL_TOKEN,
+    )
+
+    assert TIMESTAMP_NEW_TOKENS == (*NEW_TOKENS, TURN_FILL_TOKEN)
+    assert TURN_FILL_TOKEN == "<turn_fill>"
+    assert extend_vocab(["a", "b", "<space>"])[3:] == list(NEW_TOKENS)
