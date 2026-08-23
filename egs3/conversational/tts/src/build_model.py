@@ -43,6 +43,8 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
     OTHER_TOKEN,
     PREV_CHUNK_TOKEN,
     SPEAKER_PROMPT_TOKEN,
+    TIMESTAMP_NEW_TOKENS,
+    TURN_FILL_TOKEN,
     TURN_TOKEN,
     make_token2id,
 )
@@ -81,20 +83,26 @@ def _as_dict(config) -> dict:
 def _vocab_generation(tokens: Sequence[str]) -> tuple[str, ...]:
     """The trailing special-token block of an extended vocab.
 
-    Two generations exist: the legacy two-token vocab (<turn>/<OTHER>,
-    every checkpoint before the special-token conditioning run) and the
-    four-token vocab that appends <speaker_prompt>/<prev_chunk>.  The eval
-    recipe must load BOTH - old checkpoints stay comparable while the new
-    run is evaluated - so the tail gate accepts either and reports which
-    one matched instead of hard-coding a length.
+    Three generations exist: the legacy two-token vocab (<turn>/<OTHER>,
+    every checkpoint before the special-token conditioning run), the
+    four-token vocab that appends <speaker_prompt>/<prev_chunk>, and the
+    five-token vocab that further appends <turn_fill> (timestamp-alignment
+    training, PR #42 onward - the all-on run's checkpoints).  The eval
+    recipe must load ALL of them - old checkpoints stay comparable while
+    new runs are evaluated - so the tail gate accepts each generation and
+    reports which one matched instead of hard-coding a length.  Longest
+    tail first: every generation is a prefix of the next, so a shorter
+    match must never shadow a longer one.
     """
+    if list(tokens[-len(TIMESTAMP_NEW_TOKENS) :]) == list(TIMESTAMP_NEW_TOKENS):
+        return TIMESTAMP_NEW_TOKENS
     if list(tokens[-len(NEW_TOKENS) :]) == list(NEW_TOKENS):
         return NEW_TOKENS
     if list(tokens[-len(LEGACY_NEW_TOKENS) :]) == list(LEGACY_NEW_TOKENS):
         return LEGACY_NEW_TOKENS
     raise ValueError(
-        f"vocab must end with {NEW_TOKENS} or {LEGACY_NEW_TOKENS}, "
-        f"got {tokens[-len(NEW_TOKENS):]!r}"
+        f"vocab must end with {TIMESTAMP_NEW_TOKENS}, {NEW_TOKENS} or "
+        f"{LEGACY_NEW_TOKENS}, got {tokens[-len(TIMESTAMP_NEW_TOKENS):]!r}"
     )
 
 
@@ -108,9 +116,10 @@ def extended_text_embedding(
 
     ``pretrained_weight`` is the F5TTS_Base ``text_embed`` matrix of shape
     ``(base_size + 1, text_dim)`` (row 0 is the filler token; token id i
-    lives in row i+1).  ``tokens`` is the extended vocab whose last two or
-    four entries must be ``NEW_TOKENS`` (step 2 appends them at the end, so
-    all original ids - and therefore rows - are unchanged).
+    lives in row i+1).  ``tokens`` is the extended vocab whose tail must be
+    one of the three special-token generations (see ``_vocab_generation``);
+    the tokens sit at the end, so all original ids - and therefore rows -
+    are unchanged).
     """
     new_tokens = _vocab_generation(tokens)
     base_size = len(tokens) - len(new_tokens)
@@ -136,13 +145,18 @@ def extended_text_embedding(
     new_weight[: base_size + 1] = pretrained_weight
     new_weight[token2id[TURN_TOKEN] + 1] = pretrained_weight[space_row] + _noise()
     new_weight[token2id[OTHER_TOKEN] + 1] = pretrained_weight[0] + _noise()
-    if len(new_tokens) == 4:
+    if len(new_tokens) >= 4:
         # Audio-only conditioning spans warm-start from the filler row,
         # F5's learned "audio beyond text" representation (design 2026-08-14).
         new_weight[token2id[SPEAKER_PROMPT_TOKEN] + 1] = (
             pretrained_weight[0] + _noise()
         )
         new_weight[token2id[PREV_CHUNK_TOKEN] + 1] = pretrained_weight[0] + _noise()
+    if len(new_tokens) == 5:
+        # Same filler-row init as the training branch (PR #42); the row only
+        # has to exist for strict checkpoint loads - Mode O inference never
+        # emits <turn_fill>.
+        new_weight[token2id[TURN_FILL_TOKEN] + 1] = pretrained_weight[0] + _noise()
     return new_weight
 
 
