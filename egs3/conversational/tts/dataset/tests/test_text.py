@@ -4,15 +4,20 @@ import pytest
 from .conftest import FakeTurn
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
+    FRAMES_PER_SECOND,
     NEW_TOKENS,
     OTHER_TOKEN,
+    TURN_FILL_TOKEN,
     TURN_TOKEN,
     build_branch_texts,
+    build_branch_texts_timestamped,
     encode_tokens,
     extend_vocab,
     make_token2id,
     normalize_text,
     render_tokens,
+    timestamp_fits,
+    turn_frame_spans,
     vocab_charset,
 )
 
@@ -160,6 +165,9 @@ class TestNormalizeAndEncode:
             turns_3spk[1].text
         )
 
+    def test_render_tokens_turn_fill(self):
+        assert render_tokens([TURN_TOKEN, "a", TURN_FILL_TOKEN]) == "|a_"
+
 
 def test_timestamp_generation_constants_and_extend_vocab_parity():
     # The 5-token generation is NEW_TOKENS plus <turn_fill> (timestamp
@@ -174,3 +182,49 @@ def test_timestamp_generation_constants_and_extend_vocab_parity():
     assert TIMESTAMP_NEW_TOKENS == (*NEW_TOKENS, TURN_FILL_TOKEN)
     assert TURN_FILL_TOKEN == "<turn_fill>"
     assert extend_vocab(["a", "b", "<space>"])[3:] == list(NEW_TOKENS)
+
+
+def _turn(channel, text, start, end):
+    return FakeTurn(channel, f"spk_{channel}", text, start, end)
+
+
+class TestTimestampAssembly:
+    def test_single_turn_layout(self):
+        # 2.0 s target = 187 frames at 93.75 fps; one turn [0.5, 1.5) = frames 47..141.
+        turns = [_turn(0, "hi", 10.5, 11.5)]
+        out = build_branch_texts_timestamped(turns, 2, t0=10.0, target_frames=187)
+        a, b = out
+        assert len(a) == len(b) == 187
+        assert a[47] == TURN_TOKEN
+        assert a[48:50] == ["h", "i"]
+        assert a[50:141] == [TURN_FILL_TOKEN] * 91
+        assert a[:47] == [OTHER_TOKEN] * 47 and a[141:] == [OTHER_TOKEN] * 46
+        assert b == [OTHER_TOKEN] * 187
+
+    def test_overlapping_turns_are_independent_per_branch(self):
+        turns = [_turn(0, "abc", 0.0, 1.0), _turn(1, "de", 0.5, 1.5)]
+        out = build_branch_texts_timestamped(turns, 2, t0=0.0, target_frames=187)
+        assert out[0][0] == TURN_TOKEN and out[1][47] == TURN_TOKEN
+
+    def test_unfittable_turn_raises(self):
+        turns = [_turn(0, "way too much text", 0.0, 0.05)]
+        with pytest.raises(ValueError, match="does not fit"):
+            build_branch_texts_timestamped(turns, 1, t0=0.0, target_frames=187)
+
+    def test_same_channel_collision_raises(self):
+        turns = [_turn(0, "ab", 0.0, 1.0), _turn(0, "cd", 0.5, 1.5)]
+        with pytest.raises(ValueError, match="overlap on channel"):
+            build_branch_texts_timestamped(turns, 1, t0=0.0, target_frames=187)
+
+    def test_timestamp_fits_normal_and_defective(self):
+        good = [_turn(0, "hello there", 0.0, 2.0)]
+        bad = [_turn(0, "I'm gonna go.", 0.0, 0.01)]
+        assert timestamp_fits(good, t0=0.0, t1=2.0)
+        assert not timestamp_fits(bad, t0=0.0, t1=2.0)
+
+    def test_spans_clamped_to_target(self):
+        turns = [_turn(0, "x", 0.0, 99.0)]
+        assert turn_frame_spans(turns, t0=0.0, target_frames=100) == [(0, 100)]
+
+    def test_frames_per_second_is_hop_ratio(self):
+        assert FRAMES_PER_SECOND == 24000 / 256
