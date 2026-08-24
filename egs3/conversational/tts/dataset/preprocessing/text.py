@@ -10,8 +10,8 @@ This module is pure except for ``normalize_text``, which delegates to the
 pretrained checkpoint's own tokenizer (``espnet2.text.f5_pinyin``, backed by
 ``rjieba``/``pypinyin``) so fine-tuning text matches the F5TTS_Base
 pretraining distribution by construction.  No torch, no config access.
-``turns`` arguments are duck-typed and only need ``channel`` and ``text``
-attributes.
+``turns`` arguments are duck-typed and only need ``channel``, ``text``,
+``start``, and ``end`` attributes.
 """
 
 from __future__ import annotations
