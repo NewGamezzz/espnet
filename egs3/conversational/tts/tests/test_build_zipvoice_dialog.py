@@ -342,3 +342,98 @@ class TestBuild:
             ]
         )
         assert (archive["out"] / "manifest.jsonl").is_file()
+
+
+# --------------------------------------------------------------------------- #
+# level normalization (--normalize_db): v2 of the set
+# --------------------------------------------------------------------------- #
+def _active_rms_db(x: np.ndarray, sr: int = SR) -> float:
+    """Independent arithmetic: RMS over 20 ms frames whose RMS > 1e-3, dB."""
+    fr = int(sr * 0.02)
+    n = len(x) // fr
+    r = np.sqrt((x[: n * fr].reshape(n, fr) ** 2).mean(1))
+    r = r[r > 1e-3]
+    return 20 * np.log10(np.sqrt((r**2).mean()))
+
+
+class TestNormalize:
+    def test_off_by_default_is_bit_identical(self, tmp_path):
+        a = write_archive(tmp_path / "a")
+        b = write_archive(tmp_path / "b")
+        build(a["src"], a["out"], a["vocab"])
+        build(b["src"], b["out"], b["vocab"], normalize_db=None)
+        for rel in ("prompt/X_0-001-A.wav", "gt/X_0-000_ch0.wav"):
+            x, _ = sf.read(str(a["out"] / rel))
+            y, _ = sf.read(str(b["out"] / rel))
+            assert np.array_equal(x, y)
+        meta = json.loads((a["out"] / "build_meta.json").read_text("utf-8"))
+        assert meta["normalize"] is None
+
+    def test_prompts_and_gt_hit_the_target_level(self, archive):
+        build(archive["src"], archive["out"], archive["vocab"], normalize_db=-23.0)
+        for name in PROMPTS:
+            x, _ = sf.read(str(archive["out"] / "prompt" / name))
+            assert _active_rms_db(x) == pytest.approx(-23.0, abs=0.7)
+        for rel in ("gt/X_0-000_ch0.wav", "gt/X_0-000_ch1.wav", "gt/Y_0-001_ch0.wav"):
+            x, _ = sf.read(str(archive["out"] / rel))
+            assert _active_rms_db(x) == pytest.approx(-23.0, abs=0.7)
+
+    def test_pair_mismatch_is_removed(self, archive):
+        build(archive["src"], archive["out"], archive["vocab"], normalize_db=-23.0)
+        a, _ = sf.read(str(archive["out"] / "prompt/X_0-001-A.wav"))
+        b, _ = sf.read(str(archive["out"] / "prompt/X_0-001-B.wav"))
+        assert abs(_active_rms_db(a) - _active_rms_db(b)) < 1.0
+
+    def test_gains_are_recorded(self, archive):
+        build(archive["src"], archive["out"], archive["vocab"], normalize_db=-23.0)
+        meta = json.loads((archive["out"] / "build_meta.json").read_text("utf-8"))
+        norm = meta["normalize"]
+        assert norm["target_db"] == -23.0
+        assert set(norm["prompt_gain_db"]) == set(PROMPTS)
+        # one entry per written gt channel file: 4 two-speaker rows x 2 + 1 monologue
+        assert len(norm["gt_gain_db"]) == 9
+        src, _ = sf.read(
+            str(archive["src"] / "prompt_wavs/X_0-001-A.wav"), always_2d=True
+        )
+        expected = -23.0 - _active_rms_db(src[:, PROMPTS["X_0-001-A.wav"]])
+        assert norm["prompt_gain_db"]["X_0-001-A.wav"] == pytest.approx(
+            expected, abs=0.2
+        )
+
+    def test_peak_guard_prevents_clipping_and_is_flagged(self, tmp_path):
+        fx = write_archive(tmp_path)
+        # a near-full-scale but "quiet on average" prompt: huge target gain
+        # would clip, so the gain is limited to keep |peak| <= 0.99
+        n = int(1.5 * SR)
+        loud = np.zeros(n, dtype=np.float32)
+        loud[:: SR // 100] = 0.97  # sparse spikes: low RMS, high peak
+        loud[SR // 2 : SR // 2 + 2400] = 0.02 * np.sin(np.linspace(0, 200, 2400))
+        _write_stereo(fx["src"] / "prompt_wavs/X_0-001-A.wav", [loud, _floor(n, 9)])
+        build(fx["src"], fx["out"], fx["vocab"], normalize_db=-10.0)
+        x, _ = sf.read(str(fx["out"] / "prompt/X_0-001-A.wav"))
+        assert np.abs(x).max() <= 0.995
+        meta = json.loads((fx["out"] / "build_meta.json").read_text("utf-8"))
+        assert "X_0-001-A.wav" in meta["normalize"]["peak_limited"]
+
+    def test_loader_dry_run_still_passes_on_the_normalized_set(self, archive):
+        build(archive["src"], archive["out"], archive["vocab"], normalize_db=-23.0)
+        records = load_external_manifest(
+            archive["out"] / "manifest.jsonl", archive["vocab"]
+        )
+        assert len(records) == 5
+
+    def test_cli_flag(self, archive):
+        main(
+            [
+                "--src",
+                str(archive["src"]),
+                "--out",
+                str(archive["out"]),
+                "--token_list",
+                str(archive["vocab"]),
+                "--normalize_db",
+                "-23.0",
+            ]
+        )
+        meta = json.loads((archive["out"] / "build_meta.json").read_text("utf-8"))
+        assert meta["normalize"]["target_db"] == -23.0

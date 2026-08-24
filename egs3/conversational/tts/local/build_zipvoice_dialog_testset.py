@@ -141,19 +141,67 @@ def _read_tsv(path: Path) -> list[list[str]]:
     return rows
 
 
+def active_rms_db(x, sr: int) -> float | None:
+    """Active-speech level: RMS over 20 ms frames whose RMS exceeds the
+    idle floor (1e-3, the eval suite's ``ACTIVE_RMS_THRESHOLD``), in dBFS;
+    ``None`` when no frame is active."""
+    frame = int(sr * 0.02)
+    n = x.shape[0] // frame
+    if n == 0:
+        return None
+    rms = np.sqrt(np.square(x[: n * frame].reshape(n, frame)).mean(axis=1))
+    rms = rms[rms > 1e-3]
+    if not len(rms):
+        return None
+    return float(20 * np.log10(np.sqrt(np.square(rms).mean())))
+
+
+def _normalized(x, sr: int, target_db: float) -> tuple[Any, float, bool]:
+    """Scale ``x`` so its active-speech RMS hits ``target_db``.
+
+    Returns ``(scaled, applied_gain_db, peak_limited)``.  The gain is capped
+    so the peak stays <= 0.99 (PCM_16 output must not clip); a capped file
+    is flagged rather than silently under-normalized.
+    """
+    current = active_rms_db(x, sr)
+    if current is None:
+        return x, 0.0, False
+    gain = 10.0 ** ((target_db - current) / 20.0)
+    peak = float(np.abs(x).max())
+    limited = peak * gain > 0.99
+    if limited:
+        gain = 0.99 / peak
+    return x * gain, float(20 * np.log10(gain)), limited
+
+
 def build(
     src: str | Path,
     out: str | Path,
     token_list: str | Path,
     *,
     archive: str | Path | None = None,
+    normalize_db: float | None = None,
 ) -> dict[str, Any]:
     """Build ``out`` from the extracted ``src`` (= ``dialog_testset/en``).
 
     Returns the ``build_meta.json`` content.  ``archive`` (the tarball) is
-    optional and only used to record its md5.
+    optional and only used to record its md5.  ``normalize_db`` (None = off,
+    bit-identical) rescales every prompt track AND every ground-truth
+    channel to that active-speech RMS (dBFS) - the v2 convention: the raw
+    set's prompts run -22..-39 dBFS (one pair mismatched by 12.7 dB serves
+    104 dialogues) against a training-domain median of -22.6, the model does
+    not copy prompt level, and the quiet-prompt speaker paid ~2x WER.
     """
     src, out = Path(src), Path(out)
+    norm_meta: dict[str, Any] | None = None
+    if normalize_db is not None:
+        norm_meta = {
+            "target_db": float(normalize_db),
+            "active_rms_threshold": 1e-3,
+            "prompt_gain_db": {},
+            "gt_gain_db": {},
+            "peak_limited": [],
+        }
     tsv = src / "test.tsv"
     rows = _read_tsv(tsv)
     for sub in ("prompt", "gt"):
@@ -171,7 +219,13 @@ def build(
             track = active_track(array)
             prompt_tracks[name] = track
             prompt_sr[name] = sr
-            sf.write(str(out / "prompt" / name), array[:, track], sr, subtype="PCM_16")
+            mono = array[:, track]
+            if norm_meta is not None:
+                mono, gain_db, limited = _normalized(mono, sr, norm_meta["target_db"])
+                norm_meta["prompt_gain_db"][name] = round(gain_db, 3)
+                if limited:
+                    norm_meta["peak_limited"].append(name)
+            sf.write(str(out / "prompt" / name), mono, sr, subtype="PCM_16")
 
     # -- rows -> records --------------------------------------------------- #
     lines: list[dict[str, Any]] = []
@@ -247,7 +301,15 @@ def build(
         channels = []
         for ch, spk in enumerate(present):
             gt_rel = f"gt/{wid}_ch{ch}.wav"
-            sf.write(str(out / gt_rel), gt[:, speaker_track[spk]], sr, subtype="PCM_16")
+            gt_mono = gt[:, speaker_track[spk]]
+            if norm_meta is not None:
+                gt_mono, gain_db, limited = _normalized(
+                    gt_mono, sr, norm_meta["target_db"]
+                )
+                norm_meta["gt_gain_db"][gt_rel] = round(gain_db, 3)
+                if limited:
+                    norm_meta["peak_limited"].append(gt_rel)
+            sf.write(str(out / gt_rel), gt_mono, sr, subtype="PCM_16")
             pname, ptext = speaker_prompt[spk]
             channels.append(
                 {
@@ -324,6 +386,7 @@ def build(
                 "chars_dropped_by_normalization": _dropped_chars(raw_texts, charset),
             },
             "token_list": str(token_list),
+            "normalize": norm_meta,
         }
     )
     (out / "build_meta.json").write_text(
@@ -337,10 +400,23 @@ def main(argv=None) -> None:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--src", required=True, help="extracted dialog_testset/en dir")
     parser.add_argument("--out", required=True, help="output test-set directory")
+    parser.add_argument(
+        "--normalize_db",
+        type=float,
+        default=None,
+        help="normalize every prompt track and GT channel to this "
+        "active-speech RMS (dBFS); omit for the raw v1 levels",
+    )
     parser.add_argument("--token_list", required=True, help="training vocab.txt")
     parser.add_argument("--archive", default=None, help="the tarball, for its md5")
     args = parser.parse_args(argv)
-    meta = build(args.src, args.out, args.token_list, archive=args.archive)
+    meta = build(
+        args.src,
+        args.out,
+        args.token_list,
+        archive=args.archive,
+        normalize_db=args.normalize_db,
+    )
     print(
         f"{meta['n_dialogues']} dialogues ({meta['n_single_speaker']} single-speaker), "
         f"{meta['loader_dry_run']['total_gt_hours']:.3f} h ground truth, "
