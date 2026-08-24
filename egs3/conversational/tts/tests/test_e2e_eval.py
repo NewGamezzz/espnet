@@ -271,7 +271,11 @@ class TestEndToEndGtViaSystem:
 
         infer_system = ConversationalTTSSystem(inference_config=infer_cfg)
         infer_stats = infer_system.infer()
-        assert infer_stats == {"n_selected": 2, "n_skipped": 0}
+        assert infer_stats == {
+            "n_selected": 2,
+            "n_skipped": 0,
+            "n_timestamp_degraded": 0,
+        }
 
         test_dir = inf_dir / "valid"
         meta_rows = (test_dir / "meta.scp").read_text("utf-8").splitlines()
@@ -309,7 +313,11 @@ class TestEndToEndGenerateMode:
             model=model,
             vocoder=vocoder,
         )
-        assert infer_stats == {"n_selected": 2, "n_skipped": 0}
+        assert infer_stats == {
+            "n_selected": 2,
+            "n_skipped": 0,
+            "n_timestamp_degraded": 0,
+        }
 
         test_dir = inf_dir / "valid"
         meta = json.loads((test_dir / "meta/sess_w00000.json").read_text("utf-8"))

@@ -8,6 +8,7 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
     NEW_TOKENS,
     PREV_CHUNK_TOKEN,
     SPEAKER_PROMPT_TOKEN,
+    TURN_FILL_TOKEN,
     TURN_TOKEN,
     build_branch_texts,
     encode_tokens,
@@ -41,6 +42,14 @@ def turns_2spk() -> list[FakeTurn]:
         FakeTurn(0, "spk_a", "hi", 0.0, 1.0),
         FakeTurn(1, "spk_b", "yo", 1.2, 2.0),
     ]
+
+
+@pytest.fixture
+def tmp_vocab5(tmp_path, base_vocab):
+    """Vocab fixture carrying the Mode T <turn_fill> tail token, on top of
+    the ordinary extend_vocab tail (mirrors the timestamp-era vocab build:
+    PR #42 appended <turn_fill> last)."""
+    return write_vocab(tmp_path, extend_vocab(base_vocab) + [TURN_FILL_TOKEN])
 
 
 def test_literal_space_token_line(tmp_path):
@@ -118,3 +127,62 @@ def test_infill_has_no_prefix(tmp_path, turns_2spk, base_vocab):
     pre = ConversationalTextPreprocessor(token_list=vocab)
     out = pre("uid", sample_of(turns_2spk, 2))
     assert out["text"][0][0].item() == pre.token2id[TURN_TOKEN]
+
+
+def test_timestamp_text_routes_to_frame_aligned_builder(tmp_vocab5):
+    pre = ConversationalTextPreprocessor(token_list=tmp_vocab5)
+    turns = [FakeTurn(0, "a", "hi", 10.5, 11.5), FakeTurn(1, "b", "yo", 12.0, 13.0)]
+    out = pre(
+        "uid",
+        {
+            "turns": turns,
+            "num_channels": 2,
+            "timestamp_text": True,
+            "target_t0": 10.0,
+            "target_frames": 375,
+        },
+    )
+    tf = pre.token2id["<turn_fill>"]
+    tn = pre.token2id["<turn>"]
+    a, b = out["text"]
+    assert len(a) == len(b) == 375
+    assert a[47].item() == tn and b[round(2.0 * 93.75)].item() == tn
+    assert (a == tf).sum().item() > 0 and (b == tf).sum().item() > 0
+
+
+def test_timestamp_text_composes_with_conditioning_prefix(tmp_vocab5):
+    pre = ConversationalTextPreprocessor(token_list=tmp_vocab5)
+    turns = [FakeTurn(0, "a", "hi", 10.5, 11.5)]
+    out = pre(
+        "uid",
+        {
+            "turns": turns,
+            "num_channels": 2,
+            "timestamp_text": True,
+            "target_t0": 10.0,
+            "target_frames": 187,
+            "prompt_frames": 5,
+            "prev_frames": 3,
+        },
+    )
+    sp, pc = pre.token2id["<speaker_prompt>"], pre.token2id["<prev_chunk>"]
+    for t in out["text"]:
+        assert len(t) == 5 + 3 + 187
+        assert t[:5].tolist() == [sp] * 5 and t[5:8].tolist() == [pc] * 3
+
+
+def test_timestamp_text_requires_target_keys(tmp_vocab5):
+    pre = ConversationalTextPreprocessor(token_list=tmp_vocab5)
+    with pytest.raises(KeyError):
+        pre("uid", {"turns": [], "num_channels": 2, "timestamp_text": True})
+
+
+def test_mode_o_sample_unchanged(tmp_vocab5):
+    pre = ConversationalTextPreprocessor(token_list=tmp_vocab5)
+    turns = [FakeTurn(0, "a", "hi", 10.5, 11.5)]
+    out = pre("uid", {"turns": turns, "num_channels": 2})
+    assert out["text"][0].tolist() == [
+        pre.token2id["<turn>"],
+        pre.token2id["h"],
+        pre.token2id["i"],
+    ]

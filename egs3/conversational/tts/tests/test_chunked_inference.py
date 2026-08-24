@@ -16,10 +16,12 @@ import torch
 from omegaconf import OmegaConf
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
+    FRAMES_PER_SECOND,
     NEW_TOKENS,
     OTHER_TOKEN,
     PREV_CHUNK_TOKEN,
     SPEAKER_PROMPT_TOKEN,
+    TURN_FILL_TOKEN,
     TURN_TOKEN,
     build_branch_texts,
     make_token2id,
@@ -29,6 +31,7 @@ from egs3.conversational.tts.src.chunked_inference import (
     SPECIAL_TOKENS_PROMPT_FLOOR_SEC,
     CondComposition,
     SpecialTokensCond,
+    TimestampText,
     _validated_chunk_cfg,
     call_turns,
     crossfade_concat,
@@ -357,11 +360,11 @@ def _chunk_only_cfg(chunk):
 
 class TestCondCompositionConfig:
     def test_defaults_are_previous_chunk_only(self):
-        _, _, _, comp, _, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
+        _, _, _, comp, _, _, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
         assert comp == CondComposition(include_prompt=False, history_chunks=1)
 
     def test_explicit_values_are_parsed(self):
-        _, _, _, comp, _, _ = _validated_chunk_cfg(
+        _, _, _, comp, _, _, _ = _validated_chunk_cfg(
             _chunk_only_cfg(
                 {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": 0}
             )
@@ -369,7 +372,7 @@ class TestCondCompositionConfig:
         assert comp == CondComposition(include_prompt=True, history_chunks=0)
 
     def test_all_history_is_minus_one(self):
-        _, _, _, comp, _, _ = _validated_chunk_cfg(
+        _, _, _, comp, _, _, _ = _validated_chunk_cfg(
             _chunk_only_cfg(
                 {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": -1}
             )
@@ -391,17 +394,17 @@ class TestCondCompositionConfig:
 
 class TestSpecialTokensConfig:
     def test_absent_cond_format_is_transcripts_mode(self):
-        _, _, _, _, sptok, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
+        _, _, _, _, sptok, _, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
         assert sptok is None
 
     def test_special_tokens_defaults(self):
-        _, _, _, _, sptok, _ = _validated_chunk_cfg(
+        _, _, _, _, sptok, _, _ = _validated_chunk_cfg(
             _chunk_only_cfg({"target_sec": 25, "cond_format": "special_tokens"})
         )
         assert sptok == SpecialTokensCond(prompt_sec=8.0, prev_sec=10.0)
 
     def test_knobs_are_parsed_and_zero_prev_is_reanchor(self):
-        _, _, _, _, sptok, _ = _validated_chunk_cfg(
+        _, _, _, _, sptok, _, _ = _validated_chunk_cfg(
             _chunk_only_cfg(
                 {
                     "target_sec": 25,
@@ -460,6 +463,62 @@ class TestSpecialTokensConfig:
                     {"turns": 2, "cond_format": "special_tokens", "cond_prev_sec": -1.0}
                 )
             )
+
+
+class TestTimestampTextConfig:
+    def test_absent_is_mode_o(self):
+        *_, tsl = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
+        assert tsl is None
+
+    def test_explicit_order_is_mode_o(self):
+        *_, tsl = _validated_chunk_cfg(
+            _chunk_only_cfg({"turns": 2, "text_format": "order"})
+        )
+        assert tsl is None
+
+    def test_timestamps_defaults(self):
+        *_, tsl = _validated_chunk_cfg(_chunk_only_cfg(
+            {"turns": 2, "cond_format": "special_tokens", "text_format": "timestamps"}))
+        assert tsl == TimestampText(gap_sec=0.4)
+
+    def test_gap_parsed(self):
+        *_, tsl = _validated_chunk_cfg(_chunk_only_cfg(
+            {"turns": 2, "cond_format": "special_tokens", "text_format": "timestamps",
+             "turn_gap_sec": 0.0}))
+        assert tsl == TimestampText(gap_sec=0.0)
+
+    def test_requires_special_tokens(self):
+        with pytest.raises(ValueError, match="cond_format: special_tokens"):
+            _validated_chunk_cfg(
+                _chunk_only_cfg({"turns": 2, "text_format": "timestamps"})
+            )
+
+    def test_gap_requires_timestamps(self):
+        with pytest.raises(ValueError, match="turn_gap_sec"):
+            _validated_chunk_cfg(_chunk_only_cfg(
+                {"turns": 2, "cond_format": "special_tokens", "turn_gap_sec": 0.4}))
+
+    def test_rejects_cross_fade(self):
+        # A fade eats audio at every seam, so turn k would land
+        # k * cross_fade_sec earlier than the layout the text was written
+        # against - the timing metric would read the artifact as drift.
+        with pytest.raises(ValueError, match="cross_fade_sec"):
+            _validated_chunk_cfg(_chunk_only_cfg(
+                {"turns": 2, "cond_format": "special_tokens",
+                 "text_format": "timestamps", "cross_fade_sec": 0.1}))
+        # ... but a fade stays legal in Mode O, and an explicit 0.0 is fine.
+        *_, tsl = _validated_chunk_cfg(_chunk_only_cfg(
+            {"turns": 2, "cond_format": "special_tokens",
+             "text_format": "timestamps", "cross_fade_sec": 0.0}))
+        assert tsl == TimestampText(gap_sec=0.4)
+
+    def test_bad_values(self):
+        with pytest.raises(ValueError, match="text_format"):
+            _validated_chunk_cfg(_chunk_only_cfg({"turns": 2, "text_format": "modeT"}))
+        with pytest.raises(ValueError, match="turn_gap_sec"):
+            _validated_chunk_cfg(_chunk_only_cfg(
+                {"turns": 2, "cond_format": "special_tokens",
+                 "text_format": "timestamps", "turn_gap_sec": -1.0}))
 
 
 class TestFrameHelpers:
@@ -1958,4 +2017,236 @@ class TestSpecialTokensInfer:
                 _read_wav(out_b / "wav" / name),
                 rtol=0.0,
                 atol=0.0,
+            )
+
+
+# --------------------------------------------------------------------------- #
+# text_format: timestamps (Mode T) round loop
+# --------------------------------------------------------------------------- #
+def _mode_t_chunk(**over):
+    chunk = {
+        "turns": 2,
+        "cond_format": "special_tokens",
+        "cond_prev_sec": 1.0,
+        "text_format": "timestamps",
+    }
+    chunk.update(over)
+    return chunk
+
+
+class TestTimestampInfer:
+    @pytest.fixture
+    def testset(self, tmp_path):
+        # Mode T writes <turn_fill>, the fifth (timestamp-era) new token; the
+        # shared fixture vocab stops at the four special-token-era ones, so
+        # this class needs the extended vocab (and a model sized for it).
+        ts = _write_testset(tmp_path)
+        vocab = Path(ts["vocab"])
+        tokens = vocab.read_text("utf-8").splitlines()
+        assert tokens[-4:] == list(NEW_TOKENS)
+        vocab.write_text(
+            "\n".join(tokens + [TURN_FILL_TOKEN]) + "\n", encoding="utf-8"
+        )
+        return ts
+
+    @pytest.fixture
+    def tiny_model(self, testset):
+        return build_tiny(testset["vocab"])
+
+    def _run(self, testset, tiny_model, inference_dir, chunk, **overrides):
+        cfg = _chunked_config(testset, inference_dir, chunk, **overrides)
+        stats = run_chunked_inference(
+            cfg,
+            training_config=testset["training_config"],
+            model=tiny_model,
+            vocoder=FakeVocoder(),
+        )
+        return inference_dir / "valid", stats, cfg
+
+    def _metas(self, out):
+        metas = [
+            json.loads(p.read_text("utf-8")) for p in sorted((out / "meta").glob("*"))
+        ]
+        assert metas
+        return {m["window_id"]: m for m in metas}
+
+    def test_meta_records_format_and_layout(self, testset, tiny_model, tmp_path):
+        out, _, _ = self._run(testset, tiny_model, tmp_path / "o", _mode_t_chunk())
+        for wid, meta in self._metas(out).items():
+            ck = meta["chunking"]
+            assert ck["text_format"] == "timestamps" and ck["turn_gap_sec"] == 0.4
+            assert meta["turn_times"] == "layout"
+            assert meta["layout"]["gap_sec"] == 0.4
+            lay = meta["layout"]["turns"]
+            # one layout entry per dialogue turn (DIALOGUES: "000" 3, "001" 2)
+            assert len(lay) == {"000": 3, "001": 2}[wid]
+            assert [t["channel"] for t in lay] == [
+                t["channel"] for t in meta["turns"]
+            ]
+            # sequential, non-overlapping, gap-separated (the realized gap is
+            # the requested one rounded to the frame grid)
+            for prev, cur in zip(lay, lay[1:]):
+                assert cur["start"] >= prev["end"]
+                assert abs((cur["start"] - prev["end"]) - 0.4) < 2 / FRAMES_PER_SECOND
+            for c in ck["chunks"]:
+                assert c["target_frames"] == c["gen_frames"]
+
+    def test_target_spans_tile_the_layout(self, testset, tiny_model, tmp_path):
+        # Chunk k's target starts exactly where chunk k-1's ended: the round
+        # loop's t0/frames must partition the synthesized timeline, or the
+        # written wav would not be the layout it claims to realize.
+        out, _, _ = self._run(testset, tiny_model, tmp_path / "o", _mode_t_chunk())
+        for meta in self._metas(out).values():
+            cursor = 0
+            for c in meta["chunking"]["chunks"]:
+                assert c["target_t0_sec"] == pytest.approx(
+                    cursor / FRAMES_PER_SECOND, abs=1e-6
+                )
+                cursor += c["target_frames"]
+            # Every layout turn lands inside the span the chunks cover.
+            assert meta["layout"]["turns"][-1]["end"] <= cursor / FRAMES_PER_SECOND
+
+    def test_chunk_plans_identical_to_mode_o(self, testset, tiny_model, tmp_path):
+        out_o, _, _ = self._run(testset, tiny_model, tmp_path / "o", _sptok_chunk())
+        out_t, _, _ = self._run(testset, tiny_model, tmp_path / "t", _mode_t_chunk())
+        mo, mt = self._metas(out_o), self._metas(out_t)
+        assert mo.keys() == mt.keys()
+        for wid in mo:
+            ranges_o = [
+                (c["turn_start"], c["turn_end"]) for c in mo[wid]["chunking"]["chunks"]
+            ]
+            ranges_t = [
+                (c["turn_start"], c["turn_end"]) for c in mt[wid]["chunking"]["chunks"]
+            ]
+            assert ranges_o == ranges_t
+            # predicted seconds (the duration policy) stay gap-free
+            assert mo[wid]["duration"] == mt[wid]["duration"]
+            assert [c["predicted_sec"] for c in mo[wid]["chunking"]["chunks"]] == [
+                c["predicted_sec"] for c in mt[wid]["chunking"]["chunks"]
+            ]
+
+    def test_generated_audio_matches_layout_frames(self, testset, tiny_model, tmp_path):
+        out, _, _ = self._run(testset, tiny_model, tmp_path / "o", _mode_t_chunk())
+        for meta in self._metas(out).values():
+            total = sum(c["target_frames"] for c in meta["chunking"]["chunks"]) * HOP
+            wav, _ = _read_wav(out / meta["channels"][0]["gen_wav"])
+            assert wav.shape[0] == total
+            # gaps lengthen each chunk relative to the gap-free estimate
+            for c in meta["chunking"]["chunks"]:
+                assert c["target_frames"] > round(c["predicted_sec"] * FS / HOP) - 2
+
+    def test_text_stream_is_one_token_per_frame(
+        self, testset, tiny_model, tmp_path, monkeypatch
+    ):
+        import egs3.conversational.tts.src.chunked_inference as ci
+
+        captured = []
+        real = ci.generate_batch
+
+        def spy(model, vocoder, items, **kwargs):
+            captured.extend(items)
+            return real(model, vocoder, items, **kwargs)
+
+        monkeypatch.setattr(ci, "generate_batch", spy)
+        self._run(testset, tiny_model, tmp_path / "o", _mode_t_chunk())
+        assert captured
+        for item in captured:
+            # Mode T text covers P + H + target frame for frame, so every
+            # branch has the same length and nothing is pad (-1).
+            assert item.text.shape[1] == item.total_frames
+            assert (item.text[:, item.prompt_frames :] >= 0).all()
+
+    def test_zero_gap_layout(self, testset, tiny_model, tmp_path):
+        out, _, _ = self._run(
+            testset, tiny_model, tmp_path / "o", _mode_t_chunk(turn_gap_sec=0.0)
+        )
+        for meta in self._metas(out).values():
+            assert meta["chunking"]["turn_gap_sec"] == 0.0
+            lay = meta["layout"]["turns"]
+            for prev, cur in zip(lay, lay[1:]):
+                assert abs(cur["start"] - prev["end"]) < 1e-6
+
+    def test_mode_t_differs_from_mode_o(self, testset, tiny_model, tmp_path):
+        out_o, _, _ = self._run(testset, tiny_model, tmp_path / "o", _sptok_chunk())
+        out_t, _, _ = self._run(testset, tiny_model, tmp_path / "t", _mode_t_chunk())
+        name = sorted((out_o / "wav").glob("*"))[0].name
+        wo, _ = _read_wav(out_o / "wav" / name)
+        wt, _ = _read_wav(out_t / "wav" / name)
+        assert wo.shape != wt.shape or not (wo == wt).all()
+
+    def test_warns_when_gaps_push_a_chunk_past_target_sec(
+        self, testset, tiny_model, tmp_path, caplog
+    ):
+        # The packed ceiling the operator sets from the trained window is
+        # gap-free, but Mode T generates the packed span PLUS one gap per
+        # turn.  `oversized` stays the gap-free test on purpose (its rows are
+        # read beside the Mode O ones), so the overrun has to surface as a
+        # warning.  Same packing in both runs - only turn_gap_sec differs.
+        chunk = {
+            "cond_format": "special_tokens",
+            "cond_prev_sec": 1.0,
+            "text_format": "timestamps",
+            "target_sec": 11.0,
+        }
+        with caplog.at_level("WARNING"):
+            out, _, _ = self._run(
+                testset, tiny_model, tmp_path / "gap", dict(chunk, turn_gap_sec=0.4)
+            )
+        warned = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING" and "target_sec" in r.getMessage()
+        ]
+        assert len(warned) == 1, caplog.text
+        assert warned[0].startswith("000: chunk 0 realizes ")
+        # ...and it describes a REAL overrun: gap-free within budget,
+        # realized past it, derived from the meta rather than from the same
+        # arithmetic the warning itself used.
+        meta = self._metas(out)["000"]
+        entry = meta["chunking"]["chunks"][0]
+        assert entry["predicted_sec"] <= 11.0
+        assert entry["target_frames"] / FRAMES_PER_SECOND > 11.0
+        # The flag itself must NOT move - it stays the cross-mode-comparable
+        # gap-free test.
+        assert meta["chunking"]["oversized"] == [False, False]
+
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            self._run(
+                testset, tiny_model, tmp_path / "nogap", dict(chunk, turn_gap_sec=0.0)
+            )
+        assert not [
+            r for r in caplog.records if "target_sec" in r.getMessage()
+        ], caplog.text
+
+    def test_rejects_vocab_without_turn_fill(self, testset, tiny_model, tmp_path):
+        # Mode T pads every turn's frame span with <turn_fill>; a vocab
+        # without it must fail at the load gate, not with a raw KeyError
+        # from the preprocessor deep inside the round loop.
+        legacy = tmp_path / "no_turn_fill_vocab.txt"
+        tokens = Path(testset["vocab"]).read_text("utf-8").splitlines()
+        assert tokens[-1] == TURN_FILL_TOKEN
+        legacy.write_text("\n".join(tokens[:-1]) + "\n", encoding="utf-8")
+        tc = OmegaConf.create(
+            OmegaConf.to_container(testset["training_config"], resolve=True)
+        )
+        tc.dataset.preprocessor.token_list = str(legacy)
+        cfg = _chunked_config(testset, tmp_path / "o", _mode_t_chunk())
+        with pytest.raises(ValueError, match=TURN_FILL_TOKEN):
+            run_chunked_inference(
+                cfg, training_config=tc, model=tiny_model, vocoder=FakeVocoder()
+            )
+
+    def test_rejects_frame_rate_mismatch(self, testset, tiny_model, tmp_path):
+        # The Mode T text grid is hardwired to FRAMES_PER_SECOND by the
+        # preprocessor, so an fs/hop that disagrees would silently desync the
+        # text stream from the audio it describes.
+        tc = OmegaConf.create(
+            OmegaConf.to_container(testset["training_config"], resolve=True)
+        )
+        tc.hop_length = HOP * 2
+        cfg = _chunked_config(testset, tmp_path / "o", _mode_t_chunk())
+        with pytest.raises(ValueError, match="frame rate"):
+            run_chunked_inference(
+                cfg, training_config=tc, model=tiny_model, vocoder=FakeVocoder()
             )

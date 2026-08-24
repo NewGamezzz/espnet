@@ -1,0 +1,139 @@
+{
+  "chunk_full": {
+    "branches": [
+      {
+        "first_8": [
+          37,
+          37,
+          37,
+          37,
+          37,
+          37,
+          37,
+          37
+        ],
+        "last_8": [
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36
+        ],
+        "length": 1140,
+        "other_count": 347,
+        "turn_fill_count": 239,
+        "turn_indices": [
+          587,
+          962
+        ]
+      },
+      {
+        "first_8": [
+          37,
+          37,
+          37,
+          37,
+          37,
+          37,
+          37,
+          37
+        ],
+        "last_8": [
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36
+        ],
+        "length": 1140,
+        "other_count": 469,
+        "turn_fill_count": 120,
+        "turn_indices": [
+          737
+        ]
+      }
+    ],
+    "cond_frames": 540,
+    "prev_frames": 300,
+    "prompt_frames": 240,
+    "target_frames": 600,
+    "target_t0": 5.0
+  },
+  "infill": {
+    "branches": [
+      {
+        "first_8": [
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36
+        ],
+        "last_8": [
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36
+        ],
+        "length": 750,
+        "other_count": 432,
+        "turn_fill_count": 296,
+        "turn_indices": [
+          47,
+          572
+        ]
+      },
+      {
+        "first_8": [
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36
+        ],
+        "last_8": [
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36,
+          36
+        ],
+        "length": 750,
+        "other_count": 515,
+        "turn_fill_count": 223,
+        "turn_indices": [
+          281
+        ]
+      }
+    ],
+    "target_frames": 750,
+    "target_t0": 20.0
+  },
+  "vocab": {
+    "other": 36,
+    "prev_chunk": 38,
+    "size": 41,
+    "speaker_prompt": 37,
+    "turn": 35,
+    "turn_fill": 39
+  }
+}
