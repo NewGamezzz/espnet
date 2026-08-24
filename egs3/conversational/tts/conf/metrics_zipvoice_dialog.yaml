@@ -25,20 +25,38 @@ dataset:
   test:
     - name: valid
 
+# Backends are pinned to the GPU here because the metric classes default to
+# CPU (FasterWhisperTranscriber device="cpu" / compute_type="float32"), and
+# whisper-large-v3 on CPU over ~2 h of audio does not fit a job walltime.
+# Drop the device lines to score on CPU.
 metrics:
   - metric:
       _target_: egs3.conversational.tts.src.metrics.asr.ConversationASRMetric
+      _convert_: all
+      transcriber:
+        _target_: egs3.conversational.tts.src.metrics.asr.FasterWhisperTranscriber
+        device: cuda
+        compute_type: float16
     inputs:
       meta: meta
   - metric:
       _target_: egs3.conversational.tts.src.metrics.speaker.SpeakerSimilarityMetric
+      _convert_: all
+      embedder:
+        _target_: egs3.conversational.tts.src.metrics.speaker.WavLMSVEmbedder
+        device: cuda
     inputs:
       meta: meta
   - metric:
       _target_: egs3.conversational.tts.src.metrics.quality.QualityMetric
+      _convert_: all
+      mos_backend:
+        _target_: egs3.conversational.tts.src.metrics.quality.TorchHubUTMOSBackend
+        device: cuda
     inputs:
       meta: meta
   - metric:
       _target_: egs3.conversational.tts.src.metrics.interaction.InteractionMetric
+      _convert_: all
     inputs:
       meta: meta
