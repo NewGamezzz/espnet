@@ -2174,6 +2174,51 @@ class TestTimestampInfer:
         wt, _ = _read_wav(out_t / "wav" / name)
         assert wo.shape != wt.shape or not (wo == wt).all()
 
+    def test_warns_when_gaps_push_a_chunk_past_target_sec(
+        self, testset, tiny_model, tmp_path, caplog
+    ):
+        # The packed ceiling the operator sets from the trained window is
+        # gap-free, but Mode T generates the packed span PLUS one gap per
+        # turn.  `oversized` stays the gap-free test on purpose (its rows are
+        # read beside the Mode O ones), so the overrun has to surface as a
+        # warning.  Same packing in both runs - only turn_gap_sec differs.
+        chunk = {
+            "cond_format": "special_tokens",
+            "cond_prev_sec": 1.0,
+            "text_format": "timestamps",
+            "target_sec": 11.0,
+        }
+        with caplog.at_level("WARNING"):
+            out, _, _ = self._run(
+                testset, tiny_model, tmp_path / "gap", dict(chunk, turn_gap_sec=0.4)
+            )
+        warned = [
+            r.getMessage()
+            for r in caplog.records
+            if r.levelname == "WARNING" and "target_sec" in r.getMessage()
+        ]
+        assert len(warned) == 1, caplog.text
+        assert warned[0].startswith("000: chunk 0 realizes ")
+        # ...and it describes a REAL overrun: gap-free within budget,
+        # realized past it, derived from the meta rather than from the same
+        # arithmetic the warning itself used.
+        meta = self._metas(out)["000"]
+        entry = meta["chunking"]["chunks"][0]
+        assert entry["predicted_sec"] <= 11.0
+        assert entry["target_frames"] / FRAMES_PER_SECOND > 11.0
+        # The flag itself must NOT move - it stays the cross-mode-comparable
+        # gap-free test.
+        assert meta["chunking"]["oversized"] == [False, False]
+
+        caplog.clear()
+        with caplog.at_level("WARNING"):
+            self._run(
+                testset, tiny_model, tmp_path / "nogap", dict(chunk, turn_gap_sec=0.0)
+            )
+        assert not [
+            r for r in caplog.records if "target_sec" in r.getMessage()
+        ], caplog.text
+
     def test_rejects_vocab_without_turn_fill(self, testset, tiny_model, tmp_path):
         # Mode T pads every turn's frame span with <turn_fill>; a vocab
         # without it must fail at the load gate, not with a raw KeyError

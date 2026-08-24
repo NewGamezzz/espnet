@@ -115,7 +115,16 @@ duration is still the gap-free sum, so a Mode T run's chunk boundaries and
 duration meta are identical to the Mode O run it is compared against - and
 ONLY the generated length changes: each chunk's ``gen_frames`` becomes its
 span on the layout (its turns plus one trailing gap each), which tiles the
-timeline with no seam arithmetic.  Mode T requires ``cond_format:
+timeline with no seam arithmetic.  That length is exactly what breaks the
+``target_sec`` ceiling argument above: the REALIZED span of a chunk exceeds
+the span it was packed to by roughly ``n_turns * turn_gap_sec`` (a 10-turn
+chunk packed to 35 s generates ~39 s at the 0.4 s default), so budget
+``chunk.target_sec`` that much lower in Mode T to keep the realized ceiling
+inside the trained window.  The ``oversized`` flag deliberately does NOT
+account for this - it stays the gap-free ``chunk_secs > target_sec`` test so
+a Mode T row is comparable with the Mode O row beside it - so the overrun is
+reported as a per-chunk WARNING instead, naming the dialogue and the
+realized seconds.  Mode T requires ``cond_format:
 special_tokens`` (it was only trained beside the per-frame conditioning
 tokens) and a vocab carrying ``<turn_fill>``, both checked before any model
 use; the text stream then covers P, H and the target frame for frame, so its
@@ -1005,6 +1014,32 @@ def run_chunked_inference(
 
     max_rounds = max((plans[i].n_chunks for i in my_indices), default=0)
     n_oversized = sum(sum(plans[i].oversized) for i in my_indices)
+    if tsl is not None and chunk_cfg.get("target_sec") is not None:
+        # `oversized` is deliberately the gap-free test in both modes (its
+        # rows are read side by side across modes), so it cannot see the
+        # gaps Mode T adds on top of the packed span.  Warn per offending
+        # chunk instead: the packed ceiling the operator set from the
+        # trained window is what the REALIZED span has to respect.
+        target_sec = float(chunk_cfg["target_sec"])
+        for idx in my_indices:
+            plan = plans[idx]
+            for k, frames in enumerate(plan.gen_frames):
+                realized = frames / plan.layout.fps
+                if realized > target_sec:
+                    logger.warning(
+                        "%s: chunk %d realizes %.3fs on the layout, past the "
+                        "%.3fs chunk.target_sec ceiling - Mode T adds about "
+                        "n_turns * turn_gap_sec (%.2fs) of silence on top of "
+                        "the packed span, so budget target_sec that much "
+                        "lower to keep the realized chunk inside the trained "
+                        "window (the `oversized` flag stays gap-free, and so "
+                        "does not mark this)",
+                        records[idx].dialogue_id,
+                        k,
+                        realized,
+                        target_sec,
+                        tsl.gap_sec,
+                    )
     logger.info(
         "chunked external infer: %d/%d dialogues (%d out of duration band, "
         "%d not sampled, %d other shards; policy=%s, scale=%.4f, speed=%.3f) "
