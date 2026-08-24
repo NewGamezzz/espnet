@@ -29,6 +29,7 @@ from .preprocessing.text import (
     PREV_CHUNK_TOKEN,
     SPEAKER_PROMPT_TOKEN,
     build_branch_texts,
+    build_branch_texts_timestamped,
     encode_tokens,
     make_token2id,
 )
@@ -57,6 +58,15 @@ class ConversationalTextPreprocessor(AbsPreprocessor):
     text, so the text stream has one marker per mel frame over the
     ``speech`` tensor's P/H span.  Ordinary infill samples carry neither
     key and get no prefix.
+
+    Mode T samples (``timestamp_text: True`` in the sample dict) carry
+    ``target_t0`` (float, seconds) and ``target_frames`` (int) keys instead
+    of the ordinary flat branch text: the target region gets
+    ``build_branch_texts_timestamped``'s one-token-per-mel-frame text, with
+    turns placed at their frame-rounded position instead of packed
+    back-to-back.  A Mode T sample can also carry ``prompt_frames``/
+    ``prev_frames`` (P/H is audio-only in every mode), and that prefix still
+    composes in front, unchanged.
     """
 
     def __init__(self, token_list: str | Path, train: bool = False) -> None:
@@ -65,7 +75,18 @@ class ConversationalTextPreprocessor(AbsPreprocessor):
         self.token2id = make_token2id(read_vocab(self.token_list))
 
     def __call__(self, uid: str, data: dict[str, Any]) -> dict[str, Any]:
-        branch_tokens = build_branch_texts(data["turns"], data["num_channels"])
+        if data.get("timestamp_text"):
+            # Mode T (design 2026-08-15): frame-aligned target text; the
+            # caller guarantees target_t0/target_frames are present and has
+            # checked the fit, so a raise below is a pipeline bug.
+            branch_tokens = build_branch_texts_timestamped(
+                data["turns"],
+                data["num_channels"],
+                data["target_t0"],
+                data["target_frames"],
+            )
+        else:
+            branch_tokens = build_branch_texts(data["turns"], data["num_channels"])
         if "prompt_frames" in data:
             # Chunk-task sample: P/H are audio-only, so they get a flat run
             # of one marker per mel frame - identical on every branch, since
