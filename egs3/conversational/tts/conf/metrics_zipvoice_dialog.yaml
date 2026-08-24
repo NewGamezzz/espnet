@@ -1,0 +1,44 @@
+###############################################################
+#  Conversational F5 - measure a ZipVoice-Dialog test-en run  #
+###############################################################
+# Same battery and backends as conf/metrics.yaml.  Unlike CoVoMix2, this
+# test set ships dual-track ground truth, and the manifest-driven infer
+# stage writes `channels[k].gt_wav` next to every generation - so the
+# SHARED InteractionMetric applies and its *_dur_w1 keys are real numbers
+# (Wasserstein-1 against the paired reference), exactly as on SSSD.
+#
+# The generated window and the reference have different lengths on the
+# predicted-duration arm.  That is safe: derive_events() uses the window
+# duration only to close the trailing silence, which is a window-edge
+# silence and is skipped (pinned by tests/test_interaction_metric.py).
+#
+# Pass BOTH configs (run_utils propagates inference_config's inference_dir
+# over this file's own, see conf/metrics.yaml):
+#
+#   python run.py --stages measure \
+#       --inference_config conf/inference_zipvoice_dialog_chunked.yaml \
+#       --metrics_config   conf/metrics_zipvoice_dialog.yaml
+mode: generate_external_chunked
+inference_dir: ${exp_dir}/infer_${mode}
+
+dataset:
+  test:
+    - name: valid
+
+metrics:
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.asr.ConversationASRMetric
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.speaker.SpeakerSimilarityMetric
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.quality.QualityMetric
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.interaction.InteractionMetric
+    inputs:
+      meta: meta

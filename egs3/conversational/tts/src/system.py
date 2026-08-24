@@ -41,6 +41,10 @@ CHUNKED_MODE = "generate_external_chunked"
 # pinned by ``tests/test_concat_baseline.py``.
 BASELINE_MODE = "generate_concat_baseline"
 
+# ``src.external_anchor.MODE``, duplicated as a literal for the same reason;
+# pinned by ``tests/test_external_manifest.py``.
+GT_ANCHOR_MODE = "generate_external_gt"
+
 
 class ConversationalTTSSystem(BaseSystem):
     """System with ``create_dataset`` (inherited SSSD builder), ``train``, a
@@ -90,6 +94,11 @@ class ConversationalTTSSystem(BaseSystem):
             )
 
             return run_concat_baseline(self.inference_config)
+
+        if mode == GT_ANCHOR_MODE:
+            from egs3.conversational.tts.src.external_anchor import run_external_gt
+
+            return run_external_gt(self.inference_config)
 
         from egs3.conversational.tts.src.inference import run_inference
 

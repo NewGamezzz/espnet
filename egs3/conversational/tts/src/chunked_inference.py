@@ -106,10 +106,11 @@ from egs3.conversational.tts.src.external_inference import (
 )
 from egs3.conversational.tts.src.external_testset import (
     DEFAULT_DURATION_SCALE,
+    DURATION_SOURCES,
     ExternalRecord,
     assign_shard,
     duration_meta,
-    load_covomix2_testset,
+    load_records,
     plan_batches,
     select_records,
 )
@@ -493,6 +494,9 @@ class _ChunkPlan:
     gen_frames: list[int]
     oversized: list[bool]
     whole: bool = False
+    # The duration RULE's total for the dialogue.  Equals sum(chunk_secs)
+    # unless a ground-truth duration replaced it (see ``_plan_dialogue``).
+    rule_sec: float = 0.0
 
     @property
     def n_chunks(self) -> int:
@@ -509,10 +513,24 @@ def _plan_dialogue(
     fs: int,
     hop: int,
     cover_all_speakers: bool = False,
+    use_gt_duration: bool = False,
 ) -> _ChunkPlan:
     turn_secs = estimate_turn_secs(
         record, prompt_secs, duration_scale=duration_scale, speed=speed
     )
+    rule_sec = float(sum(turn_secs))
+    if use_gt_duration:
+        # Oracle duration: generate exactly the reference length.  The
+        # rule's per-turn estimates are rescaled by one factor so the chunk
+        # cuts keep their proportions - only the total changes, which is the
+        # single timing signal this model receives.
+        if record.gt_duration_sec is None:
+            raise ValueError(
+                f"{record.dialogue_id}: duration.source=ground_truth but the "
+                "record has no ground-truth audio"
+            )
+        factor = float(record.gt_duration_sec) / rule_sec
+        turn_secs = [sec * factor for sec in turn_secs]
     target = chunk_cfg.get("target_sec")
     whole = whole_dialogue_fits(
         prompt_secs, turn_secs, chunk_cfg.get("unchunked_max_sec")
@@ -549,6 +567,7 @@ def _plan_dialogue(
             else [target is not None and sec > float(target) for sec in chunk_secs]
         ),
         whole=whole,
+        rule_sec=rule_sec,
     )
 
 
@@ -690,18 +709,21 @@ def run_chunked_inference(
     hop = int(training_config.hop_length)
 
     testset = cfg.testset
-    records = load_covomix2_testset(
-        testset.root,
-        testset.librispeech_root,
-        OmegaConf.to_container(training_config, resolve=True)["dataset"][
-            "preprocessor"
-        ]["token_list"],
-        num_channels=int(testset.get("num_channels", 2)),
-    )
+    token_list = OmegaConf.to_container(training_config, resolve=True)["dataset"][
+        "preprocessor"
+    ]["token_list"]
+    records, testset_name = load_records(testset, token_list)
 
     dur_cfg = cfg.get("duration", {})
     duration_scale = float(dur_cfg.get("scale", DEFAULT_DURATION_SCALE))
     speed = float(dur_cfg.get("speed", 1.0))
+    duration_source = str(dur_cfg.get("source", "predicted") or "predicted")
+    if duration_source not in DURATION_SOURCES:
+        raise ValueError(
+            f"duration.source must be one of {DURATION_SOURCES}, "
+            f"got {duration_source!r}"
+        )
+    use_gt_duration = duration_source == "ground_truth"
 
     prompt_secs = [
         [_probe_duration_sec(p.audio_path) for p in r.prompts] for r in records
@@ -716,6 +738,7 @@ def run_chunked_inference(
             fs=fs,
             hop=hop,
             cover_all_speakers=cover_all_speakers,
+            use_gt_duration=use_gt_duration,
         )
         for r, secs in zip(records, prompt_secs)
     ]
@@ -791,6 +814,8 @@ def run_chunked_inference(
     test_dir = Path(cfg.inference_dir) / cfg.test_name
     for sub in ("meta", "wav", "prompt", "mix"):
         (test_dir / sub).mkdir(parents=True, exist_ok=True)
+    if any(records[i].gt_paths is not None for i in my_indices):
+        (test_dir / "gt").mkdir(parents=True, exist_ok=True)
 
     batching = cfg.get("batching", {}) or {}
     max_batch_audio_sec = batching.get("max_batch_audio_sec")
@@ -960,6 +985,7 @@ def run_chunked_inference(
     prompt_lines: list[str] = []
     text_lines: list[str] = []
     mix_lines: list[str] = []
+    gt_lines: list[str] = []
     for idx in my_indices:
         record = records[idx]
         n = record.num_channels
@@ -986,18 +1012,35 @@ def run_chunked_inference(
         mix_rel = f"mix/{wid}.wav"
         write_wav(test_dir / mix_rel, gen_full.sum(dim=0).cpu() / n, fs)
         mix_lines.append(f"{wid} {mix_rel}")
+        # Reference audio, when the test set ships it: one mono file per
+        # channel at the model rate, next to the generation, so the parent
+        # InteractionMetric reads ``channels[ch].gt_wav`` exactly as it does
+        # for SSSD windows (and its ``*_dur_w1`` keys become real numbers).
+        if record.gt_paths is not None:
+            for ch, gt_path in enumerate(record.gt_paths):
+                gt_rel = f"gt/{wid}_ch{ch}.wav"
+                write_wav(test_dir / gt_rel, _load_prompt_wav(gt_path, fs), fs)
+                channels[ch]["gt_wav"] = gt_rel
+                gt_lines.append(f"{wid}_ch{ch} {gt_rel}")
 
         plan = plans[idx]
         meta = {
             "window_id": wid,
             "session_id": wid,
             "mode": MODE,
-            "testset": "covomix2-dialogue-testset",
+            "testset": testset_name,
             "sample_rate": fs,
             "num_channels": n,
             "window_duration_sec": round(gen_full.shape[1] / fs, 6),
-            "duration": duration_meta(duration_scale, speed, predicted[idx]),
-            "has_reference_audio": False,
+            "duration": duration_meta(
+                duration_scale,
+                speed,
+                plan.rule_sec,
+                source=duration_source,
+                gt_sec=record.gt_duration_sec,
+            ),
+            "has_reference_audio": record.gt_paths is not None,
+            "gt_duration_sec": record.gt_duration_sec,
             "turn_times": "ordinal",
             # Wall clock is shared across a batch and rounds; per-call batch
             # stats live under chunking.chunks, so no single dialogue-level
@@ -1052,13 +1095,16 @@ def run_chunked_inference(
         meta_lines.append(f"{wid} {meta_rel}")
 
     suffix = "" if shard_count == 1 else f".{shard_index}of{shard_count}"
-    for name, lines in (
+    scps = [
         ("meta", meta_lines),
         ("wav", wav_lines),
         ("prompt", prompt_lines),
         ("text", text_lines),
         ("mix", mix_lines),
-    ):
+    ]
+    if gt_lines:
+        scps.append(("gt", gt_lines))
+    for name, lines in scps:
         _write_scp(test_dir / f"{name}.scp{suffix}", lines)
 
     logger.info(
