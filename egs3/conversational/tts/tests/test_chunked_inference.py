@@ -206,6 +206,19 @@ class TestEstimateTurnSecs:
             )
             assert sum(per_turn) == pytest.approx(whole)
 
+    def test_rate_prior_sums_to_the_whole_dialogue_estimate(self, testset):
+        for record in _records(testset):
+            prompt_secs = [1.5, 0.75]
+            kw = dict(duration_scale=1.117, speed=1.2, rate_prior_chars=100.0)
+            per_turn = estimate_turn_secs(record, prompt_secs, **kw)
+            whole = estimate_duration_sec(record, prompt_secs, **kw)
+            assert sum(per_turn) == pytest.approx(whole)
+            assert whole != pytest.approx(
+                estimate_duration_sec(
+                    record, prompt_secs, duration_scale=1.117, speed=1.2
+                )
+            )
+
     def test_wrong_prompt_count_raises(self, testset):
         record = _records(testset)[0]
         with pytest.raises(ValueError, match="prompt durations"):
@@ -442,6 +455,31 @@ class TestChunkedInfer:
 
         meta1 = json.loads((test_dir / "meta/001.json").read_text("utf-8"))
         assert meta1["chunking"]["n_chunks"] == 1
+
+    def test_rate_prior_is_applied_and_recorded(self, testset, tiny_model, tmp_path):
+        plain_dir, _, _ = self._run(
+            testset, tiny_model, tmp_path / "plain", {"turns": 2}
+        )
+        shrunk_dir, _, _ = self._run(
+            testset,
+            tiny_model,
+            tmp_path / "shrunk",
+            {"turns": 2},
+            duration={"rate_prior_chars": 1e9, "rate_prior_sec_per_char": 0.5},
+        )
+        plain = json.loads((plain_dir / "meta/000.json").read_text("utf-8"))
+        shrunk = json.loads((shrunk_dir / "meta/000.json").read_text("utf-8"))
+        assert plain["duration"]["rule"] == "f5_prompt_ratio_per_speaker"
+        assert plain["duration"]["rate_prior_chars"] is None
+        assert shrunk["duration"]["rule"] == "f5_prompt_ratio_per_speaker_shrunk"
+        assert shrunk["duration"]["rate_prior_chars"] == 1e9
+        chars = sum(len(t["text"].encode("utf-8")) for t in shrunk["turns"])
+        assert shrunk["duration"]["predicted_sec"] == pytest.approx(
+            chars * 0.5 * shrunk["duration"]["duration_scale"], rel=1e-4
+        )
+        assert sum(c["gen_frames"] for c in shrunk["chunking"]["chunks"]) != sum(
+            c["gen_frames"] for c in plain["chunking"]["chunks"]
+        )
 
     def test_wave_is_the_concat_of_chunk_regions(self, testset, tiny_model, tmp_path):
         test_dir, _, _ = self._run(

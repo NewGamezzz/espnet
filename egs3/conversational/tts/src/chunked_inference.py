@@ -107,9 +107,12 @@ from egs3.conversational.tts.src.external_inference import (
 from egs3.conversational.tts.src.external_testset import (
     DEFAULT_DURATION_SCALE,
     DURATION_SOURCES,
+    SSSD_SPEECH_SEC_PER_CHAR,
     ExternalRecord,
     assign_shard,
     duration_meta,
+    rate_prior_kwargs,
+    speaker_rates,
     load_records,
     plan_batches,
     select_records,
@@ -139,6 +142,8 @@ def estimate_turn_secs(
     *,
     duration_scale: float,
     speed: float,
+    rate_prior_chars: float | None = None,
+    rate_prior_sec_per_char: float = SSSD_SPEECH_SEC_PER_CHAR,
 ) -> list[float]:
     """Per-turn predicted seconds under the F5 per-speaker rate rule.
 
@@ -148,22 +153,14 @@ def estimate_turn_secs(
     equals ``estimate_duration_sec(...)`` by construction, so chunking never
     changes the duration policy - only where the ODE calls are cut.
     """
-    if len(prompt_seconds) != record.num_channels:
-        raise ValueError(
-            f"{record.dialogue_id}: got {len(prompt_seconds)} prompt durations "
-            f"for {record.num_channels} channels"
-        )
     if speed <= 0:
         raise ValueError(f"speed must be > 0, got {speed}")
-    rates = []
-    for ch, (prompt_sec, prompt) in enumerate(zip(prompt_seconds, record.prompts)):
-        prompt_chars = len(prompt.text.encode("utf-8"))
-        if prompt_sec <= 0 or prompt_chars <= 0:
-            raise ValueError(
-                f"{record.dialogue_id}: channel {ch} prompt is degenerate "
-                f"({prompt_sec:.3f}s, {prompt_chars} chars)"
-            )
-        rates.append(prompt_sec / prompt_chars)
+    rates = speaker_rates(
+        record,
+        prompt_seconds,
+        rate_prior_chars=rate_prior_chars,
+        rate_prior_sec_per_char=rate_prior_sec_per_char,
+    )
     return [
         len(turn.text.encode("utf-8"))
         * rates[turn.channel]
@@ -514,9 +511,14 @@ def _plan_dialogue(
     hop: int,
     cover_all_speakers: bool = False,
     use_gt_duration: bool = False,
+    rate_prior: dict[str, Any] | None = None,
 ) -> _ChunkPlan:
     turn_secs = estimate_turn_secs(
-        record, prompt_secs, duration_scale=duration_scale, speed=speed
+        record,
+        prompt_secs,
+        duration_scale=duration_scale,
+        speed=speed,
+        **(rate_prior or {}),
     )
     rule_sec = float(sum(turn_secs))
     if use_gt_duration:
@@ -717,6 +719,7 @@ def run_chunked_inference(
     dur_cfg = cfg.get("duration", {})
     duration_scale = float(dur_cfg.get("scale", DEFAULT_DURATION_SCALE))
     speed = float(dur_cfg.get("speed", 1.0))
+    rate_prior = rate_prior_kwargs(dur_cfg)
     duration_source = str(dur_cfg.get("source", "predicted") or "predicted")
     if duration_source not in DURATION_SOURCES:
         raise ValueError(
@@ -739,6 +742,7 @@ def run_chunked_inference(
             hop=hop,
             cover_all_speakers=cover_all_speakers,
             use_gt_duration=use_gt_duration,
+            rate_prior=rate_prior,
         )
         for r, secs in zip(records, prompt_secs)
     ]
@@ -1073,6 +1077,7 @@ def run_chunked_inference(
                 plan.rule_sec,
                 source=duration_source,
                 gt_sec=record.gt_duration_sec,
+                **rate_prior,
             ),
             "has_reference_audio": record.gt_paths is not None,
             "gt_duration_sec": record.gt_duration_sec,

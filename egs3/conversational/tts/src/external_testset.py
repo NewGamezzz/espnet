@@ -430,12 +430,78 @@ def load_records(
     )
 
 
+def speaker_rates(
+    record: ExternalRecord,
+    prompt_seconds: Sequence[float],
+    *,
+    rate_prior_chars: float | None = None,
+    rate_prior_sec_per_char: float = SSSD_SPEECH_SEC_PER_CHAR,
+) -> list[float]:
+    """Seconds per character for every channel's speaker, from its prompt.
+
+    The plain F5 rule reads the rate straight off the prompt
+    (``prompt_sec / prompt_chars``).  A 1-8 s prompt is a noisy estimate of a
+    speaker's rate, and on a test set that serves hundreds of dialogues from
+    a handful of prompts the noise turns into a systematic per-speaker bias
+    in every generated duration.  ``rate_prior_chars`` (``None``/0 = off)
+    shrinks each prompt-measured rate toward the training-domain prior
+    ``rate_prior_sec_per_char`` as if the prior had been observed over that
+    many characters (a precision-weighted mean)::
+
+        rate = (prompt_sec + k * prior) / (prompt_chars + k)
+
+    so a 130-character prompt keeps most of its own evidence while an
+    11-character one is pulled most of the way to the prior.  The prior is a
+    training-set constant, never a test-set measurement, which keeps the
+    rule baseline-applicable.
+    """
+    if len(prompt_seconds) != record.num_channels:
+        raise ValueError(
+            f"{record.dialogue_id}: got {len(prompt_seconds)} prompt durations "
+            f"for {record.num_channels} channels"
+        )
+    k = 0.0 if rate_prior_chars is None else float(rate_prior_chars)
+    if k < 0:
+        raise ValueError(f"rate_prior_chars must be >= 0 or null, got {k}")
+    prior = float(rate_prior_sec_per_char)
+    if k > 0 and prior <= 0:
+        raise ValueError(f"rate_prior_sec_per_char must be > 0, got {prior}")
+    rates: list[float] = []
+    for ch, (prompt_sec, prompt) in enumerate(zip(prompt_seconds, record.prompts)):
+        prompt_chars = len(prompt.text.encode("utf-8"))
+        if prompt_sec <= 0 or prompt_chars <= 0:
+            raise ValueError(
+                f"{record.dialogue_id}: channel {ch} prompt is degenerate "
+                f"({prompt_sec:.3f}s, {prompt_chars} chars)"
+            )
+        rates.append((float(prompt_sec) + k * prior) / (prompt_chars + k))
+    return rates
+
+
+def rate_prior_kwargs(dur_cfg: Any) -> dict[str, Any]:
+    """The shrinkage knobs of a ``duration:`` config block, as kwargs for
+    :func:`speaker_rates` / :func:`estimate_duration_sec` / ``duration_meta``.
+    Absent knobs mean the plain rule (bit-identical to every earlier run).
+    """
+    dur_cfg = dur_cfg or {}
+    k = dur_cfg.get("rate_prior_chars")
+    prior = dur_cfg.get("rate_prior_sec_per_char")
+    return {
+        "rate_prior_chars": None if k is None else float(k),
+        "rate_prior_sec_per_char": (
+            SSSD_SPEECH_SEC_PER_CHAR if prior is None else float(prior)
+        ),
+    }
+
+
 def estimate_duration_sec(
     record: ExternalRecord,
     prompt_seconds: Sequence[float],
     *,
     duration_scale: float = DEFAULT_DURATION_SCALE,
     speed: float = 1.0,
+    rate_prior_chars: float | None = None,
+    rate_prior_sec_per_char: float = SSSD_SPEECH_SEC_PER_CHAR,
 ) -> float:
     """Predict the generated dialogue's duration, in seconds.
 
@@ -456,30 +522,24 @@ def estimate_duration_sec(
     * ``speed`` keeps F5's knob, with F5's sense: larger is faster, so
       shorter.  Sweeping it is how the reported interaction metrics' duration
       sensitivity is measured.
+    * ``rate_prior_chars`` / ``rate_prior_sec_per_char`` shrink the
+      prompt-measured rates toward the training prior (see
+      :func:`speaker_rates`); off by default.
 
     The prompt region itself is NOT included: unlike F5's single-reference
     case, this recipe's caller already accounts for the prompt frames
     separately when it assembles the conditioning speech.  Returns the
     GENERATED region only.
     """
-    if len(prompt_seconds) != record.num_channels:
-        raise ValueError(
-            f"{record.dialogue_id}: got {len(prompt_seconds)} prompt durations "
-            f"for {record.num_channels} channels"
-        )
     if speed <= 0:
         raise ValueError(f"speed must be > 0, got {speed}")
-
-    total = 0.0
-    for ch, (prompt_sec, prompt) in enumerate(zip(prompt_seconds, record.prompts)):
-        prompt_chars = len(prompt.text.encode("utf-8"))
-        if prompt_sec <= 0 or prompt_chars <= 0:
-            raise ValueError(
-                f"{record.dialogue_id}: channel {ch} prompt is degenerate "
-                f"({prompt_sec:.3f}s, {prompt_chars} chars)"
-            )
-        rate = prompt_sec / prompt_chars  # seconds per character, this speaker
-        total += record.channel_chars[ch] * rate
+    rates = speaker_rates(
+        record,
+        prompt_seconds,
+        rate_prior_chars=rate_prior_chars,
+        rate_prior_sec_per_char=rate_prior_sec_per_char,
+    )
+    total = sum(record.channel_chars[ch] * rate for ch, rate in enumerate(rates))
     return total * float(duration_scale) / float(speed)
 
 
@@ -700,6 +760,8 @@ def duration_meta(
     *,
     source: str = "predicted",
     gt_sec: float | None = None,
+    rate_prior_chars: float | None = None,
+    rate_prior_sec_per_char: float = SSSD_SPEECH_SEC_PER_CHAR,
 ) -> dict[str, Any]:
     """The duration hyperparameters, recorded per window in ``meta``.
 
@@ -718,10 +780,16 @@ def duration_meta(
         "predicted_over_gt": (predicted_sec / float(gt_sec) if gt_sec else None),
         "duration_scale": float(duration_scale),
         "speed": float(speed),
-        "rule": "f5_prompt_ratio_per_speaker",
+        "rule": (
+            "f5_prompt_ratio_per_speaker_shrunk"
+            if rate_prior_chars
+            else "f5_prompt_ratio_per_speaker"
+        ),
+        "rate_prior_chars": float(rate_prior_chars) if rate_prior_chars else None,
         "constants": {
             "sssd_speech_sec_per_char": SSSD_SPEECH_SEC_PER_CHAR,
             "librispeech_sec_per_char": LIBRISPEECH_SEC_PER_CHAR,
             "sssd_speech_density": SSSD_SPEECH_DENSITY,
+            "rate_prior_sec_per_char": float(rate_prior_sec_per_char),
         },
     }
