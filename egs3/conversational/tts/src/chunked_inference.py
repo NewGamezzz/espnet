@@ -117,10 +117,14 @@ ONLY the generated length changes: each chunk's ``gen_frames`` becomes its
 span on the layout (its turns plus one trailing gap each), which tiles the
 timeline with no seam arithmetic.  Mode T requires ``cond_format:
 special_tokens`` (it was only trained beside the per-frame conditioning
-tokens); the text stream then covers P, H and the target frame for frame,
-so its length equals ``total_frames`` exactly.  The layout is written to the
-meta under ``layout`` (with ``turn_times: "layout"`` marking it) as the
-timing a timing-adherence metric scores the output against.
+tokens) and a vocab carrying ``<turn_fill>``, both checked before any model
+use; the text stream then covers P, H and the target frame for frame, so its
+length equals ``total_frames`` exactly.  The layout is written to the meta
+under ``layout`` (with ``turn_times: "layout"`` marking it) as the timing a
+timing-adherence metric scores the output against - which is why
+``cross_fade_sec`` is rejected in Mode T: each seam shortens the output, so
+turn k would land ``k * cross_fade_sec`` earlier in the written wav than the
+layout claims and the metric would read that artifact as drift.
 
 Checkpoint/format pairing is enforced, not assumed: ``special_tokens``
 requires the training config's vocab to contain
@@ -175,6 +179,7 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
     FRAMES_PER_SECOND,
     PREV_CHUNK_TOKEN,
     SPEAKER_PROMPT_TOKEN,
+    TURN_FILL_TOKEN,
 )
 from egs3.conversational.tts.dataset.preprocessor import read_vocab
 from egs3.conversational.tts.src.external_inference import (
@@ -826,6 +831,17 @@ def _validated_chunk_cfg(
                 "(Mode T target text was only trained beside per-frame "
                 "conditioning tokens)"
             )
+        if cross_fade_sec > 0:
+            # Every seam eats `cross_fade_sec` of output, so turn k lands
+            # `k * cross_fade_sec` earlier in the written wav than the
+            # layout the text was written against - a timing-adherence
+            # metric would read that pure artifact as drift.
+            raise ValueError(
+                "chunk.cross_fade_sec shortens the output at every seam, "
+                "which shifts every turn earlier than the layout the Mode T "
+                "text was written against; not valid with text_format: "
+                "timestamps"
+            )
         gap_sec = 0.4 if gap_raw is None else float(gap_raw)
         if gap_sec < 0:
             raise ValueError(f"chunk.turn_gap_sec must be >= 0, got {gap_sec}")
@@ -895,13 +911,19 @@ def run_chunked_inference(
     ]["token_list"]
     if sptok is not None:
         tokens = read_vocab(token_list)
-        missing = {SPEAKER_PROMPT_TOKEN, PREV_CHUNK_TOKEN} - set(tokens)
+        needed = {SPEAKER_PROMPT_TOKEN, PREV_CHUNK_TOKEN}
+        if tsl is not None:
+            # Mode T's target text pads every turn's span with <turn_fill>,
+            # the fifth (timestamp-era) new token.
+            needed.add(TURN_FILL_TOKEN)
+        missing = needed - set(tokens)
         if missing:
             raise ValueError(
-                f"cond_format: special_tokens needs a vocab containing "
-                f"{sorted(missing)}; this training config's vocab predates "
-                "special-token conditioning, so the checkpoint cannot have "
-                "been trained with it"
+                "cond_format: special_tokens"
+                + (" with text_format: timestamps" if tsl is not None else "")
+                + f" needs a vocab containing {sorted(missing)}; this training "
+                "config's vocab predates that format, so the checkpoint cannot "
+                "have been trained with it"
             )
     records = load_covomix2_testset(
         testset.root,

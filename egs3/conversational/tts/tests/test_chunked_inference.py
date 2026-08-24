@@ -498,6 +498,20 @@ class TestTimestampTextConfig:
             _validated_chunk_cfg(_chunk_only_cfg(
                 {"turns": 2, "cond_format": "special_tokens", "turn_gap_sec": 0.4}))
 
+    def test_rejects_cross_fade(self):
+        # A fade eats audio at every seam, so turn k would land
+        # k * cross_fade_sec earlier than the layout the text was written
+        # against - the timing metric would read the artifact as drift.
+        with pytest.raises(ValueError, match="cross_fade_sec"):
+            _validated_chunk_cfg(_chunk_only_cfg(
+                {"turns": 2, "cond_format": "special_tokens",
+                 "text_format": "timestamps", "cross_fade_sec": 0.1}))
+        # ... but a fade stays legal in Mode O, and an explicit 0.0 is fine.
+        *_, tsl = _validated_chunk_cfg(_chunk_only_cfg(
+            {"turns": 2, "cond_format": "special_tokens",
+             "text_format": "timestamps", "cross_fade_sec": 0.0}))
+        assert tsl == TimestampText(gap_sec=0.4)
+
     def test_bad_values(self):
         with pytest.raises(ValueError, match="text_format"):
             _validated_chunk_cfg(_chunk_only_cfg({"turns": 2, "text_format": "modeT"}))
@@ -2159,6 +2173,24 @@ class TestTimestampInfer:
         wo, _ = _read_wav(out_o / "wav" / name)
         wt, _ = _read_wav(out_t / "wav" / name)
         assert wo.shape != wt.shape or not (wo == wt).all()
+
+    def test_rejects_vocab_without_turn_fill(self, testset, tiny_model, tmp_path):
+        # Mode T pads every turn's frame span with <turn_fill>; a vocab
+        # without it must fail at the load gate, not with a raw KeyError
+        # from the preprocessor deep inside the round loop.
+        legacy = tmp_path / "no_turn_fill_vocab.txt"
+        tokens = Path(testset["vocab"]).read_text("utf-8").splitlines()
+        assert tokens[-1] == TURN_FILL_TOKEN
+        legacy.write_text("\n".join(tokens[:-1]) + "\n", encoding="utf-8")
+        tc = OmegaConf.create(
+            OmegaConf.to_container(testset["training_config"], resolve=True)
+        )
+        tc.dataset.preprocessor.token_list = str(legacy)
+        cfg = _chunked_config(testset, tmp_path / "o", _mode_t_chunk())
+        with pytest.raises(ValueError, match=TURN_FILL_TOKEN):
+            run_chunked_inference(
+                cfg, training_config=tc, model=tiny_model, vocoder=FakeVocoder()
+            )
 
     def test_rejects_frame_rate_mismatch(self, testset, tiny_model, tmp_path):
         # The Mode T text grid is hardwired to FRAMES_PER_SECOND by the
