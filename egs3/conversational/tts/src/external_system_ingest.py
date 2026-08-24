@@ -22,8 +22,12 @@ What it assumes about the baseline's output
   silent mis-mapping would corrupt every per-channel number.
 * A record with ``num_channels == 1`` takes track 0 and IGNORES the rest;
   ``ingest.mono_extra_track`` decides whether a monologue row's second
-  track must be silent (``require_silent``), may carry anything
-  (``ignore``), or is an error (``forbid``).
+  track must be QUIET (``require_silent``), may carry anything
+  (``ignore``), or is an error (``forbid``).  Quiet is relative, not
+  absolute: a generative model never writes digital silence, so the test
+  is that the unused track sits at least ``ingest.mono_extra_track_db``
+  below the record's own speech (measured on ZipVoice-Dialog-Stereo:
+  35-63 dB below, i.e. inaudible, but nowhere near zero).
 * Any sample rate: it is resampled to the training rate, like every other
   path here.
 
@@ -78,10 +82,11 @@ logger = logging.getLogger(__name__)
 MODE = "ingest_external_system"
 
 MONO_EXTRA_TRACK_POLICIES = ("require_silent", "ignore", "forbid")
-#: A track whose peak is below this is treated as digital silence.  The
-#: monologue rows' unused track is silence painted by the baseline, not a
-#: recording, so the bar can be strict without being brittle.
-SILENT_PEAK = 1e-4
+#: How far below the record's own speech an unused track has to sit before
+#: it counts as silence, in dB.  An absolute floor would be the wrong test:
+#: what matters is that nothing audible was put where the transcript has no
+#: speaker, and 30 dB down is already inaudible against the other channel.
+DEFAULT_MONO_EXTRA_TRACK_DB = 30.0
 #: Onset detection for the channel-map check: the first frame whose RMS
 #: crosses this, over 100 ms frames - the same shape of test the test-set
 #: builder used to map the reference tracks.
@@ -99,6 +104,18 @@ def _load_multichannel(path: Path, target_fs: int) -> torch.Tensor:
     if rate != target_fs:
         wav = torchaudio.functional.resample(wav, orig_freq=rate, new_freq=target_fs)
     return wav
+
+
+def _rms_db(wav: torch.Tensor) -> float:
+    """Full-signal RMS in dBFS; ``-inf``-safe."""
+    return float(20.0 * torch.log10(wav.pow(2).mean().sqrt() + 1e-12))
+
+
+def _quiet_margin_db(used: list[torch.Tensor], extra: list[torch.Tensor]) -> float:
+    """How far the loudest unused track sits below the loudest used one."""
+    return max(_rms_db(track) for track in used) - max(
+        _rms_db(track) for track in extra
+    )
 
 
 def _onset_index(wav: torch.Tensor, fs: int) -> int | None:
@@ -175,6 +192,9 @@ def run_external_system_ingest(
             f"ingest.mono_extra_track must be one of {MONO_EXTRA_TRACK_POLICIES}, "
             f"got {mono_policy!r}"
         )
+    extra_track_db = float(
+        ingest.get("mono_extra_track_db", DEFAULT_MONO_EXTRA_TRACK_DB)
+    )
     verify_map = bool(ingest.get("verify_channel_map", True))
     channel_order = ingest.get("channel_order", None)
 
@@ -242,12 +262,13 @@ def run_external_system_ingest(
                 f"ingest.mono_extra_track='forbid'"
             )
         if extra and mono_policy == "require_silent":
-            peaks = [float(track.abs().max()) for track in extra]
-            if max(peaks) > SILENT_PEAK:
+            margin = _quiet_margin_db(tracks[:n], extra)
+            if margin < extra_track_db:
                 raise ValueError(
-                    f"{wid}: the unused track(s) of a {n}-channel record are not "
-                    f"silent (peak {max(peaks):.2e} > {SILENT_PEAK:.0e}); the "
-                    f"baseline put speech where this record has no speaker"
+                    f"{wid}: the unused track(s) of a {n}-channel record sit only "
+                    f"{margin:.1f} dB below its speech (< {extra_track_db:.1f} dB); "
+                    f"the baseline put something audible where this record has no "
+                    f"speaker"
                 )
         tracks = tracks[:n]
 

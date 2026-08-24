@@ -179,11 +179,14 @@ class TestMonoRecords:
     """A 1-channel record against a stereo-only baseline: the extra track is
     the model's answer to a speaker the transcript never mentions."""
 
-    def test_silent_extra_track_is_accepted_and_dropped(self, tmp_path):
+    def test_quiet_extra_track_is_accepted_and_dropped(self, tmp_path):
         fx = write_manifest(tmp_path, [ONE_SPK])
         wav_dir = tmp_path / "system"
+        # Not digital silence: a generative model never writes zeros.  This
+        # is the shape ZipVoice-Dialog-Stereo produces on a monologue row,
+        # 35-63 dB below the speaking track.
         data = _tracks(2.0, (0.0, 0.0))
-        data[:, 1] = 0.0
+        data[:, 1] *= 10 ** (-40.0 / 20.0)
         wav_dir.mkdir()
         sf.write(str(wav_dir / "d1.wav"), data, FS, subtype="PCM_16")
         run_external_system_ingest(
@@ -200,9 +203,22 @@ class TestMonoRecords:
         fx = write_manifest(tmp_path, [ONE_SPK])
         wav_dir = tmp_path / "system"
         _write_system_wav(wav_dir, "d1", 2.0, (0.0, 0.0))
-        with pytest.raises(ValueError, match="not silent"):
+        with pytest.raises(ValueError, match="audible"):
             run_external_system_ingest(
                 _config(fx, tmp_path / "out", wav_dir),
+                training_config=fx["training_config"],
+            )
+
+    def test_the_quiet_threshold_is_configurable(self, tmp_path):
+        fx = write_manifest(tmp_path, [ONE_SPK])
+        wav_dir = tmp_path / "system"
+        data = _tracks(2.0, (0.0, 0.0))
+        data[:, 1] *= 10 ** (-40.0 / 20.0)
+        wav_dir.mkdir()
+        sf.write(str(wav_dir / "d1.wav"), data, FS, subtype="PCM_16")
+        with pytest.raises(ValueError, match="audible"):
+            run_external_system_ingest(
+                _config(fx, tmp_path / "out", wav_dir, mono_extra_track_db=50.0),
                 training_config=fx["training_config"],
             )
 

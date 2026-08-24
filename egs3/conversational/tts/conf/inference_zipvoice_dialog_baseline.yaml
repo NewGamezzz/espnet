@@ -49,6 +49,9 @@ ingest:
   # the unused track must come back silent.  Anything else is a finding, not
   # a formatting detail - hence the strict default.
   mono_extra_track: require_silent
+  # Relative, not absolute: the unused track must sit this far below the
+  # record's own speech.  Measured on this baseline: 35-63 dB below.
+  mono_extra_track_db: 30.0
   verify_channel_map: true
   channel_order: null
 
