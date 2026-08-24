@@ -98,6 +98,30 @@ length; under the campaign's ``target_sec`` 15-35 s policy chunk 0 always
 exceeds the 10 s max prev window so this cannot bind, but under
 ``chunk.turns`` short chunks can produce a sub-2 s ``H``.  The hygiene knobs
 above stay orthogonal to both formats.
+
+``chunk.text_format`` selects what the TARGET text of a chunk looks like.
+``order`` (the default) is the ordinal format above: turns packed
+back-to-back on the branch, their relative lengths the only timing signal.
+``timestamps`` (Mode T) instead writes one token per mel frame over the
+whole target span, each turn placed at its own frame position - so the run
+asks for a specific timeline rather than an ordering.  The test set's turn
+times are ordinals, not real timestamps, so that timeline is SYNTHESIZED
+(:func:`timestamp_layout.synthesize_layout`): every turn is as long as the
+duration policy's own per-turn estimate, laid down in conversation order,
+separated by a fixed ``chunk.turn_gap_sec`` silence (default 0.4 s) and
+therefore never overlapping.  Chunk packing and selection are untouched -
+``split_turns`` still cuts on the gap-free estimate and ``predicted``
+duration is still the gap-free sum, so a Mode T run's chunk boundaries and
+duration meta are identical to the Mode O run it is compared against - and
+ONLY the generated length changes: each chunk's ``gen_frames`` becomes its
+span on the layout (its turns plus one trailing gap each), which tiles the
+timeline with no seam arithmetic.  Mode T requires ``cond_format:
+special_tokens`` (it was only trained beside the per-frame conditioning
+tokens); the text stream then covers P, H and the target frame for frame,
+so its length equals ``total_frames`` exactly.  The layout is written to the
+meta under ``layout`` (with ``turn_times: "layout"`` marking it) as the
+timing a timing-adherence metric scores the output against.
+
 Checkpoint/format pairing is enforced, not assumed: ``special_tokens``
 requires the training config's vocab to contain
 ``<speaker_prompt>``/``<prev_chunk>`` (checked with ``read_vocab``), so a
@@ -138,7 +162,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -148,6 +172,7 @@ from tqdm import tqdm
 
 from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
 from egs3.conversational.tts.dataset.preprocessing.text import (
+    FRAMES_PER_SECOND,
     PREV_CHUNK_TOKEN,
     SPEAKER_PROMPT_TOKEN,
 )
@@ -185,6 +210,10 @@ from egs3.conversational.tts.src.generation import (
 # Output-format helpers, reused verbatim so the infer paths can never drift
 # apart in what they write (same import external_inference.py does).
 from egs3.conversational.tts.src.inference import _reference_texts, _write_scp
+from egs3.conversational.tts.src.timestamp_layout import (
+    TimestampLayout,
+    synthesize_layout,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -561,12 +590,20 @@ def call_turns(
 
 @dataclass
 class _ChunkPlan:
-    """One dialogue's chunk chain, fixed before any generation happens."""
+    """One dialogue's chunk chain, fixed before any generation happens.
+
+    ``layout`` / ``target_starts`` are Mode T only (``text_format:
+    timestamps``): the synthesized turn timeline and the frame each chunk's
+    target starts at on it.  Mode O leaves them ``None`` / empty, and every
+    other field is computed identically in both modes.
+    """
 
     ranges: list[tuple[int, int]]
     chunk_secs: list[float]
     gen_frames: list[int]
     oversized: list[bool]
+    layout: TimestampLayout | None = None
+    target_starts: list[int] = field(default_factory=list)
 
     @property
     def n_chunks(self) -> int:
@@ -583,7 +620,18 @@ def _plan_dialogue(
     fs: int,
     hop: int,
     cover_all_speakers: bool = False,
+    timestamp_gap_sec: float | None = None,
 ) -> _ChunkPlan:
+    """Plan one dialogue's chunk chain; ``timestamp_gap_sec`` selects Mode T.
+
+    Chunk PACKING is mode-independent by construction: ``ranges`` and
+    ``chunk_secs`` come from the gap-free per-turn estimate in both modes, so
+    a Mode T run cuts its ODE calls at exactly the turns a Mode O run does
+    and prices its ``predicted`` duration identically - the two are directly
+    comparable.  Mode T only changes how LONG each chunk's target region is:
+    ``gen_frames`` becomes the chunk's span on the synthesized layout
+    (its turns plus one inter-turn gap each), not the gap-free estimate.
+    """
     turn_secs = estimate_turn_secs(
         record, prompt_secs, duration_scale=duration_scale, speed=speed
     )
@@ -597,11 +645,32 @@ def _plan_dialogue(
         cover_all_speakers=cover_all_speakers,
     )
     chunk_secs = [sum(turn_secs[a:b]) for a, b in ranges]
+    layout = None
+    target_starts: list[int] = []
+    gen_frames = [max(1, round(sec * fs / hop)) for sec in chunk_secs]
+    if timestamp_gap_sec is not None:
+        # The preprocessor's Mode T text grid is hardwired to
+        # FRAMES_PER_SECOND, so a recipe whose fs/hop disagrees would
+        # silently desync the text stream from the audio it describes.
+        if fs / hop != FRAMES_PER_SECOND:
+            raise ValueError(
+                "chunk.text_format: timestamps needs a frame rate of "
+                f"{FRAMES_PER_SECOND} Hz, but this training config's "
+                f"sample_rate/hop_length gives {fs / hop}"
+            )
+        layout = synthesize_layout(
+            record.turns, turn_secs, gap_sec=timestamp_gap_sec, fps=fs / hop
+        )
+        spans = [layout.chunk_span(a, b) for a, b in ranges]
+        target_starts = [start for start, _ in spans]
+        gen_frames = [n for _, n in spans]
     return _ChunkPlan(
         ranges=ranges,
         chunk_secs=chunk_secs,
-        gen_frames=[max(1, round(sec * fs / hop)) for sec in chunk_secs],
+        gen_frames=gen_frames,
         oversized=[target is not None and sec > float(target) for sec in chunk_secs],
+        layout=layout,
+        target_starts=target_starts,
     )
 
 
@@ -754,7 +823,8 @@ def _validated_chunk_cfg(
         if sptok is None:
             raise ValueError(
                 "chunk.text_format: timestamps requires cond_format: special_tokens "
-                "(Mode T target text was only trained beside per-frame conditioning tokens)"
+                "(Mode T target text was only trained beside per-frame "
+                "conditioning tokens)"
             )
         gap_sec = 0.4 if gap_raw is None else float(gap_raw)
         if gap_sec < 0:
@@ -857,6 +927,7 @@ def run_chunked_inference(
             fs=fs,
             hop=hop,
             cover_all_speakers=cover_all_speakers,
+            timestamp_gap_sec=(tsl.gap_sec if tsl is not None else None),
         )
         for r, secs in zip(records, prompt_secs)
     ]
@@ -1104,14 +1175,28 @@ def run_chunked_inference(
             speech = torch.cat(
                 [prompt_trimmed, torch.zeros(n, gen_frames * hop)], dim=1
             ).to(device)
+            target_t0 = None
             if sptok is not None:
-                a, b = plans[idx].ranges[rnd]
+                plan_k = plans[idx]
+                a, b = plan_k.ranges[rnd]
                 sample = {
-                    "turns": list(record.turns[a:b]),
+                    # Mode T hands the builder this chunk's OWN turns
+                    # carrying their LAYOUT times, matched to this chunk's
+                    # target origin: it raises on any turn falling outside
+                    # the target span, so the slice and the t0 are one pair
+                    # and the full turn list must never be passed.
+                    "turns": list(
+                        (plan_k.layout.turns if tsl is not None else record.turns)[a:b]
+                    ),
                     "num_channels": n,
                     "prompt_frames": state[idx]["p_frames"],
                     "prev_frames": prev_frames,
                 }
+                if tsl is not None:
+                    target_t0 = plan_k.target_starts[rnd] / plan_k.layout.fps
+                    sample["timestamp_text"] = True
+                    sample["target_t0"] = target_t0
+                    sample["target_frames"] = gen_frames
             else:
                 sample = {
                     "turns": call_turns(
@@ -1133,6 +1218,7 @@ def run_chunked_inference(
                     total_frames=prompt_frames + gen_frames,
                 ),
                 "gen_frames": gen_frames,
+                "target_t0": target_t0,
                 "cond_info": cond_info,
                 "sptok_frames": (
                     (state[idx]["p_frames"], prev_frames) if sptok is not None else None
@@ -1186,6 +1272,14 @@ def run_chunked_inference(
                     "batch_elapsed_sec": round(float(elapsed), 6),
                     "batch_rtf": batch_rtf,
                 }
+                if prepared_inputs[idx]["target_t0"] is not None:
+                    # Mode T: where this chunk's target sits on the
+                    # synthesized layout, and how many frames of it the text
+                    # stream describes (== gen_frames by construction).
+                    chunk_entry["target_t0_sec"] = round(
+                        prepared_inputs[idx]["target_t0"], 6
+                    )
+                    chunk_entry["target_frames"] = prepared_inputs[idx]["gen_frames"]
                 if prepared_inputs[idx]["cond_info"]:
                     chunk_entry["conditioning"] = prepared_inputs[idx]["cond_info"]
                 if prepared_inputs[idx]["sptok_frames"] is not None:
@@ -1241,7 +1335,7 @@ def run_chunked_inference(
             "window_duration_sec": round(gen_full.shape[1] / fs, 6),
             "duration": duration_meta(duration_scale, speed, predicted[idx]),
             "has_reference_audio": False,
-            "turn_times": "ordinal",
+            "turn_times": "layout" if tsl is not None else "ordinal",
             # Wall clock is shared across a batch and rounds; per-call batch
             # stats live under chunking.chunks, so no single dialogue-level
             # rtf exists here.
@@ -1265,6 +1359,8 @@ def run_chunked_inference(
                     if sptok is not None and st.get("prompt_below_trained_floor")
                     else {}
                 ),
+                "text_format": "timestamps" if tsl is not None else "order",
+                **({"turn_gap_sec": tsl.gap_sec} if tsl is not None else {}),
                 "cond_include_prompt": comp.include_prompt,
                 "cond_history_chunks": comp.history_chunks,
                 "cond_silence_gate": cond.silence_gate,
@@ -1275,6 +1371,28 @@ def run_chunked_inference(
                 "oversized": list(plan.oversized),
                 "chunks": st["chunk_meta"],
             },
+            # Mode T only: the synthesized timeline the target text was
+            # written against, in dialogue seconds - the timing the run was
+            # ASKED for, which the timing-adherence metric scores the
+            # generated audio against ("turns" above stays the raw ordinal
+            # test-set order in every mode).
+            **(
+                {
+                    "layout": {
+                        "gap_sec": tsl.gap_sec,
+                        "turns": [
+                            {
+                                "channel": int(t.channel),
+                                "start": round(t.start, 6),
+                                "end": round(t.end, 6),
+                            }
+                            for t in plan.layout.turns
+                        ],
+                    }
+                }
+                if tsl is not None
+                else {}
+            ),
             "mix_wav": mix_rel,
             "prompt": {
                 "total_sec": round(st["prompt_frames0"] * hop / fs, 6),
