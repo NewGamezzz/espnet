@@ -823,6 +823,17 @@ def run_chunked_inference(
     samp = cfg.sampling
     autocast_dtype = samp.get("autocast_dtype")
     base_seed = samp.get("seed")
+    # Sparse-channel guidance (ZipVoice-Dialog drone fix): null = off, which
+    # leaves generate_batch on the scalar path and every run bit-identical.
+    cfg_sparse_raw = samp.get("cfg_sparse_strength")
+    cfg_sparse = None if cfg_sparse_raw is None else float(cfg_sparse_raw)
+    if cfg_sparse is not None and cfg_sparse < 0:
+        raise ValueError(f"sampling.cfg_sparse_strength must be >= 0, got {cfg_sparse}")
+    cfg_sparse_max_chars = int(samp.get("cfg_sparse_max_chars", 40) or 0)
+    if cfg_sparse_max_chars < 0:
+        raise ValueError(
+            f"sampling.cfg_sparse_max_chars must be >= 0, got {cfg_sparse_max_chars}"
+        )
 
     # Per-dialogue chain state, filled round by round.
     state: dict[int, dict[str, Any]] = {
@@ -918,15 +929,35 @@ def run_chunked_inference(
             }
             sample = preprocessor(record.dialogue_id, sample)
             text = pad_branch_text(sample, device)
+            cfg_per_channel = None
+            if cfg_sparse is not None:
+                # Guidance per channel from the script length of THIS call
+                # (the generated chunk's turns): a channel with (almost)
+                # nothing to say gets the low guidance, the talkative one
+                # keeps the full strength.  Rationale in the module docstring.
+                a, b = plans[idx].ranges[rnd]
+                call_chars = [0] * n
+                for turn in record.turns[a:b]:
+                    call_chars[turn.channel] += len(turn.text.encode("utf-8"))
+                cfg_per_channel = tuple(
+                    (
+                        cfg_sparse
+                        if chars <= cfg_sparse_max_chars
+                        else float(samp.cfg_strength)
+                    )
+                    for chars in call_chars
+                )
             prepared_inputs[idx] = {
                 "item": GenerationItem(
                     speech=speech,
                     text=text,
                     prompt_frames=prompt_frames,
                     total_frames=prompt_frames + gen_frames,
+                    cfg_per_channel=cfg_per_channel,
                 ),
                 "gen_frames": gen_frames,
                 "cond_info": cond_info,
+                "cfg_per_channel": cfg_per_channel,
             }
             round_costs[idx] = (prompt_frames + gen_frames) * hop / fs
 
@@ -976,6 +1007,10 @@ def run_chunked_inference(
                     "batch_elapsed_sec": round(float(elapsed), 6),
                     "batch_rtf": batch_rtf,
                 }
+                if prepared_inputs[idx]["cfg_per_channel"] is not None:
+                    chunk_entry["cfg_per_channel"] = list(
+                        prepared_inputs[idx]["cfg_per_channel"]
+                    )
                 if prepared_inputs[idx]["cond_info"]:
                     chunk_entry["conditioning"] = prepared_inputs[idx]["cond_info"]
                 state[idx]["chunk_meta"].append(chunk_entry)
@@ -1059,6 +1094,14 @@ def run_chunked_inference(
                 "cond_loudness_norm": cond.loudness_norm,
                 "n_chunks": plan.n_chunks,
                 "whole_dialogue": plan.whole,
+                **(
+                    {
+                        "cfg_sparse_strength": cfg_sparse,
+                        "cfg_sparse_max_chars": cfg_sparse_max_chars,
+                    }
+                    if cfg_sparse is not None
+                    else {}
+                ),
                 "oversized": list(plan.oversized),
                 "chunks": st["chunk_meta"],
             },

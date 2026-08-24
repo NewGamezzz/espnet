@@ -508,6 +508,13 @@ The generated window and the reference differ in length on the predicted-duratio
 - `ground_truth`: generate exactly the reference length (the rule's per-turn estimates are rescaled by one factor, so chunk cuts keep their proportions).
   The only arm whose interaction statistics are duration-comparable to the ground truth.
 
+### Sparse-channel guidance (`sampling.cfg_sparse_strength`)
+
+On this set a channel whose whole script is a few backchannels (`Oh. Wow. Yeah.`, <= 40 chars over a 10-40 s window) came out as a loud voiced drone instead of silence in about a third of cases at `cfg_strength: 3.0` (loud-non-speech share 0.225 vs 0.006 on the real recordings); the regime is in training (16 % of windows) and the prompts are not the cause.
+It is a CFG artifact: global cfg 2.0 removes it (0.004) but costs the talkative channel ~40 % relative WER, so guidance is set per channel from the script length of the current call: channels with `<= cfg_sparse_max_chars` characters get `cfg_sparse_strength`, the rest keep `cfg_strength`.
+`null` (the default everywhere else) is bit-identical to the scalar path; the per-call values are recorded in each chunk's `cfg_per_channel`.
+Upstream `espnet2/tts/f5/cfm.py` gained `apply_cfg`, which accepts one guidance value per row for this.
+
 `conf/inference_zipvoice_dialog_gt.yaml` (`mode: generate_external_gt`, `src/external_anchor.py`) writes the reference channels AS the generation in the same output contract, so the measure stage scores it unchanged: `wer_*` on the anchor is the transcripts' own ASR disagreement, `utmos_*` / `sim_o` the ceiling real speech reaches, and every `*_dur_w1` collapses to ~0, which doubles as the acceptance test of the `gt_wav` plumbing.
 
 ## Debug tools

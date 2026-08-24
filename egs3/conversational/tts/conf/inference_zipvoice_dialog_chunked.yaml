@@ -78,6 +78,16 @@ batching:
 sampling:
   steps: 32
   cfg_strength: 3.0
+  # SPARSE-CHANNEL GUIDANCE (measured 2026-08-23 on this set): a channel
+  # whose script in the current call is a few backchannels (<= 40 chars)
+  # emitted a loud voiced DRONE instead of silence in ~1/3 of cases at
+  # cfg 3.0; cfg 2.0 removes it (loud-non-speech share 0.225 -> 0.004) but
+  # costs the talkative channel ~40 % relative WER.  So guidance is set PER
+  # CHANNEL from the call's script length: channels with
+  # <= cfg_sparse_max_chars get cfg_sparse_strength, the rest cfg_strength.
+  # null = off (bit-identical to the scalar path).
+  cfg_sparse_strength: 2.0
+  cfg_sparse_max_chars: 40
   sway_sampling_coef: -1.0
   seed: 0
   autocast_dtype: bfloat16
