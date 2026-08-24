@@ -320,3 +320,67 @@ def test_meta_is_json_and_carries_provenance(tmp_path):
     meta = json.loads(raw)
     assert meta["system"]["name"] == "fake-baseline"
     assert meta["testset"] == "zipvoice-dialog-test-en-v2"
+
+
+class TestMixtureOutput:
+    """A mono baseline: one track, no per-channel truth.  Most of the battery
+    must be unavailable rather than wrong."""
+
+    def _run(self, tmp_path, **overrides):
+        fx = write_manifest(tmp_path, [TWO_SPK])
+        wav_dir = tmp_path / "system"
+        wav_dir.mkdir()
+        data = _tracks(3.0, (0.0,))
+        sf.write(str(wav_dir / "d2.wav"), data, FS, subtype="PCM_16")
+        stats = run_external_system_ingest(
+            _config(fx, tmp_path / "out", wav_dir, output="mixture", **overrides),
+            training_config=fx["training_config"],
+        )
+        return stats, tmp_path / "out" / "valid", data
+
+    def test_writes_a_one_entry_mixture_record(self, tmp_path):
+        stats, test_dir, data = self._run(tmp_path)
+        assert stats["n_selected"] == 1
+        meta = _meta(test_dir, "d2")
+        assert meta["output"] == "mixture"
+        assert meta["num_channels"] == 1
+        # The record still has two speakers; only the OUTPUT is one channel.
+        assert meta["record_num_channels"] == 2
+        assert meta["channel_map"] == "mixture"
+        assert meta["has_reference_audio"] is False
+        assert len(meta["channels"]) == 1
+        mix, sr = _read_wav(test_dir / meta["mix_wav"])
+        assert sr == FS
+        assert np.allclose(mix, data[:, 0], atol=2e-4)
+
+    def test_reference_is_the_whole_conversation_in_turn_order(self, tmp_path):
+        _, test_dir, _ = self._run(tmp_path)
+        meta = _meta(test_dir, "d2")
+        assert meta["channels"][0]["ref_text"] == "abc def gab"
+
+    def test_per_channel_inputs_are_omitted_so_those_metrics_fail_loudly(
+        self, tmp_path
+    ):
+        _, test_dir, _ = self._run(tmp_path)
+        entry = _meta(test_dir, "d2")["channels"][0]
+        assert "prompt_wav" not in entry
+        assert "gt_wav" not in entry
+        assert not (test_dir / "gt.scp").read_text("utf-8").strip()
+
+    def test_a_multitrack_file_is_rejected(self, tmp_path):
+        fx = write_manifest(tmp_path, [TWO_SPK])
+        wav_dir = tmp_path / "system"
+        _write_system_wav(wav_dir, "d2", 3.0, (0.0, 1.0))
+        with pytest.raises(ValueError, match="single-track"):
+            run_external_system_ingest(
+                _config(fx, tmp_path / "out", wav_dir, output="mixture"),
+                training_config=fx["training_config"],
+            )
+
+    def test_unknown_output_kind_is_rejected(self, tmp_path):
+        fx, wav_dir, _ = _two_spk_case(tmp_path)
+        with pytest.raises(ValueError, match="ingest.output"):
+            run_external_system_ingest(
+                _config(fx, tmp_path / "out", wav_dir, output="diarized"),
+                training_config=fx["training_config"],
+            )

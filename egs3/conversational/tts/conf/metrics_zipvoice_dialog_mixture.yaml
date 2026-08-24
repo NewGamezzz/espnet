@@ -1,0 +1,50 @@
+####################################################################
+#  Measure a MIXTURE-ONLY (mono) system on ZipVoice-Dialog test-en  #
+####################################################################
+# The reduced battery for an `ingest.output: mixture` arm - a baseline that
+# emits one mixed track and therefore has no per-channel truth.
+#
+# What is here and what it means on such an arm:
+#   * wer_mix   - the number to quote.  Reference = the whole conversation
+#                 in turn order, same as every other arm's wer_mix.
+#   * utmos_mix - the other number to quote.
+#   * wer_channel - COMPUTED BUT REDUNDANT: the single entry is the mixture
+#                 itself, so this is wer_mix again, not a per-channel score.
+#   * utmos_ipu - UTMOS over MIXTURE IPUs, which contain overlapping speech.
+#                 Not comparable to a channel system's utmos_ipu.
+#
+# Deliberately absent: SpeakerSimilarityMetric and InteractionMetric.  A
+# mixture has no prompt to be similar to and no per-channel timeline to be
+# scored against the reference; the ingest omits `prompt_wav`/`gt_wav` so
+# both would raise rather than return an uninterpretable number.  Mixture-
+# level speaker and turn-taking metrics (cpWER / cpSIM / the Talking Turns
+# judge) are the Track A stage's job, not this file's.
+#
+#   python run.py --stages infer measure \
+#       --inference_config conf/inference_zipvoice_dialog_baseline_mono.yaml \
+#       --metrics_config   conf/metrics_zipvoice_dialog_mixture.yaml
+mode: ingest_external_system
+inference_dir: ${exp_dir}/infer_zipvoice_baseline_mono_v2
+
+dataset:
+  test:
+    - name: valid
+
+metrics:
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.asr.ConversationASRMetric
+      _convert_: all
+      transcriber:
+        _target_: egs3.conversational.tts.src.metrics.asr.FasterWhisperTranscriber
+        device: cuda
+        compute_type: float16
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.quality.QualityMetric
+      _convert_: all
+      mos_backend:
+        _target_: egs3.conversational.tts.src.metrics.quality.TorchHubUTMOSBackend
+        device: cuda
+    inputs:
+      meta: meta

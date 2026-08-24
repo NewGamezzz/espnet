@@ -31,10 +31,23 @@ What it assumes about the baseline's output
 * Any sample rate: it is resampled to the training rate, like every other
   path here.
 
-Mono (single-track) baselines are NOT ingested here.  A mixture-only system
-has no per-channel truth to score against ``gt_wav``, and manufacturing
-channels from it with a diarizer would make its rows incomparable to the
-channel systems'.  Those belong in the mixture-level Track A stage.
+Mono (single-track) baselines: ``ingest.output: mixture``
+---------------------------------------------------------
+A mixture-only system (e.g. the mono ZipVoice-Dialog) has no per-channel
+truth, so most of the battery does not apply to it.  Rather than inventing
+channels with a diarizer - which would make its rows incomparable to the
+channel systems' - this mode writes the mixture as a ONE-entry record whose
+reference is the whole conversation in turn order, and DELIBERATELY OMITS
+``prompt_wav`` and ``gt_wav`` from that entry.  The omission is the safety
+rail: SpeakerSimilarityMetric and InteractionMetric raise on the missing
+keys instead of quietly returning a number that compares a two-speaker
+mixture against one speaker's prompt.
+
+What such an arm can be quoted on: ``wer_mix`` and ``utmos_mix``.
+``wer_channel`` is computed but is a DUPLICATE of ``wer_mix`` there (same
+audio, same reference), and ``utmos_ipu`` is UTMOS over mixture IPUs, which
+contain overlapping speech - read neither as a per-channel number.  Run it
+with a reduced metrics config (ASR + quality only).
 
 Channel mapping is VERIFIED, not assumed
 ----------------------------------------
@@ -81,6 +94,7 @@ logger = logging.getLogger(__name__)
 
 MODE = "ingest_external_system"
 
+OUTPUT_KINDS = ("channels", "mixture")
 MONO_EXTRA_TRACK_POLICIES = ("require_silent", "ignore", "forbid")
 #: How far below the record's own speech an unused track has to sit before
 #: it counts as silence, in dB.  An absolute floor would be the wrong test:
@@ -157,6 +171,89 @@ def _channel_map_verdict(tracks: list[torch.Tensor], turns, fs: int) -> str:
     return "as_is" if observed == expected else "swapped"
 
 
+def _write_mixture_record(
+    test_dir: Path,
+    lines: dict[str, list[str]],
+    record,
+    mixture: torch.Tensor,
+    fs: int,
+    *,
+    system: dict[str, Any],
+    testset_name: str,
+) -> None:
+    """Write a mono system's dialogue as a one-entry, mixture-level record.
+
+    The single entry carries ``gen_wav`` and ``ref_text`` and NOTHING else:
+    a mixture has no prompt to be similar to and no per-channel reference to
+    be timed against, so the per-channel metrics must fail loudly rather
+    than return a number nobody can interpret.
+    """
+    wid = record.dialogue_id
+    ref_text = " ".join(
+        turn.text for turn in sorted(record.turns, key=lambda t: t.start)
+    )
+    gen_rel = f"wav/{wid}_ch0.wav"
+    mix_rel = f"mix/{wid}.wav"
+    write_wav(test_dir / gen_rel, mixture, fs)
+    write_wav(test_dir / mix_rel, mixture, fs)
+    lines["wav"].append(f"{wid}_ch0 {gen_rel}")
+    lines["text"].append(f"{wid}_ch0 {ref_text}")
+    lines["mix"].append(f"{wid} {mix_rel}")
+
+    generated_sec = mixture.shape[0] / fs
+    prompt_secs = [_probe_duration_sec(p.audio_path) for p in record.prompts]
+    meta = {
+        "window_id": wid,
+        "session_id": wid,
+        "mode": MODE,
+        "testset": testset_name,
+        "system": system,
+        "output": "mixture",
+        "sample_rate": fs,
+        # The OUTPUT has one channel; the record's speaker count is kept
+        # separately so no reader mistakes this for a monologue.
+        "num_channels": 1,
+        "record_num_channels": record.num_channels,
+        "window_duration_sec": round(generated_sec, 6),
+        "duration": duration_meta(
+            1.0, 1.0, generated_sec, source="system", gt_sec=record.gt_duration_sec
+        ),
+        "has_reference_audio": False,
+        "gt_duration_sec": record.gt_duration_sec,
+        "turn_times": "ordinal",
+        "rtf": None,
+        "mix_wav": mix_rel,
+        "channel_map": "mixture",
+        "prompt": {
+            "total_sec": round(sum(prompt_secs), 6),
+            "turns": [
+                {
+                    "channel": p.channel,
+                    "text": p.text,
+                    "audio_path": str(p.audio_path),
+                    "duration_sec": round(prompt_secs[p.channel], 6),
+                }
+                for p in record.prompts
+            ],
+        },
+        "channels": [{"gen_wav": gen_rel, "ref_text": ref_text}],
+        "turns": [
+            {
+                "channel": int(t.channel),
+                "text": t.text,
+                "start": t.start,
+                "end": t.end,
+            }
+            for t in record.turns
+        ],
+    }
+    meta_rel = f"meta/{wid}.json"
+    (test_dir / meta_rel).write_text(
+        json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    lines["meta"].append(f"{wid} {meta_rel}")
+
+
 def run_external_system_ingest(
     inference_config, *, training_config=None
 ) -> dict[str, Any]:
@@ -186,6 +283,11 @@ def run_external_system_ingest(
     if not wav_dir.is_dir():
         raise FileNotFoundError(f"ingest.wav_dir does not exist: {wav_dir}")
     suffix = str(ingest.get("suffix", ".wav"))
+    output_kind = str(ingest.get("output", "channels"))
+    if output_kind not in OUTPUT_KINDS:
+        raise ValueError(
+            f"ingest.output must be one of {OUTPUT_KINDS}, got {output_kind!r}"
+        )
     mono_policy = str(ingest.get("mono_extra_track", "require_silent"))
     if mono_policy not in MONO_EXTRA_TRACK_POLICIES:
         raise ValueError(
@@ -240,6 +342,25 @@ def run_external_system_ingest(
         ref_texts = _reference_texts(record.turns, n)
 
         gen = _load_multichannel(wav_dir / f"{wid}{suffix}", fs)
+
+        if output_kind == "mixture":
+            if gen.shape[0] != 1:
+                raise ValueError(
+                    f"{wid}: ingest.output='mixture' expects a single-track file, "
+                    f"got {gen.shape[0]} tracks"
+                )
+            _write_mixture_record(
+                test_dir,
+                lines,
+                record,
+                gen[0],
+                fs,
+                system=system,
+                testset_name=testset_name,
+            )
+            verdicts["unverifiable"] += 1
+            continue
+
         if gen.shape[0] < n:
             raise ValueError(
                 f"{wid}: {system['name']} wrote {gen.shape[0]} track(s) but the "
