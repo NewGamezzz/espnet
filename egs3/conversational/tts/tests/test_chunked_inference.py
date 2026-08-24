@@ -29,6 +29,7 @@ from egs3.conversational.tts.src.chunked_inference import (
     SPECIAL_TOKENS_PROMPT_FLOOR_SEC,
     CondComposition,
     SpecialTokensCond,
+    TimestampText,
     _validated_chunk_cfg,
     call_turns,
     crossfade_concat,
@@ -357,11 +358,11 @@ def _chunk_only_cfg(chunk):
 
 class TestCondCompositionConfig:
     def test_defaults_are_previous_chunk_only(self):
-        _, _, _, comp, _, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
+        _, _, _, comp, _, _, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
         assert comp == CondComposition(include_prompt=False, history_chunks=1)
 
     def test_explicit_values_are_parsed(self):
-        _, _, _, comp, _, _ = _validated_chunk_cfg(
+        _, _, _, comp, _, _, _ = _validated_chunk_cfg(
             _chunk_only_cfg(
                 {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": 0}
             )
@@ -369,7 +370,7 @@ class TestCondCompositionConfig:
         assert comp == CondComposition(include_prompt=True, history_chunks=0)
 
     def test_all_history_is_minus_one(self):
-        _, _, _, comp, _, _ = _validated_chunk_cfg(
+        _, _, _, comp, _, _, _ = _validated_chunk_cfg(
             _chunk_only_cfg(
                 {"turns": 2, "cond_include_prompt": True, "cond_history_chunks": -1}
             )
@@ -391,17 +392,17 @@ class TestCondCompositionConfig:
 
 class TestSpecialTokensConfig:
     def test_absent_cond_format_is_transcripts_mode(self):
-        _, _, _, _, sptok, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
+        _, _, _, _, sptok, _, _ = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
         assert sptok is None
 
     def test_special_tokens_defaults(self):
-        _, _, _, _, sptok, _ = _validated_chunk_cfg(
+        _, _, _, _, sptok, _, _ = _validated_chunk_cfg(
             _chunk_only_cfg({"target_sec": 25, "cond_format": "special_tokens"})
         )
         assert sptok == SpecialTokensCond(prompt_sec=8.0, prev_sec=10.0)
 
     def test_knobs_are_parsed_and_zero_prev_is_reanchor(self):
-        _, _, _, _, sptok, _ = _validated_chunk_cfg(
+        _, _, _, _, sptok, _, _ = _validated_chunk_cfg(
             _chunk_only_cfg(
                 {
                     "target_sec": 25,
@@ -460,6 +461,44 @@ class TestSpecialTokensConfig:
                     {"turns": 2, "cond_format": "special_tokens", "cond_prev_sec": -1.0}
                 )
             )
+
+
+class TestTimestampTextConfig:
+    def test_absent_is_mode_o(self):
+        *_, tsl = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2}))
+        assert tsl is None
+
+    def test_explicit_order_is_mode_o(self):
+        *_, tsl = _validated_chunk_cfg(_chunk_only_cfg({"turns": 2, "text_format": "order"}))
+        assert tsl is None
+
+    def test_timestamps_defaults(self):
+        *_, tsl = _validated_chunk_cfg(_chunk_only_cfg(
+            {"turns": 2, "cond_format": "special_tokens", "text_format": "timestamps"}))
+        assert tsl == TimestampText(gap_sec=0.4)
+
+    def test_gap_parsed(self):
+        *_, tsl = _validated_chunk_cfg(_chunk_only_cfg(
+            {"turns": 2, "cond_format": "special_tokens", "text_format": "timestamps",
+             "turn_gap_sec": 0.0}))
+        assert tsl == TimestampText(gap_sec=0.0)
+
+    def test_requires_special_tokens(self):
+        with pytest.raises(ValueError, match="cond_format: special_tokens"):
+            _validated_chunk_cfg(_chunk_only_cfg({"turns": 2, "text_format": "timestamps"}))
+
+    def test_gap_requires_timestamps(self):
+        with pytest.raises(ValueError, match="turn_gap_sec"):
+            _validated_chunk_cfg(_chunk_only_cfg(
+                {"turns": 2, "cond_format": "special_tokens", "turn_gap_sec": 0.4}))
+
+    def test_bad_values(self):
+        with pytest.raises(ValueError, match="text_format"):
+            _validated_chunk_cfg(_chunk_only_cfg({"turns": 2, "text_format": "modeT"}))
+        with pytest.raises(ValueError, match="turn_gap_sec"):
+            _validated_chunk_cfg(_chunk_only_cfg(
+                {"turns": 2, "cond_format": "special_tokens", "text_format": "timestamps",
+                 "turn_gap_sec": -1.0}))
 
 
 class TestFrameHelpers:

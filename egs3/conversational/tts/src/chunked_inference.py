@@ -479,6 +479,14 @@ class SpecialTokensCond:
     prev_sec: float = 10.0
 
 
+@dataclass(frozen=True)
+class TimestampText:
+    """``text_format: timestamps`` knobs (Mode T target text over a
+    synthesized non-overlapping layout; requires cond_format special_tokens)."""
+
+    gap_sec: float = 0.4
+
+
 def min_truncated_prompt_frames(
     prompt_samples: Sequence[int], cap_sec: float, fs: int, hop: int
 ) -> int:
@@ -600,9 +608,15 @@ def _plan_dialogue(
 def _validated_chunk_cfg(
     cfg,
 ) -> tuple[
-    dict[str, Any], float, CondHygiene, CondComposition, SpecialTokensCond | None, bool
+    dict[str, Any],
+    float,
+    CondHygiene,
+    CondComposition,
+    SpecialTokensCond | None,
+    bool,
+    TimestampText | None,
 ]:
-    """Return ``(policy, cross_fade_sec, cond, comp, sptok, cover_all_speakers)``
+    """Return ``(policy, cross_fade_sec, cond, comp, sptok, cover_all_speakers, tsl)``
     from the ``chunk`` block.
 
     The policy stays exactly one of ``turns`` / ``target_sec``;
@@ -611,10 +625,12 @@ def _validated_chunk_cfg(
     ``cond_format: transcripts`` and a :class:`SpecialTokensCond` for
     ``cond_format: special_tokens`` (the two formats are mutually exclusive -
     see the module docstring), ``cover_all_speakers`` is an independent
-    coverage knob restricted to the ``target_sec`` policy, and the
+    coverage knob restricted to the ``target_sec`` policy, the
     conditioning-hygiene knobs (``cond_silence_gate``, ``cond_gate_threshold``,
     ``cond_loudness_norm``) are independent conditioning knobs - all default off,
-    so existing configs reproduce bit-for-bit.
+    so existing configs reproduce bit-for-bit - and ``tsl`` is ``None`` for the
+    default ``text_format: order`` and a :class:`TimestampText` for
+    ``text_format: timestamps``, which requires ``cond_format: special_tokens``.
     """
     raw = cfg.get("chunk")
     if raw is None:
@@ -637,6 +653,8 @@ def _validated_chunk_cfg(
         "cond_prompt_sec",
         "cond_prev_sec",
         "cover_all_speakers",
+        "text_format",
+        "turn_gap_sec",
     }
     if unknown:
         raise ValueError(f"unknown chunk keys: {sorted(unknown)}")
@@ -724,6 +742,28 @@ def _validated_chunk_cfg(
         sptok = SpecialTokensCond(prompt_sec=prompt_sec, prev_sec=prev_sec)
     else:
         sptok = None
+    text_format_raw = chunk_cfg.pop("text_format", None)
+    text_format = "order" if text_format_raw is None else str(text_format_raw)
+    if text_format not in ("order", "timestamps"):
+        raise ValueError(
+            "chunk.text_format must be one of ('order', 'timestamps'), "
+            f"got {text_format!r}"
+        )
+    gap_raw = chunk_cfg.pop("turn_gap_sec", None)
+    if text_format == "timestamps":
+        if sptok is None:
+            raise ValueError(
+                "chunk.text_format: timestamps requires cond_format: special_tokens "
+                "(Mode T target text was only trained beside per-frame conditioning tokens)"
+            )
+        gap_sec = 0.4 if gap_raw is None else float(gap_raw)
+        if gap_sec < 0:
+            raise ValueError(f"chunk.turn_gap_sec must be >= 0, got {gap_sec}")
+        tsl = TimestampText(gap_sec=gap_sec)
+    else:
+        if gap_raw is not None:
+            raise ValueError("chunk.turn_gap_sec requires text_format: timestamps")
+        tsl = None
     set_keys = [k for k, v in chunk_cfg.items() if v is not None]
     if len(set_keys) != 1:
         raise ValueError(
@@ -733,7 +773,7 @@ def _validated_chunk_cfg(
     policy = {k: chunk_cfg[k] for k in set_keys}
     if cover and "target_sec" not in policy:
         raise ValueError("chunk.cover_all_speakers requires the target_sec policy")
-    return policy, cross_fade_sec, cond, comp, sptok, cover
+    return policy, cross_fade_sec, cond, comp, sptok, cover, tsl
 
 
 def run_chunked_inference(
@@ -755,7 +795,7 @@ def run_chunked_inference(
     mode = cfg.get("mode")
     if mode != MODE:
         raise ValueError(f"expected mode {MODE!r}, got {mode!r}")
-    chunk_cfg, cross_fade_sec, cond, comp, sptok, cover_all_speakers = (
+    chunk_cfg, cross_fade_sec, cond, comp, sptok, cover_all_speakers, tsl = (
         _validated_chunk_cfg(cfg)
     )
     prompt_fill = str(cfg.get("prompt_fill", "zeros") or "zeros")
