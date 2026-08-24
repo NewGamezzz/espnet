@@ -1,0 +1,60 @@
+#############################################################################
+#  Ingest a BASELINE system's ZipVoice-Dialog test-en output for measurement  #
+#############################################################################
+# `mode: ingest_external_system` (src/external_system_ingest.py) reads one
+# wav per dialogue from another system's own inference run and writes our
+# output contract, so conf/metrics_zipvoice_dialog.yaml scores it with the
+# pipeline our own arms go through.  No model, no GPU.
+#
+# Defaults below are the ZipVoice-Dialog-Stereo baseline on the ADOPTED v2
+# (-23 dBFS) set, generated outside this repo with the k2-fsa/ZipVoice repo
+# and their published recipe (guidance 1.5, num_step 16, t_shift 0.5,
+# target_rms 0.1), fed OUR v2 prompts and OUR script segmentation via
+# scripts/make_zipvoice_baseline_tsv.py.
+#
+#   python run.py --stages infer measure \
+#       --inference_config conf/inference_zipvoice_dialog_baseline.yaml \
+#       --metrics_config   conf/metrics_zipvoice_dialog.yaml
+#
+# READ THE ROWS AGAINST OUR **pred** ARMS ONLY: this system predicts its own
+# durations, so there is no oracle-duration counterpart to compare it with.
+# And v2 rows compare only to the v2 anchor - the VAD statistics are level
+# sensitive.
+training_config: conf/training_poc.yaml
+exp_tag: eval_zipvoice_dialog
+mode: ingest_external_system
+device: cpu
+inference_dir: ${exp_dir}/infer_zipvoice_baseline_stereo_v2
+test_name: valid
+
+testset:
+  manifest: downloads/zipvoice-dialog-test-en-v2/manifest.jsonl
+  name: zipvoice-dialog-test-en-v2
+
+# Provenance, copied verbatim into every meta JSON: a results table can then
+# never be read without knowing which system and which recipe produced it.
+system:
+  name: zipvoice-dialog-stereo
+  repo: https://github.com/k2-fsa/ZipVoice
+  commit: 2f7326f
+  checkpoint: k2-fsa/ZipVoice@4ed45fb6e7e9527b780bef9e097a04bf13fe4e6b:zipvoice_dialog_stereo
+  prompts: v2-normalized (-23 dBFS active RMS), mono, ours
+  params: guidance_scale=1.5 num_step=16 t_shift=0.5 target_rms=0.1 speed=1.0
+
+ingest:
+  wav_dir: /work/hdd/bbjs/ttrachu/development/ZipVoice/exp_baseline/results/stereo_v2
+  suffix: .wav
+  # The 10 monologue rows are 1-channel records here, but their stereo model
+  # always writes two tracks; the transcript gives it no second speaker, so
+  # the unused track must come back silent.  Anything else is a finding, not
+  # a formatting detail - hence the strict default.
+  mono_extra_track: require_silent
+  verify_channel_map: true
+  channel_order: null
+
+selection:
+  dialogue_ids: null
+  min_duration: null
+  max_duration: null
+  num_dialogues: null
+  seed: 0

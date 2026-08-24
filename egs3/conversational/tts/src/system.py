@@ -45,6 +45,10 @@ BASELINE_MODE = "generate_concat_baseline"
 # pinned by ``tests/test_external_manifest.py``.
 GT_ANCHOR_MODE = "generate_external_gt"
 
+# ``src.external_system_ingest.MODE``, duplicated as a literal for the same
+# reason; pinned by ``tests/test_external_system_ingest.py``.
+INGEST_MODE = "ingest_external_system"
+
 
 class ConversationalTTSSystem(BaseSystem):
     """System with ``create_dataset`` (inherited SSSD builder), ``train``, a
@@ -99,6 +103,13 @@ class ConversationalTTSSystem(BaseSystem):
             from egs3.conversational.tts.src.external_anchor import run_external_gt
 
             return run_external_gt(self.inference_config)
+
+        if mode == INGEST_MODE:
+            from egs3.conversational.tts.src.external_system_ingest import (
+                run_external_system_ingest,
+            )
+
+            return run_external_system_ingest(self.inference_config)
 
         from egs3.conversational.tts.src.inference import run_inference
 
