@@ -464,6 +464,59 @@ Unit tests exercise the metric math with injected fakes, and none of this is imp
 A corrupt or missing wav aborts the whole `measure` run: no metric catches or skips a bad window internally, so a single bad file fails loudly rather than the run silently under-reporting a metric over fewer windows than it claims.
 Graceful per-window skip-and-count is future work, not implemented in v1.
 
+## Evaluating on ZipVoice-Dialog test-en
+
+The recipe also generates from the English half of the [ZipVoice-Dialog](https://arxiv.org/abs/2507.09318) dialogue test set (`dialog_testset.tar.gz` in HF `k2-fsa/TTS_eval_datasets`): 280 spontaneous two-party dialogues (1.84 h, median 22 s), each with per-speaker prompt wavs and dual-track ground-truth audio.
+It is MagicData-derived, so treat it as research-use only regardless of the HF license tag.
+
+Unlike CoVoMix2, this set is reformatted ONCE into a training-style manifest and inference reads that manifest as-is.
+The reformat is `local/build_zipvoice_dialog_testset.py`; its docstring records the archive's conventions and edge cases (monologues, consecutive same-speaker tags, an empty segment, per-file L/R prompt tracks).
+
+```bash
+cd egs3/conversational/tts
+tar xzf dialog_testset.tar.gz
+python local/build_zipvoice_dialog_testset.py \
+    --src dialog_testset/en --out downloads/zipvoice-dialog-test-en \
+    --token_list data/vocab.txt --archive dialog_testset.tar.gz
+
+python run.py --stages infer measure \
+    --inference_config conf/inference_zipvoice_dialog_chunked.yaml \
+    --metrics_config   conf/metrics_zipvoice_dialog.yaml
+```
+
+### The manifest is the training format
+
+`downloads/zipvoice-dialog-test-en/manifest.jsonl` has one line per dialogue, shaped like the training `WindowRecord`: explicit `num_channels`, turns with explicit `channel` indices, one prompt per channel, and optional `gt_wav` per channel.
+`src/external_testset.py::load_external_manifest` reads it; `testset.manifest` in the inference config selects it (mutually exclusive with the CoVoMix2 `testset.root`).
+
+- The 10 monologues (`[S1]` only) become ONE-channel records with one prompt, exactly the shape LibriTTS utterances have in training (`dataset/preprocessing/libritts.py::utterance_session`), not two-channel records with an empty channel.
+  The chunked path already reads `record.num_channels` per dialogue and `generate_batch` packs rows with per-item channel counts, so mixed channel counts share a batch.
+- Turn channels are explicit: consecutive same-speaker tags stay separate turns, as in the source transcript.
+- S1's ground-truth track is the active track of prompt A (verified against first-onset order on 264/270 two-speaker rows); the exceptions are recorded in `build_meta.json` as anomalies, mapping kept.
+- Text is stored raw and normalized by the loader against the training vocab; the build's dry run reports every character normalization drops (`loader_dry_run.chars_dropped_by_normalization`).
+
+### Ground truth, duration, and the anchor
+
+Because the reference audio exists, the manifest-driven infer stage writes `channels[k].gt_wav` next to every generation and `conf/metrics_zipvoice_dialog.yaml` uses the SHARED `InteractionMetric`, so the `*_dur_w1` keys are real Wasserstein-1 distances against the paired reference, as on SSSD.
+The generated window and the reference differ in length on the predicted-duration arm; that is safe because `derive_events` uses the window duration only to close the trailing silence, a window-edge silence it skips (pinned in `tests/test_interaction_metric.py`).
+
+`duration.source` selects the arm:
+
+- `predicted` (default): the F5 prompt-ratio rule, the cross-model-fair arm since baselines predict their own durations.
+  `duration.scale` is 1.048 here, not CoVoMix2's 1.117: the 1.117 retargets READ-speech prompt rates to spontaneous, which has no premise on spontaneous prompts, so only the SSSD silence budget (1 / 0.954) remains.
+  Nothing is tuned on the test set; the rule still over-predicts (GT runs 0.060 s/char, prompts 0.073 s/char), and every meta records `duration.predicted_over_gt`.
+- `ground_truth`: generate exactly the reference length (the rule's per-turn estimates are rescaled by one factor, so chunk cuts keep their proportions).
+  The only arm whose interaction statistics are duration-comparable to the ground truth.
+
+### Sparse-channel guidance (`sampling.cfg_sparse_strength`)
+
+On this set a channel whose whole script is a few backchannels (`Oh. Wow. Yeah.`, <= 40 chars over a 10-40 s window) came out as a loud voiced drone instead of silence in about a third of cases at `cfg_strength: 3.0` (loud-non-speech share 0.225 vs 0.006 on the real recordings); the regime is in training (16 % of windows) and the prompts are not the cause.
+It is a CFG artifact: global cfg 2.0 removes it (0.004) but costs the talkative channel ~40 % relative WER, so guidance is set per channel from the script length of the current call: channels with `<= cfg_sparse_max_chars` characters get `cfg_sparse_strength`, the rest keep `cfg_strength`.
+`null` (the default everywhere else) is bit-identical to the scalar path; the per-call values are recorded in each chunk's `cfg_per_channel`.
+Upstream `espnet2/tts/f5/cfm.py` gained `apply_cfg`, which accepts one guidance value per row for this.
+
+`conf/inference_zipvoice_dialog_gt.yaml` (`mode: generate_external_gt`, `src/external_anchor.py`) writes the reference channels AS the generation in the same output contract, so the measure stage scores it unchanged: `wer_*` on the anchor is the transcripts' own ASR disagreement, `utmos_*` / `sim_o` the ceiling real speech reaches, and every `*_dur_w1` collapses to ~0, which doubles as the acceptance test of the `gt_wav` plumbing.
+
 ## Debug tools
 
 ```bash

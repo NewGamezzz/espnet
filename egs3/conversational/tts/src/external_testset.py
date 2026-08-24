@@ -122,6 +122,11 @@ class ExternalRecord:
     num_channels: int
     turns: list[Turn]
     prompts: list[ExternalPrompt]
+    # Per-channel ground-truth audio (absolute paths, channel-ascending) when
+    # the test set ships it (ZipVoice-Dialog does; CoVoMix2 does not).  All
+    # channels share one duration, recorded once.  ``None`` = no reference.
+    gt_paths: tuple[Path, ...] | None = None
+    gt_duration_sec: float | None = None
 
     @property
     def channel_chars(self) -> list[int]:
@@ -243,12 +248,260 @@ def load_covomix2_testset(
     return records
 
 
+def _wav_duration_sec(path: Path) -> float:
+    import soundfile as sf
+
+    info = sf.info(str(path))
+    return float(info.frames) / float(info.samplerate)
+
+
+def load_external_manifest(
+    manifest_path: str | Path,
+    token_list: str | Path,
+) -> list[ExternalRecord]:
+    """Load a training-style external dialogue manifest (JSONL).
+
+    One line per dialogue, shaped like the training ``WindowRecord`` so that
+    a test set is reformatted ONCE into the format the model was trained on
+    and inference reads it as-is::
+
+        {"window_id": ..., "session_id": ..., "num_channels": N,
+         "turns": [{"channel": c, "speaker": ..., "text": ...}, ...],
+         "channels": [{"prompt_wav": rel, "prompt_text": ...,
+                       "gt_wav": rel (optional)}, ...N]}
+
+    Differences from the CoVoMix2 index, all deliberate:
+
+    * ``num_channels`` is PER DIALOGUE.  A single-speaker dialogue is a
+      one-channel record - exactly how LibriTTS utterances enter training
+      (``dataset/preprocessing/libritts.py::utterance_session``) - not a
+      two-channel record with an empty channel.
+    * Turn channels are EXPLICIT.  No alternation rule: consecutive turns
+      of one speaker stay separate turns, as the source transcript has them.
+    * Ground truth is optional but all-or-none per dialogue, and every
+      channel's ground-truth file must share one duration (they are tracks
+      of one recording).
+
+    Relative paths resolve against the manifest's directory.  Text (turns
+    and prompt transcriptions) goes through the same ``normalize_text`` as
+    training; a turn or prompt that normalizes to empty is an error, as in
+    the CoVoMix2 loader.  Turn ``start``/``end`` are ordinals (see module
+    docstring) - the source has no timestamps.
+    """
+    manifest_path = Path(manifest_path)
+    root = manifest_path.parent
+    charset = vocab_charset(read_vocab(token_list))
+
+    records: list[ExternalRecord] = []
+    seen: set[str] = set()
+    with manifest_path.open("r", encoding="utf-8") as f:
+        for lineno, raw in enumerate(f, start=1):
+            raw = raw.strip()
+            if not raw:
+                continue
+            entry = json.loads(raw)
+            wid = str(entry["window_id"])
+            if wid in seen:
+                raise ValueError(
+                    f"{manifest_path}:{lineno}: duplicate window_id {wid!r}"
+                )
+            seen.add(wid)
+
+            channels = entry["channels"]
+            n = int(entry["num_channels"])
+            if n != len(channels):
+                raise ValueError(
+                    f"{wid}: num_channels {n} but {len(channels)} channel entries"
+                )
+            if n < 1:
+                raise ValueError(f"{wid}: num_channels must be >= 1")
+
+            turns: list[Turn] = []
+            for i, t in enumerate(entry["turns"]):
+                ch = int(t["channel"])
+                if not 0 <= ch < n:
+                    raise ValueError(
+                        f"{wid}: turn {i} has channel {ch}, outside [0, {n})"
+                    )
+                text = normalize_text(str(t["text"]), charset)
+                if not text:
+                    raise ValueError(
+                        f"{wid}: turn {i} normalized to empty text; the masking "
+                        "scheme cannot represent a zero-character turn"
+                    )
+                turns.append(
+                    Turn(
+                        channel=ch,
+                        speaker=str(t.get("speaker", f"spk{ch + 1}")),
+                        text=text,
+                        start=float(i),  # ordinal, NOT seconds
+                        end=float(i),
+                    )
+                )
+            present = {t.channel for t in turns}
+            missing = [c for c in range(n) if c not in present]
+            if missing:
+                raise ValueError(
+                    f"{wid}: channel(s) {missing} have no turn; a channel with "
+                    "nothing to say should not exist in the record (use a "
+                    "smaller num_channels, as LibriTTS single-speaker records do)"
+                )
+
+            prompts: list[ExternalPrompt] = []
+            gt_paths: list[Path] = []
+            for ch, c in enumerate(channels):
+                audio_path = root / c["prompt_wav"]
+                if not audio_path.is_file():
+                    raise FileNotFoundError(
+                        f"{wid}: prompt audio {audio_path} not found"
+                    )
+                ptext = normalize_text(str(c["prompt_text"]), charset)
+                if not ptext:
+                    raise ValueError(f"{wid}: channel {ch} prompt text is empty")
+                prompts.append(
+                    ExternalPrompt(channel=ch, audio_path=audio_path, text=ptext)
+                )
+                if c.get("gt_wav") is not None:
+                    gt_path = root / c["gt_wav"]
+                    if not gt_path.is_file():
+                        raise FileNotFoundError(
+                            f"{wid}: ground-truth audio {gt_path} not found"
+                        )
+                    gt_paths.append(gt_path)
+            if gt_paths and len(gt_paths) != n:
+                raise ValueError(
+                    f"{wid}: gt_wav given for {len(gt_paths)}/{n} channels; "
+                    "ground truth must be present on every channel or none"
+                )
+            gt_duration = None
+            if gt_paths:
+                durations = [_wav_duration_sec(p) for p in gt_paths]
+                if max(durations) - min(durations) > 1e-3:
+                    raise ValueError(
+                        f"{wid}: ground-truth channels differ in duration "
+                        f"{durations}; they must be tracks of one recording"
+                    )
+                gt_duration = durations[0]
+
+            records.append(
+                ExternalRecord(
+                    dialogue_id=wid,
+                    num_channels=n,
+                    turns=turns,
+                    prompts=prompts,
+                    gt_paths=tuple(gt_paths) if gt_paths else None,
+                    gt_duration_sec=gt_duration,
+                )
+            )
+    return records
+
+
+COVOMIX2_TESTSET_NAME = "covomix2-dialogue-testset"
+
+
+def load_records(
+    testset_cfg, token_list: str | Path
+) -> tuple[list[ExternalRecord], str]:
+    """Resolve the ``testset`` config block to ``(records, testset_name)``.
+
+    Two shapes, mutually exclusive:
+
+    * ``testset.manifest`` (+ optional ``testset.name``) - the training-style
+      manifest of :func:`load_external_manifest`; the name defaults to the
+      manifest's directory name.
+    * ``testset.root`` + ``testset.librispeech_root`` (+ ``num_channels``) -
+      the CoVoMix2 index, exactly as before (name pinned to the literal every
+      existing meta JSON carries).
+    """
+    manifest = testset_cfg.get("manifest")
+    if manifest is not None:
+        if testset_cfg.get("root") is not None:
+            raise ValueError("testset.manifest and testset.root are mutually exclusive")
+        name = testset_cfg.get("name") or Path(manifest).resolve().parent.name
+        return load_external_manifest(manifest, token_list), str(name)
+    return (
+        load_covomix2_testset(
+            testset_cfg.root,
+            testset_cfg.librispeech_root,
+            token_list,
+            num_channels=int(testset_cfg.get("num_channels", 2)),
+        ),
+        COVOMIX2_TESTSET_NAME,
+    )
+
+
+def speaker_rates(
+    record: ExternalRecord,
+    prompt_seconds: Sequence[float],
+    *,
+    rate_prior_chars: float | None = None,
+    rate_prior_sec_per_char: float = SSSD_SPEECH_SEC_PER_CHAR,
+) -> list[float]:
+    """Seconds per character for every channel's speaker, from its prompt.
+
+    The plain F5 rule reads the rate straight off the prompt
+    (``prompt_sec / prompt_chars``).  A 1-8 s prompt is a noisy estimate of a
+    speaker's rate, and on a test set that serves hundreds of dialogues from
+    a handful of prompts the noise turns into a systematic per-speaker bias
+    in every generated duration.  ``rate_prior_chars`` (``None``/0 = off)
+    shrinks each prompt-measured rate toward the training-domain prior
+    ``rate_prior_sec_per_char`` as if the prior had been observed over that
+    many characters (a precision-weighted mean)::
+
+        rate = (prompt_sec + k * prior) / (prompt_chars + k)
+
+    so a 130-character prompt keeps most of its own evidence while an
+    11-character one is pulled most of the way to the prior.  The prior is a
+    training-set constant, never a test-set measurement, which keeps the
+    rule baseline-applicable.
+    """
+    if len(prompt_seconds) != record.num_channels:
+        raise ValueError(
+            f"{record.dialogue_id}: got {len(prompt_seconds)} prompt durations "
+            f"for {record.num_channels} channels"
+        )
+    k = 0.0 if rate_prior_chars is None else float(rate_prior_chars)
+    if k < 0:
+        raise ValueError(f"rate_prior_chars must be >= 0 or null, got {k}")
+    prior = float(rate_prior_sec_per_char)
+    if k > 0 and prior <= 0:
+        raise ValueError(f"rate_prior_sec_per_char must be > 0, got {prior}")
+    rates: list[float] = []
+    for ch, (prompt_sec, prompt) in enumerate(zip(prompt_seconds, record.prompts)):
+        prompt_chars = len(prompt.text.encode("utf-8"))
+        if prompt_sec <= 0 or prompt_chars <= 0:
+            raise ValueError(
+                f"{record.dialogue_id}: channel {ch} prompt is degenerate "
+                f"({prompt_sec:.3f}s, {prompt_chars} chars)"
+            )
+        rates.append((float(prompt_sec) + k * prior) / (prompt_chars + k))
+    return rates
+
+
+def rate_prior_kwargs(dur_cfg: Any) -> dict[str, Any]:
+    """The shrinkage knobs of a ``duration:`` config block, as kwargs for
+    :func:`speaker_rates` / :func:`estimate_duration_sec` / ``duration_meta``.
+    Absent knobs mean the plain rule (bit-identical to every earlier run).
+    """
+    dur_cfg = dur_cfg or {}
+    k = dur_cfg.get("rate_prior_chars")
+    prior = dur_cfg.get("rate_prior_sec_per_char")
+    return {
+        "rate_prior_chars": None if k is None else float(k),
+        "rate_prior_sec_per_char": (
+            SSSD_SPEECH_SEC_PER_CHAR if prior is None else float(prior)
+        ),
+    }
+
+
 def estimate_duration_sec(
     record: ExternalRecord,
     prompt_seconds: Sequence[float],
     *,
     duration_scale: float = DEFAULT_DURATION_SCALE,
     speed: float = 1.0,
+    rate_prior_chars: float | None = None,
+    rate_prior_sec_per_char: float = SSSD_SPEECH_SEC_PER_CHAR,
 ) -> float:
     """Predict the generated dialogue's duration, in seconds.
 
@@ -269,30 +522,24 @@ def estimate_duration_sec(
     * ``speed`` keeps F5's knob, with F5's sense: larger is faster, so
       shorter.  Sweeping it is how the reported interaction metrics' duration
       sensitivity is measured.
+    * ``rate_prior_chars`` / ``rate_prior_sec_per_char`` shrink the
+      prompt-measured rates toward the training prior (see
+      :func:`speaker_rates`); off by default.
 
     The prompt region itself is NOT included: unlike F5's single-reference
     case, this recipe's caller already accounts for the prompt frames
     separately when it assembles the conditioning speech.  Returns the
     GENERATED region only.
     """
-    if len(prompt_seconds) != record.num_channels:
-        raise ValueError(
-            f"{record.dialogue_id}: got {len(prompt_seconds)} prompt durations "
-            f"for {record.num_channels} channels"
-        )
     if speed <= 0:
         raise ValueError(f"speed must be > 0, got {speed}")
-
-    total = 0.0
-    for ch, (prompt_sec, prompt) in enumerate(zip(prompt_seconds, record.prompts)):
-        prompt_chars = len(prompt.text.encode("utf-8"))
-        if prompt_sec <= 0 or prompt_chars <= 0:
-            raise ValueError(
-                f"{record.dialogue_id}: channel {ch} prompt is degenerate "
-                f"({prompt_sec:.3f}s, {prompt_chars} chars)"
-            )
-        rate = prompt_sec / prompt_chars  # seconds per character, this speaker
-        total += record.channel_chars[ch] * rate
+    rates = speaker_rates(
+        record,
+        prompt_seconds,
+        rate_prior_chars=rate_prior_chars,
+        rate_prior_sec_per_char=rate_prior_sec_per_char,
+    )
+    total = sum(record.channel_chars[ch] * rate for ch, rate in enumerate(rates))
     return total * float(duration_scale) / float(speed)
 
 
@@ -503,22 +750,46 @@ def plan_batches(
     return batches
 
 
+DURATION_SOURCES = ("predicted", "ground_truth")
+
+
 def duration_meta(
-    duration_scale: float, speed: float, predicted_sec: float
+    duration_scale: float,
+    speed: float,
+    predicted_sec: float,
+    *,
+    source: str = "predicted",
+    gt_sec: float | None = None,
+    rate_prior_chars: float | None = None,
+    rate_prior_sec_per_char: float = SSSD_SPEECH_SEC_PER_CHAR,
 ) -> dict[str, Any]:
     """The duration hyperparameters, recorded per window in ``meta``.
 
     Written into every meta JSON so a results table can never be read
-    without the duration policy that produced it.
+    without the duration policy that produced it.  ``predicted_sec`` is
+    always the RULE's estimate, even when ``source == "ground_truth"``
+    generated the ground-truth length instead - so ``predicted_over_gt``
+    (the rule's over/under-prediction against the reference) is readable on
+    every arm that has a reference.
     """
+    predicted_sec = round(float(predicted_sec), 6)
     return {
-        "predicted_sec": round(float(predicted_sec), 6),
+        "source": source,
+        "predicted_sec": predicted_sec,
+        "gt_sec": round(float(gt_sec), 6) if gt_sec is not None else None,
+        "predicted_over_gt": (predicted_sec / float(gt_sec) if gt_sec else None),
         "duration_scale": float(duration_scale),
         "speed": float(speed),
-        "rule": "f5_prompt_ratio_per_speaker",
+        "rule": (
+            "f5_prompt_ratio_per_speaker_shrunk"
+            if rate_prior_chars
+            else "f5_prompt_ratio_per_speaker"
+        ),
+        "rate_prior_chars": float(rate_prior_chars) if rate_prior_chars else None,
         "constants": {
             "sssd_speech_sec_per_char": SSSD_SPEECH_SEC_PER_CHAR,
             "librispeech_sec_per_char": LIBRISPEECH_SEC_PER_CHAR,
             "sssd_speech_density": SSSD_SPEECH_DENSITY,
+            "rate_prior_sec_per_char": float(rate_prior_sec_per_char),
         },
     }

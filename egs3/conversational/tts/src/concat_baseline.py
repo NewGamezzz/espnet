@@ -103,6 +103,7 @@ from egs3.conversational.tts.src.external_inference import _load_prompt_wav
 from egs3.conversational.tts.src.external_testset import (
     assign_shard,
     estimate_duration_sec,
+    rate_prior_kwargs,
     load_covomix2_testset,
     select_records,
 )
@@ -231,6 +232,7 @@ def _covomix2_items(cfg, training_config, fs: int) -> tuple[list[BaselineItem], 
     dur_cfg = cfg.get("duration", {}) or {}
     duration_scale = float(dur_cfg.get("scale", DEFAULT_DURATION_SCALE))
     speed = float(dur_cfg.get("speed", 1.0))
+    rate_prior = rate_prior_kwargs(dur_cfg)
 
     from egs3.conversational.tts.src.chunked_inference import estimate_turn_secs
     from egs3.conversational.tts.src.external_inference import _probe_duration_sec
@@ -239,7 +241,9 @@ def _covomix2_items(cfg, training_config, fs: int) -> tuple[list[BaselineItem], 
         [_probe_duration_sec(p.audio_path) for p in r.prompts] for r in records
     ]
     predicted = [
-        estimate_duration_sec(r, secs, duration_scale=duration_scale, speed=speed)
+        estimate_duration_sec(
+            r, secs, duration_scale=duration_scale, speed=speed, **rate_prior
+        )
         for r, secs in zip(records, prompt_secs)
     ]
     indices, exclusions = select_records(records, predicted, cfg.selection)
@@ -248,7 +252,11 @@ def _covomix2_items(cfg, training_config, fs: int) -> tuple[list[BaselineItem], 
     for idx in indices:
         record = records[idx]
         secs = estimate_turn_secs(
-            record, prompt_secs[idx], duration_scale=duration_scale, speed=speed
+            record,
+            prompt_secs[idx],
+            duration_scale=duration_scale,
+            speed=speed,
+            **rate_prior,
         )
         # `_load_prompt_wav` returns MONO (T,) - a CoVoMix2 prompt is one
         # LibriSpeech utterance, not a multichannel block - so index the
@@ -272,6 +280,7 @@ def _covomix2_items(cfg, training_config, fs: int) -> tuple[list[BaselineItem], 
                     "duration_policy": "predicted",
                     "duration_scale": duration_scale,
                     "speed": speed,
+                    **rate_prior,
                 },
             )
         )

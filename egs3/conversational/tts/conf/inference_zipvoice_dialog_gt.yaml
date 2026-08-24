@@ -1,0 +1,35 @@
+#####################################################################
+#  Conversational F5 - ground-truth ANCHOR on ZipVoice-Dialog test-en  #
+#####################################################################
+# `mode: generate_external_gt` (src/external_anchor.py) writes each
+# dialogue's reference channels AS the generation, in the same output
+# contract as the chunked run, so conf/metrics_zipvoice_dialog.yaml scores
+# it unchanged.  No model, no GPU.
+#
+# Read the anchor row as the set's floor/ceiling: wer_* = the reference
+# transcripts' own ASR disagreement, utmos_* / sim_o = what real speech
+# reaches under these metrics, and every *_dur_w1 ~ 0 (gen == gt), which is
+# also the acceptance test of the gt_wav plumbing.
+#
+#   python run.py --stages infer measure \
+#       --inference_config conf/inference_zipvoice_dialog_gt.yaml \
+#       --metrics_config   conf/metrics_zipvoice_dialog.yaml
+training_config: conf/training_poc.yaml
+exp_tag: eval_zipvoice_dialog
+mode: generate_external_gt
+device: cpu
+inference_dir: ${exp_dir}/infer_${mode}
+test_name: valid
+
+testset:
+  manifest: downloads/zipvoice-dialog-test-en/manifest.jsonl
+  name: zipvoice-dialog-test-en
+
+selection:
+  # Same subset semantics as the chunked config (band knobs apply to the
+  # ground-truth duration here).
+  dialogue_ids: null
+  min_duration: null
+  max_duration: null
+  num_dialogues: null
+  seed: 0
