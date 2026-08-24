@@ -95,6 +95,14 @@ sampling:
 chunk:
   turns: null
   target_sec: 25.0
+  # SINGLE PASS by default on this set (measured 2026-08-23): every dialogue
+  # fits this budget, so it is generated as ONE chunk over all turns = one
+  # ODE call.  ZipVoice dialogues are short (GT median 22 s, max 50 s), and
+  # single-pass beat chunked tsec25 on EVERY axis here (wer_channel 0.130 ->
+  # 0.116 pred, sim_o to the anchor ceiling, utmos_ipu +0.3, gap W1 0.305 ->
+  # 0.064).  Set to null to fall back to tsec25 chunking (the CoVoMix2
+  # recipe, which wins on that set's 30-80 s dialogues).
+  unchunked_max_sec: 100000.0
   cross_fade_sec: 0.1
   cond_silence_gate: true
   cond_gate_fill: room_tone
