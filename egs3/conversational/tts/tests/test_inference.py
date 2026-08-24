@@ -619,6 +619,38 @@ class TestTimestampGenerate:
         meta = json.loads((inf_a / "valid/meta/sess_w00000.json").read_text("utf-8"))
         assert meta["text_format"] == "order" and "layout" not in meta
 
+    def test_layout_is_the_only_key_mode_t_adds(self, fixture, ext_vocab5_file):
+        # `TestModeParity` pins `set(gt_meta) == set(gen_meta)` in Mode O
+        # only.  Mode T makes that invariant conditional: generate gains
+        # "layout", which gt can NEVER carry (timestamps is rejected outside
+        # generate).  Pin the conditional form here so the exception is a
+        # checked contract, not just a narrated one - all three arms share
+        # the 5-token vocab, so `text_format` is the only variable.
+        metas = {}
+        for name, mode, text_format in (
+            ("gt", "gt", None),
+            ("order", "generate", "order"),
+            ("timestamps", "generate", "timestamps"),
+        ):
+            inf_dir = fixture["tmp_path"] / f"infer_keys_{name}"
+            cfg = _infer_config(fixture, mode, inf_dir)
+            if text_format is not None:
+                cfg.text_format = text_format
+            needs_model = mode != "gt"
+            run_inference(
+                cfg,
+                training_config=fixture["training_config_5"],
+                model=build_tiny(ext_vocab5_file).eval() if needs_model else None,
+                vocoder=FakeVocoder() if needs_model else None,
+            )
+            metas[name] = json.loads(
+                (inf_dir / "valid/meta/sess_w00000.json").read_text("utf-8")
+            )
+
+        assert set(metas["gt"]) == set(metas["order"])  # the Mode O invariant
+        assert "layout" not in metas["order"] and "layout" in metas["timestamps"]
+        assert set(metas["timestamps"]) - {"layout"} == set(metas["order"])
+
     def test_timestamps_rejected_outside_generate(self, fixture):
         cfg = _infer_config(fixture, "gt", fixture["tmp_path"] / "x")
         cfg.text_format = "timestamps"

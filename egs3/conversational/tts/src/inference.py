@@ -519,6 +519,13 @@ def run_inference(
             "num_channels": n,
             "window_duration_sec": round(record.t1 - record.t0, 6),
             "text_format": effective_text_format,
+            # `layout` is the ONE meta key that intentionally breaks
+            # gt/generate key parity, and only under `text_format:
+            # timestamps` - gt can never carry it, since timestamps is
+            # rejected outside generate.  The cross-mode invariant is
+            # therefore "equal key sets whenever text_format is order", with
+            # `layout` the sole Mode T addition; the two halves are pinned by
+            # TestModeParity and TestTimestampGenerate respectively.
             **({"layout": {"turns": layout_meta}} if layout_meta is not None else {}),
             "rtf": rtf,
             "mix_wav": mix_rel,
