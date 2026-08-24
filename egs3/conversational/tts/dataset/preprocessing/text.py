@@ -23,9 +23,9 @@ OTHER_TOKEN = "<OTHER>"
 SPEAKER_PROMPT_TOKEN = "<speaker_prompt>"
 PREV_CHUNK_TOKEN = "<prev_chunk>"
 # Mode T in-turn fill token from the timestamp-alignment training run
-# (PR #42): pads a timestamp-aligned turn block to its span end.  The eval
-# recipe never EMITS it (inference text is Mode O), but timestamp-era
-# checkpoints carry its vocab row, so the load gates must know it.
+# (PR #42): pads a timestamp-aligned turn block to its span end.  Emitted by
+# ``build_branch_texts_timestamped`` under ``text_format: timestamps``; it is
+# the fifth (timestamp-era) vocab token, so the load gates must know it.
 TURN_FILL_TOKEN = "<turn_fill>"
 LEGACY_NEW_TOKENS: tuple[str, str] = (TURN_TOKEN, OTHER_TOKEN)
 NEW_TOKENS: tuple[str, str, str, str] = (
