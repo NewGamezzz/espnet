@@ -47,11 +47,25 @@ conditioning.  The concatenated prompt is trimmed to a whole number of hops
 (remainder dropped from the END) so the prompt/generated boundary is
 frame-exact; conditioning speech is ``concat(prompt, window_speech)``.
 
-Text assembly: ``sample["turns"] = [prompt_turn_ch0, prompt_turn_ch1, ...] +
-window_turns`` (window turns keep their existing order), then the existing
-per-branch preprocessor runs unchanged - prompt turns keep their own
-``channel``, and inference uses the identity channel permutation, so no
-remapping is needed.
+Text assembly (the default ``text_format: order``): ``sample["turns"] =
+[prompt_turn_ch0, prompt_turn_ch1, ...] + window_turns`` (window turns keep
+their existing order), then the existing per-branch preprocessor runs
+unchanged - prompt turns keep their own ``channel``, and inference uses the
+identity channel permutation, so no remapping is needed.
+
+``text_format: timestamps`` (``generate`` only; a ValueError otherwise)
+switches that to Mode T over the WHOLE conditioning+target sequence rather
+than the target alone: ``prompt_window_layout`` places the concatenated
+prompt blocks back-to-back from sequence time 0 and then the window turns at
+their GROUND-TRUTH offsets past the prompt (real timestamps - unlike the
+chunked path, which has to synthesize a timeline from ordinal turns), and
+the preprocessor emits one token per mel frame over all ``total_frames``.
+Prompt-turn spans come from the UNTRIMMED block lengths, so they can differ
+from the hop-trimmed prompt by at most one hop - the same order of rounding
+``turn_frame_spans`` applies to every other boundary.  A window whose turns
+do not fit their spans (``timestamp_fits`` is false) DEGRADES to the
+order-only text above rather than failing, and is counted in
+``n_timestamp_degraded``: one unfittable window must never cost the run.
 
 Output contract, under ``inference_dir/<test_name>/`` (ALL paths in
 ``meta.scp`` and in the meta JSONs are relative to THIS directory, so the
@@ -64,8 +78,11 @@ whole tree is relocatable):
   (ALL window turns of that channel), the ground-truth turn spans shifted to
   window time (the generated region now starts at window time 0), the
   prompt's total duration/frames and the concatenated prompt turns
-  (session-absolute spans, concatenation order), the mixdown wav path, and
-  RTF (generate mode only).
+  (session-absolute spans, concatenation order), the mixdown wav path, the
+  effective ``text_format`` (present in every mode, ``"order"`` unless the
+  window actually ran Mode T, so a degraded window is self-describing) plus
+  a ``layout`` block of sequence-time turn spans in Mode T only, and RTF
+  (generate mode only).
 * convenience SCPs (NOT consumed by metrics): channel-level ``wav.scp`` /
   ``prompt.scp`` / ``text.scp`` (``<window_id>_ch<k>`` rows) and window-level
   ``mix.scp``.
@@ -94,6 +111,10 @@ import torch
 from omegaconf import OmegaConf
 from tqdm import tqdm
 
+from egs3.conversational.tts.dataset.preprocessing.text import (
+    FRAMES_PER_SECOND,
+    timestamp_fits,
+)
 from egs3.conversational.tts.src.generation import (
     build_dataset,
     build_preprocessor,
@@ -105,11 +126,13 @@ from egs3.conversational.tts.src.generation import (
     resynth_region,
     write_wav,
 )
+from egs3.conversational.tts.src.timestamp_layout import prompt_window_layout
 
 logger = logging.getLogger(__name__)
 
 _EPS = 1e-6
 _MODES = ("generate", "gt", "resynth")
+_TEXT_FORMATS = ("order", "timestamps")
 
 
 def _overlaps(a_start: float, a_end: float, b_start: float, b_end: float) -> bool:
@@ -242,6 +265,21 @@ def _prompt_turn_meta(turns) -> list[dict[str, Any]]:
     ]
 
 
+def _layout_turn_meta(turns) -> list[dict[str, Any]]:
+    """Mode T layout entries: the sequence timeline the text was written
+    against (seconds from conditioning-speech start, prompt included), in
+    layout order.  No text: the transcripts are already in ``prompt.turns``
+    and ``turns``; this block is purely the timing the model was asked for."""
+    return [
+        {
+            "channel": int(t.channel),
+            "start": round(t.start, 6),
+            "end": round(t.end, 6),
+        }
+        for t in turns
+    ]
+
+
 def run_inference(
     inference_config,
     *,
@@ -249,7 +287,9 @@ def run_inference(
     model=None,
     vocoder=None,
 ) -> dict[str, Any]:
-    """Execute the infer stage; return ``{"n_selected", "n_skipped"}``.
+    """Execute the infer stage; return ``{"n_selected", "n_skipped",
+    "n_timestamp_degraded"}`` (the last is always 0 outside
+    ``text_format: timestamps``).
 
     ``training_config`` (the model / vocab / feats source) defaults to loading
     ``inference_config.training_config`` from disk, mirroring
@@ -261,6 +301,19 @@ def run_inference(
     mode = cfg.mode
     if mode not in _MODES:
         raise ValueError(f"unknown mode {mode!r}; expected one of {_MODES}")
+    # Checked before any I/O: a typo'd or misplaced knob must fail on the
+    # config, not after a manifest load.  `or "order"` also covers an
+    # explicit YAML null.
+    text_format = str(cfg.get("text_format", "order") or "order")
+    if text_format not in _TEXT_FORMATS:
+        raise ValueError(
+            f"text_format must be one of {_TEXT_FORMATS}, got {text_format!r}"
+        )
+    if text_format == "timestamps" and mode != "generate":
+        raise ValueError(
+            f"text_format: timestamps requires mode: generate, got mode {mode!r} "
+            "(gt/resynth never run the text preprocessor)"
+        )
 
     if training_config is None:
         train_path = Path(cfg.training_config)
@@ -271,6 +324,15 @@ def run_inference(
     device = torch.device(cfg.get("device", "cpu"))
     fs = int(training_config.sample_rate)
     hop = int(training_config.hop_length)
+    if text_format == "timestamps" and fs / hop != FRAMES_PER_SECOND:
+        # The preprocessor's Mode T text grid is hardwired to
+        # FRAMES_PER_SECOND, so a recipe whose fs/hop disagrees would
+        # silently desync the text stream from the audio it describes.
+        raise ValueError(
+            f"text_format: timestamps needs a frame rate of {FRAMES_PER_SECOND} "
+            "Hz, but this training config's sample_rate/hop_length gives "
+            f"{fs / hop}"
+        )
 
     dataset = build_dataset(
         training_config,
@@ -314,6 +376,7 @@ def run_inference(
     text_lines: list[str] = []
     mix_lines: list[str] = []
     n_skipped = 0
+    n_timestamp_degraded = 0  # per WINDOW, not per channel; 0 in Mode O
 
     prompt_cfg = cfg.prompt
     turn_min = float(prompt_cfg.get("turn_min_sec", 2.0))
@@ -371,13 +434,41 @@ def run_inference(
         speech = torch.cat([prompt_trimmed, window_speech], dim=1).to(device)
         total_frames = speech.shape[1] // hop
 
+        wid = record.window_id
         rtf = None
+        effective_text_format = "order"
+        layout_meta: list[dict[str, Any]] | None = None
         if mode == "gt":
             gen_wavs = window_speech.cpu()
         elif mode == "resynth":
             gen_wavs = resynth_region(model, vocoder, window_speech.to(device))
         else:  # generate
-            sample["turns"] = list(selected) + list(sample["turns"])
+            if text_format == "timestamps":
+                layout_turns = prompt_window_layout(
+                    selected,
+                    [b.shape[1] for b in blocks],
+                    sample["turns"],
+                    record.t0,
+                    fs=fs,
+                )
+                fps = fs / hop
+                if timestamp_fits(layout_turns, 0.0, total_frames / fps, fps):
+                    sample["turns"] = layout_turns
+                    sample.update(
+                        timestamp_text=True, target_t0=0.0, target_frames=total_frames
+                    )
+                    effective_text_format = "timestamps"
+                    layout_meta = _layout_turn_meta(layout_turns)
+                else:
+                    logger.warning(
+                        "%s: a turn does not fit its span; degrading to "
+                        "order-only text",
+                        wid,
+                    )
+                    n_timestamp_degraded += 1
+                    sample["turns"] = list(selected) + list(sample["turns"])
+            else:
+                sample["turns"] = list(selected) + list(sample["turns"])
             sample = preprocessor(str(idx), sample)
             text = pad_branch_text(sample, device)
             gen_wavs, elapsed = generate_region(
@@ -395,7 +486,6 @@ def run_inference(
             gen_seconds = gen_wavs.shape[1] / fs
             rtf = float(elapsed / gen_seconds) if gen_seconds > 0 else None
 
-        wid = record.window_id
         ref_texts = _reference_texts(record.turns, n)
         channels = []
         for ch in range(n):
@@ -428,6 +518,8 @@ def run_inference(
             "sample_rate": fs,
             "num_channels": n,
             "window_duration_sec": round(record.t1 - record.t0, 6),
+            "text_format": effective_text_format,
+            **({"layout": {"turns": layout_meta}} if layout_meta is not None else {}),
             "rtf": rtf,
             "mix_wav": mix_rel,
             "prompt": {
@@ -452,12 +544,17 @@ def run_inference(
 
     n_selected = len(meta_lines)
     logger.info(
-        "infer done: %d generated, %d skipped -> %s",
+        "infer done: %d generated, %d skipped, %d timestamp-degraded -> %s",
         n_selected,
         n_skipped,
+        n_timestamp_degraded,
         test_dir,
     )
-    return {"n_selected": n_selected, "n_skipped": n_skipped}
+    return {
+        "n_selected": n_selected,
+        "n_skipped": n_skipped,
+        "n_timestamp_degraded": n_timestamp_degraded,
+    }
 
 
 def _write_scp(path: Path, lines: Sequence[str]) -> None:

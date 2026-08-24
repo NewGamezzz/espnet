@@ -30,10 +30,12 @@ from .test_build_model import build_tiny  # noqa: F401  (fixture reuse)
 
 from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
 from egs3.conversational.tts.dataset.preprocessing.text import (
+    TURN_FILL_TOKEN,
     build_branch_texts,
     encode_tokens,
     make_token2id,
 )
+from egs3.conversational.tts.dataset.preprocessor import read_vocab
 from egs3.conversational.tts.dataset.preprocessing.windows import (
     WindowRecord,
     to_json,
@@ -48,6 +50,11 @@ from egs3.conversational.tts.src.inference import (
 FS = 24000
 SRC_SR = 48000
 HOP = 256
+
+# Mode T emits <turn_fill>, the fifth (timestamp-era) new token; the shared
+# `ext_vocab_file` / EXT_TOKENS fixtures stop at the four special-token-era
+# ones, so the Mode T tests pair a 5-token vocab with a model sized for it.
+EXT5_TOKENS = EXT_TOKENS + [TURN_FILL_TOKEN]
 
 _RecordStub = namedtuple("_RecordStub", ["session_id", "turns"])
 _TextTurn = namedtuple("_TextTurn", ["channel", "text"])
@@ -204,21 +211,38 @@ def _write_fixture_files(tmp_path, windows, flac_duration_s: float) -> dict:
     )
     vocab = tmp_path / "vocab.txt"
     vocab.write_text("\n".join(EXT_TOKENS) + "\n", encoding="utf-8")
-    training_config = OmegaConf.create(
-        {
-            "recipe_dir": str(tmp_path),
-            "sample_rate": FS,
-            "hop_length": HOP,
-            "dataset": {"preprocessor": {"token_list": str(vocab)}},
-        }
-    )
+    vocab5 = tmp_path / "vocab5.txt"
+    vocab5.write_text("\n".join(EXT5_TOKENS) + "\n", encoding="utf-8")
+
+    def _training_config(token_list):
+        return OmegaConf.create(
+            {
+                "recipe_dir": str(tmp_path),
+                "sample_rate": FS,
+                "hop_length": HOP,
+                "dataset": {"preprocessor": {"token_list": str(token_list)}},
+            }
+        )
+
     return {
         "tmp_path": tmp_path,
         "manifest": manifest,
         "dataset_root": root,
         "vocab": vocab,
-        "training_config": training_config,
+        "vocab5": vocab5,
+        "training_config": _training_config(vocab),
+        # Same config against the 5-token (<turn_fill>-carrying) vocab, for
+        # the Mode T runs; the 4-token one above is left untouched.
+        "training_config_5": _training_config(vocab5),
     }
+
+
+@pytest.fixture
+def ext_vocab5_file(tmp_path) -> Path:
+    """The conftest `ext_vocab_file` plus <turn_fill> (Mode T's fill token)."""
+    path = tmp_path / "vocab5.txt"
+    path.write_text("\n".join(EXT5_TOKENS) + "\n", encoding="utf-8")
+    return path
 
 
 @pytest.fixture
@@ -329,6 +353,10 @@ class TestGtContract:
             "sample_rate": FS,
             "num_channels": 2,
             "window_duration_sec": 8.0,
+            # Always present, in every mode: `TestModeParity` requires the
+            # gt/generate meta key sets to match, and only Mode T adds the
+            # sibling "layout" block.
+            "text_format": "order",
             "rtf": None,
             "mix_wav": "mix/sess_w00000.wav",
             "prompt": {
@@ -531,6 +559,90 @@ class TestTextAssembly:
 
 
 # --------------------------------------------------------------------------- #
+# text_format: timestamps (Mode T) over the whole prompt+window sequence
+# --------------------------------------------------------------------------- #
+class TestTimestampGenerate:
+    def _cfg(self, fixture, inf_dir):
+        cfg = _infer_config(fixture, "generate", inf_dir)
+        cfg.text_format = "timestamps"
+        return cfg
+
+    def test_text_is_frame_aligned_over_prompt_and_window(
+        self, fixture, ext_vocab5_file, monkeypatch
+    ):
+        captured = []
+        orig = inference_mod.generate_region
+
+        def spy(model, vocoder, speech, text, prompt_frames, total_frames, **kw):
+            captured.append((text.clone(), prompt_frames, total_frames))
+            return orig(model, vocoder, speech, text, prompt_frames, total_frames, **kw)
+
+        monkeypatch.setattr(inference_mod, "generate_region", spy)
+        inf_dir = fixture["tmp_path"] / "infer_t"
+        stats = run_inference(
+            self._cfg(fixture, inf_dir),
+            training_config=fixture["training_config_5"],
+            model=build_tiny(ext_vocab5_file).eval(),
+            vocoder=FakeVocoder(),
+        )
+        assert stats["n_timestamp_degraded"] == 0
+        text, prompt_frames, total_frames = captured[0]  # window A
+        token2id = make_token2id(read_vocab(ext_vocab5_file))
+        tn, tf = token2id["<turn>"], token2id["<turn_fill>"]
+        assert text.shape == (2, total_frames)
+        assert prompt_frames == 468 and total_frames == 1218
+        # prompt blocks: ch0 [0, 234), ch1 [234, 469); window turns shifted by 5.0 s
+        assert text[0, 0] == tn and text[1, 234] == tn
+        assert text[0, round(5.5 * 93.75)] == tn  # "abc def" rel 0.5 -> 516
+        assert text[1, round(8.5 * 93.75)] == tn  # "bead cab" rel 3.5 -> 797
+        assert (text[0] == tf).sum() > 0 and (text[1] == tf).sum() > 0
+        meta = json.loads((inf_dir / "valid/meta/sess_w00000.json").read_text("utf-8"))
+        assert meta["text_format"] == "timestamps"
+        assert meta["layout"]["turns"][2] == {"channel": 0, "start": 5.5, "end": 8.0}
+
+    def test_order_mode_meta_and_parity(self, fixture, ext_vocab_file):
+        inf_a = fixture["tmp_path"] / "a"
+        inf_b = fixture["tmp_path"] / "b"
+        cfg_a = _infer_config(fixture, "generate", inf_a)
+        cfg_b = _infer_config(fixture, "generate", inf_b)
+        cfg_b.text_format = "order"
+        for cfg, _d in ((cfg_a, inf_a), (cfg_b, inf_b)):
+            run_inference(
+                cfg,
+                training_config=fixture["training_config"],
+                model=build_tiny(ext_vocab_file).eval(),
+                vocoder=FakeVocoder(),
+            )
+        wa, _ = _read_wav(inf_a / "valid/wav/sess_w00000_ch0.wav")
+        wb, _ = _read_wav(inf_b / "valid/wav/sess_w00000_ch0.wav")
+        assert (wa == wb).all()
+        meta = json.loads((inf_a / "valid/meta/sess_w00000.json").read_text("utf-8"))
+        assert meta["text_format"] == "order" and "layout" not in meta
+
+    def test_timestamps_rejected_outside_generate(self, fixture):
+        cfg = _infer_config(fixture, "gt", fixture["tmp_path"] / "x")
+        cfg.text_format = "timestamps"
+        with pytest.raises(ValueError, match="text_format"):
+            run_inference(cfg, training_config=fixture["training_config"])
+
+    def test_unfittable_window_degrades_to_order(
+        self, fixture, ext_vocab5_file, monkeypatch
+    ):
+        # Force the fit predicate to fail; the window must still generate.
+        monkeypatch.setattr(inference_mod, "timestamp_fits", lambda *a, **k: False)
+        inf_dir = fixture["tmp_path"] / "infer_deg"
+        stats = run_inference(
+            self._cfg(fixture, inf_dir),
+            training_config=fixture["training_config_5"],
+            model=build_tiny(ext_vocab5_file).eval(),
+            vocoder=FakeVocoder(),
+        )
+        assert stats["n_timestamp_degraded"] == stats["n_selected"] > 0
+        meta = json.loads((inf_dir / "valid/meta/sess_w00000.json").read_text("utf-8"))
+        assert meta["text_format"] == "order"
+
+
+# --------------------------------------------------------------------------- #
 # Determinism across modes + generate/gt/resynth layout parity
 # --------------------------------------------------------------------------- #
 class TestModeParity:
@@ -619,7 +731,11 @@ class TestSystemDispatch:
 
         system = ConversationalTTSSystem(inference_config=cfg)
         stats = system.infer()
-        assert stats == {"n_selected": 2, "n_skipped": 0}
+        assert stats == {
+            "n_selected": 2,
+            "n_skipped": 0,
+            "n_timestamp_degraded": 0,
+        }
 
         test_dir = inf_dir / "valid"
         scp = (test_dir / "meta.scp").read_text("utf-8").splitlines()
