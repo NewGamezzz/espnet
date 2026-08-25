@@ -60,3 +60,14 @@ metrics:
       _convert_: all
     inputs:
       meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.turn_taking_judge.TurnTakingJudgeMetric
+      _convert_: all
+      judge:
+        _target_: egs3.conversational.tts.src.metrics.turn_taking_judge.TurnTakingJudge
+        checkpoint: espnet/Turn_taking_prediction_SWBD
+        device: cuda
+      bc_max_sec: 1.08
+      report_role_metrics: true
+    inputs:
+      meta: meta

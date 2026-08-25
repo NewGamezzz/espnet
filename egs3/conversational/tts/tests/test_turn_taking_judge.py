@@ -474,3 +474,27 @@ class TestMetricLayer2:
         # undefined selections (no interruptions here) are None, never NaN
         assert summary["judge_acc_interrupt"] is None
         assert not any(isinstance(v, float) and np.isnan(v) for v in summary.values())
+
+
+# --------------------------------------------------------------------------- #
+# Task 7: the checked-in metrics configs build the metric without loading it
+# --------------------------------------------------------------------------- #
+class TestConfigHydration:
+    @pytest.mark.parametrize(
+        "conf", ["conf/metrics.yaml", "conf/metrics_zipvoice_dialog.yaml"]
+    )
+    def test_metric_block_instantiates_lazily(self, conf):
+        from hydra.utils import instantiate
+        from omegaconf import OmegaConf
+
+        root = Path(__file__).resolve().parents[1]
+        cfg = OmegaConf.load(root / conf)
+        blocks = [
+            b for b in cfg.metrics if "TurnTakingJudgeMetric" in b.metric._target_
+        ]
+        assert len(blocks) == 1
+        metric = instantiate(blocks[0].metric)
+        assert isinstance(metric, TurnTakingJudgeMetric)
+        assert metric.judge._encode_fn is None  # checkpoint NOT loaded yet
+        assert metric.bc_max_sec == 1.08 and metric.report_role_metrics is True
+        assert isinstance(metric.vad_backend, m.SileroVADSegmenter)
