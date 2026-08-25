@@ -318,3 +318,283 @@ class TurnTakingJudge:
         """Upstream likelihood text: ``wid p,p,p,p,p p,p,p,p,p ...``."""
         cells = [",".join(f"{float(p):g}" for p in row) for row in probs]
         return " ".join([window_id, *cells])
+
+
+# --------------------------------------------------------------------------- #
+# upstream scoring library (imported by path, never vendored)
+# --------------------------------------------------------------------------- #
+_TEMPLATE_DIR = Path(__file__).resolve().parents[5] / "egs2" / "TEMPLATE" / "asr1"
+
+
+def _upstream():
+    """``pyscripts.utils.compute_turn_take_metrics`` from the ESPnet tree
+    (a namespace package under ``egs2/TEMPLATE/asr1``)."""
+    os.environ.setdefault("MPLBACKEND", "Agg")  # it imports pyplot at top
+    if str(_TEMPLATE_DIR) not in sys.path:
+        sys.path.insert(0, str(_TEMPLATE_DIR))
+    from pyscripts.utils import compute_turn_take_metrics as lib
+
+    return lib
+
+
+ROLE_KEYS = (
+    "judge_acc_pause",
+    "judge_acc_turn_change",
+    "judge_acc_bc",
+    "judge_acc_no_bc",
+    "judge_acc_interrupt",
+    "judge_acc_no_interrupt",
+    "judge_acc_willing_pause",
+    "judge_acc_willing_turn",
+    "judge_acc_interrupt_unsuccess",
+    "judge_acc_interrupt_success",
+)
+
+
+# --------------------------------------------------------------------------- #
+# the metric
+# --------------------------------------------------------------------------- #
+class TurnTakingJudgeMetric(BaseMetric):
+    """Talking Turns judge agreement on each window's mixdown. See the module
+    docstring for what is measured and how to read it."""
+
+    def __init__(
+        self,
+        judge: Optional[TurnTakingJudge] = None,
+        vad_backend: Optional[VADBackend] = None,
+        bc_max_sec: float = BC_MAX_SEC,
+        cache_likelihoods: bool = True,
+        report_role_metrics: bool = False,
+    ) -> None:
+        self.judge = judge if judge is not None else TurnTakingJudge()
+        self.vad_backend = (
+            vad_backend if vad_backend is not None else SileroVADSegmenter()
+        )
+        self.bc_max_sec = bc_max_sec
+        self.cache_likelihoods = cache_likelihoods
+        self.report_role_metrics = report_role_metrics
+
+    # -- BaseMetric entrypoint ------------------------------------------- #
+    def __call__(
+        self, data: Dict[str, Path], test_name: str, output_dir: Path
+    ) -> Dict[str, Optional[float]]:
+        test_dir = Path(data["meta"]).parent
+        out_dir = Path(output_dir) / test_name / "scoring" / "turn_taking_judge"
+        (out_dir / "likelihoods").mkdir(parents=True, exist_ok=True)
+        (out_dir / "labels").mkdir(parents=True, exist_ok=True)
+
+        lik_lines: List[str] = []
+        label_lines: List[str] = []
+        per_window: List[Dict[str, Any]] = []
+        skipped = 0
+        with (out_dir / "windows.jsonl").open("w", encoding="utf-8") as fout:
+            for _wid, row in self.iter_inputs(data, "meta"):
+                meta = json.loads((test_dir / row["meta"]).read_text("utf-8"))
+                if len(meta["channels"]) > 2:
+                    skipped += 1
+                    fout.write(
+                        json.dumps(
+                            {"window_id": meta["window_id"], "skipped": "channels>2"}
+                        )
+                        + "\n"
+                    )
+                    continue
+                rec, lik, rows = self._score_window(meta, test_dir, out_dir)
+                lik_lines.append(lik)
+                label_lines.extend(rows)
+                fout.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                per_window.append(rec)
+
+        summary, confusion = self._summarize(lik_lines, label_lines, per_window, skipped)
+        (out_dir / "confusion.json").write_text(
+            json.dumps(confusion, indent=2), encoding="utf-8"
+        )
+        (out_dir / "summary.json").write_text(
+            json.dumps(summary, indent=2), encoding="utf-8"
+        )
+        return summary
+
+    # -- per window ------------------------------------------------------- #
+    def _score_window(self, meta: Dict[str, Any], test_dir: Path, out_dir: Path):
+        wid = meta["window_id"]
+        if "sw0" in wid:
+            # compute_turn_likelihoods strips "sw0" from ids (Switchboard
+            # convention); such a window would fail the join silently.
+            raise ValueError(f"window id {wid!r} contains 'sw0'; rename before scoring")
+        dur = float(meta["window_duration_sec"])
+        lik_path = out_dir / "likelihoods" / f"{wid}.txt"
+        if self.cache_likelihoods and lik_path.exists():
+            lik_line = lik_path.read_text("utf-8").strip()
+        else:
+            mix, _sr = load_wav(test_dir / meta["mix_wav"], target_sr=JUDGE_SR)
+            lik_line = self.judge.likelihood_line(wid, self.judge.predict(mix))
+            lik_path.write_text(lik_line + "\n", encoding="utf-8")
+
+        spans = []
+        for ch in meta["channels"]:
+            wav, sr = load_wav(test_dir / ch["gen_wav"], target_sr=JUDGE_SR)
+            spans.append(self.vad_backend(wav, sr))
+        rows = label_rows(wid, spans, dur, self.bc_max_sec)
+        (out_dir / "labels" / f"{wid}.txt").write_text(
+            "".join(r + "\n" for r in rows), encoding="utf-8"
+        )
+
+        labels = [r.split(",")[3] for r in rows]
+        bc_spans = sum(
+            1
+            for ch in apply_backchannel_proxy(spans, dur, self.bc_max_sec)
+            for _, kind in ch
+            if kind == "BC"
+        )
+        return (
+            {
+                "window_id": wid,
+                "duration_sec": dur,
+                "expected_chunks": len(rows),
+                "judge_chunks": len(lik_line.split()) - 1,
+                "matched_chunks": min(len(lik_line.split()) - 1, len(rows)),
+                "bc_proxy_spans": bc_spans,
+                "label_counts": {
+                    c: labels.count(c)
+                    for c in ("C", "NA", "I", "BC", "T", "BC_1", "BC_2")
+                },
+                "confusion": self._confusion([lik_line], rows),
+            },
+            lik_line,
+            rows,
+        )
+
+    # -- run level -------------------------------------------------------- #
+    @staticmethod
+    def _scorer(lib, lik_lines: Sequence[str], rows: Sequence[str]):
+        lik = lib.compute_turn_likelihoods(
+            list(lik_lines),
+            lib.ModelParam.min_start_time.value,
+            lib.ModelParam.chunk_length.value,
+        )
+        dec, turn = lib.compute_turn_decisions(list(rows))
+        # human_human=True: the realized labels are the truth and the judge is
+        # what gets scored. Upstream's parameter names are inverted relative
+        # to what they hold; mimic score_turn_take.py's call order exactly
+        # (decisions first, likelihoods second).
+        return lik, lib.ScoreResult(dec, lik, turn, list(CLASSES), human_human=True)
+
+    def _confusion(self, lik_lines: Sequence[str], rows: Sequence[str]):
+        lib = _upstream()
+        _lik, scorer = self._scorer(lib, lik_lines, rows)
+        true = np.asarray(scorer.true_arr)
+        pred = np.asarray(scorer.pred_arr_hard_label)
+        return {
+            t: {p: int(((true == t) & (pred == p)).sum()) for p in CLASSES}
+            for t in CLASSES
+        }
+
+    def _summarize(self, lik_lines, label_lines, per_window, skipped):
+        from sklearn.metrics import f1_score, roc_auc_score
+
+        name = type(self).__name__
+        lib = _upstream()
+        summary: Dict[str, Optional[float]] = {
+            "judge_skipped_windows": skipped,
+            "judge_expected_chunks": sum(w["expected_chunks"] for w in per_window),
+            "judge_bc_proxy_count": sum(w["bc_proxy_spans"] for w in per_window),
+        }
+        empty = {t: {p: 0 for p in CLASSES} for t in CLASSES}
+        f1s: Dict[str, Optional[float]] = {c: None for c in CLASSES}
+        aucs: Dict[str, Optional[float]] = {c: None for c in CLASSES}
+        role: Dict[str, Optional[float]] = {k: None for k in ROLE_KEYS}
+        confusion = empty
+        matched: Optional[int] = None
+
+        if lik_lines:
+            lik, scorer = self._scorer(lib, lik_lines, label_lines)
+            true = np.asarray(scorer.true_arr)
+            hard = np.asarray(scorer.pred_arr_hard_label)
+            soft = np.asarray(scorer.pred_arr_soft_label)
+            matched = int(len(true))
+            expected = summary["judge_expected_chunks"]
+            if expected and matched / expected < 0.99:
+                raise RuntimeError(
+                    f"judge grid drift: matched {matched} of {expected} chunks"
+                )
+            for c in CLASSES:
+                pos = true == c
+                if not pos.any():
+                    continue  # class absent from the realized labels
+                f1s[c] = float(f1_score(pos, hard == c, average="macro"))
+                aucs[c] = float(roc_auc_score(pos, soft[:, lib.LabelIndex[c].value]))
+            confusion = {
+                t: {p: int(((true == t) & (hard == p)).sum()) for p in CLASSES}
+                for t in CLASSES
+            }
+            if self.report_role_metrics:
+                role = self._role_metrics(lib.ScoreResult, lik, label_lines)
+
+        summary["judge_matched_chunks"] = summary_value(
+            matched, "judge_matched_chunks", metric_name=name
+        )
+        for c in CLASSES:
+            summary[f"judge_f1_{c}"] = summary_value(
+                f1s[c], f"judge_f1_{c}", metric_name=name
+            )
+            summary[f"judge_auc_{c}"] = summary_value(
+                aucs[c], f"judge_auc_{c}", metric_name=name
+            )
+        f1_vals = [v for v in f1s.values() if v is not None]
+        auc_vals = [v for v in aucs.values() if v is not None]
+        summary["judge_f1_macro"] = summary_value(
+            sum(f1_vals) / len(f1_vals) if f1_vals else None,
+            "judge_f1_macro",
+            metric_name=name,
+        )
+        summary["judge_auc_mean"] = summary_value(
+            sum(auc_vals) / len(auc_vals) if auc_vals else None,
+            "judge_auc_mean",
+            metric_name=name,
+        )
+        for k in ROLE_KEYS:
+            summary[k] = summary_value(role[k], k, metric_name=name)
+        return summary, confusion
+
+    # -- layer 2 ---------------------------------------------------------- #
+    def _role_metrics(self, score_cls, lik_dict, rows) -> Dict[str, Optional[float]]:
+        """The paper's role-conditioned accuracies, asked from BOTH sides
+        (``only_AI`` on the original rows = "channel B holds the floor, what
+        does A do"; then on the role-swapped rows), decision arrays pooled
+        before the accuracy is taken."""
+        lib = _upstream()
+        dec_a, turn_a = lib.compute_turn_decisions(list(rows))
+        dec_b, turn_b = lib.compute_turn_decisions(swap_roles(rows))
+        s_a = score_cls(lik_dict, dec_a, turn_a, list(CLASSES), only_AI=True)
+        s_b = score_cls(lik_dict, dec_b, turn_b, list(CLASSES), only_AI=True)
+        for attr in ("pred_arr", "turn_arr", "true_arr_soft_label", "true_arr_hard_label"):
+            setattr(
+                s_a, attr, np.concatenate([getattr(s_a, attr), getattr(s_b, attr)])
+            )
+
+        def safe(fn):
+            try:
+                return fn()
+            except (ValueError, ZeroDivisionError, IndexError):
+                return (None, None)
+
+        out: Dict[str, Optional[float]] = {}
+        out["judge_acc_pause"], out["judge_acc_turn_change"] = safe(
+            s_a.turn_change_metric
+        )
+        out["judge_acc_bc"], out["judge_acc_no_bc"] = safe(s_a.make_backchannel_metric)
+        out["judge_acc_interrupt"], out["judge_acc_no_interrupt"] = safe(
+            s_a.make_interruption_metric
+        )
+        out["judge_acc_willing_pause"], out["judge_acc_willing_turn"] = safe(
+            s_a.turn_willingness_metric
+        )
+        out["judge_acc_interrupt_unsuccess"], out["judge_acc_interrupt_success"] = safe(
+            s_a.handle_interruption_metric
+        )
+        # upstream accuracy_score on an empty selection yields NaN (warning,
+        # not an exception): undefined stays None, never NaN in the summary.
+        return {
+            k: (None if v is None or np.isnan(float(v)) else float(v))
+            for k, v in out.items()
+        }
