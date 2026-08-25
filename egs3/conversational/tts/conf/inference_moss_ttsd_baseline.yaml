@@ -44,6 +44,7 @@ system:
   commit: 04fe1d85
   checkpoint: OpenMOSS-Team/MOSS-TTSD-v1.0 + OpenMOSS-Team/MOSS-Audio-Tokenizer
   prompts: v2-normalized (-23 dBFS active RMS), mono, ours
+  output: 24 kHz mono, one mixed track (measured 2026-08-25)
   params: >-
     mode=voice_clone_and_continuation batch_size=1 text_normalize=on
     sample_rate_normalize=on max_new_tokens=8192 temperature=1.1 top_p=0.9
