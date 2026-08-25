@@ -141,7 +141,7 @@
 # per rank via srun, and a mismatch either strands GPUs or oversubscribes them.
 
 set -euo pipefail
-ROOT=/ocean/projects/cis210027p/ttrachu/development/espnet_proj/espnet_emilia
+ROOT=/ocean/projects/cis210027p/ttrachu/development/espnet_proj/espnet_emilia_f5
 cd "$ROOT"
 # `set -e`/`set -u` are disabled across the activation ONLY. activate_python.sh
 # runs `eval "$(pixi shell-hook)"`, whose output references unset variables, so
@@ -295,18 +295,116 @@ if [[ -f "$EXP_DIR/STOP" ]]; then
     exit 0
 fi
 
-LAST_CKPT="$EXP_DIR/last.ckpt"
-if [[ -e "$LAST_CKPT" ]]; then
-    # save_last="link" (default_callbacks.py) makes last.ckpt a symlink to
-    # step{step}.ckpt; resolve the target and read the step count back out
-    # of the filename rather than loading the checkpoint.
-    TARGET_NAME="$(basename "$(readlink -f "$LAST_CKPT" 2>/dev/null || echo "$LAST_CKPT")")"
-    STEP="$(echo "$TARGET_NAME" | grep -oE '[0-9]+' | head -1 || true)"
-    if [[ -n "$STEP" ]] && (( STEP >= MAX_STEPS )); then
-        echo "$LAST_CKPT is at step $STEP >= max_steps $MAX_STEPS; training is" \
-            "complete, not resubmitting."
-        exit 0
+# Resolve the resume checkpoint by MAX STEP over the real step*.ckpt files
+# rather than by reading the last.ckpt symlink.
+#
+# WHY NOT last.ckpt: the symlink is written by Lightning's ModelCheckpoint,
+# and Lightning silently stops updating it whenever the callback's
+# `last_model_path` is not restored on resume -- it walks the version counter
+# to last-v1.ckpt, last-v2.ckpt, ... instead (model_checkpoint.py:912-916) and
+# leaves last.ckpt pointing at whatever step it last held. The restore is
+# skipped whenever the ABSOLUTE dirpath baked into the checkpoint differs from
+# the current one (model_checkpoint.py:559), so simply moving the tree does it.
+#
+# That happened: the tree was re-cloned from espnet_emilia/ to
+# espnet_emilia_f5/, last.ckpt froze at step11200.ckpt, and because this script
+# read --ckpt_path off that symlink, four consecutive 8h jobs each restarted
+# from the same batch (89608), trained ~1,800 steps and died -- zero net
+# progress over ~128 V100-hours, visible only as duplicate step13000-v*.ckpt
+# files and an identical first batch index in every train*.log.
+# default_callbacks.py now pins the name with enable_version_counter=False so
+# last.ckpt cannot drift again; resolving by max step here is the independent
+# second line of defence, and it holds for ANY cause of a stale symlink, not
+# just this one.
+#
+# Only step*.ckpt is considered. The epoch*_step*_valid.loss.ckpt files are
+# written save_weights_only=True and carry no optimizer/scheduler/loop state,
+# so resuming from one would silently restart the schedule; backup_step*.ckpt
+# is operator-managed and deliberately out of scope. Neither matches step*.
+resolve_last_ckpt() {
+    local f base step best_file="" best_step=-1
+    shopt -s nullglob
+    for f in "$EXP_DIR"/step*.ckpt; do
+        # -f skips dangling symlinks, -s skips the zero/truncated files a
+        # full filesystem produces (July 2026: step96048/step96600).
+        [[ -f "$f" && -s "$f" ]] || continue
+        base="${f##*/}"
+        step="${base#step}"      # step13000-v3.ckpt -> 13000-v3.ckpt
+        step="${step%.ckpt}"     #                   -> 13000-v3
+        step="${step%%-v*}"      #                   -> 13000
+        [[ "$step" =~ ^[0-9]+$ ]] || continue
+        # 10#: force base 10, so a hypothetical zero-padded name cannot be
+        # read as octal and abort the script under `set -e`.
+        if (( 10#$step > best_step )); then
+            best_step=$((10#$step)); best_file="$f"
+        elif (( 10#$step == best_step )) && [[ "$f" -nt "$best_file" ]]; then
+            # Same step reached more than once == a previous resume was
+            # broken. Prefer the most recently written copy.
+            best_file="$f"
+        fi
+    done
+    shopt -u nullglob
+    RESOLVED_CKPT="$best_file"
+    RESOLVED_STEP="$best_step"
+}
+resolve_last_ckpt
+LAST_CKPT="$RESOLVED_CKPT"
+
+# Fall back to last.ckpt only when no step*.ckpt exists at all (a config with
+# save_top_k=0, or a checkpoint written directly rather than linked).
+if [[ -z "$LAST_CKPT" && -e "$EXP_DIR/last.ckpt" ]]; then
+    LAST_CKPT="$EXP_DIR/last.ckpt"
+    echo "NOTE: no step*.ckpt found; falling back to $LAST_CKPT"
+fi
+
+if [[ -n "$LAST_CKPT" ]]; then
+    echo "Resuming from: $LAST_CKPT (step $RESOLVED_STEP)"
+    # Loud, because a disagreement here is the exact fingerprint of the bug
+    # above and it is otherwise invisible.
+    if [[ -e "$EXP_DIR/last.ckpt" ]]; then
+        SYMLINK_TARGET="$(readlink -f "$EXP_DIR/last.ckpt" || true)"
+        if [[ "$SYMLINK_TARGET" != "$(readlink -f "$LAST_CKPT" || true)" ]]; then
+            echo "WARNING: last.ckpt points at $SYMLINK_TARGET but the newest" \
+                "checkpoint is $LAST_CKPT. Lightning has stopped updating the" \
+                "symlink -- see the resolve_last_ckpt comment above." >&2
+        fi
     fi
+else
+    echo "No resumable checkpoint found; starting from scratch."
+fi
+
+if (( RESOLVED_STEP >= MAX_STEPS )); then
+    echo "$LAST_CKPT is at step $RESOLVED_STEP >= max_steps $MAX_STEPS;" \
+        "training is complete, not resubmitting."
+    exit 0
+fi
+
+# Stall watchdog. The failure above was silent for days precisely because a
+# non-advancing chain looks exactly like a healthy one from the queue: jobs
+# start, run their full walltime, write checkpoints and exit 0. Recording the
+# resume step per hop makes "the chain is not progressing" a checkable
+# condition. This runs BEFORE the next hop is queued below, so aborting here
+# actually stops the chain instead of leaving a successor behind.
+RESUME_HISTORY="$EXP_DIR/.resume_step_history"
+echo "$RESOLVED_STEP" >> "$RESUME_HISTORY"
+STALL=0
+while IFS= read -r _prev_step; do
+    if [[ "$_prev_step" == "$RESOLVED_STEP" ]]; then
+        STALL=$((STALL + 1))
+    else
+        break
+    fi
+done < <(tac "$RESUME_HISTORY")
+if (( STALL >= 3 )); then
+    echo "ABORT: the last $STALL jobs all resumed from step $RESOLVED_STEP." \
+        "The chain is not making progress -- each hop is re-training the same" \
+        "span and discarding it. Not training, not resubmitting. Check that" \
+        "the checkpoint's stored dirpath matches $EXP_DIR (see" \
+        "resolve_last_ckpt above) before restarting the chain." >&2
+    exit 1
+elif (( STALL == 2 )); then
+    echo "WARNING: this job and the previous one both resume from step" \
+        "$RESOLVED_STEP. One more and the chain aborts." >&2
 fi
 
 # 5) Pre-flight artifact check, BEFORE queuing the next hop (IMPORTANT 1):
