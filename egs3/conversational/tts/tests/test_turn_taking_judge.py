@@ -565,7 +565,9 @@ class TestPredictMany:
         _write_meta_scp(test_dir, wids)
         seen = []
         metric = TurnTakingJudgeMetric(
-            judge=TurnTakingJudge(encode_fn=_deterministic_encoder(seen)), vad_backend=vad
+            judge=TurnTakingJudge(encode_fn=_deterministic_encoder(seen)),
+            vad_backend=vad,
+            window_batch=32,
         )
         metric({"meta": test_dir / "meta.scp"}, "valid", tmp_path / "infer")
         assert all(bsz == 3 for bsz, _ in seen)  # every chunk index: 3 windows stacked

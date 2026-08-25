@@ -321,9 +321,13 @@ class TurnTakingJudge:
         windows: chunk ``i`` of every window covers the same sample span
         ``[max(0, end - 30 s), end)`` with ``end = 3200 + (i + 1) * 640``,
         so the stacked batch has one length and needs no padding - the
-        inputs are identical to the sequential loop, only stacked. Output
-        is independent of ``batch_size`` and of which windows share a
-        batch."""
+        inputs are identical to the sequential loop, only stacked. With a
+        deterministic encoder the output is independent of ``batch_size``;
+        on a GPU, batched kernels differ from the batch-1 path at the
+        ~1e-3 level (measured 2.4e-3 max abs diff over 16k chunks, A100)
+        and buy only ~1.5x (the encoder is compute-bound), so the metric
+        defaults to ``window_batch=1`` (exactly the upstream loop) and the
+        knob exists for callers who accept the deviation."""
         self._load()
         arrs = [np.asarray(w, dtype=np.float32) for w in wavs]
         counts = [self.n_chunks(w) for w in arrs]
@@ -396,7 +400,7 @@ class TurnTakingJudgeMetric(BaseMetric):
         bc_max_sec: float = BC_MAX_SEC,
         cache_likelihoods: bool = True,
         report_role_metrics: bool = False,
-        window_batch: int = 32,
+        window_batch: int = 1,
     ) -> None:
         self.judge = judge if judge is not None else TurnTakingJudge()
         self.vad_backend = (

@@ -334,7 +334,7 @@ Mono-ingested baselines (`ingest.output: mixture`) have no per-channel activity 
 
 Per window, `scoring/turn_taking_judge/likelihoods/<wid>.txt` (upstream likelihood text, cached so relabelling never re-runs the encoder) and `labels/<wid>.txt` (upstream `*_Label_Mono.csv` rows); run-level `confusion.json`.
 Read every number COMPARATIVELY against the `gt` anchor on the same set: the judge is Switchboard-telephony trained (domain shift to 24 kHz TTS mixdowns unquantified) and its human agreement is 57-81% in the paper.
-Cost: about 600 Whisper-medium encoder passes per 24 s dialogue at batch 1; this is a GPU metric (`device: cuda` in the Delta template), and `espnet2`'s Whisper encoder needs the `openai-whisper` package.
+Cost: about 600 Whisper-medium encoder passes per 24 s dialogue (about 22 chunks/s on an A40; `window_batch` > 1 stacks equal-length chunks across windows for ~1.5x at a ~1e-3 likelihood deviation from the batch-1 path, so the default is 1 and speed comes from sharding windows across jobs, the likelihood cache reassembling them); this is a GPU metric (`device: cuda` in the Delta template), and `espnet2`'s Whisper encoder needs the `openai-whisper` package.
 
 ## Evaluating on the CoVoMix2 test set
 
