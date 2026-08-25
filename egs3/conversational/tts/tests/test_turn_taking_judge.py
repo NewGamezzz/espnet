@@ -176,3 +176,46 @@ class TestSwapRoles:
             "w,0.28,0.32,NA,NA",
             "w,0.32,0.36,T,A",
         ]
+
+
+# --------------------------------------------------------------------------- #
+# Task 4: judge loop (run_chunk port) with an injected encoder
+# --------------------------------------------------------------------------- #
+from egs3.conversational.tts.src.metrics.turn_taking_judge import (  # noqa: E402
+    TurnTakingJudge,
+)
+
+
+class TestJudgeLoop:
+    def test_chunk_count_and_causal_window(self):
+        seen = []
+
+        def fake_encode(window):
+            seen.append(len(window))
+            return np.array([0.6, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
+
+        judge = TurnTakingJudge(encode_fn=fake_encode)
+        wav = np.zeros(16000 * 35, dtype=np.float32)  # 35 s > 30 s context
+        probs = judge.predict(wav)
+        assert probs.shape == ((16000 * 35 - 3200) // 640, 5)
+        assert seen[0] == 3200 + 640  # first window: start_chunk + one hop
+        assert max(seen) == 480000  # never more than 30 s
+        assert seen[-1] == 480000
+
+    def test_chunk_count_matches_grid(self):
+        judge = TurnTakingJudge(encode_fn=lambda w: np.full(5, 0.2, np.float32))
+        wav = np.zeros(int(16000 * 7.37), dtype=np.float32)
+        assert judge.predict(wav).shape[0] == len(chunk_ends(7.37))
+
+    def test_short_audio_gives_zero_chunks(self):
+        judge = TurnTakingJudge(encode_fn=lambda w: np.full(5, 0.2, np.float32))
+        assert judge.predict(np.zeros(3000, np.float32)).shape == (0, 5)
+
+    def test_likelihood_text_roundtrip(self):
+        judge = TurnTakingJudge(
+            encode_fn=lambda w: np.array([0.5, 0.2, 0.1, 0.1, 0.1], np.float32)
+        )
+        line = judge.likelihood_line(
+            "w1", judge.predict(np.zeros(3200 + 640 * 2, np.float32))
+        )
+        assert line == "w1 0.5,0.2,0.1,0.1,0.1 0.5,0.2,0.1,0.1,0.1"

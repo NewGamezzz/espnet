@@ -228,3 +228,93 @@ def swap_roles(rows: Sequence[str]) -> List[str]:
         head, turn = r.rsplit(",", 1)
         out.append(f"{head},{_ROLE_SWAP[turn]}")
     return out
+
+
+# --------------------------------------------------------------------------- #
+# judge wrapper (run_chunk port)
+# --------------------------------------------------------------------------- #
+class TurnTakingJudge:
+    """Ports the ``run_chunk`` loop of ``espnet2/bin/slu_inference.py``: one
+    causal <= 30 s window per 40 ms hop, prediction read from the LAST
+    encoder frame (``use_only_last_correct``), softmax over the 5 classes.
+
+    ``encode_fn`` (window float32 ``(T,)`` -> 5 probabilities) is the test
+    seam; the real one is built lazily from the Hugging Face checkpoint
+    (``espnet/Turn_taking_prediction_SWBD``, CC-BY-4.0) or a local snapshot
+    directory holding ``config.yaml`` + ``valid.loss.ave.pth``.
+    """
+
+    def __init__(
+        self,
+        checkpoint: str = "espnet/Turn_taking_prediction_SWBD",
+        device: str = "cpu",
+        encode_fn: Optional[Callable[[np.ndarray], np.ndarray]] = None,
+    ) -> None:
+        self.checkpoint = checkpoint
+        self.device = device
+        self._encode_fn = encode_fn
+
+    def _load(self) -> None:
+        if self._encode_fn is not None:
+            return
+        import torch
+        from espnet2.tasks.slu import SLUTask
+
+        root = Path(self.checkpoint)
+        if not root.exists():
+            from huggingface_hub import snapshot_download
+
+            root = Path(snapshot_download(self.checkpoint))
+        cfgs = sorted(root.rglob("config.yaml"))
+        pths = sorted(root.rglob("valid.loss.ave.pth"))
+        if len(cfgs) != 1 or len(pths) != 1:
+            raise FileNotFoundError(
+                f"expected one config.yaml and one valid.loss.ave.pth under {root}"
+            )
+        model, _args = SLUTask.build_model_from_file(
+            str(cfgs[0]), str(pths[0]), self.device
+        )
+        model.eval()
+        head = [
+            t for t in model.token_list if t not in ("<blank>", "<unk>", "<sos/eos>")
+        ]
+        if head != HEAD_TOKENS:
+            raise RuntimeError(
+                f"unexpected judge token order {head}; scorer assumes {HEAD_TOKENS}"
+            )
+        if not getattr(model, "use_only_last_correct", False):
+            raise RuntimeError("judge checkpoint must have use_only_last_correct=True")
+
+        def encode(window: np.ndarray) -> np.ndarray:
+            speech = torch.as_tensor(
+                window, dtype=torch.float32, device=self.device
+            ).unsqueeze(0)
+            lengths = speech.new_full([1], dtype=torch.long, fill_value=speech.size(1))
+            with torch.no_grad():
+                enc, enc_olens = model.encode(speech, lengths)
+                feats = model.transform_mean(model.act_fn(enc))
+                last = feats[0, enc_olens[0] - 1]
+                logits = model.transform_linear(last)
+                return torch.softmax(logits, dim=-1).float().cpu().numpy()
+
+        self._encode_fn = encode
+
+    def predict(self, wav16k: np.ndarray) -> np.ndarray:
+        """``(n_chunks, 5)`` likelihoods, ``n_chunks = (T - 3200) // 640``."""
+        self._load()
+        wav = np.asarray(wav16k, dtype=np.float32)
+        n = (len(wav) - START_SAMPLES) // HOP_SAMPLES
+        if n <= 0:
+            return np.zeros((0, 5), dtype=np.float32)
+        out = np.zeros((n, 5), dtype=np.float32)
+        for i in range(n):
+            end = (i + 1) * HOP_SAMPLES + START_SAMPLES
+            start = max(0, end - CONTEXT_SAMPLES)
+            out[i] = self._encode_fn(wav[start:end])
+        return out
+
+    @staticmethod
+    def likelihood_line(window_id: str, probs: np.ndarray) -> str:
+        """Upstream likelihood text: ``wid p,p,p,p,p p,p,p,p,p ...``."""
+        cells = [",".join(f"{float(p):g}" for p in row) for row in probs]
+        return " ".join([window_id, *cells])
