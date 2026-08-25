@@ -238,8 +238,9 @@ class TurnTakingJudge:
     causal <= 30 s window per 40 ms hop, prediction read from the LAST
     encoder frame (``use_only_last_correct``), softmax over the 5 classes.
 
-    ``encode_fn`` (window float32 ``(T,)`` -> 5 probabilities) is the test
-    seam; the real one is built lazily from the Hugging Face checkpoint
+    ``encode_fn`` (batch float32 ``(B, T)`` of EQUAL-length windows -> ``(B, 5)``
+    probabilities) is the test seam; the real one is built lazily from the
+    Hugging Face checkpoint
     (``espnet/Turn_taking_prediction_SWBD``, CC-BY-4.0) or a local snapshot
     directory holding ``config.yaml`` + ``valid.loss.ave.pth``.
     """
@@ -285,33 +286,63 @@ class TurnTakingJudge:
         if not getattr(model, "use_only_last_correct", False):
             raise RuntimeError("judge checkpoint must have use_only_last_correct=True")
 
-        def encode(window: np.ndarray) -> np.ndarray:
-            speech = torch.as_tensor(
-                window, dtype=torch.float32, device=self.device
-            ).unsqueeze(0)
-            lengths = speech.new_full([1], dtype=torch.long, fill_value=speech.size(1))
+        def encode(batch: np.ndarray) -> np.ndarray:
+            # (B, T) windows of ONE length: no padding, so the batch is
+            # sample-for-sample what the upstream batch-1 loop encodes
+            # (the Whisper encoder has no attention mask, so padded batches
+            # would NOT be faithful - see predict_many).
+            speech = torch.as_tensor(batch, dtype=torch.float32, device=self.device)
+            lengths = speech.new_full(
+                [speech.size(0)], dtype=torch.long, fill_value=speech.size(1)
+            )
             with torch.no_grad():
                 enc, enc_olens = model.encode(speech, lengths)
                 feats = model.transform_mean(model.act_fn(enc))
-                last = feats[0, enc_olens[0] - 1]
+                last = torch.stack(
+                    [feats[k, enc_olens[k] - 1] for k in range(feats.size(0))]
+                )
                 logits = model.transform_linear(last)
                 return torch.softmax(logits, dim=-1).float().cpu().numpy()
 
         self._encode_fn = encode
 
+    @staticmethod
+    def n_chunks(wav: np.ndarray) -> int:
+        return max((len(wav) - START_SAMPLES) // HOP_SAMPLES, 0)
+
     def predict(self, wav16k: np.ndarray) -> np.ndarray:
         """``(n_chunks, 5)`` likelihoods, ``n_chunks = (T - 3200) // 640``."""
+        return self.predict_many([wav16k])[0]
+
+    def predict_many(
+        self, wavs: Sequence[np.ndarray], batch_size: int = 32
+    ) -> List[np.ndarray]:
+        """Likelihoods for several windows, batching chunk ``i`` ACROSS
+        windows: chunk ``i`` of every window covers the same sample span
+        ``[max(0, end - 30 s), end)`` with ``end = 3200 + (i + 1) * 640``,
+        so the stacked batch has one length and needs no padding - the
+        inputs are identical to the sequential loop, only stacked. Output
+        is independent of ``batch_size`` and of which windows share a
+        batch."""
         self._load()
-        wav = np.asarray(wav16k, dtype=np.float32)
-        n = (len(wav) - START_SAMPLES) // HOP_SAMPLES
-        if n <= 0:
-            return np.zeros((0, 5), dtype=np.float32)
-        out = np.zeros((n, 5), dtype=np.float32)
-        for i in range(n):
+        arrs = [np.asarray(w, dtype=np.float32) for w in wavs]
+        counts = [self.n_chunks(w) for w in arrs]
+        outs = [np.zeros((n, 5), dtype=np.float32) for n in counts]
+        for i in range(max(counts, default=0)):
             end = (i + 1) * HOP_SAMPLES + START_SAMPLES
             start = max(0, end - CONTEXT_SAMPLES)
-            out[i] = self._encode_fn(wav[start:end])
-        return out
+            members = [k for k, n in enumerate(counts) if i < n]
+            for b in range(0, len(members), batch_size):
+                idx = members[b : b + batch_size]
+                batch = np.stack([arrs[k][start:end] for k in idx])
+                probs = np.asarray(self._encode_fn(batch), dtype=np.float32)
+                if probs.shape != (len(idx), 5):
+                    raise RuntimeError(
+                        f"encoder returned {probs.shape}, expected {(len(idx), 5)}"
+                    )
+                for row, k in zip(probs, idx):
+                    outs[k][i] = row
+        return outs
 
     @staticmethod
     def likelihood_line(window_id: str, probs: np.ndarray) -> str:
@@ -365,6 +396,7 @@ class TurnTakingJudgeMetric(BaseMetric):
         bc_max_sec: float = BC_MAX_SEC,
         cache_likelihoods: bool = True,
         report_role_metrics: bool = False,
+        window_batch: int = 32,
     ) -> None:
         self.judge = judge if judge is not None else TurnTakingJudge()
         self.vad_backend = (
@@ -373,6 +405,7 @@ class TurnTakingJudgeMetric(BaseMetric):
         self.bc_max_sec = bc_max_sec
         self.cache_likelihoods = cache_likelihoods
         self.report_role_metrics = report_role_metrics
+        self.window_batch = window_batch
 
     # -- BaseMetric entrypoint ------------------------------------------- #
     def __call__(
@@ -387,9 +420,15 @@ class TurnTakingJudgeMetric(BaseMetric):
         label_lines: List[str] = []
         per_window: List[Dict[str, Any]] = []
         skipped = 0
+        metas = [
+            json.loads((test_dir / row["meta"]).read_text("utf-8"))
+            for _wid, row in self.iter_inputs(data, "meta")
+        ]
+        self._fill_likelihood_cache(
+            [m for m in metas if len(m["channels"]) <= 2], test_dir, out_dir
+        )
         with (out_dir / "windows.jsonl").open("w", encoding="utf-8") as fout:
-            for _wid, row in self.iter_inputs(data, "meta"):
-                meta = json.loads((test_dir / row["meta"]).read_text("utf-8"))
+            for meta in metas:
                 if len(meta["channels"]) > 2:
                     skipped += 1
                     fout.write(
@@ -414,6 +453,31 @@ class TurnTakingJudgeMetric(BaseMetric):
         )
         return summary
 
+    # -- likelihoods, batched across windows -------------------------------- #
+    def _fill_likelihood_cache(self, metas, test_dir: Path, out_dir: Path) -> None:
+        """Run the judge on every window whose likelihood file is missing,
+        ``window_batch`` windows at a time (chunk-index batching inside
+        :meth:`TurnTakingJudge.predict_many`), and write the cache files
+        ``_score_window`` then reads."""
+        todo = [
+            m
+            for m in metas
+            if not (
+                self.cache_likelihoods
+                and (out_dir / "likelihoods" / f"{m['window_id']}.txt").exists()
+            )
+        ]
+        for b in range(0, len(todo), self.window_batch):
+            group = todo[b : b + self.window_batch]
+            wavs = [
+                load_wav(test_dir / m["mix_wav"], target_sr=JUDGE_SR)[0] for m in group
+            ]
+            for m, probs in zip(group, self.judge.predict_many(wavs)):
+                line = self.judge.likelihood_line(m["window_id"], probs)
+                (out_dir / "likelihoods" / f"{m['window_id']}.txt").write_text(
+                    line + "\n", encoding="utf-8"
+                )
+
     # -- per window ------------------------------------------------------- #
     def _score_window(self, meta: Dict[str, Any], test_dir: Path, out_dir: Path):
         wid = meta["window_id"]
@@ -423,12 +487,8 @@ class TurnTakingJudgeMetric(BaseMetric):
             raise ValueError(f"window id {wid!r} contains 'sw0'; rename before scoring")
         dur = float(meta["window_duration_sec"])
         lik_path = out_dir / "likelihoods" / f"{wid}.txt"
-        if self.cache_likelihoods and lik_path.exists():
-            lik_line = lik_path.read_text("utf-8").strip()
-        else:
-            mix, _sr = load_wav(test_dir / meta["mix_wav"], target_sr=JUDGE_SR)
-            lik_line = self.judge.likelihood_line(wid, self.judge.predict(mix))
-            lik_path.write_text(lik_line + "\n", encoding="utf-8")
+        # written by _fill_likelihood_cache (always, cache on or off)
+        lik_line = lik_path.read_text("utf-8").strip()
 
         spans = []
         for ch in meta["channels"]:

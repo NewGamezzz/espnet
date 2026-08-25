@@ -190,9 +190,10 @@ class TestJudgeLoop:
     def test_chunk_count_and_causal_window(self):
         seen = []
 
-        def fake_encode(window):
-            seen.append(len(window))
-            return np.array([0.6, 0.1, 0.1, 0.1, 0.1], dtype=np.float32)
+        def fake_encode(batch):
+            assert batch.ndim == 2 and batch.shape[0] == 1
+            seen.append(batch.shape[1])
+            return np.array([[0.6, 0.1, 0.1, 0.1, 0.1]], dtype=np.float32)
 
         judge = TurnTakingJudge(encode_fn=fake_encode)
         wav = np.zeros(16000 * 35, dtype=np.float32)  # 35 s > 30 s context
@@ -203,17 +204,17 @@ class TestJudgeLoop:
         assert seen[-1] == 480000
 
     def test_chunk_count_matches_grid(self):
-        judge = TurnTakingJudge(encode_fn=lambda w: np.full(5, 0.2, np.float32))
+        judge = TurnTakingJudge(encode_fn=lambda w: np.full((len(w), 5), 0.2, np.float32))
         wav = np.zeros(int(16000 * 7.37), dtype=np.float32)
         assert judge.predict(wav).shape[0] == len(chunk_ends(7.37))
 
     def test_short_audio_gives_zero_chunks(self):
-        judge = TurnTakingJudge(encode_fn=lambda w: np.full(5, 0.2, np.float32))
+        judge = TurnTakingJudge(encode_fn=lambda w: np.full((len(w), 5), 0.2, np.float32))
         assert judge.predict(np.zeros(3000, np.float32)).shape == (0, 5)
 
     def test_likelihood_text_roundtrip(self):
         judge = TurnTakingJudge(
-            encode_fn=lambda w: np.array([0.5, 0.2, 0.1, 0.1, 0.1], np.float32)
+            encode_fn=lambda w: np.tile([0.5, 0.2, 0.1, 0.1, 0.1], (len(w), 1)).astype(np.float32)
         )
         line = judge.likelihood_line(
             "w1", judge.predict(np.zeros(3200 + 640 * 2, np.float32))
@@ -326,9 +327,10 @@ class TestMetricLayer1:
         table = _oracle_table(label_rows("w1", [[(0.2, 1.4)], [(1.8, 3.6)]], dur))
         calls = {"n": 0}
 
-        def encode(window):
+        def encode(batch):
+            assert batch.shape[0] == 1
             calls["n"] += 1
-            return table[float(f"{(calls['n'] * 0.04 + 0.2):.2f}")]
+            return table[float(f"{(calls['n'] * 0.04 + 0.2):.2f}")][None]
 
         metric = TurnTakingJudgeMetric(
             judge=TurnTakingJudge(encode_fn=encode), vad_backend=vad
@@ -362,9 +364,9 @@ class TestMetricLayer1:
         _write_meta_scp(test_dir, ["w1"])
         calls = {"n": 0}
 
-        def encode(window):
+        def encode(batch):
             calls["n"] += 1
-            return np.array([0.6, 0.1, 0.1, 0.1, 0.1], np.float32)
+            return np.tile([0.6, 0.1, 0.1, 0.1, 0.1], (len(batch), 1)).astype(np.float32)
 
         metric = TurnTakingJudgeMetric(
             judge=TurnTakingJudge(encode_fn=encode), vad_backend=vad
@@ -381,7 +383,7 @@ class TestMetricLayer1:
         gens = [vad.register(_unique_wav(i, 32000), [(0.2, 1.0)]) for i in range(3)]
         _write_window(test_dir, "w1", 2.0, gens, seed=3)
         _write_meta_scp(test_dir, ["w1"])
-        judge = TurnTakingJudge(encode_fn=lambda w: np.full(5, 0.2, np.float32))
+        judge = TurnTakingJudge(encode_fn=lambda w: np.full((len(w), 5), 0.2, np.float32))
         summary = TurnTakingJudgeMetric(judge=judge, vad_backend=vad)(
             {"meta": test_dir / "meta.scp"}, "valid", tmp_path / "infer"
         )
@@ -398,7 +400,7 @@ class TestMetricLayer1:
         _write_window(test_dir, "w1", 4.0, [g0, g1], seed=5)
         _write_wav(test_dir / "mix" / "w1.wav", _unique_wav(6, 32000), 16000)
         _write_meta_scp(test_dir, ["w1"])
-        judge = TurnTakingJudge(encode_fn=lambda w: np.full(5, 0.2, np.float32))
+        judge = TurnTakingJudge(encode_fn=lambda w: np.full((len(w), 5), 0.2, np.float32))
         with pytest.raises(RuntimeError, match="grid drift"):
             TurnTakingJudgeMetric(judge=judge, vad_backend=vad)(
                 {"meta": test_dir / "meta.scp"}, "valid", tmp_path / "infer"
@@ -435,7 +437,7 @@ class TestMetricLayer2:
 
         rows = ["w,0.2,0.24,C,B"]
         metric = TurnTakingJudgeMetric(
-            judge=TurnTakingJudge(encode_fn=lambda w: np.full(5, 0.2, np.float32)),
+            judge=TurnTakingJudge(encode_fn=lambda w: np.full((len(w), 5), 0.2, np.float32)),
             report_role_metrics=True,
         )
         out = metric._role_metrics(FakeScore, {"w": {0.24: [0.2] * 5}}, rows)
@@ -458,9 +460,10 @@ class TestMetricLayer2:
         table = _oracle_table(label_rows("w1", [[(0.2, 1.4)], [(1.8, 3.6)]], dur))
         calls = {"n": 0}
 
-        def encode(window):
+        def encode(batch):
+            assert batch.shape[0] == 1
             calls["n"] += 1
-            return table[float(f"{(calls['n'] * 0.04 + 0.2):.2f}")]
+            return table[float(f"{(calls['n'] * 0.04 + 0.2):.2f}")][None]
 
         metric = TurnTakingJudgeMetric(
             judge=TurnTakingJudge(encode_fn=encode),
@@ -498,3 +501,72 @@ class TestConfigHydration:
         assert metric.judge._encode_fn is None  # checkpoint NOT loaded yet
         assert metric.bc_max_sec == 1.08 and metric.report_role_metrics is True
         assert isinstance(metric.vad_backend, m.SileroVADSegmenter)
+
+
+# --------------------------------------------------------------------------- #
+# batched prediction across windows (chunk-index batching, equal lengths)
+# --------------------------------------------------------------------------- #
+def _deterministic_encoder(seen_lengths=None):
+    """Probabilities that depend on the window's content and length, so a
+    wrong slice or a padded batch would change the output."""
+
+    def encode(batch):
+        assert batch.ndim == 2
+        if seen_lengths is not None:
+            seen_lengths.append((batch.shape[0], batch.shape[1]))
+        out = []
+        for w in batch:
+            z = np.array(
+                [w.sum(), w[-1], w[0], len(w) / 1e6, np.abs(w).mean()], dtype=np.float64
+            )
+            e = np.exp(z - z.max())
+            out.append(e / e.sum())
+        return np.stack(out).astype(np.float32)
+
+    return encode
+
+
+class TestPredictMany:
+    def test_matches_sequential_and_batches_have_one_length(self):
+        rng = np.random.default_rng(0)
+        wavs = [rng.standard_normal(n).astype(np.float32) for n in (16000 * 3, 16000 * 5 + 7, 16000 * 4)]
+        seq = [TurnTakingJudge(encode_fn=_deterministic_encoder()).predict(w) for w in wavs]
+        seen = []
+        many = TurnTakingJudge(encode_fn=_deterministic_encoder(seen)).predict_many(wavs, batch_size=2)
+        for a, b in zip(seq, many):
+            np.testing.assert_array_equal(a, b)
+        assert max(bsz for bsz, _ in seen) == 2 and any(bsz == 2 for bsz, _ in seen)
+        # shorter windows drop out of later batches; the longest finishes alone
+        assert seen[-1][0] == 1
+
+    def test_independent_of_batch_size(self):
+        rng = np.random.default_rng(1)
+        wavs = [rng.standard_normal(16000 * 2 + k * 640).astype(np.float32) for k in range(5)]
+        j = TurnTakingJudge(encode_fn=_deterministic_encoder())
+        a = j.predict_many(wavs, batch_size=1)
+        b = j.predict_many(wavs, batch_size=32)
+        for x, y in zip(a, b):
+            np.testing.assert_array_equal(x, y)
+
+    def test_bad_encoder_shape_is_an_error(self):
+        j = TurnTakingJudge(encode_fn=lambda b: np.zeros(5, np.float32))
+        with pytest.raises(RuntimeError, match="encoder returned"):
+            j.predict(np.zeros(3200 + 640, np.float32))
+
+    def test_metric_batches_cache_misses_across_windows(self, tmp_path):
+        test_dir = tmp_path / "infer" / "valid"
+        vad = KeyedFakeVADBackend()
+        wids = []
+        for k in range(3):
+            g0 = vad.register(_unique_wav(10 + k, 32000), [(0.2, 1.0)])
+            g1 = vad.register(_unique_wav(20 + k, 32000), [(1.2, 1.8)])
+            _write_window(test_dir, f"w{k}", 2.0, [g0, g1], seed=30 + k)
+            wids.append(f"w{k}")
+        _write_meta_scp(test_dir, wids)
+        seen = []
+        metric = TurnTakingJudgeMetric(
+            judge=TurnTakingJudge(encode_fn=_deterministic_encoder(seen)), vad_backend=vad
+        )
+        metric({"meta": test_dir / "meta.scp"}, "valid", tmp_path / "infer")
+        assert all(bsz == 3 for bsz, _ in seen)  # every chunk index: 3 windows stacked
+        assert len(seen) == 45  # (32000 - 3200) // 640 chunk indices, one batch each
