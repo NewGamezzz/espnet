@@ -1,0 +1,19 @@
+builder:
+  corpus_root: /ocean/projects/cis210027p/ttrachu/emilia_dataset/raw
+  langs: [EN, ZH]
+  data_path: data
+  val_ratio: 0.01
+  seed: 42
+  min_duration: 0.3
+  max_duration: 30.0
+  strict_text_filters: false     # D3: filter_text.py rules, off by default
+  audio_suffix: .mp3
+  manifest_paths:
+    train: manifest/train.tsv
+    valid: manifest/valid.tsv
+  shard_table_path: manifest/shards.txt
+
+dataset:
+  split_manifest_paths:
+    train: manifest/train.tsv
+    valid: manifest/valid.tsv

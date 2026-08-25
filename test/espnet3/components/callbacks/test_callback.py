@@ -1,11 +1,16 @@
+import shutil
+import warnings
 from pathlib import Path
 from unittest import mock
 
 import pytest
 import torch
 from hydra.utils import instantiate
+from lightning.pytorch import LightningModule, Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, ModelCheckpoint
+from lightning.pytorch.loggers import CSVLogger
 from omegaconf import OmegaConf
+from torch.utils.data import DataLoader, Dataset
 
 from espnet3.components.callbacks.default_callbacks import (
     AverageCheckpointsCallback,
@@ -41,6 +46,13 @@ from espnet3.components.callbacks.default_callbacks import (
 # |                                               | differ across checkpoints. |
 # | test_average_checkpoint_with_int_and_float_mix| Confirms floats are averaged and   |
 # |                          | ints are accumulated properly during checkpoint merging.|
+# | test_average_checkpoint_skips_rotated_away_checkpoint | best_k_models names a     |
+# | | checkpoint save_top_k already deleted: it is skipped, the survivors are     |
+# | | averaged, and the denominator/filename use the surviving count.             |
+# | test_average_checkpoint_all_tracked_checkpoints_missing | Every tracked path is   |
+# | | gone: no crash and no file written (the Emilia resume crash loop).          |
+# | test_average_checkpoint_unprefixed_state_dict | state_dict keys carry no "model." |
+# | | prefix (what ESPnetLightningModule returns): averaged file must not be empty.|
 
 
 @pytest.fixture
@@ -321,3 +333,279 @@ def test_metric_to_float_rejects_unsupported_type():
         AssertionError, match="does not support metric values of type dict"
     ):
         _metric_to_float({"loss": 1.0})
+
+
+def _write_lightning_ckpt(path, value):
+    """Write a Lightning-layout checkpoint with UNPREFIXED keys.
+
+    ESPnetLightningModule.state_dict() returns the inner model's state dict
+    (`return self.model.state_dict(...)`), so real checkpoints from this
+    framework carry no "model." prefix.
+    """
+    torch.save({"state_dict": {"layer.weight": torch.tensor([value, value])}}, path)
+
+
+def _run_average(tmp_path, ckpt_paths):
+    callback = AverageCheckpointsCallback(
+        output_dir=str(tmp_path),
+        best_ckpt_callbacks=[
+            mock.Mock(
+                best_k_models={str(p): 0.0 for p in ckpt_paths},
+                monitor="valid/loss",
+            )
+        ],
+    )
+    trainer = mock.Mock()
+    trainer.is_global_zero = True
+    callback.on_validation_end(trainer, pl_module=mock.Mock())
+    return sorted(tmp_path.glob("valid.loss.ave_*best.pth"))
+
+
+def test_average_checkpoint_skips_rotated_away_checkpoint(tmp_path):
+    """A checkpoint save_top_k already deleted must be skipped, not fatal.
+
+    best_k_models is restored from the resuming checkpoint's callback state and
+    routinely names files that save_top_k has since rotated off disk.
+    """
+    present = [tmp_path / "real_0.ckpt", tmp_path / "real_1.ckpt"]
+    _write_lightning_ckpt(present[0], 1.0)
+    _write_lightning_ckpt(present[1], 3.0)
+    missing = tmp_path / "rotated_away.ckpt"  # deliberately never created
+
+    written = _run_average(tmp_path, present + [missing])
+
+    assert len(written) == 1
+    # Denominator and filename both use the SURVIVING count, not the tracked
+    # count -- dividing by 3 here would silently shrink the weights.
+    assert written[0].name == "valid.loss.ave_2best.pth"
+    averaged = torch.load(written[0], map_location="cpu", weights_only=False)
+    assert torch.allclose(averaged["layer.weight"], torch.tensor([2.0, 2.0]))
+
+
+def test_average_checkpoint_all_tracked_checkpoints_missing(tmp_path):
+    """Every tracked checkpoint gone: no crash, nothing written.
+
+    The `if not checkpoints` guard sits before the load loop and does not cover
+    this -- the list is non-empty, every load just fails. Regression test for
+    the Emilia resume crash loop (102 consecutive failed chain links).
+    """
+    gone = [tmp_path / "gone_0.ckpt", tmp_path / "gone_1.ckpt"]
+    written = _run_average(tmp_path, gone)
+
+    assert written == []
+
+
+def test_average_checkpoint_unprefixed_state_dict(tmp_path):
+    """Unprefixed keys must survive averaging instead of writing an empty file.
+
+    Filtering on `k.startswith("model.")` alone empties the averaged dict for
+    this framework's checkpoints; the shipped Emilia valid.loss.ave_1best.pth
+    was 916 bytes and loaded to zero keys.
+    """
+    present = [tmp_path / "real_0.ckpt", tmp_path / "real_1.ckpt"]
+    _write_lightning_ckpt(present[0], 2.0)
+    _write_lightning_ckpt(present[1], 4.0)
+
+    written = _run_average(tmp_path, present)
+
+    assert len(written) == 1
+    averaged = torch.load(written[0], map_location="cpu", weights_only=False)
+    assert averaged, "averaged state dict must not be empty"
+    assert torch.allclose(averaged["layer.weight"], torch.tensor([3.0, 3.0]))
+
+
+# ===============================================================
+# Resume-chain regression tests for the last-checkpoint callback
+# ===============================================================
+#
+# | Test Name                                     | Description                     |
+# |-----------------------------------------------|--------------------------------|
+# | test_last_ckpt_relinks_across_repeated_resumes | last.ckpt tracks the newest    |
+# | | step across two consecutive resumes; no last-v*.ckpt is ever created.      |
+# | test_last_ckpt_relinks_after_exp_dir_is_moved  | THE 2026-08-25 regression:     |
+# | | exp_dir moved, so the absolute dirpath in the checkpoint no longer matches  |
+# | | and Lightning declines to restore last_model_path -- last.ckpt must still   |
+# | | be relinked rather than superseded by last-v1.ckpt.                        |
+# | test_resume_chain_advances_global_step        | global_step actually advances   |
+# | | across a resume (the property four consecutive Emilia jobs violated).      |
+# | test_resume_when_stored_last_model_path_no_longer_exists | Restored callback   |
+# | | state names a deleted last-vN.ckpt (what the repair left behind): the       |
+# | | removal of the missing previous checkpoint must be a no-op, not a crash.   |
+#
+# These drive a real Trainer instead of mocking, because the regression lived
+# entirely in the interaction between Lightning's callback-state restore and its
+# filename version counter -- every unit-level assertion about the callback in
+# isolation passed while the chain made zero progress for four 8h jobs.
+#
+# NOTE: only test_last_ckpt_relinks_after_exp_dir_is_moved fails against the
+# pre-fix code. The other three pass both before and after, by design: when
+# dirpath is unchanged the version counter correctly stands down on its own, so
+# they are invariants guarding normal resume, not reproductions of the bug.
+
+
+class _Data(Dataset):
+    def __len__(self):
+        return 32
+
+    def __getitem__(self, i):
+        return torch.full((4,), float(i) / 32.0)
+
+
+class _TinyModel(LightningModule):
+    def __init__(self):
+        super().__init__()
+        self.layer = torch.nn.Linear(4, 4)
+
+    def forward(self, x):
+        return self.layer(x)
+
+    def training_step(self, batch, batch_idx):
+        return self(batch).abs().mean()
+
+    def validation_step(self, batch, batch_idx):
+        loss = self(batch).abs().mean()
+        self.log("valid/loss", loss)
+        return loss
+
+    def configure_optimizers(self):
+        return torch.optim.SGD(self.parameters(), lr=0.01)
+
+
+def _fit(exp_dir, max_steps, ckpt_path=None):
+    callbacks = get_default_callbacks(
+        exp_dir=str(exp_dir),
+        log_interval=1000,
+        best_model_criterion=[("valid/loss", 2, "min")],
+        save_every_n_train_steps=2,
+    )
+    trainer = Trainer(
+        default_root_dir=str(exp_dir),
+        max_steps=max_steps,
+        callbacks=callbacks,
+        accelerator="cpu",
+        devices=1,
+        logger=CSVLogger(save_dir=str(exp_dir)),
+        num_sanity_val_steps=0,
+        val_check_interval=2,
+        limit_val_batches=2,
+        enable_model_summary=False,
+    )
+    loader = DataLoader(_Data(), batch_size=4)
+    trainer.fit(_TinyModel(), loader, loader, ckpt_path=ckpt_path)
+    return trainer
+
+
+def _versioned(exp_dir):
+    return sorted(p.name for p in Path(exp_dir).glob("last-v*.ckpt"))
+
+
+def _link_target(exp_dir):
+    link = Path(exp_dir) / "last.ckpt"
+    assert link.is_symlink(), f"last.ckpt is not a symlink: {link}"
+    return Path(str(link.resolve())).name
+
+
+def test_last_ckpt_relinks_across_repeated_resumes(tmp_path):
+    """last.ckpt must track the newest step across a resume chain.
+
+    Without enable_version_counter=False this writes last-v1/last-v2 and leaves
+    last.ckpt frozen, which is what pinned four consecutive Emilia jobs to the
+    same starting batch.
+    """
+    exp = tmp_path / "exp"
+    exp.mkdir()
+
+    _fit(exp, max_steps=4)
+    assert _link_target(exp) == "step4.ckpt"
+    assert _versioned(exp) == []
+
+    _fit(exp, max_steps=8, ckpt_path=str(exp / "last.ckpt"))
+    assert _link_target(exp) == "step8.ckpt", "last.ckpt did not advance on resume #1"
+    assert _versioned(exp) == [], f"version counter fired: {_versioned(exp)}"
+
+    _fit(exp, max_steps=12, ckpt_path=str(exp / "last.ckpt"))
+    assert _link_target(exp) == "step12.ckpt", "last.ckpt did not advance on resume #2"
+    assert _versioned(exp) == [], f"version counter fired: {_versioned(exp)}"
+
+
+def test_last_ckpt_relinks_after_exp_dir_is_moved(tmp_path):
+    """The exact 2026-08-25 failure: exp_dir moved, so the absolute dirpath
+    stored in the checkpoint no longer matches and Lightning declines to restore
+    last_model_path (model_checkpoint.py:559). The last-checkpoint name must
+    still be pinned to last.ckpt regardless.
+    """
+    old = tmp_path / "espnet_emilia" / "exp"
+    old.mkdir(parents=True)
+    _fit(old, max_steps=4)
+    assert _link_target(old) == "step4.ckpt"
+
+    new = tmp_path / "espnet_emilia_f5" / "exp"
+    new.parent.mkdir(parents=True)
+    shutil.move(str(old), str(new))
+
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        _fit(new, max_steps=8, ckpt_path=str(new / "last.ckpt"))
+
+    # Precondition: the restore really was declined. If this stops holding, the
+    # test is no longer exercising the regression.
+    assert any("dirpath has changed" in str(w.message) for w in caught), (
+        "expected Lightning's dirpath-changed warning; the test is not "
+        "reproducing the original condition"
+    )
+    assert _link_target(new) == "step8.ckpt", "last.ckpt froze after exp_dir move"
+    assert _versioned(new) == [], f"version counter fired: {_versioned(new)}"
+
+
+def test_resume_chain_advances_global_step(tmp_path):
+    """Resuming from last.ckpt must actually advance global_step.
+
+    The original symptom was that it did not: every job restarted from the same
+    checkpoint, so this asserts the property the train logs disproved.
+    """
+    exp = tmp_path / "exp"
+    exp.mkdir()
+
+    _fit(exp, max_steps=4)
+    first = torch.load(exp / "last.ckpt", map_location="cpu", weights_only=False)
+    assert first["global_step"] == 4
+
+    _fit(exp, max_steps=8, ckpt_path=str(exp / "last.ckpt"))
+    second = torch.load(exp / "last.ckpt", map_location="cpu", weights_only=False)
+    assert second["global_step"] == 8, (
+        f"resume did not advance: {first['global_step']} -> {second['global_step']}"
+    )
+
+
+def test_resume_when_stored_last_model_path_no_longer_exists(tmp_path):
+    """Callback state restores cleanly but names a last-vN.ckpt that is gone.
+
+    This is the exact state left behind by repairing the 2026-08-25 failure:
+    step13000-v4.ckpt stores last_model_path=last-v5.ckpt, and the repair
+    deleted the stale last-v* symlinks. On the next save Lightning computes
+    `previous`=last-v5.ckpt and calls _remove_checkpoint on it, so this asserts
+    the missing-file path is a no-op (TorchCheckpointIO guards with fs.exists)
+    rather than an exception that would kill the first save of every job.
+    """
+    exp = tmp_path / "exp"
+    exp.mkdir()
+    _fit(exp, max_steps=4)
+
+    # Rewrite the checkpoint's callback state to reference a checkpoint that
+    # does not exist, mirroring the repaired directory on PSC.
+    real = exp / "step4.ckpt"
+    ckpt = torch.load(real, map_location="cpu", weights_only=False)
+    ghost = str(exp / "last-v5.ckpt")
+    patched = 0
+    for key, state in ckpt["callbacks"].items():
+        if isinstance(state, dict) and "last_model_path" in state and state["last_model_path"]:
+            state["last_model_path"] = ghost
+            patched += 1
+    assert patched == 1, f"expected exactly one last_model_path to patch, got {patched}"
+    torch.save(ckpt, real)
+    assert not Path(ghost).exists()
+
+    # Must not raise, and must still take ownership of the last.ckpt name.
+    _fit(exp, max_steps=8, ckpt_path=str(exp / "last.ckpt"))
+    assert _link_target(exp) == "step8.ckpt"
+    assert _versioned(exp) == [], f"version counter fired: {_versioned(exp)}"

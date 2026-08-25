@@ -1,0 +1,315 @@
+# F5-TTS Base trained on Emilia, reproducing arXiv:2410.06885's official
+# F5TTS_Base checkpoint recipe (Table 3 architecture, Table 9 batch size,
+# Sec. 4 optimizer/schedule). Adapted from
+# egs3/libritts/tts/conf/training_f5_tts_small.yaml with:
+#   - Base architecture instead of Small (dim/depth/heads/text_dim per Table 3).
+#   - Emilia's builder + create_shape stage (Task 4/6) instead of LibriTTS's
+#     remove_long_short / collect_stats / create_token_list pipeline.
+#   - F5's own shipped vocab.txt (F5PinyinPreprocessor) instead of a
+#     corpus-derived char vocab, so the trained checkpoint stays token-list
+#     compatible with the official F5TTS_Base release (decision D7).
+#
+# Global batch: batch_bins(960000) * accumulate_grad_batches(8) * num_device(4)
+# / n_mel_channels(100) == 307200 mel-frames/update, matching the paper's
+# "batch size of 307,200 audio frames (0.91 hours)" (Sec. B.7) exactly.
+#
+# fp32 only: Bridges-2 nodes are V100s, which have no bf16 support, so no
+# `precision:` key is set under trainer (D5).
+#
+# Step-based validation: the full run is ~12 epochs over many months on PSC,
+# so validation is driven by trainer.val_check_interval (steps), not
+# check_val_every_n_epoch (spec 6.2).
+task: espnet2.tasks.tts.TTSTask
+
+num_device: 4
+num_nodes: 1
+
+recipe_dir: .
+data_dir: ${recipe_dir}/data
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+# feats_shape is a property of the corpus (manifest durations), not of a
+# specific experiment -- fixed at ${recipe_dir}/exp/stats, not
+# experiment-scoped via ${exp_dir}. Both this config and
+# training_f5_tts_base_smoke.yaml only differ in exp_tag, so an
+# experiment-scoped stats_dir would put create_shape's real output (written
+# once, under this config's exp_tag) somewhere the smoke config's dataloader
+# would never look -- exactly the bug this comment replaces. See
+# tests/test_training_config.py::test_stats_dir_is_shared_across_exp_tags.
+stats_dir: ${recipe_dir}/exp/stats
+inference_dir: ${exp_dir}/inference
+
+exp_tag: train_f5_tts_base_emilia
+
+# Mel / audio front-end settings shared by feats_extract and the model.
+sample_rate: 24000
+n_mel_channels: 100
+hop_length: 256
+win_length: 1024
+n_fft: 1024
+mel_spec_type: vocos
+
+vocab_file: ${recipe_dir}/downloads/vocab.txt
+
+create_dataset:
+  recipe_dir: ${recipe_dir}
+
+# Replaces collect_stats: synthesizes feats_shape analytically from manifest
+# durations instead of running the model's feats_extract over every sample.
+# See src/system.py TTSSystem.create_shape and the spec, section 5.4.
+create_shape:
+  splits: [train, valid]
+  save_path: ${stats_dir}
+  hop_length: ${hop_length}
+  sample_rate: ${sample_rate}
+  n_mels: ${n_mel_channels}
+  manifest_paths:            # read directly; no DataOrganizer coupling
+    train: ${data_dir}/manifest/train.tsv
+    valid: ${data_dir}/manifest/valid.tsv
+
+dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  recipe_dir: ${recipe_dir}
+  train:
+    - data_src_args:
+        split: train
+        manifest_path: ${data_dir}/manifest/train.tsv
+        fs: ${sample_rate}    # ensure consistent sampling rate via resampling in the dataset
+  valid:
+    - data_src_args:
+        split: valid
+        manifest_path: ${data_dir}/manifest/valid.tsv
+        fs: ${sample_rate}    # ensure consistent sampling rate via resampling in the dataset
+  # F5's own pinyin/char preprocessor, matching the official inference path
+  # (espnet2/text/f5_preprocessor.py) instead of espnet2's CommonPreprocessor.
+  # The mel is produced inside the model by feats_extract: vocoder_mel.
+  preprocessor:
+    _target_: espnet2.text.f5_preprocessor.F5PinyinPreprocessor
+    vocab_file: ${vocab_file}
+    text_name: text
+    train: true
+
+parallel:
+  env: local
+  n_workers: 1
+
+# espnet2 task args (consumed by get_espnet_model -> TTSTask.build_model ->
+# ESPnetTTSModel). Same shape as the VITS recipe's `model:` block.
+model:
+  token_list: ${vocab_file}        # 2545 lines -> idim=2545 -> Embedding(2546)
+  token_type: char
+  odim: null                       # derived from feats_extract.output_size()
+  feats_extract: vocoder_mel
+  feats_extract_conf:
+    fs: ${sample_rate}
+    n_fft: ${n_fft}
+    hop_length: ${hop_length}
+    win_length: ${win_length}
+    n_mels: ${n_mel_channels}
+    mel_spec_type: ${mel_spec_type}
+  # F5 trains on raw vocos log-mel; no mean/variance stats needed
+  # (create_shape replaces collect_stats on that basis).
+  normalize: null
+  tts: f5tts
+  tts_conf:                        # F5TTS_Base, Table 3
+    dim: 1024
+    depth: 22
+    heads: 16
+    dim_head: 64
+    ff_mult: 2
+    text_dim: 512
+    text_mask_padding: false
+    pe_attn_head: 1
+    conv_layers: 4
+    sigma: 0.0
+    audio_drop_prob: 0.3
+    cond_drop_prob: 0.2
+    frac_lengths_mask: [0.7, 1.0]
+    odeint_method: euler
+    mel_spec_kwargs:               # raw-waveform inference fallback inside CFM
+      n_fft: ${n_fft}
+      hop_length: ${hop_length}
+      win_length: ${win_length}
+      n_mel_channels: ${n_mel_channels}
+      target_sample_rate: ${sample_rate}
+      mel_spec_type: ${mel_spec_type}
+  model_conf: {}
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 7.5e-5
+  betas: [0.9, 0.999]      # F5-TTS uses AdamW defaults
+  weight_decay: 0.01
+
+scheduler:
+  # F5-TTS schedule: linear warmup then linear decay to ~0 (SequentialLR).
+  # total_steps MUST match the planned run (epochs * updates_per_epoch).
+  _target_: espnet2.schedulers.linear_warmup_decay.linear_warmup_decay
+  warmup_steps: 20000
+  total_steps: 1200000
+scheduler_interval: step
+
+best_model_criterion:
+  - - valid/loss
+    - 1
+    - min
+
+dataloader:
+  collate_fn:
+    _target_: espnet2.train.collate_fn.CommonCollateFn
+    # F5TTS remaps padded text to its filler id internally (via text_lengths),
+    # so the espnet2 default int_pad_value=0 is fine here.
+    int_pad_value: 0
+    float_pad_value: 0.0
+  train:
+    num_shards: 1
+    iter_factory:
+      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+      # INSIDE iter_factory, not beside it. espnet3's _build_iter_factory
+      # instantiates ONLY the iter_factory block, so num_workers/pin_memory
+      # placed as siblings of it are silently dead -- the 2-GPU smoke (job
+      # 43635433) ran with num_workers=0 and paid iter_time=0.624s of
+      # dataloader wait against train_time=1.751s, i.e. 26% of every step
+      # spent decoding mp3 on the main process. egs3/libritts's config
+      # documents this same trap.
+      num_workers: 4
+      pin_memory: true
+      shuffle: true
+      collate_fn: ${dataloader.collate_fn}
+      batches:
+        # Stock espnet2 sampler, same as the LibriTTS F5 recipe. An earlier
+        # revision used a custom numpy-backed variant carrying upstream
+        # F5-TTS's per-batch sample cap of 64; both justifications for it
+        # were measured and neither held:
+        #   - The cap is inert. It was argued from Emilia's 0.3s duration
+        #     floor (28 frames -> 340+ samples in a short-end batch), but
+        #     Emilia ships 3-30s segments and this corpus's minimum is
+        #     3.004s, so realized batch sizes run 1..35 and 0 of 9,997
+        #     batches ever reach 64.
+        #   - The memory saving is real but not needed: ~4.3 GB vs ~12.4 GB
+        #     per rank extrapolated to 37M utterances, i.e. ~35 GB vs
+        #     ~100 GB across 8 ranks on a 515 GB node. Stock is also faster
+        #     to construct at every size measured.
+        # The two produce identical partitions at 116k/500k/2M/8M
+        # utterances, so this is not a behavioural change.
+        type: numel
+        batch_size: 1          # required by signature, unused for "numel"
+        # 1, NOT world_size. min_batch_size is a FLOOR the sampler may not
+        # close below, and the sampler closes on
+        #   current_count * current_length * n_mels > batch_bins
+        # so any floor above 1 lets a batch of `floor` long utterances cost
+        # floor * L_max frames no matter what batch_bins says -- batch_bins
+        # stops bounding memory. Emilia's 30s cap makes L_max 2813 frames,
+        # and the first GPU smoke (job 43582509) OOM'd exactly this way:
+        # min_batch_size 8 bound 72% of batches and peaked at 25,317 padded
+        # frames against a 4,800 nominal budget.
+        #
+        # At 1 the floor never forces an overshoot, so peak padded frames is
+        # batch_bins/n_mels plus one length gap in the ascending sort.
+        # Measured on the smoke corpus (116,152 utts): peak 11,990 frames vs
+        # 9,600 nominal, and 24.81 GiB of a V100-32's 31.73 under real 2-rank
+        # DDP (parity/mem_probe.py, job 43631681). The gap term shrinks as
+        # the corpus grows, so the full 37M-utterance run peaks no higher.
+        #
+        # It costs essentially nothing: exactly ONE batch of 9,997 comes out
+        # smaller than 4 samples (a single batch of 1), and the batch count
+        # is unchanged from min_batch_size 4 (9,997 vs 9,996). F5 conditions
+        # via AdaLN and has no BatchNorm, so a batch of 1 is well-defined.
+        min_batch_size: 1
+        # The original rationale here (keeping the trailing 1-7 sample
+        # remainder from tripping espnet3's len(batch) >= world_size check)
+        # is obsolete: that check was espnet2's, wrong for espnet3, and has
+        # been removed. Retained anyway -- at ~101k batches per epoch a
+        # ragged final batch buys nothing, and espnet3 drops tail batches to
+        # align ranks regardless.
+        drop_last: true
+        shape_files:
+          - ${stats_dir}/train/feats_shape
+        # Same value as egs3/libritts/tts/conf/training_f5_tts_small.yaml,
+        # i.e. a per-GPU budget already proven on a V100-32.
+        batch_bins: 960000     # 960000 * 8 accum * 4 gpu / 100 mels = 307200
+  valid:
+    num_shards: 1
+    iter_factory:
+      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+      # INSIDE iter_factory, not beside it. espnet3's _build_iter_factory
+      # instantiates ONLY the iter_factory block, so num_workers/pin_memory
+      # placed as siblings of it are silently dead -- the 2-GPU smoke (job
+      # 43635433) ran with num_workers=0 and paid iter_time=0.624s of
+      # dataloader wait against train_time=1.751s, i.e. 26% of every step
+      # spent decoding mp3 on the main process. egs3/libritts's config
+      # documents this same trap.
+      num_workers: 4
+      pin_memory: true
+      shuffle: false
+      collate_fn: ${dataloader.collate_fn}
+      batches:
+        type: ${dataloader.train.iter_factory.batches.type}
+        batch_size: 1          # required by signature, unused for "numel"
+        # Must track train's floor. Validation shares train's batch_bins, so
+        # a floor left at 8 here reintroduces exactly the 25,317-frame batch
+        # that OOM'd. That it did not OOM in the first smoke was luck, not
+        # safety: the valid loader does not shuffle, so it walks the
+        # length-sorted order short-to-long and limit_val_batches stops it
+        # before the long tail -- which silently stops protecting anything
+        # the moment limit_val_batches is raised.
+        min_batch_size: 1
+        drop_last: true
+        shape_files:
+          - ${stats_dir}/valid/feats_shape
+        batch_bins: ${dataloader.train.iter_factory.batches.batch_bins}
+
+trainer:
+  accelerator: auto
+  devices: ${num_device}
+  num_nodes: ${num_nodes}
+  accumulate_grad_batches: 8
+  # Real optimizer-update count isn't fixed under numel batching, so stop
+  # explicitly at the paper's target instead of relying on max_epochs.
+  max_steps: 1200000
+  # REQUIRED here, not optional. One epoch is 784,770 batches per rank, about
+  # 14.8 days at the measured 0.61 it/s, against an 8-hour GPU-small walltime.
+  # espnet3's last-checkpoint callback otherwise fires only at train-epoch end,
+  # so every segment would be killed before writing anything and its successor
+  # would restart from step 0 -- ~300 chained jobs, ~100 GPU-days, zero
+  # progress. submit_train.sbatch keys its resume on exp/last.ckpt, so it would
+  # keep starting fresh silently rather than failing.
+  #
+  # 200 updates is ~44 min at the measured ~275 updates/hour, so a walltime
+  # kill loses at most that much of an 8-hour segment (~9%), across ~11 saves
+  # per segment. Each save is ~5.4 GB (params + AdamW moments + EMA) but
+  # save_top_k defaults to 1 with no monitor, so it overwrites rather than
+  # accumulating.
+  #
+  # NOTE val_check_interval below is 5000, which at ~275 updates/hour is ~18
+  # hours -- longer than a segment, so the best-checkpoint callbacks never
+  # fire either. last.ckpt is what actually carries this run.
+  save_every_n_train_steps: 200
+  val_check_interval: 5000       # steps, not epochs (spec 6.2)
+  limit_val_batches: 200
+  log_every_n_steps: 50
+  max_epochs: -1
+  gradient_clip_val: 1.0
+  strategy: auto
+  callbacks:
+    - _target_: espnet3.components.callbacks.ema.EMACallback
+      decay: 0.9999
+  logger:
+    _target_: lightning.pytorch.loggers.WandbLogger
+    project: espnet3-emilia-f5-tts
+    name: ${exp_tag}
+    save_dir: ${exp_dir}
+    log_model: false
+    id: ${exp_tag}
+    resume: allow
+
+# Resume is NOT configured here unconditionally: on a fresh run
+# ${exp_dir}/last.ckpt does not exist, and Lightning 2.x's
+# CheckpointConnector._parse_ckpt_path passes a literal (non-"best"/"last"/
+# "hpc") ckpt_path straight through to TorchCheckpointIO.load_checkpoint,
+# which raises FileNotFoundError for a nonexistent path -- verified
+# directly against the installed lightning==2.6.5
+# (lightning_fabric/plugins/io/torch_io.py:88-89). local/submit_train.sbatch
+# passes --ckpt_path to run.py, and run.py sets fit.ckpt_path here, only
+# when $LAST_CKPT already exists, so the first hop of a chain runs with no
+# ckpt_path at all.
+fit: {}

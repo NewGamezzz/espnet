@@ -4,7 +4,7 @@ import logging
 import time
 from collections import defaultdict
 from pathlib import Path
-from typing import List, Tuple, Union
+from typing import List, Tuple, Union, Optional
 
 import torch
 from lightning.pytorch.callbacks import (
@@ -119,10 +119,31 @@ class AverageCheckpointsCallback(Callback):
 
                 avg_state_dict = None
                 reference_keys = None
+                num_averaged = 0
                 for ckpt_path in checkpoints:
-                    state_dict = torch.load(
-                        ckpt_path, map_location="cpu", weights_only=False
-                    )
+                    # best_k_models is restored from the resuming checkpoint's
+                    # callback state, but save_top_k rotates the files it names
+                    # off disk. A resumed run therefore routinely carries
+                    # entries whose file is already gone, and an unguarded load
+                    # kills every rank at the first validation -- observed on
+                    # Emilia as 102 consecutive failed chain links, each
+                    # resuming from the same last.ckpt and dying ~42 min in on
+                    # a rotated-away epoch0_step10625_valid.loss.ckpt.
+                    # Caught rather than pre-checked with exists() so the
+                    # check-then-load race is covered too, and so the mocked
+                    # torch.load in test_callback.py keeps working.
+                    try:
+                        state_dict = torch.load(
+                            ckpt_path, map_location="cpu", weights_only=False
+                        )
+                    except FileNotFoundError:
+                        logging.warning(
+                            "Averaging %s: skipping checkpoint that is no "
+                            "longer on disk: %s",
+                            ckpt_callback.monitor,
+                            ckpt_path,
+                        )
+                        continue
 
                     # for deepspeed checkpoints
                     if "module" in state_dict:
@@ -145,6 +166,19 @@ class AverageCheckpointsCallback(Callback):
                             )
                         for k in avg_state_dict:
                             avg_state_dict[k] = avg_state_dict[k] + state_dict[k]
+                    num_averaged += 1
+
+                # Every tracked checkpoint was missing. The `if not checkpoints`
+                # guard above sits BEFORE the loop and so does not cover this:
+                # the list was non-empty, every load just failed. Iterating over
+                # None below would raise TypeError.
+                if avg_state_dict is None:
+                    logging.warning(
+                        "Averaging %s: no tracked checkpoint still exists on "
+                        "disk; skipping this average.",
+                        ckpt_callback.monitor,
+                    )
+                    continue
 
                 for k in avg_state_dict:
                     if str(avg_state_dict[k].dtype).startswith("torch.int"):
@@ -159,18 +193,29 @@ class AverageCheckpointsCallback(Callback):
                         )
                         pass
                     else:
-                        avg_state_dict[k] = avg_state_dict[k] / len(checkpoints)
+                        avg_state_dict[k] = avg_state_dict[k] / num_averaged
 
-                # remove extra prefix in model keys
-                new_avg_state_dict = {
-                    k.removeprefix("model."): v
-                    for k, v in avg_state_dict.items()
-                    if k.startswith("model.")
-                }
+                # Remove the extra prefix in model keys when present.
+                # ESPnetLightningModule.state_dict() returns the inner model's
+                # state dict directly (lightning_module.py: `return
+                # self.model.state_dict(...)`), so its keys carry NO "model."
+                # prefix and filtering on the prefix alone writes an EMPTY
+                # averaged checkpoint. Verified on the Emilia run: the shipped
+                # valid.loss.ave_1best.pth is 916 bytes and loads to 0 keys.
+                # Originally fixed in 900dbd433, reverted in 583678ebc only
+                # because that PR wanted to touch no framework code.
+                if any(k.startswith("model.") for k in avg_state_dict):
+                    new_avg_state_dict = {
+                        k.removeprefix("model."): v
+                        for k, v in avg_state_dict.items()
+                        if k.startswith("model.")
+                    }
+                else:
+                    new_avg_state_dict = avg_state_dict
 
                 avg_ckpt_path = Path(self.output_dir) / (
                     f"{ckpt_callback.monitor.replace('/', '.')}."
-                    + f"ave_{len(checkpoints)}best.pth"
+                    + f"ave_{num_averaged}best.pth"
                 )
                 torch.save(new_avg_state_dict, avg_ckpt_path)
 
@@ -403,6 +448,7 @@ def get_default_callbacks(
     best_model_criterion: Union[List[Tuple[str, int, str]], List[List]] = [
         ("valid/loss", 3, "min")
     ],
+    save_every_n_train_steps: Optional[int] = None,
 ) -> List[Callback]:
     """Return a list of callbacks tailored for most training workflows.
 
@@ -440,13 +486,71 @@ def get_default_callbacks(
         ... )
         >>> trainer = Trainer(callbacks=callbacks, ...)
     """
+    # save_every_n_train_steps is REQUIRED for any run whose epoch is longer
+    # than its walltime. Without it this callback fires only at train-epoch
+    # end, so a job killed at walltime writes nothing at all and its
+    # successor restarts from step 0 -- a chain that burns GPU-months and
+    # accumulates no progress. Emilia is the concrete case: one epoch is
+    # 784,770 batches (~14.8 days) against an 8-hour GPU-small walltime, so
+    # the epoch boundary is never reached.
+    #
+    # monitor is None here, so save_top_k defaults to 1: each save writes
+    # step{step}.ckpt, removes the previous one, and relinks last.ckpt.
+    # Disk stays bounded no matter how often this fires.
+    #
+    # enable_version_counter=False is LOAD-BEARING for resume, not a tidiness
+    # flag -- it is what keeps last.ckpt the single, stable name a chained job
+    # can resume from. Without it, Lightning's _save_last_checkpoint runs
+    #     while self.file_exists(filepath) and filepath != self.last_model_path:
+    #         filepath = ...(ver=version_cnt)
+    # (model_checkpoint.py:912-916), so ANY run that starts with an empty or
+    # non-matching self.last_model_path walks straight past the existing
+    # last.ckpt and writes last-v1.ckpt, then last-v2.ckpt, and so on, leaving
+    # last.ckpt frozen at whatever step it happened to hold.
+    #
+    # last_model_path is empty exactly when ModelCheckpoint.load_state_dict
+    # declines to restore callback state, and its only condition for that is
+    # `self.dirpath == state_dict["dirpath"]` (model_checkpoint.py:559) -- an
+    # ABSOLUTE path stored inside the checkpoint. So merely MOVING an exp_dir
+    # is enough to trigger this: on 2026-08-25 the Emilia Base run was found
+    # having made zero net progress since 2026-08-24 because the tree had been
+    # re-cloned from espnet_emilia/ to espnet_emilia_f5/. last.ckpt stayed
+    # pinned to step11200.ckpt written by the old tree, submit_train.sbatch
+    # resolved --ckpt_path from that symlink, and four consecutive 8h jobs each
+    # restarted from batch 89608, trained ~1,800 steps, and died -- ~128
+    # V100-hours, and the four step13000*.ckpt copies, are that loop.
+    #
+    # Note that repointing last.ckpt by hand does NOT break the cycle: every
+    # checkpoint the broken run wrote stores last_model_path=last-vN.ckpt, so
+    # the counter fires again on the next resume (verified against
+    # step13000-v3.ckpt, which holds last-v4.ckpt). The condition only stands
+    # down when the restored value is exactly <dirpath>/last.ckpt, which is
+    # what pinning the name here guarantees unconditionally.
+    #
+    # Lightning's own warning ("The dirpath has changed from X to Y, therefore
+    # ... last_model_path ... won't be reloaded") is the fingerprint, and it is
+    # only a WARNING -- training continues and looks healthy, so the failure is
+    # silent unless someone compares the first logged batch index across jobs.
+    # local/submit_train.sbatch resolves the resume checkpoint by max step
+    # rather than trusting this symlink, which catches the same class of bug
+    # from the other side.
+    #
+    # This mirrors the best_ckpt_callbacks below, which already pass
+    # enable_version_counter=False. The same flag also gates the counter in
+    # _get_metric_interpolated_filepath_name (model_checkpoint.py:888), so
+    # step{step}.ckpt becomes overwrite-in-place too -- that is what produced
+    # step13000-v1..v3. A step-name collision can only happen when the same
+    # step is reached twice, i.e. when resume is already broken, so clobbering
+    # is the correct behaviour rather than a hazard.
     last_ckpt_callback = ModelCheckpoint(
         dirpath=exp_dir,
         save_last="link",
         filename="step{step}",
         auto_insert_metric_name=False,
         save_on_train_epoch_end=True,
+        every_n_train_steps=save_every_n_train_steps,
         save_weights_only=False,
+        enable_version_counter=False,  # see above: required for resume
     )
 
     best_ckpt_callbacks = []

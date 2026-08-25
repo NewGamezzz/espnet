@@ -52,6 +52,8 @@ dist
 
 # recipe related
 egs*/*/*/data*
+# Emilia recipe: dataset/ holds source, not data (egs*/*/*/data* above matches it)
+!egs3/emilia/tts/dataset/
 egs*/*/*/manifest*
 egs*/*/*/db
 egs*/*/*/downloads

@@ -1,0 +1,91 @@
+recipe_dir: .
+
+exp_tag:
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+data_dir: ${recipe_dir}/data
+inference_dir: ${exp_dir}/${self_name:}
+
+# The LibriTTS inference path silently ran on CPU because F5TTSInference
+# defaults to device="cpu" and nothing overrode it. Set explicitly here.
+device: cuda
+
+sample_rate: 24000
+
+# No preprocessor: the F5 inference model needs the raw target text + raw
+# reference waveform, and does its own tokenization / mel extraction
+# internally.
+#
+# This is the published Seed-TTS protocol, not an approximation: unlike the
+# LibriTTS dataset's ref_mode (random same/cross-speaker prompt selection),
+# every Seed-TTS row ships its own fixed prompt (prepared by
+# local/prepare_seedtts_eval.py), so there is no reference selection here.
+# test-en, test-zh and test-hard are kept as three separate eval sets rather
+# than merged, matching the paper's Table 4 breakout.
+#
+# `data_src` is a module dotted path (no "/"), so
+# espnet3.components.data.dataset_module.load_dataset_module imports it
+# directly and DataOrganizer resolves the dataset class via
+# getattr(module, "Dataset") -- which egs3/emilia/tts/dataset/seedtts.py
+# aliases to SeedTTSDataset. This is the same mechanism
+# egs3/libritts/tts/conf/inference_f5_librispeech_pc.yaml uses for
+# LibriSpeechPCDataset.
+dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  recipe_dir: ${recipe_dir}
+  test:
+    - name: test_en
+      data_src: egs3.emilia.tts.dataset.seedtts
+      data_src_args:
+        manifest_path: ${data_dir}/eval/test_en/meta.tsv
+        fs: ${sample_rate}
+        inference: true
+    - name: test_zh
+      data_src: egs3.emilia.tts.dataset.seedtts
+      data_src_args:
+        manifest_path: ${data_dir}/eval/test_zh/meta.tsv
+        fs: ${sample_rate}
+        inference: true
+    - name: test_hard
+      data_src: egs3.emilia.tts.dataset.seedtts
+      data_src_args:
+        manifest_path: ${data_dir}/eval/test_hard/meta.tsv
+        fs: ${sample_rate}
+        inference: true
+
+parallel:
+  env: local
+  n_workers: 1
+
+model:
+  _target_: espnet2.tts.f5.inference.F5TTSInference
+  # Rebuilds ESPnetTTSModel(F5TTS) via the espnet2 task and matches training
+  # tokenization, both read from this training config. This must be the Base
+  # config Task 7 created, not the LibriTTS small config.
+  train_config: ${recipe_dir}/conf/training_f5_tts_base.yaml
+  ckpt_path: ${exp_dir}/last.ckpt
+  use_ema: true
+  # Vocos mel vocoder (24 kHz, 100-mel) — matches the F5 "vocos" mel front-end.
+  vocoder_name: vocos
+  vocoder_path: null
+  target_sample_rate: ${sample_rate}
+  # Sampling hyperparameters.
+  nfe_step: 32
+  cfg_strength: 2.0
+  sway_sampling_coef: -1.0
+  speed: 1.0
+  seed: null
+
+# Cross-speaker protocol: synthesize `text` in the voice of `ref_speech`,
+# using its transcript `ref_text`, matching SeedTTSDataset's returned keys.
+input_key: [text, ref_speech, ref_text]
+batch_size: null
+output_fn: src.inference.build_output
+output_artifacts:
+  wav:
+    type: wav
+    sample_rate: ${sample_rate}
+
+provider:
+  _target_: espnet3.systems.base.inference_provider.InferenceProvider
+runner:
+  _target_: espnet3.systems.base.inference_runner.InferenceRunner

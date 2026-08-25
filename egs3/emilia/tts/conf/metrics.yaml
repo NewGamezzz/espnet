@@ -1,0 +1,30 @@
+# No `dataset:` block here, deliberately: with it absent,
+# espnet3.systems.base.metric._resolve_test_sets auto-scans
+# metrics_config.inference_dir and treats every non-hidden subdirectory as a
+# test set, so this file can never drift from the `infer` stage's actual
+# output directories (test_en / test_zh / test_hard) the way a hardcoded
+# `dataset.test` list can. See tests/test_metrics_config.py.
+metrics:
+  - metric:
+      _target_: src.metrics.versa.VersaMetric
+      score_config:
+        - name: pseudo_mos
+          predictor_types: [utmos, dnsmos]
+          predictor_args:
+            utmos:
+              fs: 16000
+            dnsmos:
+              fs: 16000
+        - name: whisper_wer
+          model_tag: default
+          beam_size: 1
+        - name: speaker
+          model_tag: espnet/voxcelebs12_ecapa_wavlm_joint
+      wav_key:  wav
+      ref_key:  ref
+      text_key: text
+      use_gpu:  true
+    inputs:
+      wav:  wav
+      ref:  ref
+      text: text

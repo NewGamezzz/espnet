@@ -1,0 +1,124 @@
+#!/bin/bash
+#SBATCH --job-name=emilia_f5_smoke
+#SBATCH --partition=GPU
+#SBATCH --gres=gpu:v100-32:8
+#SBATCH --nodes=1
+#SBATCH --ntasks-per-node=8
+#SBATCH --cpus-per-task=5
+#SBATCH --time=02:00:00
+#SBATCH --output=logs/smoke_%j.out
+#
+# GPU smoke: produces the number the whole campaign budget depends on.
+# Trains conf/training_f5_tts_base_smoke.yaml, which is the production Base
+# config (training_f5_tts_base.yaml) with ONLY max_steps, val_check_interval,
+# limit_val_batches, exp_tag and trainer.logger changed -- batch_bins,
+# accumulate_grad_batches and num_device are untouched (see
+# tests/test_training_config.py::test_smoke_config_only_differs_from_base_in_five_places),
+# because the point is to measure PRODUCTION throughput, not a smaller run.
+#
+# `#SBATCH --output=logs/smoke_%j.out` requires logs/ to already exist --
+# Slurm does not create the parent directory. `mkdir -p logs` before
+# submitting.
+#
+# ---------------------------------------------------------------------------
+# Four measurements to extract from the job log after it completes
+# (spec section 8, Task 11 step 4):
+# ---------------------------------------------------------------------------
+#
+# 1. UPDATES PER HOUR at production batch_bins.
+#    "[train] distributed batches: world_size=..." (dataloader.py) marks
+#    when training data is ready; step/time deltas from the MetricsLogger's
+#    periodic "Nepoch:train:A-Bbatch: ..." lines (log_every_n_steps: 50)
+#    give steps/sec directly. Extrapolate to 1,200,000 updates:
+#      wall_clock_hours = 1_200_000 / updates_per_hour
+#
+# 2. PEAK GPU MEMORY per rank, confirming Base fits on V100-32 in fp32 at
+#    this batch_bins. Query after the job completes:
+#      sacct -j <jobid> --format=JobID,MaxRSS,MaxVMSize,ReqGRES,Elapsed
+#    or (more precise for GPU memory specifically) grep the job's stderr
+#    for any CUDA OOM trace (absence is itself the pass condition) and read
+#    peak allocated/reserved from PyTorch's own end-of-run summary if
+#    trainer logging captures one; otherwise wrap the srun below in
+#    `nvidia-smi --query-gpu=memory.used --format=csv -l 30 > logs/gpu_%j.csv &`
+#    (backgrounded, killed after srun returns) for a time series.
+#
+# 3. PEAK HOST RSS and WALL TIME OF SAMPLER CONSTRUCTION. The recipe uses
+#    the stock `numel` sampler, whose cost at full corpus size is real:
+#    extrapolated to 37M utterances it is roughly 12 GB and ~4 minutes per
+#    rank, paid on EVERY restart of a chained months-long run. Watch it:
+#      - Peak RSS per rank: `sacct -j <jobid> --format=JobID,MaxRSS,MaxRSSNode`
+#        (per-task RSS is only available per srun step, not per Slurm task,
+#        on some PSC accounting configs -- fall back to
+#        `/usr/bin/time -v` wrapping the srun invocation below if sacct's
+#        MaxRSS reads 0 or blank).
+#      - Wall time of sampler construction: the timestamp delta between the
+#        LAST "create_shape"/config-resolution log line and the FIRST
+#        "[train] distributed batches: world_size=..., rank=..., total=...,
+#        per_rank=..." line (espnet3/components/data/dataloader.py). Every
+#        log line is timestamped by espnet3/utils/logging_utils.py's
+#        LOG_FORMAT, so this is a plain grep + timestamp subtraction, no
+#        extra instrumentation needed.
+#      - len(batches): read directly off that same "distributed batches"
+#        log line (the "total=" field is the full batch count before
+#        per-rank slicing).
+#
+# 4. MP3 DECODE THROUGHPUT (open probe 4): dataloader wait time as a
+#    fraction of step time. MetricsLogger already separates iter_time
+#    (includes dataloader wait between batches) from forward_time/
+#    backward_time/optim_step_time in its periodic summary lines, so
+#    iter_time / (iter_time + forward_time + backward_time + optim_step_time)
+#    is the dataloader-wait fraction directly from the log, no extra
+#    instrumentation needed. If the loader is starving the GPU (this
+#    fraction is large), raise dataloader.train.num_workers (currently 4)
+#    before considering anything else -- BUT note this node has only 40
+#    CPUs total (8 tasks * 5 cpus-per-task already accounts for all of
+#    them), so raising num_workers past what's implied by
+#    --cpus-per-task requires also raising --cpus-per-task, which lowers
+#    how many ranks fit per node.
+#
+# ---------------------------------------------------------------------------
+# Poll on a log marker, not pgrep (an ssh-wrapped `pgrep -f` matches its own
+# `bash -c` wrapper and reports alive forever):
+#   ssh psc "grep -q 'Training completed' logs/smoke_<jobid>.out && echo DONE || echo RUN"
+# ---------------------------------------------------------------------------
+
+set -euo pipefail
+ROOT=/ocean/projects/cis210027p/ttrachu/development/espnet_proj/espnet_emilia
+cd "$ROOT"
+# `set -e`/`set -u` are disabled across the activation ONLY. activate_python.sh
+# runs `eval "$(pixi shell-hook)"`, whose output references unset variables, so
+# under `set -u` the job aborts before producing any output: observed on PSC as
+# job 43566289, FAILED in 3 seconds with a 0-byte log. Re-enabled immediately
+# afterwards so the rest of the script keeps strict-mode semantics.
+set +eu
+source tools/activate_python.sh
+set -eu
+# Absolute, and re-anchored to $ROOT. activate_python.sh runs
+# `eval "$(pixi shell-hook)"`, which leaves the shell in the pixi manifest's
+# own tools/ directory -- and because tools/ is shared across the espnet
+# trees on this allocation, that is a DIFFERENT tree
+# (espnet_f5_libritts/tools), not this one. A relative `cd egs3/emilia/tts`
+# after the activation therefore resolves against the wrong root and the job
+# dies before it starts: observed as job 43630646, which failed in seconds
+# with `cd: egs3/emilia/tts: No such file or directory`.
+cd "$ROOT/egs3/emilia/tts"
+
+# Same omission that killed the first real training job (43825659): without
+# this, `espnet3` and `egs3` resolve out of the pixi env's installed espnet in
+# the espnet_f5_libritts tree, and `egs3.emilia` does not exist there. Also
+# puts pylibs/ (rjieba) on the path.
+export PYTHONPATH="$ROOT/pylibs:$ROOT:$ROOT/egs3/emilia/tts:${PYTHONPATH:-}"
+
+# Guards the failure mode that is NOT peak allocation: the allocator. Peak
+# allocated at the configured batch_bins is 24.81 GiB of 31.73 under 2-rank
+# DDP (parity/mem_probe.py), but peak *reserved* runs higher as
+# variable-length batches fragment the pool. The LibriTTS F5 Small run failed
+# exactly there -- it survived 950 steps, then OOM'd with only 22.60 GiB
+# allocated against 7.45 GiB reserved-but-unallocated. expandable_segments
+# lets the allocator grow a segment instead of stranding it.
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
+
+# Offline CSV logger: espnet3 installs LearningRateMonitor unconditionally,
+# and Lightning refuses that callback with logger: false.
+srun python run.py --stages train \
+  --training_config conf/training_f5_tts_base_smoke.yaml
