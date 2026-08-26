@@ -1,0 +1,69 @@
+##########################################################
+#      MULTI-COMPRESSION BASELINE INFERENCE SETTING      #
+##########################################################
+# Evaluates the PRETRAINED baseline codec wrapped with a compression
+# model, WITHOUT any fine-tuning (e.g. rate-sweeping the baseline
+# weights to quantify the gain from fine-tuning).
+#
+# Quick usage:
+#   python run.py --stages infer \
+#       --training_config conf/training_encodec_multicomp.yaml \
+#       --inference_config conf/inference_multicomp_baseline.yaml
+#
+# Merged over egs3/TEMPLATE/codec/conf/inference.yaml. Outputs default
+# to ${exp_dir}/inference_multicomp_baseline (the inference dir is
+# derived from this config's filename), so baseline sweeps never
+# overwrite the fine-tuned run's inference outputs.
+#
+# There is no fine-tuning run to rebuild from, so instead of
+# `train_config` (the dumped multicomp_model.yaml spec) the wrapped
+# architecture is described inline via `model_conf`: the codec comes
+# from the baseline run's config.yaml and the compression model is
+# chosen here. The weights still load through `model_file` like every
+# other run - the wrapper remaps the baseline's unwrapped key layout at
+# load time and the load stays strict. `model_conf` must NOT name
+# weight sources (pretrained_model_file / pretrained_model_tag);
+# `model_file` is the single source of weights.
+#
+# For a rate sweep, override `rate` (and `inference_dir`, so runs do
+# not overwrite each other), e.g.:
+#   --inference_config conf/inference_multicomp_baseline.yaml \
+#   -o 'model.rate=0.25' 'inference_dir=${exp_dir}/inference_baseline_r0.25'
+
+# The baseline run to evaluate. Only exp_tag/exp_dir are copied over
+# from the training config by run.py, so this path is defined here
+# (keep it in sync with training_encodec_multicomp.yaml).
+baseline_exp_dir: ${recipe_dir}/exp/train_encodec_libritts
+
+dataset:
+  test:
+    - name: test
+      data_src_args:
+        split: test
+        inference: true
+
+model:
+  _target_: src.inference.MultiCompressionAudioCoding
+  # Architecture only (factory kwargs, no weight sources).
+  model_conf:
+    pretrained_train_config: ${baseline_exp_dir}/config.yaml
+    compression_model:
+      name: cosine_similarity   # cosine_similarity | density_peak | dp_segmentation | identity
+      params: {}
+      # Fallback rate for eval-mode forwards when `rate` below is null.
+      eval_rate: 0.5
+  # Baseline weights (unwrapped key layout, remapped at load time).
+  # Lightning checkpoints (last.ckpt) are unwrapped automatically and
+  # loaded strictly.
+  model_file: ${baseline_exp_dir}/last.ckpt
+  rate: 0.5
+  # Anchor constraint (optional): layers at/after this index may only
+  # place boundaries inside the union of the earlier layers' boundaries.
+  # null disables; e.g. 2 anchors layers 2+ on layers 0-1.
+  anchor_start_layer: null
+
+output_fn: src.inference.build_output
+output_artifacts:
+  wav:
+    type: wav
+    sample_rate: 24000
