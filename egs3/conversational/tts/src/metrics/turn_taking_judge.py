@@ -623,14 +623,20 @@ class TurnTakingJudgeMetric(BaseMetric):
     # -- layer 2 ---------------------------------------------------------- #
     def _role_metrics(self, score_cls, lik_dict, rows) -> Dict[str, Optional[float]]:
         """The paper's role-conditioned accuracies, asked from BOTH sides
-        (``only_AI`` on the original rows = "channel B holds the floor, what
-        does A do"; then on the role-swapped rows), decision arrays pooled
-        before the accuracy is taken."""
+        (original rows = "channel B holds the floor, what does A do", then
+        the role-swapped rows), decision arrays pooled before the accuracy
+        is taken."""
+        # NO only_AI / only_human filtering: upstream's combined_pred_hyp_arr
+        # filters pred/judge arrays but returns turn_arr UNFILTERED, so the
+        # filtered variants pair decisions with the wrong chunks' floor state
+        # (measured: layer-2 numbers moved 5-13 points with array order). The
+        # five metric methods condition on the floor state themselves, so the
+        # unfiltered, aligned arrays are the correct input.
         lib = _upstream()
         dec_a, turn_a = lib.compute_turn_decisions(list(rows))
         dec_b, turn_b = lib.compute_turn_decisions(swap_roles(rows))
-        s_a = score_cls(lik_dict, dec_a, turn_a, list(CLASSES), only_AI=True)
-        s_b = score_cls(lik_dict, dec_b, turn_b, list(CLASSES), only_AI=True)
+        s_a = score_cls(lik_dict, dec_a, turn_a, list(CLASSES))
+        s_b = score_cls(lik_dict, dec_b, turn_b, list(CLASSES))
         for attr in ("pred_arr", "turn_arr", "true_arr_soft_label", "true_arr_hard_label"):
             setattr(
                 s_a, attr, np.concatenate([getattr(s_a, attr), getattr(s_b, attr)])

@@ -444,7 +444,11 @@ class TestMetricLayer2:
         assert out["judge_acc_turn_change"] == 100.0
         assert out["judge_acc_interrupt_success"] is None
         assert set(out) == set(ROLE_KEYS)
-        assert len(captured) == 2 and all(c[0].get("only_AI") for c in captured)
+        # aligned arrays: no only_AI / only_human filtering (upstream leaves
+        # turn_arr unfiltered, which would misalign the decisions)
+        assert len(captured) == 2 and not any(
+            c[0].get("only_AI") or c[0].get("only_human") for c in captured
+        )
         assert captured[0][1]["w"][0.24] == "B" and captured[1][1]["w"][0.24] == "A"
 
     def test_role_metrics_run_on_real_upstream_library(self, tmp_path):
