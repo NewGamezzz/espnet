@@ -1,0 +1,89 @@
+#################################################################
+#  Ingest the MoonCast baseline's ZipVoice-Dialog test-en output  #
+#################################################################
+# `mode: ingest_external_system` (src/external_system_ingest.py) reads one
+# wav per dialogue from another system's own inference run and writes our
+# output contract, so our metrics config scores it with the pipeline our own
+# arms go through.  No model, no GPU.
+#
+# MoonCast detokenizes each turn separately and returns the CONCATENATION of
+# those turns as ONE MONO TRACK - there is no per-speaker output anywhere in
+# their pipeline, and no timing model at all.  So this is a mixture-only
+# arm: `ingest.output: mixture`, and conf/metrics_mooncast_mixture.yaml is
+# the ONLY correct metrics config for it.  QUOTE ONLY wer_mix AND utmos_mix.
+# wer_channel duplicates wer_mix here and utmos_ipu is measured over mixture
+# IPUs; neither is a per-channel number.
+#
+# TWO CAPTIONS BELONG ON EVERY ROW FROM THIS ARM:
+#   1. Its zero inter-speaker gap and zero overlap are ARCHITECTURAL, a
+#      consequence of concatenating turns, not a measured result.  A reader
+#      must not read this system's silence on the interaction axes as a
+#      score of zero.
+#   2. Every turn is peak-normalized to full scale BEFORE concatenation
+#      (`gen_speech_fm / gen_speech_fm.abs().max()`), so the loudness
+#      contour across a dialogue is flattened by construction and the track
+#      sits at 0 dBFS peak, against the -23 dBFS the v2 prompts carry.
+#      This is upstream behaviour, kept as shipped.
+#
+# MoonCast is also the only system in this table that CANNOT run on more
+# than two speakers: `Model.__init__` encodes the literal roles "0" and "1",
+# and `infer_with_prompt` indexes both unconditionally.  It could not have
+# been evaluated on the CoVoMix2 three-speaker tier at all.
+#
+# Generated outside this repo with their published recipe, fed OUR v2
+# prompts and OUR script segmentation via local/make_mooncast_jsonl.py,
+# driven by local/mooncast_infer.py (they ship no batch inference program),
+# checked by local/mooncast_preflight.py and verified by
+# local/mooncast_collect.py.
+#
+#   python run.py --stages infer measure \
+#       --inference_config conf/inference_mooncast_baseline.yaml \
+#       --metrics_config   conf/metrics_mooncast_mixture.yaml
+#
+# READ THE ROWS AGAINST OUR **pred** ARMS ONLY: this system is
+# autoregressive and predicts its own durations, so there is no
+# oracle-duration counterpart.  And v2 rows compare only to the v2 anchor.
+training_config: conf/training_poc.yaml
+exp_tag: eval_zipvoice_dialog
+mode: ingest_external_system
+device: cpu
+inference_dir: ${exp_dir}/infer_mooncast_v2
+test_name: valid
+
+testset:
+  manifest: downloads/zipvoice-dialog-test-en-v2/manifest.jsonl
+  name: zipvoice-dialog-test-en-v2
+
+# Provenance, copied verbatim into every meta JSON: a results table can then
+# never be read without knowing which system and which recipe produced it.
+system:
+  name: mooncast
+  repo: https://github.com/jzq11111/MoonCast
+  checkpoint: jzq11111/mooncast (resources/text2semantic)
+  prompts: v2-normalized (-23 dBFS active RMS), mono, ours
+  output: >-
+    24 kHz mono, turns concatenated with no gap and no overlap,
+    each turn peak-normalized to full scale before the concatenation
+  params: >-
+    temperature=0.8 top_k=30 top_p=0.8 bf16 max_new_tokens=200s/turn
+    pretraining_sequence_length=40000 tokens at 50 Hz
+    _clean_text applied to every turn (THEIRS - it rewrites our script)
+    seed=blake2b(window_id) OURS - they ship no seed at all
+    monologue rows duplicate the S1 prompt into role 1 OURS - both roles
+    are mandatory and both are injected into the conditioning context
+    wav written from the pre-mp3 tensor OURS - their API returns base64 mp3
+
+ingest:
+  output: mixture
+  wav_dir: /work/hdd/bbjs/ttrachu/development/MoonCast/exp_baseline/collected/v2
+  suffix: .wav
+  # Unused in mixture mode: there is one track and no ordering to check.
+  verify_channel_map: false
+  channel_order: null
+
+selection:
+  dialogue_ids: null
+  min_duration: null
+  max_duration: null
+  num_dialogues: null
+  seed: 0
