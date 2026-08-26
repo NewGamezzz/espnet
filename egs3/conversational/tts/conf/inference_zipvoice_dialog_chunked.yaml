@@ -1,0 +1,109 @@
+#####################################################################
+#  Conversational F5 - CHUNKED infer on ZipVoice-Dialog test-en     #
+#####################################################################
+# Generate from the ZipVoice-Dialog English test set (arXiv 2507.09318;
+# `dialog_testset.tar.gz` in HF k2-fsa/TTS_eval_datasets): 280 spontaneous
+# two-party dialogues (10 of them monologues), 1.84 h, each with its own
+# per-speaker prompt wavs AND dual-track ground-truth audio.  MagicData-
+# derived: research use only, whatever the HF tag says.
+#
+# The set is reformatted ONCE into the training-style manifest by
+# local/build_zipvoice_dialog_testset.py (see its docstring for the archive's
+# conventions and edge cases); inference reads that manifest as-is:
+#
+#   tar xzf dialog_testset.tar.gz
+#   python local/build_zipvoice_dialog_testset.py \
+#       --src dialog_testset/en --out downloads/zipvoice-dialog-test-en \
+#       --token_list data/vocab.txt --archive dialog_testset.tar.gz
+#   python run.py --stages infer measure \
+#       --inference_config conf/inference_zipvoice_dialog_chunked.yaml \
+#       --metrics_config   conf/metrics_zipvoice_dialog.yaml
+#
+# WHAT DIFFERS FROM THE COVOMIX2 CONFIG (everything else is the ratified
+# chunked recipe, unchanged):
+#
+# * testset.manifest instead of testset.root: per-dialogue channel counts
+#   come from the manifest, so the 10 monologues run as ONE-channel records
+#   (the LibriTTS shape in training), and every record carries gt_wav.
+# * duration.scale 1.048, not 1.117.  The CoVoMix2 constant retargets
+#   READ-speech prompt rates to spontaneous (0.0735 / 0.0690) and then adds
+#   the conversational silence budget (1 / 0.954).  These prompts ARE
+#   spontaneous, so the retarget's premise fails and only the silence
+#   budget remains: 1 / 0.954 = 1.048.  Both constants are SSSD-measured;
+#   nothing here is tuned on this test set.  Measured on the archive, the
+#   rule still over-predicts (GT runs 0.060 s/char, prompts 0.073 s/char),
+#   which is why every meta records predicted_over_gt.
+# * duration.source: "predicted" is the cross-model-fair arm (baselines
+#   predict their own durations).  "ground_truth" generates exactly the
+#   reference length and is the only arm whose interaction statistics are
+#   duration-comparable to the ground truth (W1 claims live there).
+# * Full coverage: no duration band, no subsampling.  GT median 22 s, max
+#   50 s; at target_sec 25 most dialogues are a single chunk.
+training_config: conf/training_poc.yaml
+exp_tag: eval_zipvoice_dialog
+mode: generate_external_chunked
+device: cuda
+inference_dir: ${exp_dir}/infer_${mode}
+test_name: valid
+
+ckpt: null
+use_ema: true
+prompt_fill: room_tone
+
+testset:
+  manifest: downloads/zipvoice-dialog-test-en/manifest.jsonl
+  name: zipvoice-dialog-test-en
+
+duration:
+  scale: 1.048
+  speed: 1.0
+  # predicted | ground_truth (oracle: generate the reference length)
+  source: predicted
+
+selection:
+  # Full coverage by default.  `dialogue_ids` (one id per line, e.g. the
+  # build's ids_2spk.txt) pins a subset and is exclusive with the band knobs.
+  dialogue_ids: null
+  min_duration: null
+  max_duration: null
+  num_dialogues: null
+  seed: 0
+  shard_index: 0
+  shard_count: 1
+
+batching:
+  max_batch_audio_sec: 240.0
+  max_batch_dialogues: 16
+
+sampling:
+  steps: 32
+  cfg_strength: 3.0
+  # SPARSE-CHANNEL GUIDANCE (measured 2026-08-23 on this set): a channel
+  # whose script in the current call is a few backchannels (<= 40 chars)
+  # emitted a loud voiced DRONE instead of silence in ~1/3 of cases at
+  # cfg 3.0; cfg 2.0 removes it (loud-non-speech share 0.225 -> 0.004) but
+  # costs the talkative channel ~40 % relative WER.  So guidance is set PER
+  # CHANNEL from the call's script length: channels with
+  # <= cfg_sparse_max_chars get cfg_sparse_strength, the rest cfg_strength.
+  # null = off (bit-identical to the scalar path).
+  cfg_sparse_strength: 2.0
+  cfg_sparse_max_chars: 40
+  sway_sampling_coef: -1.0
+  seed: 0
+  autocast_dtype: bfloat16
+
+chunk:
+  turns: null
+  target_sec: 25.0
+  # SINGLE PASS by default on this set (measured 2026-08-23): every dialogue
+  # fits this budget, so it is generated as ONE chunk over all turns = one
+  # ODE call.  ZipVoice dialogues are short (GT median 22 s, max 50 s), and
+  # single-pass beat chunked tsec25 on EVERY axis here (wer_channel 0.130 ->
+  # 0.116 pred, sim_o to the anchor ceiling, utmos_ipu +0.3, gap W1 0.305 ->
+  # 0.064).  Set to null to fall back to tsec25 chunking (the CoVoMix2
+  # recipe, which wins on that set's 30-80 s dialogues).
+  unchunked_max_sec: 100000.0
+  cross_fade_sec: 0.1
+  cond_silence_gate: true
+  cond_gate_fill: room_tone
+  cond_loudness_norm: true

@@ -75,6 +75,7 @@ from egs3.conversational.tts.src.external_testset import (
     assign_shard,
     duration_meta,
     estimate_duration_sec,
+    rate_prior_kwargs,
     load_covomix2_testset,
     plan_batches,
     select_records,
@@ -266,12 +267,15 @@ def run_external_inference(
     dur_cfg = cfg.get("duration", {})
     duration_scale = float(dur_cfg.get("scale", DEFAULT_DURATION_SCALE))
     speed = float(dur_cfg.get("speed", 1.0))
+    rate_prior = rate_prior_kwargs(dur_cfg)
 
     prompt_secs = [
         [_probe_duration_sec(p.audio_path) for p in r.prompts] for r in records
     ]
     predicted = [
-        estimate_duration_sec(r, secs, duration_scale=duration_scale, speed=speed)
+        estimate_duration_sec(
+            r, secs, duration_scale=duration_scale, speed=speed, **rate_prior
+        )
         for r, secs in zip(records, prompt_secs)
     ]
     shard_count = int(cfg.selection.get("shard_count", 1) or 1)
@@ -447,7 +451,9 @@ def run_external_inference(
                 "sample_rate": fs,
                 "num_channels": n,
                 "window_duration_sec": round(prep["gen_frames"] * hop / fs, 6),
-                "duration": duration_meta(duration_scale, speed, predicted[idx]),
+                "duration": duration_meta(
+                    duration_scale, speed, predicted[idx], **rate_prior
+                ),
                 "has_reference_audio": False,
                 "turn_times": "ordinal",
                 "rtf": rtf,

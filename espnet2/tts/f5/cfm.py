@@ -31,6 +31,29 @@ from espnet2.tts.f5.utils import (
 )
 
 
+def apply_cfg(
+    pred: torch.Tensor, null_pred: torch.Tensor, cfg_strength: float | torch.Tensor
+) -> torch.Tensor:
+    """Classifier-free guidance combine: ``pred + (pred - null_pred) * cfg``.
+
+    ``cfg_strength`` is either one scalar (the original formula, untouched)
+    or one value per ROW - a ``(b,)`` tensor broadcast over ``(b, n, d)`` -
+    so callers can guide the rows of one batch with different strengths
+    (e.g. per channel of a multi-branch conversation).
+    """
+    if torch.is_tensor(cfg_strength):
+        if cfg_strength.ndim != 1 or cfg_strength.shape[0] != pred.shape[0]:
+            raise ValueError(
+                "cfg_strength tensor must carry one guidance value per row: "
+                f"got shape {tuple(cfg_strength.shape)} for {pred.shape[0]} rows"
+            )
+        cfg = cfg_strength.to(device=pred.device, dtype=pred.dtype).view(
+            -1, *([1] * (pred.ndim - 1))
+        )
+        return pred + (pred - null_pred) * cfg
+    return pred + (pred - null_pred) * cfg_strength
+
+
 class CFM(nn.Module):
     def __init__(
         self,
@@ -89,7 +112,7 @@ class CFM(nn.Module):
         *,
         lens: int["b"] | None = None,
         steps=32,
-        cfg_strength=1.0,
+        cfg_strength: float | torch.Tensor = 1.0,
         sway_sampling_coef=None,
         seed: int | None = None,
         max_duration=65536,
@@ -159,12 +182,18 @@ class CFM(nn.Module):
 
         # neural ode
 
+        # ``cfg_strength`` may be one scalar or one value per row (a ``(b,)``
+        # tensor): the CFG pass is skipped only when NO row asks for guidance.
+        cfg_max = (
+            float(cfg_strength.max()) if torch.is_tensor(cfg_strength) else float(cfg_strength)
+        )
+
         def fn(t, x):
             # at each step, conditioning is fixed
             # step_cond = torch.where(cond_mask, cond, torch.zeros_like(cond))
 
             # predict flow (cond)
-            if cfg_strength < 1e-5:
+            if cfg_max < 1e-5:
                 pred = self.transformer(
                     x=x,
                     cond=step_cond,
@@ -188,7 +217,7 @@ class CFM(nn.Module):
                 cache=True,
             )
             pred, null_pred = torch.chunk(pred_cfg, 2, dim=0)
-            return pred + (pred - null_pred) * cfg_strength
+            return apply_cfg(pred, null_pred, cfg_strength)
 
         # noise input
         # to make sure batch inference result is same with different batch size, and for sure single inference
