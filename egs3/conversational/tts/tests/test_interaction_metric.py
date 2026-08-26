@@ -37,6 +37,19 @@ ALL_SUMMARY_KEYS = {
 # derive_events: pure interval arithmetic
 # --------------------------------------------------------------------------- #
 class TestDeriveEvents:
+    def test_total_sec_only_shapes_the_skipped_trailing_silence(self):
+        # External test sets with reference audio score gen and gt events
+        # against ONE window duration (the generated one), while the gt wav
+        # has its own length.  Every event must be independent of that
+        # total: a trailing silence is a window-edge silence and is skipped,
+        # and a total SHORTER than the last IPU must not clip or invent one.
+        ipus = [[(0.0, 1.0), (3.0, 4.0)], [(1.5, 2.5)]]
+        reference = derive_events(ipus, 4.0)
+        for total in (2.0, 4.0, 4.5, 60.0):
+            assert derive_events(ipus, total) == reference
+        assert reference["gap"] == [pytest.approx(0.5), pytest.approx(0.5)]
+        assert reference["pause"] == []
+
     def test_pause_same_speaker_on_both_sides(self):
         events = derive_events([[(0.0, 2.0), (3.0, 5.0)], []], total_sec=5.0)
         assert events["ipu"] == [2.0, 2.0]
@@ -72,9 +85,7 @@ class TestDeriveEvents:
         # ch0 speaks 0-3, ch1 overlaps 2-4, silence 4-5, then ch0 5-6:
         # the last IPU to end before the silence is ch1's -> floor moved
         # ch1 -> ch0 across the silence -> gap.
-        events = derive_events(
-            [[(0.0, 3.0), (5.0, 6.0)], [(2.0, 4.0)]], total_sec=6.0
-        )
+        events = derive_events([[(0.0, 3.0), (5.0, 6.0)], [(2.0, 4.0)]], total_sec=6.0)
         assert events["overlap"] == [1.0]
         assert events["gap"] == [1.0]
         assert events["pause"] == []

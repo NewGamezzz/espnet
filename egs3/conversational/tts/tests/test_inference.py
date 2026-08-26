@@ -97,8 +97,14 @@ class TestPromptTurnLadder:
         # regardless of every relaxation tier.
         turns = [Turn(0, "a", "x", 1.0, 3.0)]
         result = _select_prompt_turn(
-            turns, 0, t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0,
-            seed=0, window_id="w",
+            turns,
+            0,
+            t0=0.0,
+            t1=5.0,
+            turn_min=2.0,
+            turn_max=10.0,
+            seed=0,
+            window_id="w",
         )
         assert result is None
 
@@ -108,8 +114,14 @@ class TestPromptTurnLadder:
         solo = Turn(0, "a", "z", 20.0, 23.0)
         pool = [overlapped, overlap_partner, solo]
         result = _select_prompt_turn(
-            pool, 0, t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0,
-            seed=0, window_id="w",
+            pool,
+            0,
+            t0=0.0,
+            t1=5.0,
+            turn_min=2.0,
+            turn_max=10.0,
+            seed=0,
+            window_id="w",
         )
         assert result is solo
 
@@ -118,8 +130,14 @@ class TestPromptTurnLadder:
         in_band = Turn(0, "a", "y", 20.0, 23.0)  # 3.0s
         pool = [too_short, in_band]
         result = _select_prompt_turn(
-            pool, 0, t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0,
-            seed=0, window_id="w",
+            pool,
+            0,
+            t0=0.0,
+            t1=5.0,
+            turn_min=2.0,
+            turn_max=10.0,
+            seed=0,
+            window_id="w",
         )
         assert result is in_band
 
@@ -127,8 +145,14 @@ class TestPromptTurnLadder:
         # Only candidate is solo but out of band -> tier 2 still returns it.
         too_short = Turn(0, "a", "x", 10.0, 11.0)
         result = _select_prompt_turn(
-            [too_short], 0, t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0,
-            seed=0, window_id="w",
+            [too_short],
+            0,
+            t0=0.0,
+            t1=5.0,
+            turn_min=2.0,
+            turn_max=10.0,
+            seed=0,
+            window_id="w",
         )
         assert result is too_short
 
@@ -136,8 +160,14 @@ class TestPromptTurnLadder:
         overlapped = Turn(0, "a", "x", 10.0, 13.0)
         overlap_partner = Turn(1, "b", "y", 11.0, 14.0)
         result = _select_prompt_turn(
-            [overlapped, overlap_partner], 0, t0=0.0, t1=5.0,
-            turn_min=2.0, turn_max=10.0, seed=0, window_id="w",
+            [overlapped, overlap_partner],
+            0,
+            t0=0.0,
+            t1=5.0,
+            turn_min=2.0,
+            turn_max=10.0,
+            seed=0,
+            window_id="w",
         )
         assert result is overlapped
 
@@ -146,7 +176,12 @@ class TestPromptTurnLadder:
         b = Turn(0, "a", "y", 20.0, 23.0)
         pool = [a, b]  # both solo, both in band -> tier 1 has 2 candidates
         kwargs = dict(
-            t0=0.0, t1=5.0, turn_min=2.0, turn_max=10.0, seed=0, window_id="w",
+            t0=0.0,
+            t1=5.0,
+            turn_min=2.0,
+            turn_max=10.0,
+            seed=0,
+            window_id="w",
         )
         first = _select_prompt_turn(pool, 0, **kwargs)
         second = _select_prompt_turn(pool, 0, **kwargs)
@@ -466,9 +501,7 @@ class TestAudioAssembly:
             assert sr == FS
             assert data.shape[0] == round(2.5 * FS)
 
-    def test_prompt_frame_exact_trim_reconstructed_from_channel_blocks(
-        self, fixture
-    ):
+    def test_prompt_frame_exact_trim_reconstructed_from_channel_blocks(self, fixture):
         inf_dir = fixture["tmp_path"] / "infer_trim"
         cfg = _infer_config(fixture, "gt", inf_dir)
         run_inference(cfg, training_config=fixture["training_config"])
@@ -485,9 +518,7 @@ class TestAudioAssembly:
         )
         expected_frames = total_samples // HOP
         assert meta["prompt"]["total_frames"] == expected_frames
-        assert meta["prompt"]["total_sec"] == round(
-            (expected_frames * HOP) / FS, 6
-        )
+        assert meta["prompt"]["total_sec"] == round((expected_frames * HOP) / FS, 6)
 
     def test_generated_region_covers_the_whole_window(self, fixture, ext_vocab_file):
         inf_dir = fixture["tmp_path"] / "infer_gen_len"
@@ -495,7 +526,9 @@ class TestAudioAssembly:
         model = build_tiny(ext_vocab_file).eval()
         vocoder = FakeVocoder()
         run_inference(
-            cfg, training_config=fixture["training_config"], model=model,
+            cfg,
+            training_config=fixture["training_config"],
+            model=model,
             vocoder=vocoder,
         )
         test_dir = inf_dir / "valid"
@@ -531,7 +564,9 @@ class TestTextAssembly:
         model = build_tiny(ext_vocab_file).eval()
         vocoder = FakeVocoder()
         run_inference(
-            cfg, training_config=fixture["training_config"], model=model,
+            cfg,
+            training_config=fixture["training_config"],
+            model=model,
             vocoder=vocoder,
         )
 
@@ -541,9 +576,7 @@ class TestTextAssembly:
         prompt_turns = [
             _TextTurn(p["channel"], p["text"]) for p in meta["prompt"]["turns"]
         ]
-        window_turns = [
-            _TextTurn(t["channel"], t["text"]) for t in meta["turns"]
-        ]
+        window_turns = [_TextTurn(t["channel"], t["text"]) for t in meta["turns"]]
         expected_branches = build_branch_texts(prompt_turns + window_turns, 2)
         token2id = make_token2id(EXT_TOKENS)
         expected_ids = [encode_tokens(b, token2id) for b in expected_branches]
@@ -696,9 +729,7 @@ class TestModeParity:
 
     def _layout(self, test_dir: Path):
         files = sorted(
-            str(p.relative_to(test_dir))
-            for p in test_dir.rglob("*")
-            if p.is_file()
+            str(p.relative_to(test_dir)) for p in test_dir.rglob("*") if p.is_file()
         )
         return files
 
@@ -793,6 +824,243 @@ class TestSelection:
         )
         assert stats["n_selected"] == 0
         assert stats["n_skipped"] == 1
-        assert not (inf_dir / "valid" / "meta.scp").exists() or (
-            inf_dir / "valid" / "meta.scp"
-        ).read_text("utf-8").strip() == ""
+        assert (
+            not (inf_dir / "valid" / "meta.scp").exists()
+            or (inf_dir / "valid" / "meta.scp").read_text("utf-8").strip() == ""
+        )
+
+
+# --------------------------------------------------------------------------- #
+# Frozen eval manifest (shareable, prompt-pinning selection)
+# --------------------------------------------------------------------------- #
+def _window_c() -> WindowRecord:
+    """A third window on the same session, so every window has TWO
+    non-window candidates per channel and the ladder pick is a real draw
+    rather than a forced one - which is what makes pinning observable."""
+    return WindowRecord(
+        window_id="sess_w00002",
+        session_id="sess",
+        audio_relpath="original/sess_mixed.flac",
+        num_channels=2,
+        sample_rate=SRC_SR,
+        t0=45.0,
+        t1=53.0,
+        turns=(
+            Turn(0, "spk_a", "fed ace", 45.5, 48.0),  # 2.5s
+            Turn(1, "spk_b", "gab deaf", 48.5, 51.0),  # 2.5s
+        ),
+    )
+
+
+@pytest.fixture
+def three_window_fixture(tmp_path):
+    return _write_fixture_files(tmp_path, [_window_a(), _window_b(), _window_c()], 60.0)
+
+
+def _manifest_lines(header: dict, rows: list) -> str:
+    return "".join(
+        json.dumps(obj, ensure_ascii=False) + "\n" for obj in [header, *rows]
+    )
+
+
+def _header(**over) -> dict:
+    base = {
+        "record_type": "header",
+        "manifest_version": 1,
+        "split": "valid",
+        "source_manifest": "valid.jsonl",
+        "source_manifest_md5": "0" * 32,
+    }
+    base.update(over)
+    return base
+
+
+def _row(window_id, session_id, t0, t1, prompts) -> dict:
+    return {
+        "record_type": "window",
+        "window_id": window_id,
+        "session_id": session_id,
+        "t0": t0,
+        "t1": t1,
+        "prompts": [{"channel": c, "start": s, "end": e} for c, s, e in prompts],
+    }
+
+
+class TestEvalManifestSelection:
+    def _run_with_manifest(self, fixture, text, name="infer_pinned"):
+        path = fixture["tmp_path"] / "eval_manifest.jsonl"
+        path.write_text(text, encoding="utf-8")
+        inf_dir = fixture["tmp_path"] / name
+        cfg = _infer_config(fixture, "gt", inf_dir)
+        cfg.selection.manifest = str(path)
+        stats = run_inference(cfg, training_config=fixture["training_config"])
+        return inf_dir / "valid", stats
+
+    def test_manifest_pins_which_windows_run(self, three_window_fixture):
+        # Only window B is listed, so only window B runs - even though the
+        # seeded selection would have taken all three.
+        text = _manifest_lines(
+            _header(),
+            [_row("sess_w00001", "sess", 25.0, 33.0, [(0, 5.5, 8.0), (1, 8.5, 11.0)])],
+        )
+        test_dir, stats = self._run_with_manifest(three_window_fixture, text)
+        assert stats["n_selected"] == 1
+        assert stats["n_skipped"] == 0
+        assert (test_dir / "meta.scp").read_text("utf-8").splitlines() == [
+            "sess_w00001 meta/sess_w00001.json"
+        ]
+
+    def test_manifest_pins_the_prompt_spans(self, three_window_fixture):
+        # Window A's ch0 prompt is pinned to window C's turn.  The ladder is
+        # free to prefer window B's; the meta must show the pinned one.
+        text = _manifest_lines(
+            _header(),
+            [
+                _row(
+                    "sess_w00000", "sess", 5.0, 13.0, [(0, 45.5, 48.0), (1, 48.5, 51.0)]
+                )
+            ],
+        )
+        test_dir, _ = self._run_with_manifest(three_window_fixture, text)
+        meta = json.loads((test_dir / "meta/sess_w00000.json").read_text("utf-8"))
+        assert [t["text"] for t in meta["prompt"]["turns"]] == [
+            "fed ace",
+            "gab deaf",
+        ]
+
+    def test_unknown_window_id_is_an_error(self, three_window_fixture):
+        text = _manifest_lines(
+            _header(),
+            [_row("sess_wNOPE", "sess", 5.0, 13.0, [(0, 45.5, 48.0), (1, 48.5, 51.0)])],
+        )
+        with pytest.raises(ValueError, match="sess_wNOPE"):
+            self._run_with_manifest(three_window_fixture, text, "infer_bad_id")
+
+    def test_duplicate_window_id_is_an_error(self, three_window_fixture):
+        row = _row("sess_w00000", "sess", 5.0, 13.0, [(0, 45.5, 48.0), (1, 48.5, 51.0)])
+        text = _manifest_lines(_header(), [row, row])
+        with pytest.raises(ValueError, match="duplicate"):
+            self._run_with_manifest(three_window_fixture, text, "infer_dup")
+
+    def test_window_geometry_mismatch_is_an_error(self, three_window_fixture):
+        # t1 echo disagrees with the split -> the manifest was built against
+        # different data.  Must fail loudly, never resolve silently.
+        text = _manifest_lines(
+            _header(),
+            [
+                _row(
+                    "sess_w00000", "sess", 5.0, 99.0, [(0, 45.5, 48.0), (1, 48.5, 51.0)]
+                )
+            ],
+        )
+        with pytest.raises(ValueError, match="t1"):
+            self._run_with_manifest(three_window_fixture, text, "infer_geom")
+
+    def test_prompt_span_absent_from_the_pool_is_an_error(self, three_window_fixture):
+        text = _manifest_lines(
+            _header(),
+            [
+                _row(
+                    "sess_w00000", "sess", 5.0, 13.0, [(0, 45.5, 47.0), (1, 48.5, 51.0)]
+                )
+            ],
+        )
+        with pytest.raises(ValueError, match="no pool turn"):
+            self._run_with_manifest(three_window_fixture, text, "infer_span")
+
+    def test_in_window_prompt_span_is_rejected(self, three_window_fixture):
+        # Leakage is never allowed, not even when a manifest asks for it.
+        text = _manifest_lines(
+            _header(),
+            [_row("sess_w00000", "sess", 5.0, 13.0, [(0, 5.5, 8.0), (1, 48.5, 51.0)])],
+        )
+        with pytest.raises(ValueError, match="overlaps"):
+            self._run_with_manifest(three_window_fixture, text, "infer_leak")
+
+    def test_missing_channel_is_an_error(self, three_window_fixture):
+        # Every speaker must have a voice reference in the prompt.
+        text = _manifest_lines(
+            _header(),
+            [_row("sess_w00000", "sess", 5.0, 13.0, [(0, 45.5, 48.0)])],
+        )
+        with pytest.raises(ValueError, match="channel"):
+            self._run_with_manifest(three_window_fixture, text, "infer_chan")
+
+
+class TestEvalManifestRoundTrip:
+    def test_generated_manifest_reproduces_the_seeded_run_byte_for_byte(
+        self, three_window_fixture
+    ):
+        """The acceptance test: freezing the seeded selection into a manifest
+        and replaying it must change nothing at all."""
+        from egs3.conversational.tts.src.eval_manifest import (
+            build_eval_manifest,
+            write_eval_manifest,
+        )
+
+        fixture = three_window_fixture
+        seeded_dir = fixture["tmp_path"] / "infer_seeded"
+        cfg = _infer_config(fixture, "gt", seeded_dir)
+        seeded_stats = run_inference(cfg, training_config=fixture["training_config"])
+
+        header, rows = build_eval_manifest(
+            _infer_config(fixture, "gt", seeded_dir),
+            training_config=fixture["training_config"],
+        )
+        assert header["num_windows"] == seeded_stats["n_selected"]
+        path = fixture["tmp_path"] / "frozen.jsonl"
+        write_eval_manifest(path, header, rows)
+
+        pinned_dir = fixture["tmp_path"] / "infer_replay"
+        cfg2 = _infer_config(fixture, "gt", pinned_dir)
+        cfg2.selection.manifest = str(path)
+        pinned_stats = run_inference(cfg2, training_config=fixture["training_config"])
+
+        assert pinned_stats == seeded_stats
+        a, b = seeded_dir / "valid", pinned_dir / "valid"
+        assert (a / "meta.scp").read_bytes() == (b / "meta.scp").read_bytes()
+        metas = sorted(p.name for p in (a / "meta").glob("*.json"))
+        assert metas == sorted(p.name for p in (b / "meta").glob("*.json"))
+        for name in metas:
+            assert (a / "meta" / name).read_bytes() == (
+                b / "meta" / name
+            ).read_bytes(), name
+
+    def test_builder_records_skipped_windows(self, solo_window_fixture):
+        from egs3.conversational.tts.src.eval_manifest import build_eval_manifest
+
+        header, rows = build_eval_manifest(
+            _infer_config(solo_window_fixture, "gt", solo_window_fixture["tmp_path"]),
+            training_config=solo_window_fixture["training_config"],
+        )
+        assert rows == []
+        assert header["num_windows"] == 0
+        assert header["num_skipped"] == 1
+
+
+class TestManifestSlicing:
+    """Slices are how a long run is sharded, so they must partition the
+    manifest exactly - a dropped or duplicated window silently changes the
+    test set."""
+
+    def _slice(self, n_rows, n_slices):
+        from egs3.conversational.tts.local.make_eval_manifest import slice_rows
+
+        return slice_rows(list(range(n_rows)), n_slices)
+
+    def test_slices_partition_in_order(self):
+        parts = self._slice(1065, 8)
+        assert len(parts) == 8
+        assert [x for p in parts for x in p] == list(range(1065))
+        assert sorted(len(p) for p in parts) == [133] * 7 + [134]
+
+    def test_single_slice_is_the_whole_manifest(self):
+        assert self._slice(5, 1) == [[0, 1, 2, 3, 4]]
+
+    def test_more_slices_than_windows_is_an_error(self):
+        with pytest.raises(ValueError, match="exceeds"):
+            self._slice(3, 4)
+
+    def test_zero_slices_is_an_error(self):
+        with pytest.raises(ValueError, match=">= 1"):
+            self._slice(3, 0)

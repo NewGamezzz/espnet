@@ -200,6 +200,10 @@ class GenerationItem:
     text: torch.Tensor
     prompt_frames: int
     total_frames: int
+    # Optional per-channel classifier-free guidance, one value per row of
+    # ``speech``; ``None`` = the batch-wide ``cfg_strength`` (bit-identical
+    # to the scalar path).
+    cfg_per_channel: tuple[float, ...] | None = None
 
 
 def _autocast(device: torch.device, dtype: str | None):
@@ -274,6 +278,22 @@ def generate_batch(
             for item, n in zip(items, counts)
         ]
     )
+    # Per-row guidance only when some item asks for it; otherwise the scalar
+    # goes through untouched, which keeps every existing run bit-identical.
+    cfg: float | torch.Tensor = float(cfg_strength)
+    if any(item.cfg_per_channel is not None for item in items):
+        rows: list[float] = []
+        for item, n in zip(items, counts):
+            per = item.cfg_per_channel
+            if per is None:
+                rows.extend([float(cfg_strength)] * n)
+                continue
+            if len(per) != n:
+                raise ValueError(
+                    f"cfg_per_channel has {len(per)} values for {n} channels"
+                )
+            rows.extend(float(v) for v in per)
+        cfg = torch.tensor(rows, device=device, dtype=torch.float32)
     start = time.perf_counter()
     with torch.inference_mode():
         with _autocast(device, autocast_dtype):
@@ -284,7 +304,7 @@ def generate_batch(
                 counts=counts,
                 lens=lens,
                 steps=steps,
-                cfg_strength=cfg_strength,
+                cfg_strength=cfg,
                 sway_sampling_coef=sway_sampling_coef,
                 seed=seed,
             )

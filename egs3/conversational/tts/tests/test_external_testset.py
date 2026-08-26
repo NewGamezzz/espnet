@@ -43,6 +43,8 @@ from egs3.conversational.tts.src.external_testset import (
     ExternalRecord,
     _read_turns,
     estimate_duration_sec,
+    SSSD_SPEECH_SEC_PER_CHAR,
+    duration_meta,
     load_covomix2_testset,
     plan_batches,
     select_records,
@@ -155,6 +157,68 @@ class TestDurationEstimate:
         with pytest.raises(ValueError, match="degenerate"):
             estimate_duration_sec(record, [0.0, 2.0])
 
+    # Shrinkage toward a prior articulation rate.  A 1-8 s prompt is a
+    # noisy estimate of a speaker's seconds-per-character; ``rate_prior_chars``
+    # blends the prompt's evidence with the training-domain prior as if the
+    # prior had been observed over that many characters:
+    #   rate = (prompt_sec + k * prior) / (prompt_chars + k)
+    def test_rate_prior_shrinks_each_speaker_toward_the_prior(self):
+        record = _record(["abcdefg", "abcdefgh"], ["abc", "de"])
+        # Longhand: ch0 (1.0 + 3*0.5) / (3 + 3) = 2.5/6; ch1 (2.0 + 3*0.5) /
+        # (2 + 3) = 3.5/5.  Then 7 chars * ch0 rate + 8 chars * ch1 rate.
+        got = estimate_duration_sec(
+            record,
+            [1.0, 2.0],
+            duration_scale=1.0,
+            rate_prior_chars=3.0,
+            rate_prior_sec_per_char=0.5,
+        )
+        assert got == pytest.approx(7 * (2.5 / 6) + 8 * (3.5 / 5))
+
+    def test_rate_prior_none_or_zero_is_the_plain_rule(self):
+        record = _record(["abcdefg", "abcdefgh"], ["abc", "de"])
+        plain = estimate_duration_sec(record, [1.0, 2.0], duration_scale=1.0)
+        assert estimate_duration_sec(
+            record, [1.0, 2.0], duration_scale=1.0, rate_prior_chars=None
+        ) == pytest.approx(plain)
+        assert estimate_duration_sec(
+            record, [1.0, 2.0], duration_scale=1.0, rate_prior_chars=0.0
+        ) == pytest.approx(plain)
+
+    def test_rate_prior_dominates_as_it_grows(self):
+        record = _record(["abcdefg", "abcdefgh"], ["abc", "de"])
+        got = estimate_duration_sec(
+            record,
+            [1.0, 2.0],
+            duration_scale=1.0,
+            rate_prior_chars=1e9,
+            rate_prior_sec_per_char=0.5,
+        )
+        assert got == pytest.approx((7 + 8) * 0.5, rel=1e-6)
+
+    def test_rate_prior_default_is_the_measured_sssd_rate(self):
+        record = _record(["abcdefg", "abcdefgh"], ["abc", "de"])
+        got = estimate_duration_sec(
+            record, [1.0, 2.0], duration_scale=1.0, rate_prior_chars=1e9
+        )
+        assert got == pytest.approx((7 + 8) * SSSD_SPEECH_SEC_PER_CHAR, rel=1e-6)
+
+    def test_negative_rate_prior_raises(self):
+        record = _record(["abcdefg", "abcdefgh"], ["abc", "de"])
+        with pytest.raises(ValueError, match="rate_prior_chars"):
+            estimate_duration_sec(record, [1.0, 2.0], rate_prior_chars=-1.0)
+
+    def test_duration_meta_names_the_rule_and_records_the_prior(self):
+        plain = duration_meta(1.0, 1.0, 5.0)
+        assert plain["rule"] == "f5_prompt_ratio_per_speaker"
+        assert plain["rate_prior_chars"] is None
+        shrunk = duration_meta(1.0, 1.0, 5.0, rate_prior_chars=100.0)
+        assert shrunk["rule"] == "f5_prompt_ratio_per_speaker_shrunk"
+        assert shrunk["rate_prior_chars"] == 100.0
+        assert shrunk["constants"]["rate_prior_sec_per_char"] == pytest.approx(
+            SSSD_SPEECH_SEC_PER_CHAR
+        )
+
 
 # --------------------------------------------------------------------------- #
 # Selection
@@ -226,9 +290,7 @@ class TestSelection:
         assert got == [1, 3]
         assert counts == {"n_out_of_band": 0, "n_not_sampled": 2}
 
-    def test_dialogue_ids_is_mutually_exclusive_with_band_and_subsample(
-        self, tmp_path
-    ):
+    def test_dialogue_ids_is_mutually_exclusive_with_band_and_subsample(self, tmp_path):
         ids_file = tmp_path / "ids.txt"
         ids_file.write_text("a\n", encoding="utf-8")
         records = self._records_with_ids(["a"])
@@ -538,6 +600,29 @@ class TestExternalInfer:
             assert meta["duration"]["speed"] == 2.0
             assert meta["duration"]["rule"] == "f5_prompt_ratio_per_speaker"
             assert meta["duration"]["predicted_sec"] > 0
+
+    def test_rate_prior_is_applied_and_recorded(self, testset, tiny_model, tmp_path):
+        plain_dir, _, _ = self._run(testset, tiny_model, tmp_path / "plain")
+        shrunk_dir, _, _ = self._run(
+            testset,
+            tiny_model,
+            tmp_path / "shrunk",
+            duration={"rate_prior_chars": 1e9, "rate_prior_sec_per_char": 0.5},
+        )
+        plain = json.loads((plain_dir / "meta/000.json").read_text("utf-8"))
+        shrunk = json.loads((shrunk_dir / "meta/000.json").read_text("utf-8"))
+        assert shrunk["duration"]["rule"] == "f5_prompt_ratio_per_speaker_shrunk"
+        assert shrunk["duration"]["rate_prior_chars"] == 1e9
+        assert shrunk["duration"]["constants"]["rate_prior_sec_per_char"] == 0.5
+        assert plain["duration"]["rate_prior_chars"] is None
+        # With an overwhelming prior every character costs 0.5 s * scale.
+        chars = sum(len(t["text"].encode("utf-8")) for t in shrunk["turns"])
+        assert shrunk["duration"]["predicted_sec"] == pytest.approx(
+            chars * 0.5 * shrunk["duration"]["duration_scale"], rel=1e-4
+        )
+        assert shrunk["duration"]["predicted_sec"] != pytest.approx(
+            plain["duration"]["predicted_sec"]
+        )
 
     def test_generated_length_follows_the_predicted_duration(
         self, testset, tiny_model, tmp_path
