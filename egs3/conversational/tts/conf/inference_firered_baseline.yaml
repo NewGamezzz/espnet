@@ -1,0 +1,74 @@
+#######################################################################
+#  Ingest the FireRedTTS-2 baseline's ZipVoice-Dialog test-en output  #
+#######################################################################
+# `mode: ingest_external_system` (src/external_system_ingest.py) reads one
+# wav per dialogue from another system's own inference run and writes our
+# output contract, so our metrics config scores it with the pipeline our own
+# arms go through.  No model, no GPU.
+#
+# FireRedTTS-2 synthesizes each turn separately and returns the
+# CONCATENATION of those turns as ONE MONO TRACK - there is no per-speaker
+# output anywhere in their pipeline, and no timing model at all.  So this is
+# a mixture-only arm: `ingest.output: mixture`, and
+# conf/metrics_firered_mixture.yaml is the ONLY correct metrics config for
+# it.  QUOTE ONLY wer_mix AND utmos_mix.  wer_channel duplicates wer_mix
+# here and utmos_ipu is measured over mixture IPUs; neither is a per-channel
+# number.
+#
+# ONE CAPTION BELONGS ON EVERY ROW FROM THIS ARM: its zero inter-speaker gap
+# and zero overlap are ARCHITECTURAL, a consequence of concatenating turns,
+# not a measured result.  A reader must not read this system's silence on
+# the interaction axes as a score of zero.
+#
+# Generated outside this repo with FireRedTeam/FireRedTTS2 at 404f3f6 and
+# their published dialogue recipe, fed OUR v2 prompts and OUR script
+# segmentation via local/make_firered_jsonl.py, driven by
+# local/firered_infer.py (they ship no batch inference program), checked by
+# local/firered_preflight.py and verified by local/firered_collect.py.
+#
+#   python run.py --stages infer measure \
+#       --inference_config conf/inference_firered_baseline.yaml \
+#       --metrics_config   conf/metrics_firered_mixture.yaml
+#
+# READ THE ROWS AGAINST OUR **pred** ARMS ONLY: this system is
+# autoregressive and predicts its own durations, so there is no
+# oracle-duration counterpart.  And v2 rows compare only to the v2 anchor.
+training_config: conf/training_poc.yaml
+exp_tag: eval_zipvoice_dialog
+mode: ingest_external_system
+device: cpu
+inference_dir: ${exp_dir}/infer_firered_v2
+test_name: valid
+
+testset:
+  manifest: downloads/zipvoice-dialog-test-en-v2/manifest.jsonl
+  name: zipvoice-dialog-test-en-v2
+
+# Provenance, copied verbatim into every meta JSON: a results table can then
+# never be read without knowing which system and which recipe produced it.
+system:
+  name: fireredtts2
+  repo: https://github.com/FireRedTeam/FireRedTTS2
+  commit: 404f3f6
+  checkpoint: FireRedTeam/FireRedTTS2 (llm_posttrain.pt, dialogue)
+  prompts: v2-normalized (-23 dBFS active RMS), mono, ours
+  output: 24 kHz mono, turns concatenated with no gap and no overlap
+  params: >-
+    gen_type=dialogue temperature=0.9 topk=30 fp32 (use_bf16=False)
+    max_audio_length_ms=30000/turn max_seq_len=3100
+    seed=blake2b(window_id) OURS - they ship no seed at all
+
+ingest:
+  output: mixture
+  wav_dir: /work/hdd/bbjs/ttrachu/development/FireRedTTS2/exp_baseline/collected/v2
+  suffix: .wav
+  # Unused in mixture mode: there is one track and no ordering to check.
+  verify_channel_map: false
+  channel_order: null
+
+selection:
+  dialogue_ids: null
+  min_duration: null
+  max_duration: null
+  num_dialogues: null
+  seed: 0

@@ -1,0 +1,33 @@
+##################################################################
+#  Measure the FireRedTTS-2 baseline on ZipVoice-Dialog test-en  #
+##################################################################
+# The reduced battery for an `ingest.output: mixture` arm - a system that
+# emits one mixed track and therefore has no per-channel truth.  Same metric
+# list as conf/metrics_zipvoice_dialog_mixture.yaml; only `inference_dir`
+# differs.  See that file for what each row means on a mixture arm and why
+# SpeakerSimilarityMetric and InteractionMetric are deliberately absent.
+mode: ingest_external_system
+inference_dir: ${exp_dir}/infer_firered_v2
+
+dataset:
+  test:
+    - name: valid
+
+metrics:
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.asr.ConversationASRMetric
+      _convert_: all
+      transcriber:
+        _target_: egs3.conversational.tts.src.metrics.asr.FasterWhisperTranscriber
+        device: cuda
+        compute_type: float16
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.quality.QualityMetric
+      _convert_: all
+      mos_backend:
+        _target_: egs3.conversational.tts.src.metrics.quality.TorchHubUTMOSBackend
+        device: cuda
+    inputs:
+      meta: meta
