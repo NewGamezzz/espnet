@@ -217,6 +217,61 @@ class TestSynthesize:
             mod.synthesize(module, model, row, 7, seeder=lambda s: None)
 
 
+class TestLastLogitOnly:
+    class FakeHead:
+        def __init__(self):
+            self.seen = []
+
+        def __call__(self, hidden):
+            self.seen.append(tuple(hidden.shape))
+            return hidden
+
+    class FakeTensor:
+        def __init__(self, shape):
+            self.shape = shape
+
+        def dim(self):
+            return len(self.shape)
+
+        def __getitem__(self, key):
+            # only the [:, -1:, :] slice this patch performs
+            return type(self)((self.shape[0], 1, self.shape[2]))
+
+    class FakeLM:
+        pass
+
+    def _model(self):
+        lm = self.FakeLM()
+        lm.lm_head = self.FakeHead()
+        return lm
+
+    def test_a_multi_position_prefill_is_cut_to_its_last_row(self):
+        # The whole point: sampling reads only the last position, so the
+        # 13.8 GB [1, N, 172032] tensor never needs to exist.
+        lm = self._model()
+        head = lm.lm_head
+        mod.use_last_logit_only(lm)
+        lm.lm_head(self.FakeTensor((1, 40000, 172032)))
+        assert head.seen == [(1, 1, 172032)]
+
+    def test_a_single_position_step_is_passed_through_untouched(self):
+        lm = self._model()
+        head = lm.lm_head
+        mod.use_last_logit_only(lm)
+        lm.lm_head(self.FakeTensor((1, 1, 172032)))
+        assert head.seen == [(1, 1, 172032)]
+
+    def test_applying_it_twice_does_not_nest_the_wrapper(self):
+        lm = self._model()
+        head = lm.lm_head
+        mod.use_last_logit_only(lm)
+        first = lm.lm_head
+        mod.use_last_logit_only(lm)
+        assert lm.lm_head is first
+        lm.lm_head(self.FakeTensor((1, 500, 172032)))
+        assert head.seen == [(1, 1, 172032)]
+
+
 class TestRun:
     def test_a_wav_and_a_record_are_written_per_row(self, tmp_path):
         module, model = _pair()

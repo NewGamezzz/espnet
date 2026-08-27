@@ -267,6 +267,36 @@ def run(
     return {"ok": ok, "failed": failed, "skipped": skipped}
 
 
+def use_last_logit_only(model) -> None:
+    """Make their causal LM emit logits for the final position only.
+
+    Their ``MoonshotForCausalLM.forward`` runs ``lm_head`` over the WHOLE
+    hidden-state sequence, so a prefill of N tokens materializes an
+    ``[1, N, 172032]`` logits tensor - 13.8 GB in bf16 at N = 40000 - and
+    transformers 4.46's ``_sample`` then CLONES it before slicing, doubling
+    that.  On a 40 GB A100 a runaway generation therefore dies in
+    ``next_token_logits = outputs.logits.clone()[:, -1, :]`` rather than in
+    anything to do with the model.
+
+    Sampling only ever reads the last position, so restricting ``lm_head``
+    to it changes no arithmetic - the surviving row of the tensor is the
+    same matmul on the same hidden state - while removing the allocation
+    entirely.  It is OUR patch and is applied only where a row would
+    otherwise not run at all.
+    """
+    head = model.lm_head
+    if getattr(head, "_last_logit_only", False):
+        return
+
+    def forward(hidden):
+        if hidden.dim() == 3 and hidden.shape[1] > 1:
+            hidden = hidden[:, -1:, :]
+        return head(hidden)
+
+    forward._last_logit_only = True
+    model.lm_head = forward
+
+
 def load_model(repo_dir: Path):
     """``(module, model)`` - their ``inference`` module and a live ``Model``.
 
@@ -299,6 +329,13 @@ def main() -> None:
         help="comma-separated window_ids, for smoke tests and retries",
     )
     parser.add_argument(
+        "--last-logit-only",
+        action="store_true",
+        help="apply their lm_head to the final position only - identical "
+        "sampling, but without the multi-GB prefill logits tensor that OOMs "
+        "a runaway row on a 40 GB card",
+    )
+    parser.add_argument(
         "--resume",
         action="store_true",
         help="skip rows whose wav is already on disk (per-row seeding makes "
@@ -317,6 +354,8 @@ def main() -> None:
         rows = rows[: args.limit]
 
     module, model = load_model(args.repo_dir)
+    if args.last_logit_only:
+        use_last_logit_only(model.model)
     report = run(rows, out_dir, module, model, resume=args.resume)
     print(
         f"{report['ok']} ok, {report['failed']} failed, "
