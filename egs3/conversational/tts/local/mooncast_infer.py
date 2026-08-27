@@ -205,20 +205,29 @@ def run(
     model,
     save=_save_wav,
     seeder=_torch_seed,
+    resume: bool = False,
 ) -> dict:
     """Generate every row into ``out_dir/<window_id>.wav``.
 
     Appends one record per row to ``out_dir/records.jsonl`` - appends, so a
     resumed shard keeps its history rather than erasing the evidence of the
-    first attempt.  Returns ``{"ok", "failed"}``.
+    first attempt.  Returns ``{"ok", "failed", "skipped"}``.
+
+    With ``resume``, a row whose wav is already on disk is skipped.  Rows
+    are seeded from their own id, so a resumed shard produces exactly what
+    an uninterrupted one would have - which is what makes skipping sound
+    rather than merely convenient.
     """
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
     records_path = out_dir / "records.jsonl"
-    ok = failed = 0
+    ok = failed = skipped = 0
     with records_path.open("a", encoding="utf-8") as records:
         for row in rows:
             wid = row["window_id"]
+            if resume and (out_dir / f"{wid}.wav").is_file():
+                skipped += 1
+                continue
             seed = row_seed(wid)
             record = {
                 "window_id": wid,
@@ -255,7 +264,7 @@ def run(
             record["wall_sec"] = round(time.time() - started, 3)
             records.write(json.dumps(record) + "\n")
             records.flush()
-    return {"ok": ok, "failed": failed}
+    return {"ok": ok, "failed": failed, "skipped": skipped}
 
 
 def load_model(repo_dir: Path):
@@ -289,6 +298,12 @@ def main() -> None:
         default=None,
         help="comma-separated window_ids, for smoke tests and retries",
     )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="skip rows whose wav is already on disk (per-row seeding makes "
+        "the result identical to an uninterrupted run)",
+    )
     args = parser.parse_args()
 
     out_dir = args.out_dir.resolve()
@@ -302,8 +317,11 @@ def main() -> None:
         rows = rows[: args.limit]
 
     module, model = load_model(args.repo_dir)
-    report = run(rows, out_dir, module, model)
-    print(f"{report['ok']} ok, {report['failed']} failed -> {out_dir}")
+    report = run(rows, out_dir, module, model, resume=args.resume)
+    print(
+        f"{report['ok']} ok, {report['failed']} failed, "
+        f"{report['skipped']} already present -> {out_dir}"
+    )
     if report["failed"]:
         raise SystemExit(1)
 

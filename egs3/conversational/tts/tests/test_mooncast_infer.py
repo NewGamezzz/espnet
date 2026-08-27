@@ -229,7 +229,7 @@ class TestRun:
             save=lambda path, audio: saved.append(path),
             seeder=lambda s: None,
         )
-        assert report == {"ok": 1, "failed": 0}
+        assert report == {"ok": 1, "failed": 0, "skipped": 0}
         assert [p.name for p in saved] == ["d2.wav"]
         record = json.loads((tmp_path / "records.jsonl").read_text().strip())
         assert record["window_id"] == "d2"
@@ -249,11 +249,55 @@ class TestRun:
             save=lambda path, audio: None,
             seeder=lambda s: None,
         )
-        assert report == {"ok": 0, "failed": 1}
+        assert report == {"ok": 0, "failed": 1, "skipped": 0}
         record = json.loads((tmp_path / "records.jsonl").read_text().strip())
         assert record["status"] == "failed"
         assert "context overrun" in record["error"]
         assert "Traceback" in record["traceback"]
+
+    def test_resume_skips_rows_whose_wav_is_already_on_disk(self, tmp_path):
+        # A shard that ran out of walltime must not redo the rows it
+        # finished: the queue wait costs far more than the generation.
+        (tmp_path / "d2.wav").write_bytes(b"RIFF")
+        module, model = _pair()
+        report = mod.run(
+            [ROW],
+            tmp_path,
+            module,
+            model,
+            save=lambda path, audio: None,
+            seeder=lambda s: None,
+            resume=True,
+        )
+        assert report == {"ok": 0, "failed": 0, "skipped": 1}
+        assert model.seen == []
+        assert not (tmp_path / "records.jsonl").read_text().strip()
+
+    def test_resume_still_generates_a_row_with_no_wav(self, tmp_path):
+        module, model = _pair()
+        report = mod.run(
+            [ROW],
+            tmp_path,
+            module,
+            model,
+            save=lambda path, audio: None,
+            seeder=lambda s: None,
+            resume=True,
+        )
+        assert report == {"ok": 1, "failed": 0, "skipped": 0}
+
+    def test_without_resume_an_existing_wav_is_regenerated(self, tmp_path):
+        (tmp_path / "d2.wav").write_bytes(b"RIFF")
+        module, model = _pair()
+        report = mod.run(
+            [ROW],
+            tmp_path,
+            module,
+            model,
+            save=lambda path, audio: None,
+            seeder=lambda s: None,
+        )
+        assert report == {"ok": 1, "failed": 0, "skipped": 0}
 
     def test_records_are_appended_so_a_retry_keeps_its_history(self, tmp_path):
         for _ in range(2):
