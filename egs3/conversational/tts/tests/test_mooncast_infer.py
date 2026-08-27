@@ -218,58 +218,54 @@ class TestSynthesize:
 
 
 class TestLastLogitOnly:
-    class FakeHead:
-        def __init__(self):
-            self.seen = []
+    """Exercised against a REAL ``nn.Module``.
 
-        def __call__(self, hidden):
-            self.seen.append(tuple(hidden.shape))
-            return hidden
+    An earlier version of this patch replaced ``lm_head`` with a plain
+    function and passed a hand-rolled fake, but ``nn.Module.__setattr__``
+    rejects a function where a child module is registered - so the fake
+    hid a TypeError that only appeared after a 24-minute model load on a
+    GPU.  These tests use the real thing.
+    """
 
-    class FakeTensor:
-        def __init__(self, shape):
-            self.shape = shape
-
-        def dim(self):
-            return len(self.shape)
-
-        def __getitem__(self, key):
-            # only the [:, -1:, :] slice this patch performs
-            return type(self)((self.shape[0], 1, self.shape[2]))
-
-    class FakeLM:
-        pass
-
-    def _model(self):
-        lm = self.FakeLM()
-        lm.lm_head = self.FakeHead()
-        return lm
+    @staticmethod
+    def _lm():
+        torch = pytest.importorskip("torch")
+        lm = torch.nn.Module()
+        lm.lm_head = torch.nn.Linear(8, 5, bias=False)
+        return torch, lm
 
     def test_a_multi_position_prefill_is_cut_to_its_last_row(self):
         # The whole point: sampling reads only the last position, so the
-        # 13.8 GB [1, N, 172032] tensor never needs to exist.
-        lm = self._model()
-        head = lm.lm_head
+        # multi-GB [1, N, vocab] tensor never needs to exist.
+        torch, lm = self._lm()
+        hidden = torch.randn(1, 40, 8)
+        before = lm.lm_head(hidden)
         mod.use_last_logit_only(lm)
-        lm.lm_head(self.FakeTensor((1, 40000, 172032)))
-        assert head.seen == [(1, 1, 172032)]
+        after = lm.lm_head(hidden)
+        assert after.shape == (1, 1, 5)
+        # and it is the SAME arithmetic on the same hidden state
+        assert torch.equal(after[:, 0, :], before[:, -1, :])
 
     def test_a_single_position_step_is_passed_through_untouched(self):
-        lm = self._model()
-        head = lm.lm_head
+        torch, lm = self._lm()
+        hidden = torch.randn(1, 1, 8)
+        before = lm.lm_head(hidden)
         mod.use_last_logit_only(lm)
-        lm.lm_head(self.FakeTensor((1, 1, 172032)))
-        assert head.seen == [(1, 1, 172032)]
+        assert torch.equal(lm.lm_head(hidden), before)
 
-    def test_applying_it_twice_does_not_nest_the_wrapper(self):
-        lm = self._model()
-        head = lm.lm_head
+    def test_applying_it_twice_registers_one_hook(self):
+        torch, lm = self._lm()
         mod.use_last_logit_only(lm)
-        first = lm.lm_head
         mod.use_last_logit_only(lm)
-        assert lm.lm_head is first
-        lm.lm_head(self.FakeTensor((1, 500, 172032)))
-        assert head.seen == [(1, 1, 172032)]
+        assert len(lm.lm_head._forward_pre_hooks) == 1
+        assert lm.lm_head(torch.randn(1, 12, 8)).shape == (1, 1, 5)
+
+    def test_the_head_is_still_a_module_afterwards(self):
+        # nn.Module.__setattr__ rejects a plain function in a child-module
+        # slot; the patch must not try.
+        torch, lm = self._lm()
+        mod.use_last_logit_only(lm)
+        assert isinstance(lm.lm_head, torch.nn.Module)
 
 
 class TestRun:

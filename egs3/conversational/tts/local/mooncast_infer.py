@@ -278,23 +278,27 @@ def use_last_logit_only(model) -> None:
     ``next_token_logits = outputs.logits.clone()[:, -1, :]`` rather than in
     anything to do with the model.
 
-    Sampling only ever reads the last position, so restricting ``lm_head``
-    to it changes no arithmetic - the surviving row of the tensor is the
-    same matmul on the same hidden state - while removing the allocation
-    entirely.  It is OUR patch and is applied only where a row would
-    otherwise not run at all.
+    Sampling only ever reads the last position, so trimming ``lm_head``'s
+    input to it changes no arithmetic - the surviving row is the same
+    matmul on the same hidden state - while removing the allocation.  It is
+    OUR patch and is applied only where a row would otherwise not run.
+
+    Implemented as a forward pre-hook rather than by replacing the module:
+    ``nn.Module.__setattr__`` refuses a plain function where a child module
+    is registered.
     """
     head = model.lm_head
     if getattr(head, "_last_logit_only", False):
         return
 
-    def forward(hidden):
+    def trim(module, args):
+        hidden = args[0]
         if hidden.dim() == 3 and hidden.shape[1] > 1:
-            hidden = hidden[:, -1:, :]
-        return head(hidden)
+            return (hidden[:, -1:, :],) + tuple(args[1:])
+        return None
 
-    forward._last_logit_only = True
-    model.lm_head = forward
+    head.register_forward_pre_hook(trim)
+    head._last_logit_only = True
 
 
 def load_model(repo_dir: Path):
