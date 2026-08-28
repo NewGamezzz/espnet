@@ -96,12 +96,9 @@ def test_clean_strips_known_tags_and_unwraps_pname():
     )
 
 
-def test_clean_unknown_inline_word_is_dropped_but_kept():
-    res = chorus.clean_chorus_text("has <UNKNOWN/> been said")
-    assert res == CleanResult("has been said", False)
-
-
-def test_clean_unknown_only_is_unintelligible():
+def test_clean_any_unknown_is_unintelligible():
+    # inline or alone: the audio has a word the text would not cover
+    assert chorus.clean_chorus_text("has <UNKNOWN/> been said") == CleanResult("", True)
     assert chorus.clean_chorus_text("<UNKNOWN/>").unintelligible
     assert chorus.clean_chorus_text("<UNKNOWN/> <ST/>").unintelligible
 
@@ -124,8 +121,8 @@ def test_clean_supervisions_splits_drop_classes():
         Supervision("d", "MTG_1", 0, 3.0, 1.0, "a <UNKNOWN/> b", "Bert"),
     ]
     kept, spans, n_benign = chorus.clean_chorus_supervisions(sups)
-    assert [s.text for s in kept] == ["fine text", "a b"]
-    assert spans == [(1.0, 2.0)]
+    assert [s.text for s in kept] == ["fine text"]
+    assert spans == [(1.0, 2.0), (3.0, 4.0)]
     assert n_benign == 1
 
 
@@ -308,9 +305,9 @@ def test_builder_end_to_end_uses_given_splits(tmp_path, monkeypatch):
     assert sum(1 for t in s.turns if t.speaker == "Bert") == 2  # gap 0.5 > 0.2
     t3 = test[0]
     assert t3.num_channels == 3
-    # <UNKNOWN/>-only utterances are dropped but never become exclusion spans
-    assert t3.exclusion_spans == ()
-    assert [t.text for t in t3.turns if t.speaker == "Cid"] == ["one"]
+    # both Cid utterances contain <UNKNOWN/>: excluded, spans recorded
+    assert t3.exclusion_spans == ((0.2, 1.0), (1.5, 2.0))
+    assert [t.text for t in t3.turns if t.speaker == "Cid"] == []
 
 
 def test_builder_requires_vocab(tmp_path, monkeypatch):

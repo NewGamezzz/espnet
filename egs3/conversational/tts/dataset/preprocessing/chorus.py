@@ -131,13 +131,13 @@ def clean_chorus_text(text: str) -> CleanResult:
     """Strip Chorus markup from one utterance (see module docstring).
 
     ``<PName>x</PName>`` unwraps to ``x``; known self-closing tags are
-    deleted; ``<UNKNOWN/>`` marks one unintelligible word and is deleted.
-    An utterance whose only content was ``<UNKNOWN/>`` is reported as
-    unintelligible so the builder can COUNT it, but (unlike Fisher's unclear
-    spans) it does NOT become an exclusion span: measured 2026-08-28, the
-    230 such spans in train total 1.9 min (median 0.44 s, one word each)
-    yet would kill 2.5 h of the 6.75 h of windowable audio.  Any other tag
-    is an error so corpus changes surface at build time.
+    deleted.  ``<UNKNOWN/>`` marks a spoken word the transcriber could not
+    make out: any utterance containing one (inline or alone) is
+    UNINTELLIGIBLE under Fisher's standard - its audio holds words its text
+    would not cover - so it is dropped and its span excluded.  The planner's
+    ``exclusion_mode: cut`` keeps that from costing whole windows (design
+    2026-08-28).  Any other tag is an error so corpus changes surface at
+    build time.
 
     Args:
         text: Raw utterance text.
@@ -148,15 +148,14 @@ def clean_chorus_text(text: str) -> CleanResult:
     Raises:
         ValueError: on a tag outside ``KNOWN_TAGS`` / ``<UNKNOWN/>`` / PName.
     """
-    had_unknown = UNKNOWN_TAG in text
     cleaned = _PNAME_RE.sub(r"\1", text)
     for tag in _ANY_TAG_RE.findall(cleaned):
         if tag not in KNOWN_TAGS and tag != UNKNOWN_TAG:
             raise ValueError(f"unknown Chorus markup {tag} in {text!r}")
+    if UNKNOWN_TAG in text:
+        return CleanResult("", True)
     cleaned = _ANY_TAG_RE.sub(" ", cleaned)
     cleaned = " ".join(cleaned.split())
-    if not cleaned and had_unknown:
-        return CleanResult("", True)
     return CleanResult(cleaned, False)
 
 
@@ -169,10 +168,9 @@ def clean_chorus_supervisions(
         sups: One meeting's utterances.
 
     Returns:
-        ``(kept, unknown_only_spans, n_benign_dropped)``: the same shape as
-        ``fisher.clean_fisher_supervisions``, but ``unknown_only_spans`` is
-        informational (the builder logs their total and does NOT write them
-        as ``exclusion_spans`` - see ``clean_chorus_text``).
+        ``(kept, unintelligible_spans, n_benign_dropped)`` with the same
+        contract as ``fisher.clean_fisher_supervisions``: the spans become
+        the session's ``exclusion_spans``.
     """
     kept: list[Supervision] = []
     spans: list[tuple[float, float]] = []
