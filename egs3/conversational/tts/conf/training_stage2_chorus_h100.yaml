@@ -8,13 +8,15 @@
 #   2. session_blocklist on the CANDOR and Fisher TRAIN entries (cornell2's
 #      DNSMOS blocklists, whole session dropped when either channel fails).
 #   3. Activation checkpointing ON (model.arch.checkpoint_activations) so the
-#      8-channel Chorus meetings train at the SAME window range as every
-#      other corpus (window_max 80, chunk_window_max 60). MEASURED on one
-#      GH200 (jobs/memcheck_stage2.py, 2026-08-28, forward+backward, bf16):
-#      8 ch x 80 s (15.4M sample-rows, the worst solo batch) peaks at 12.0
-#      GiB with checkpointing vs 64.6 GiB for 8 x 60 s without; the stage-1
-#      floor (2 x 80 s, no checkpointing) was 23.8 GiB. The recompute costs
-#      ~25-30% step time for every corpus.
+#      8-channel Chorus meetings train on LONGER windows than the other
+#      corpora (Thanapat 2026-08-28: a meeting needs a long window to cover
+#      all its speakers): Chorus window_max 120 / chunk_window_max 120, the
+#      others keep the defaults (80 / 60). MEASURED on one GH200
+#      (jobs/memcheck_stage2.py, forward+backward, bf16): 8 ch x 80 s peaks
+#      at 12.0 GiB with checkpointing vs 64.6 GiB for 8 x 60 s without; the
+#      stage-1 floor (2 x 80 s, no checkpointing) was 23.8 GiB. The 8 ch x
+#      138 s worst case (8 + 10 + 120 s assembled chunk sample) is probed by
+#      the same script before launch. Recompute costs ~25-30% step time.
 #   4. timestamp_align_prob 0.5 -> 0.2 everywhere (Mode T is the easier
 #      format, so 80% of windows train Mode O).
 #   5. weights [0.20, 0.10, 0.05, 0.35, 0.30] over [SSSD, LibriTTS, CANDOR,
@@ -24,6 +26,17 @@
 #      boundaries instead of killing the window they touch. Clean (no
 #      untranscribed words enter a window) and recovers most of the 238 h
 #      Fisher / 2.5 h Chorus that the drop rule lost.
+#   7. Chunk-task knobs (Thanapat 2026-08-28): chunk_task_prob 0.5 -> 0.7 on
+#      every chunk-capable entry (the special-token format is what we infer
+#      with), prompt_slice_min 3 -> 2 and prompt_speech_floor 3 -> 1 (the
+#      per-channel floor decides whether a sparse Chorus speaker can anchor a
+#      prompt at all; below it the whole window degrades to plain). The
+#      shared prompt length is max(draw in [2, 8], largest channel floor
+#      extent), so prompts stay >= 2 s.
+#   8. batch_bins 7M -> 9.8M and accumulate_grad_batches 7 -> 5: the stage-1
+#      run used ~60% of the GPU WITHOUT checkpointing, so there is room. The
+#      per-optimizer-step budget is unchanged (7M x 7 = 9.8M x 5 = 49M rows
+#      per GPU) and so is the number of optimizer steps per epoch.
 # The session manifests + 2550-token vocab are COPIED verbatim from the
 # stage-1 checkout (byte-identical vocab is what lets the checkpoint
 # strict-load); only the Chorus builder runs in this checkout.
@@ -42,11 +55,11 @@ exp_dir: ${recipe_dir}/exp/${exp_tag}
 # stage-1 weights then overwrite everything via init_ckpt.
 pretrained_dir: ${recipe_dir}/downloads/F5TTS_Base
 
-# Stage-1 checkpoint (all-on run, frozen by Thanapat at >= 100K steps).
-# Weights only: optimizer, scheduler, EMA, and the step counter start fresh.
-# Replace the filename with the real backup_stepN name before launching; a
-# missing file fails at model build.
-init_ckpt: /work/hdd/bbjs/ttrachu/espnet_conv_allon/egs3/conversational/tts/exp/train_mixed4_allon_h100/backup_step100000.ckpt
+# Stage-1 checkpoint: backup_step98900 of the all-on run (Thanapat
+# 2026-08-28), COPIED into this checkout's init/ so the all-on tree is never
+# touched. Weights only: optimizer, scheduler, EMA, and the step counter
+# start fresh. A missing file fails at model build.
+init_ckpt: ${recipe_dir}/init/backup_step98900.ckpt
 
 # SSSD corpus root, pinned explicitly to the durable /work/hdd copy (the
 # repo default resolves into cornell2's PURGEABLE scratch).
@@ -117,9 +130,11 @@ dataset:
         dataset_root: ${sssd_root}
         min_active_speakers: 1
         chunk_task:
-          chunk_task_prob: 0.5
+          chunk_task_prob: 0.7
           prompt_only_prob: 0.5
           chunk_window_max: 60.0
+          prompt_slice_min: 2.0
+          prompt_speech_floor: 1.0
         timestamp_align_prob: 0.2
         context_channel_prob: 0.3
         independent_mask_prob: 0.3
@@ -141,9 +156,11 @@ dataset:
         session_blocklist: ${candor_blocklist}
         min_active_speakers: 1
         chunk_task:
-          chunk_task_prob: 0.5
+          chunk_task_prob: 0.7
           prompt_only_prob: 0.5
           chunk_window_max: 60.0
+          prompt_slice_min: 2.0
+          prompt_speech_floor: 1.0
         timestamp_align_prob: 0.2
         context_channel_prob: 0.3
         independent_mask_prob: 0.3
@@ -162,9 +179,11 @@ dataset:
         window_params:
           exclusion_mode: cut
         chunk_task:
-          chunk_task_prob: 0.5
+          chunk_task_prob: 0.7
           prompt_only_prob: 0.5
           chunk_window_max: 60.0
+          prompt_slice_min: 2.0
+          prompt_speech_floor: 1.0
         timestamp_align_prob: 0.2
         context_channel_prob: 0.3
         independent_mask_prob: 0.3
@@ -179,15 +198,19 @@ dataset:
         # Exclusion spans become window boundaries instead of killing the
         # window they touch (design 2026-08-28, option C): no untranscribed
         # words enter a window, and only the span itself is lost.
+        # Longer windows than the other corpora so one window can cover
+        # all 4-8 speakers (header item 3). The worst solo batch is
+        # 8 ch x (8 + 10 + 120) s = 26.5M sample-rows, > batch_bins by
+        # design; activation checkpointing is what makes it fit.
         window_params:
           exclusion_mode: cut
-        # No window cap: with activation checkpointing the worst solo
-        # batch (8 ch x 80 s = 15.4M sample-rows, > batch_bins by design)
-        # peaks at 12.0 GiB (measured, see header). Same knobs as Fisher.
+          window_max: 120.0
         chunk_task:
-          chunk_task_prob: 0.5
+          chunk_task_prob: 0.7
           prompt_only_prob: 0.5
-          chunk_window_max: 60.0
+          chunk_window_max: 120.0
+          prompt_slice_min: 2.0
+          prompt_speech_floor: 1.0
         timestamp_align_prob: 0.2
         context_channel_prob: 0.3
         independent_mask_prob: 0.3
@@ -238,6 +261,7 @@ dataset:
         min_active_speakers: 1
         window_params:
           exclusion_mode: cut
+          window_max: 120.0
   # Runtime tokenization against the EXTENDED vocab (base + 5 new tokens).
   preprocessor:
     _target_: egs3.conversational.tts.dataset.preprocessor.ConversationalTextPreprocessor
@@ -328,11 +352,12 @@ dataloader:
     _target_: egs3.conversational.tts.src.lit_module.PackedConversationCollator
   train:
     # Packed row budget in sample-rows: N x T_24k summed over the batch,
-    # padded to the longest window. Same 7M as stage 1 for equal-compute
-    # comparability; an 8-channel 80 s Chorus window (15.4M solo) exceeds it
-    # by design (solo batches may) and relies on activation checkpointing
-    # (12.0 GiB measured; there is headroom to raise batch_bins later).
-    batch_bins: 7000000
+    # padded to the longest window. 9.8M (stage 1: 7M, ~60% of the GPU
+    # without checkpointing) with accumulate_grad_batches 5 keeps the
+    # per-optimizer-step budget at 49M rows per GPU, exactly stage 1's.
+    # A solo 8-channel Chorus window (up to 26.5M) exceeds it by design
+    # (solo batches may) and relies on activation checkpointing.
+    batch_bins: 9800000
     min_batch_size: 1      # conversations, not rows
     shuffle: true
     num_workers: 4
@@ -353,8 +378,9 @@ trainer:
   accelerator: auto
   devices: ${num_device}
   num_nodes: ${num_nodes}
-  # 2 GPUs x 7M bins x 7 accum ~= 98M tokens/step, same as stage 1.
-  accumulate_grad_batches: 7
+  # 2 GPUs x 9.8M bins x 5 accum = 98M rows/step, same as stage 1's
+  # 2 x 7M x 7 (header item 8).
+  accumulate_grad_batches: 5
   precision: bf16-mixed
   # Epoch cadence (measured by the 2026-08-28 smoke): Chorus (570 windows
   # at weight 0.3) anchors the epoch at ~1,510 micro-batches = ~108

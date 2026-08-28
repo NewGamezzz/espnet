@@ -20,10 +20,13 @@ CHORUS_MAX_CHANNELS = 8  # measured on Delta 2026-08-27 (train: 7 meetings x 8)
 PROMPT_SLICE_MAX = 8.0
 PREV_SLICE_MAX = 10.0
 # Solo-batch ceiling for Chorus under activation checkpointing (sample-rows):
-# 8 ch x 80 s measured at 12.0 GiB on a GH200 (jobs/memcheck_stage2.py,
-# 2026-08-28); this pins the config's worst case to what was measured.
-CHORUS_SOLO_CEILING = 8 * 80.0 * FS
-WINDOW_MAX_DEFAULT = 80.0  # WindowParams default; Chorus uses it uncapped
+# 8 ch x 138 s (8 + 10 + 120 s assembled chunk sample at the Chorus
+# chunk_window_max 120) probed by jobs/memcheck_stage2.py before launch;
+# this pins the config's worst case to what that probe covers.
+CHORUS_WINDOW_MAX = 120.0  # Thanapat 2026-08-28: cover all 4-8 speakers
+CHORUS_SOLO_CEILING = 8 * (PROMPT_SLICE_MAX + PREV_SLICE_MAX + 120.0) * FS
+# Stage-1 per-GPU budget per optimizer step: 7M bins x 7 accumulation.
+STAGE1_ROWS_PER_STEP = 7_000_000 * 7
 
 
 def _entries(split):
@@ -49,19 +52,48 @@ def test_five_corpora_and_weights_sum_to_one():
     assert [e["data_src"] for e in _entries("valid")] == srcs
 
 
-def test_chorus_uncapped_worst_case_matches_measured_ceiling():
+def test_chorus_long_windows_within_probed_ceiling():
     args = _chorus("train")["data_src_args"]
-    # same window RANGE as the other corpora: no window_min/max override
-    assert set(args.get("window_params", {})) == {"exclusion_mode"}
-    assert set(_chorus("valid")["data_src_args"].get("window_params", {})) == {
-        "exclusion_mode"
-    }
+    # Chorus alone gets the long window range (train AND valid); the other
+    # corpora keep the WindowParams defaults.
+    for split in ("train", "valid"):
+        wp = _chorus(split)["data_src_args"]["window_params"]
+        assert wp == {"exclusion_mode": "cut", "window_max": CHORUS_WINDOW_MAX}, split
+    for e in _entries("train"):
+        if not e["data_src"].endswith("dataset_chorus"):
+            assert "window_max" not in e["data_src_args"].get("window_params", {})
     ct = args["chunk_task"]
+    assert ct["chunk_window_max"] == CHORUS_WINDOW_MAX
     assembled = PROMPT_SLICE_MAX + PREV_SLICE_MAX + ct["chunk_window_max"]
-    worst = max(WINDOW_MAX_DEFAULT, assembled)
+    worst = max(CHORUS_WINDOW_MAX, assembled)
     assert CHORUS_MAX_CHANNELS * worst * FS <= CHORUS_SOLO_CEILING
     assert CHORUS_SOLO_CEILING > CFG["dataloader"]["train"]["batch_bins"]
     assert CFG["model"]["arch"]["checkpoint_activations"] is True
+
+
+def test_chunk_task_knobs_everywhere_chunk_capable():
+    seen = 0
+    for e in _entries("train"):
+        ct = e["data_src_args"].get("chunk_task")
+        if e["data_src"].endswith("dataset_libritts"):
+            assert ct is None
+            continue
+        seen += 1
+        assert ct["chunk_task_prob"] == 0.7, e["data_src"]
+        assert ct["prompt_only_prob"] == 0.5, e["data_src"]
+        assert ct["prompt_slice_min"] == 2.0, e["data_src"]
+        assert ct["prompt_speech_floor"] == 1.0, e["data_src"]
+        if not e["data_src"].endswith("dataset_chorus"):
+            assert ct["chunk_window_max"] == 60.0, e["data_src"]
+    assert seen == 4
+
+
+def test_batch_budget_per_optimizer_step_matches_stage1():
+    bins = CFG["dataloader"]["train"]["batch_bins"]
+    accum = CFG["trainer"]["accumulate_grad_batches"]
+    assert bins == 9_800_000 and accum == 5
+    assert bins * accum == STAGE1_ROWS_PER_STEP
+    assert CFG["dataloader"]["valid"]["batch_bins"] == "${dataloader.train.batch_bins}"
 
 
 def test_exclusion_cut_on_fisher_and_chorus_both_splits():
@@ -92,7 +124,7 @@ def test_blocklists_on_candor_and_fisher_train_only():
 
 
 def test_init_keys_and_fresh_run_identity():
-    assert CFG["init_ckpt"].endswith(".ckpt")
+    assert CFG["init_ckpt"] == "${recipe_dir}/init/backup_step98900.ckpt"
     assert CFG["model"]["init_ckpt"] == "${init_ckpt}"
     assert CFG["model"]["init_from_ema"] is True
     assert CFG["exp_tag"] == "train_stage2_chorus_h100"
