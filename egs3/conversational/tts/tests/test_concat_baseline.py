@@ -124,6 +124,7 @@ class TestTurnSpans:
 from omegaconf import OmegaConf  # noqa: E402
 
 from egs3.conversational.tts.src.concat_baseline import (  # noqa: E402
+    SOURCES,
     run_concat_baseline,
 )
 from .test_build_model import build_tiny  # noqa: E402
@@ -243,3 +244,126 @@ class TestConcatBaselineRun:
                 model=tiny_model,
                 vocoder=FakeVocoder(),
             )
+
+
+# --------------------------------------------------------------------------- #
+# The `external` source: stock F5 on a training-style external manifest.
+#
+# Without it the baseline can only read the CoVoMix2 index and the SSSD
+# dataset, so single-speaker sets that ship as external manifests (LibriTTS
+# test-clean) have a system row and no baseline to compare it against.
+# --------------------------------------------------------------------------- #
+from .test_external_manifest import (  # noqa: E402
+    NO_GT,
+    ONE_SPK,
+    TWO_SPK,
+    write_manifest,
+)
+
+
+def _external_source_config(fx, **overrides):
+    cfg = OmegaConf.create(
+        {
+            "testset": {
+                "manifest": str(fx["manifest"]),
+                "name": "libritts-test-clean",
+            },
+            "duration": {
+                "source": "predicted",
+                "scale": 1.0,
+                "speed": 1.0,
+                "rate_prior_chars": 0.0,
+            },
+            "selection": {
+                "dialogue_ids": None,
+                "min_duration": None,
+                "max_duration": None,
+                "num_dialogues": None,
+                "seed": 0,
+                "shard_index": 0,
+                "shard_count": 1,
+            },
+        }
+    )
+    for key, value in overrides.items():
+        OmegaConf.update(cfg, key, value)
+    return cfg
+
+
+class TestExternalSource:
+    def test_builds_items_from_a_one_channel_manifest(self, tmp_path):
+        # A LibriTTS utterance is a ONE-channel record; the baseline must
+        # carry its turns and its single prompt through unchanged.
+        fx = write_manifest(tmp_path, [ONE_SPK], name="lt")
+        source = SOURCES.get("external")
+        assert source is not None, "concat_baseline has no `external` source"
+
+        items, exclusions = source(
+            _external_source_config(fx), fx["training_config"], FS
+        )
+
+        assert [it.dialogue_id for it in items] == ["d1"]
+        item = items[0]
+        assert item.num_channels == 1
+        assert item.turn_texts == ["cab", "bad"]
+        assert item.turn_channels == [0, 0]
+        assert item.prompt_texts == ["fed"]
+        assert item.prompt_secs == pytest.approx([1.0], abs=1e-3)
+        assert len(item.prompt_wavs) == 1
+        assert exclusions == {"n_out_of_band": 0, "n_not_sampled": 0}
+
+    def test_ground_truth_duration_policy_matches_the_reference_total(self, tmp_path):
+        # The system row for LibriTTS runs duration.source=ground_truth, so
+        # the baseline must too or the two differ in duration policy as well
+        # as in weights, and the comparison stops being controlled.
+        fx = write_manifest(tmp_path, [ONE_SPK], name="lt")
+        cfg = _external_source_config(fx, **{"duration.source": "ground_truth"})
+
+        items, _ = SOURCES["external"](cfg, fx["training_config"], FS)
+
+        # ONE_SPK ships 3.0 s of ground truth across its two turns.
+        assert sum(items[0].turn_secs) == pytest.approx(3.0, abs=1e-3)
+        assert len(items[0].turn_secs) == 2
+        assert items[0].extra_meta["duration_policy"] == "ground_truth"
+
+    def test_ground_truth_duration_keeps_the_rule_s_turn_proportions(self, tmp_path):
+        # Only the TOTAL is replaced; the per-turn split stays the rate
+        # rule's, exactly as _plan_dialogue does it for the system.
+        fx = write_manifest(tmp_path, [ONE_SPK], name="lt")
+        base = _external_source_config(fx)
+        gt = _external_source_config(fx, **{"duration.source": "ground_truth"})
+
+        pred_secs = SOURCES["external"](base, fx["training_config"], FS)[0][0].turn_secs
+        gt_secs = SOURCES["external"](gt, fx["training_config"], FS)[0][0].turn_secs
+
+        factor = 3.0 / sum(pred_secs)
+        assert gt_secs == pytest.approx([s * factor for s in pred_secs], rel=1e-6)
+
+    def test_ground_truth_source_without_reference_audio_raises(self, tmp_path):
+        # NO_GT has no gt_wav, so there is no reference total to honour;
+        # silently falling back to the rule would make the row incomparable.
+        fx = write_manifest(tmp_path, [NO_GT], name="lt")
+        cfg = _external_source_config(fx, **{"duration.source": "ground_truth"})
+
+        with pytest.raises(ValueError, match="ground_truth"):
+            SOURCES["external"](cfg, fx["training_config"], FS)
+
+    def test_unknown_duration_source_raises(self, tmp_path):
+        fx = write_manifest(tmp_path, [ONE_SPK], name="lt")
+        cfg = _external_source_config(fx, **{"duration.source": "nonsense"})
+
+        with pytest.raises(ValueError, match="duration.source"):
+            SOURCES["external"](cfg, fx["training_config"], FS)
+
+    def test_two_channel_manifest_keeps_explicit_turn_channels(self, tmp_path):
+        # The source is not single-speaker-only: ZipVoice-Dialog is a
+        # two-channel external manifest and must round-trip its channels.
+        fx = write_manifest(tmp_path, [TWO_SPK], name="zv")
+
+        items, _ = SOURCES["external"](
+            _external_source_config(fx), fx["training_config"], FS
+        )
+
+        assert items[0].num_channels == 2
+        assert items[0].turn_channels == [0, 1, 0]
+        assert items[0].prompt_texts == ["abc", "de"]

@@ -101,10 +101,12 @@ from egs3.conversational.tts.dataset.preprocessing.text import (
 from egs3.conversational.tts.dataset.preprocessor import read_vocab
 from egs3.conversational.tts.src.external_inference import _load_prompt_wav
 from egs3.conversational.tts.src.external_testset import (
+    DURATION_SOURCES,
     assign_shard,
     estimate_duration_sec,
     rate_prior_kwargs,
     load_covomix2_testset,
+    load_records,
     select_records,
 )
 from egs3.conversational.tts.src.generation import (
@@ -345,7 +347,105 @@ def _sssd_items(cfg, training_config, fs: int) -> tuple[list[BaselineItem], dict
     return items, {"n_out_of_band": 0, "n_not_sampled": 0}
 
 
-SOURCES = {"covomix2": _covomix2_items, "sssd": _sssd_items}
+def _external_items(cfg, training_config, fs: int) -> tuple[list[BaselineItem], dict]:
+    """External manifest: external prompts, ``duration.source`` durations.
+
+    The rule's predicted total or, under ``duration.source: ground_truth``,
+    the reference total.
+
+    The CoVoMix2 index and the SSSD dataset were the only two sources, so a
+    test set that ships as a training-style external manifest had a system row
+    and no baseline to compare it against.  Single-speaker sets are the reason
+    this matters: a LibriTTS utterance is a ONE-channel record with one turn,
+    and for one turn "concatenate the turns" is the identity, so this source
+    reduces to plain stock F5 - which is exactly the baseline wanted.
+
+    Turn ``start``/``end`` on an external manifest are ORDINALS, not
+    timestamps, so durations come from the rate rule here, never from the
+    turn spans.
+    """
+    token_list = OmegaConf.to_container(training_config, resolve=True)["dataset"][
+        "preprocessor"
+    ]["token_list"]
+    records, testset_name = load_records(cfg.testset, token_list)
+
+    dur_cfg = cfg.get("duration", {}) or {}
+    duration_scale = float(dur_cfg.get("scale", DEFAULT_DURATION_SCALE))
+    speed = float(dur_cfg.get("speed", 1.0))
+    rate_prior = rate_prior_kwargs(dur_cfg)
+    duration_source = str(dur_cfg.get("source", "predicted") or "predicted")
+    if duration_source not in DURATION_SOURCES:
+        raise ValueError(
+            f"duration.source must be one of {DURATION_SOURCES}, "
+            f"got {duration_source!r}"
+        )
+    use_gt_duration = duration_source == "ground_truth"
+
+    from egs3.conversational.tts.src.chunked_inference import estimate_turn_secs
+    from egs3.conversational.tts.src.external_inference import _probe_duration_sec
+
+    prompt_secs = [
+        [_probe_duration_sec(p.audio_path) for p in r.prompts] for r in records
+    ]
+    predicted = [
+        estimate_duration_sec(
+            r, secs, duration_scale=duration_scale, speed=speed, **rate_prior
+        )
+        for r, secs in zip(records, prompt_secs)
+    ]
+    indices, exclusions = select_records(records, predicted, cfg.selection)
+
+    items = []
+    for idx in indices:
+        record = records[idx]
+        secs = estimate_turn_secs(
+            record,
+            prompt_secs[idx],
+            duration_scale=duration_scale,
+            speed=speed,
+            **rate_prior,
+        )
+        if use_gt_duration:
+            # Oracle duration, the same single rescale _plan_dialogue applies
+            # for the system: only the TOTAL is replaced, so the per-turn
+            # split stays the rate rule's and the two rows differ in weights
+            # alone.
+            if record.gt_duration_sec is None:
+                raise ValueError(
+                    f"{record.dialogue_id}: duration.source=ground_truth but "
+                    "the record has no ground-truth audio"
+                )
+            factor = float(record.gt_duration_sec) / float(sum(secs))
+            secs = [sec * factor for sec in secs]
+        by_channel = {int(p.channel): p for p in record.prompts}
+        prompts = [by_channel[ch] for ch in range(record.num_channels)]
+        items.append(
+            BaselineItem(
+                dialogue_id=record.dialogue_id,
+                num_channels=record.num_channels,
+                turn_channels=[t.channel for t in record.turns],
+                turn_texts=[t.text for t in record.turns],
+                turn_secs=list(secs),
+                prompt_wavs=[_load_prompt_wav(p.audio_path, fs) for p in prompts],
+                prompt_texts=[p.text for p in prompts],
+                prompt_secs=[prompt_secs[idx][int(p.channel)] for p in prompts],
+                extra_meta={
+                    "testset": testset_name,
+                    "duration_policy": duration_source,
+                    "duration_scale": duration_scale,
+                    "speed": speed,
+                    **rate_prior,
+                },
+            )
+        )
+    return items, exclusions
+
+
+SOURCES = {
+    "covomix2": _covomix2_items,
+    "sssd": _sssd_items,
+    "external": _external_items,
+}
 
 
 def run_concat_baseline(
