@@ -26,3 +26,11 @@ def test_fisher_data_src_resolves():
     module = load_dataset_module(data_src="egs3.conversational.tts.dataset_fisher")
     assert module.Dataset is ConversationDataset
     assert module.DatasetBuilder is FisherBuilder
+
+
+def test_chorus_data_src_resolves():
+    from egs3.conversational.tts.dataset.chorus_builder import ChorusBuilder
+
+    module = load_dataset_module(data_src="egs3.conversational.tts.dataset_chorus")
+    assert module.Dataset is ConversationDataset
+    assert module.DatasetBuilder is ChorusBuilder

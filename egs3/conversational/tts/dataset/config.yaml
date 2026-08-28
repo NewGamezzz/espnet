@@ -128,3 +128,32 @@ fisher_builder:
     valid: manifest/sessions_fisher_valid.jsonl
     test: manifest/sessions_fisher_test.jsonl
   seed: 0
+
+chorus_builder:
+  # NSF Chorus corpus root (read-only): manifest.jsonl + <split>/<MTG_id>/<Name>.wav.
+  # Resolution order at runtime: explicit argument > $CHORUS_ROOT > this value.
+  dataset_root: /work/hdd/bbjs/cornell2/nsf_chorus/nsf_chorus
+  manifest_file: manifest.jsonl
+  # One-time per-speaker mono wav -> N-channel FLAC merge target (the
+  # pipeline assumes one multi-channel file per session). Channel i = i-th
+  # speaker in sorted name order. ~16 GB of wav in, less out.
+  # Resolution order: explicit argument > $CHORUS_FLAC_DIR > this value.
+  # NOTE the builder kwarg is chorus_flac_dir (flac_dir is CANDOR's key and
+  # fisher_flac_dir is Fisher's in the shared create_dataset stage config).
+  flac_dir: /work/hdd/bbjs/ttrachu/dataset/chorus_flac
+  ffmpeg: ffmpeg
+  merge_workers: 8
+  # Fisher's value: Chorus utterances are already sentence-split at <ST/>.
+  # Checked with the merge-gap sweep on Delta before the stage-2 run.
+  merge_gap: 0.2
+  # The corpus ships train/dev/eval; they map 1:1 onto train/valid/test
+  # (eval speakers are disjoint from train+dev; dev shares actors with train).
+  split_map:
+    train: train
+    dev: valid
+    eval: test
+  manifest_paths:
+    train: manifest/sessions_chorus_train.jsonl
+    valid: manifest/sessions_chorus_valid.jsonl
+    test: manifest/sessions_chorus_test.jsonl
+  seed: 0
