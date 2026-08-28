@@ -1,10 +1,14 @@
+import dataclasses
 import random
+
+import pytest
 from types import SimpleNamespace
 
 from ..preprocessing.chunk_task import ChunkTaskParams
 from ..preprocessing.planner import (
     WindowParams,
     _apply_mask_coin,
+    cut_segments,
     plan_session,
     plan_sessions,
 )
@@ -252,6 +256,81 @@ class TestExclusionSpans:
         a, _ = plan_session(s0, params=PARAMS, seed=0, epoch=None)
         b, _ = plan_session(s1, params=PARAMS, seed=0, epoch=None)
         assert a == b
+
+
+CUT = dataclasses.replace(PARAMS, exclusion_mode="cut")
+
+
+class TestExclusionCutMode:
+    def test_invalid_mode_rejected(self):
+        import pytest
+
+        with pytest.raises(ValueError, match="exclusion_mode"):
+            WindowParams(exclusion_mode="ignore")
+
+    def test_no_spans_is_bit_identical_to_drop(self):
+        s = _session()
+        a, sa = plan_session(s, params=PARAMS, seed=0, epoch=3)
+        b, sb = plan_session(s, params=CUT, seed=0, epoch=3)
+        assert a == b and sa == sb
+
+    def test_span_between_turns_becomes_a_boundary(self):
+        # _turns(): turn i occupies [2i, 2i+1.5]; a span in the gap after turn 9
+        s = _session(exclusion_spans=((19.6, 19.9),))
+        dropped, _ = plan_session(s, params=PARAMS, seed=0, epoch=None)
+        cut, stats = plan_session(s, params=CUT, seed=0, epoch=None)
+        assert all(not (r.t0 < 19.9 and 19.6 < r.t1) for r in cut)
+        assert any(r.t1 <= 19.6 + 1e-9 for r in cut) and any(
+            r.t0 >= 19.9 - 1e-9 for r in cut
+        )
+        # everything except the span itself is windowable again
+        assert sum(r.t1 - r.t0 for r in cut) > sum(r.t1 - r.t0 for r in dropped)
+        assert stats.excluded_sec == pytest.approx(0.3)
+        assert stats.n_excluded_turns == 0
+        ids = [r.window_id for r in cut]
+        assert ids == [f"sess_a_w{i:05d}" for i in range(len(ids))]
+        assert all(
+            t.start >= r.t0 - 1e-9 and t.end <= r.t1 + 1e-9
+            for r in cut
+            for t in r.turns
+        )
+
+    def test_turn_overlapping_span_is_excluded_and_extends_span(self):
+        # span inside turn 5 ([10, 11.5]): the whole turn goes
+        s = _session(exclusion_spans=((10.5, 10.7),))
+        segments, spans, n_excluded = cut_segments(s)
+        assert n_excluded == 1
+        assert spans == ((10.0, 11.5),)
+        assert all(not any(t.start == 10.0 for t in seg[2]) for seg in segments)
+        cut, stats = plan_session(s, params=CUT, seed=0, epoch=None)
+        assert stats.n_excluded_turns == 1 and stats.excluded_sec == pytest.approx(1.5)
+        assert all(not any(t.start == 10.0 for t in r.turns) for r in cut)
+        assert all(not (r.t0 < 11.5 and 10.0 < r.t1) for r in cut)
+
+    def test_cut_mode_in_chunk_task_path(self):
+        s = _session(exclusion_spans=((19.6, 19.9),))
+        cp = ChunkTaskParams(
+            chunk_task_prob=1.0, chunk_window_min=5.0, chunk_window_max=15.0
+        )
+        recs, stats = plan_session(s, params=CUT, seed=0, epoch=1, chunk_params=cp)
+        assert recs and all(not (r.t0 < 19.9 and 19.6 < r.t1) for r in recs)
+        assert (
+            stats.n_chunk_full
+            + stats.n_chunk_prompt_only
+            + stats.n_chunk_fallback_infill
+            == len(recs)
+        )
+
+    def test_cut_segments_covers_timeline(self):
+        s = _session(exclusion_spans=((5.0, 6.0), (30.0, 31.0)))
+        segments, spans, _ = cut_segments(s)
+        edges = [(a, b) for a, b, _ in segments]
+        assert edges[0][0] == 0.0 and edges[-1][1] == s.duration
+        for (a0, b0), (a1, b1) in zip(edges, edges[1:]):
+            assert b0 < a1
+        assert sum(b - a for a, b in edges) + sum(
+            b - a for a, b in spans
+        ) == pytest.approx(s.duration)
 
 
 def test_plan_sessions_concatenates_in_order():
@@ -624,9 +703,7 @@ class TestMaskCoin:
             raise AssertionError("maskmode rng must not be constructed")
 
         monkeypatch.setattr(planner_mod, "_maskmode_rng", _boom)
-        records, _ = plan_session(
-            _session(), params=PARAMS, seed=0, epoch=3
-        )
+        records, _ = plan_session(_session(), params=PARAMS, seed=0, epoch=3)
         assert all(r.context_channels is None for r in records)
         assert all(not r.independent_mask for r in records)
 
@@ -693,18 +770,25 @@ class TestMaskCoin:
             d.pop("context_channels", None)
             d.pop("independent_mask", None)
             return d
-        assert [strip(to_json(r)) for r in flagged] == [
-            to_json(r) for r in plain
-        ]
+
+        assert [strip(to_json(r)) for r in flagged] == [to_json(r) for r in plain]
 
     def test_deterministic_across_calls(self):
         a, _ = plan_session(
-            _session(), params=PARAMS, seed=0, epoch=2,
-            context_channel_prob=0.5, independent_mask_prob=0.5,
+            _session(),
+            params=PARAMS,
+            seed=0,
+            epoch=2,
+            context_channel_prob=0.5,
+            independent_mask_prob=0.5,
         )
         b, _ = plan_session(
-            _session(), params=PARAMS, seed=0, epoch=2,
-            context_channel_prob=0.5, independent_mask_prob=0.5,
+            _session(),
+            params=PARAMS,
+            seed=0,
+            epoch=2,
+            context_channel_prob=0.5,
+            independent_mask_prob=0.5,
         )
         assert [to_json(r) for r in a] == [to_json(r) for r in b]
 
@@ -717,9 +801,7 @@ class TestMaskCoin:
             sample_rate=48000,
             t0=0.0,
             t1=3.0,
-            turns=(
-                Turn(channel=0, speaker="s0", text="hi", start=0.0, end=1.0),
-            ),
+            turns=(Turn(channel=0, speaker="s0", text="hi", start=0.0, end=1.0),),
         )
         stats = WindowingStats()
         out = _apply_mask_coin(
@@ -777,12 +859,9 @@ class TestMaskCoin:
             params=WindowParams(),
             seed=3,
             epoch=5,
-            chunk_params=ChunkTaskParams(
-                chunk_task_prob=1.0, prompt_only_prob=0.0
-            ),
+            chunk_params=ChunkTaskParams(chunk_task_prob=1.0, prompt_only_prob=0.0),
             context_channel_prob=1.0,
         )
         assert any(
-            r.chunk_task is not None and r.context_channels is not None
-            for r in records
+            r.chunk_task is not None and r.context_channels is not None for r in records
         )

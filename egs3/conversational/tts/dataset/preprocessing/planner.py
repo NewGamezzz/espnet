@@ -99,6 +99,23 @@ class WindowParams:
     # snapped-gaps). It brackets the leading edge during selection;
     # trim_to_turns brackets the trailing edge it leaves.
     snap_start_to_turn: bool = True
+    # How exclusion spans (Fisher's unintelligible utterances, Chorus's
+    # <UNKNOWN/> utterances) interact with windowing (design 2026-08-28):
+    #   "drop" (default, bit-parity): plan as if there were no spans, then
+    #         discard every window overlapping one - a 0.8 s span kills a
+    #         whole 10-80 s window (measured: 21% of Fisher, 37% of Chorus).
+    #   "cut": the spans become hard window boundaries - the session is
+    #         planned segment by segment between them, so only the span
+    #         itself (plus any turn that overlapped it, whose text would not
+    #         cover that audio, and slivers too short to window) is lost.
+    #         No untranscribed words ever enter a window.
+    exclusion_mode: str = "drop"
+
+    def __post_init__(self) -> None:
+        if self.exclusion_mode not in ("drop", "cut"):
+            raise ValueError(
+                f"exclusion_mode must be 'drop' or 'cut', got {self.exclusion_mode!r}"
+            )
 
 
 def _window_rng(seed: int, session_id: str, epoch: int | None) -> random.Random:
@@ -166,10 +183,7 @@ def _apply_mask_coin(
     rng = _maskmode_rng(seed, session.session_id, epoch)
     out = []
     for record in records:
-        ctx_hit = (
-            context_channel_prob > 0
-            and rng.random() < context_channel_prob
-        )
+        ctx_hit = context_channel_prob > 0 and rng.random() < context_channel_prob
         if ctx_hit and record.num_channels >= 2:
             k = rng.randint(1, record.num_channels - 1)
             chans = tuple(sorted(rng.sample(range(record.num_channels), k)))
@@ -179,14 +193,139 @@ def _apply_mask_coin(
             if ctx_hit:
                 # A 1-channel window cannot spare a fully observed row.
                 stats.n_context_degraded += 1
-            if (
-                independent_mask_prob > 0
-                and rng.random() < independent_mask_prob
-            ):
+            if independent_mask_prob > 0 and rng.random() < independent_mask_prob:
                 record = dataclasses.replace(record, independent_mask=True)
                 stats.n_independent_windows += 1
         out.append(record)
     return out
+
+
+def cut_segments(
+    session: SessionRecord,
+) -> tuple[list[tuple[float, float, tuple]], tuple[tuple[float, float], ...], int]:
+    """Split a session at its exclusion spans (``exclusion_mode == "cut"``).
+
+    Spans are merged, then extended over any turn that overlaps one (a turn
+    merged across a dropped utterance, or one containing an inline
+    unintelligible word): that turn's text does not cover that audio, so it
+    is removed and its seconds join the excluded region.  Extension repeats
+    until stable, so an excluded turn that overlaps another span merges too.
+
+    Args:
+        session: The session record (turns + exclusion spans).
+
+    Returns:
+        ``(segments, extended_spans, n_excluded_turns)`` where each segment
+        is ``(start, end, turns_fully_inside)`` covering the gaps between the
+        extended spans within ``[0, session.duration]``.
+    """
+    spans = sorted(
+        (max(0.0, a), min(session.duration, b)) for a, b in session.exclusion_spans
+    )
+    merged: list[list[float]] = []
+    for a, b in spans:
+        if b <= a:
+            continue
+        if merged and a <= merged[-1][1]:
+            merged[-1][1] = max(merged[-1][1], b)
+        else:
+            merged.append([a, b])
+    turns = list(session.turns)
+    excluded_turns: set[int] = set()
+    changed = True
+    while changed:
+        changed = False
+        for i, t in enumerate(turns):
+            if i in excluded_turns:
+                continue
+            for span in merged:
+                if t.start < span[1] and span[0] < t.end:
+                    excluded_turns.add(i)
+                    span[0] = min(span[0], t.start)
+                    span[1] = max(span[1], t.end)
+                    changed = True
+                    break
+        if changed:
+            merged.sort()
+            out: list[list[float]] = []
+            for a, b in merged:
+                if out and a <= out[-1][1]:
+                    out[-1][1] = max(out[-1][1], b)
+                else:
+                    out.append([a, b])
+            merged = out
+    kept = [t for i, t in enumerate(turns) if i not in excluded_turns]
+    gaps: list[tuple[float, float]] = []
+    cur = 0.0
+    for a, b in merged:
+        if a > cur:
+            gaps.append((cur, a))
+        cur = max(cur, b)
+    if session.duration > cur:
+        gaps.append((cur, session.duration))
+    segments = []
+    for a, b in gaps:
+        inside = tuple(t for t in kept if t.start >= a - 1e-9 and t.end <= b + 1e-9)
+        segments.append((a, b, inside))
+    return segments, tuple((a, b) for a, b in merged), len(excluded_turns)
+
+
+def _build_session_windows(
+    session: SessionRecord,
+    rec: Recording,
+    wp: WindowParams,
+    rng: random.Random,
+) -> tuple[list[WindowRecord], WindowingStats, tuple, tuple[tuple[float, float], ...]]:
+    """build_windows + exclusion handling per ``wp.exclusion_mode``.
+
+    Returns ``(records, stats, turns_for_chunk_task, spans_for_chunk_task)``.
+    "drop" mode (and any session without spans) is the exact original code:
+    one build_windows call over the whole session, then windows overlapping a
+    span are discarded.  "cut" mode plans each segment from ``cut_segments``
+    in order with the SAME rng object, so the draw sequence is deterministic.
+    """
+    kwargs = dict(
+        window_min=wp.window_min,
+        window_max=wp.window_max,
+        boundary_guard=wp.boundary_guard,
+        tail_min=wp.tail_min,
+        rng=rng,
+        trim_to_turns=wp.trim_to_turns,
+        min_coverage=wp.min_coverage,
+        snap_start_to_turn=wp.snap_start_to_turn,
+    )
+    if wp.exclusion_mode == "cut" and session.exclusion_spans:
+        segments, spans, n_excluded = cut_segments(session)
+        records: list[WindowRecord] = []
+        stats = WindowingStats()
+        stats.excluded_sec = sum(b - a for a, b in spans)
+        stats.n_excluded_turns = n_excluded
+        kept_turns: list = []
+        for a, b, turns in segments:
+            kept_turns.extend(turns)
+            if not turns:
+                continue
+            seg_records, seg_stats = build_windows(
+                session.session_id,
+                rec,
+                turns,
+                region=(a, b),
+                first_index=len(records),
+                **kwargs,
+            )
+            records.extend(seg_records)
+            stats.merge(seg_stats)
+        return records, stats, tuple(kept_turns), spans
+    records, stats = build_windows(session.session_id, rec, session.turns, **kwargs)
+    if session.exclusion_spans:
+        surviving = []
+        for record in records:
+            if any(record.t0 < b and a < record.t1 for a, b in session.exclusion_spans):
+                stats.n_windows -= 1
+            else:
+                surviving.append(record)
+        records = surviving
+    return records, stats, session.turns, session.exclusion_spans
 
 
 def plan_session(
@@ -248,29 +387,9 @@ def plan_session(
     )
 
     if not chunking:
-        records, stats = build_windows(
-            session.session_id,
-            rec,
-            session.turns,
-            window_min=params.window_min,
-            window_max=params.window_max,
-            boundary_guard=params.boundary_guard,
-            tail_min=params.tail_min,
-            rng=_window_rng(seed, session.session_id, epoch),
-            trim_to_turns=params.trim_to_turns,
-            min_coverage=params.min_coverage,
-            snap_start_to_turn=params.snap_start_to_turn,
+        records, stats, _turns, _spans = _build_session_windows(
+            session, rec, params, _window_rng(seed, session.session_id, epoch)
         )
-        if session.exclusion_spans:
-            surviving = []
-            for record in records:
-                if any(
-                    record.t0 < b and a < record.t1 for a, b in session.exclusion_spans
-                ):
-                    stats.n_windows -= 1
-                else:
-                    surviving.append(record)
-            records = surviving
         records = _apply_timestamp_coin(
             records, stats, session, seed, epoch, timestamp_align_prob
         )
@@ -297,39 +416,22 @@ def plan_session(
             window_min=chunk_params.chunk_window_min,
             window_max=chunk_params.chunk_window_max,
         )
-    records, stats = build_windows(
-        session.session_id,
-        rec,
-        session.turns,
-        window_min=window_params.window_min,
-        window_max=window_params.window_max,
-        boundary_guard=window_params.boundary_guard,
-        tail_min=window_params.tail_min,
-        rng=rng,
-        trim_to_turns=window_params.trim_to_turns,
-        min_coverage=window_params.min_coverage,
-        snap_start_to_turn=window_params.snap_start_to_turn,
+    # Exclusion-span handling (drop or cut, per params) runs BEFORE the
+    # draw_chunk_task calls: draws only happen per SURVIVING window, so no
+    # draws are wasted on dropped windows and the surviving set alone
+    # determines the draw sequence.
+    records, stats, chunk_turns, chunk_spans = _build_session_windows(
+        session, rec, window_params, rng
     )
-    # Exclusion-span filtering runs BEFORE draw_chunk_task calls: draws only
-    # happen per SURVIVING window, so no draws are wasted on dropped windows
-    # and the surviving set alone determines the draw sequence.
-    if session.exclusion_spans:
-        surviving = []
-        for record in records:
-            if any(record.t0 < b and a < record.t1 for a, b in session.exclusion_spans):
-                stats.n_windows -= 1
-            else:
-                surviving.append(record)
-        records = surviving
 
     if is_chunk:
         chunked_records = []
         for record in records:
             plan, degraded = draw_chunk_task(
                 record,
-                session.turns,
+                chunk_turns,
                 session.duration,
-                session.exclusion_spans,
+                chunk_spans,
                 session.num_channels,
                 rng,
                 chunk_params,
