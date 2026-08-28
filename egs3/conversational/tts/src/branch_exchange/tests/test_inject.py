@@ -139,22 +139,46 @@ def test_gradient_flow(kind, ckpt):
 
 
 @pytest.mark.parametrize("kind", ["tac", "mha"])
-def test_checkpoint_backward_outside_context_fails(kind):
+def test_checkpoint_backward_outside_context_uses_snapshot(kind):
+    """Lightning calls backward() after training_step has exited the context:
+    the recompute must reproduce the forward's exchange from the snapshot,
+    giving gradients bit-identical to an in-context backward."""
+    torch.manual_seed(0)
     model = make_dit(checkpoint_activations=True)
     ctx = inject_all(model, FACTORIES[kind])
+    set_gates(model, 0.5)
+    randomize_exchanges(model)
     inputs = make_packed_inputs(COUNTS)
 
     with ctx.branches(counts=COUNTS):
         loss = model(*inputs).sum()
-    with pytest.raises(RuntimeError, match="BranchContext changed"):
         loss.backward()
+    ref = {n: p.grad.clone() for n, p in model.named_parameters() if p.grad is not None}
 
-    # Re-entering the context (even with the same counts) is a new context:
-    # the recompute must see the very same activation, not a lookalike.
     model.zero_grad(set_to_none=True)
     with ctx.branches(counts=COUNTS):
         loss = model(*inputs).sum()
-    with ctx.branches(counts=COUNTS), pytest.raises(RuntimeError, match="BranchContext changed"):
+    loss.backward()  # outside any context
+    for n, p in model.named_parameters():
+        if n in ref:
+            assert torch.equal(p.grad, ref[n]), n
+    assert not ctx.active
+
+
+@pytest.mark.parametrize("kind", ["tac", "mha"])
+def test_checkpoint_backward_in_different_context_fails(kind):
+    model = make_dit(checkpoint_activations=True)
+    ctx = inject_all(model, FACTORIES[kind])
+    inputs = make_packed_inputs(COUNTS)
+
+    # Re-entering the context (even with the same counts) is a new context:
+    # the recompute must see the very same activation, not a lookalike.
+    with ctx.branches(counts=COUNTS):
+        loss = model(*inputs).sum()
+    with (
+        ctx.branches(counts=COUNTS),
+        pytest.raises(RuntimeError, match="BranchContext changed"),
+    ):
         loss.backward()
 
 
@@ -226,8 +250,12 @@ def test_get_context_validation():
         get_context(make_dit())
 
     model = make_dit()
-    sched_a = ExchangeSchedule.from_spec({"1-2": "P+TAC", "3-4": "P"}, depth=DEPTH, factory=FACTORIES["tac"])
-    sched_b = ExchangeSchedule.from_spec({"1-2": "P", "3-4": "P+TAC"}, depth=DEPTH, factory=FACTORIES["tac"])
+    sched_a = ExchangeSchedule.from_spec(
+        {"1-2": "P+TAC", "3-4": "P"}, depth=DEPTH, factory=FACTORIES["tac"]
+    )
+    sched_b = ExchangeSchedule.from_spec(
+        {"1-2": "P", "3-4": "P+TAC"}, depth=DEPTH, factory=FACTORIES["tac"]
+    )
     inject_exchange(model, REGISTRY["f5_dit"], sched_a, BranchContext())
     inject_exchange(model, REGISTRY["f5_dit"], sched_b, BranchContext())
     with pytest.raises(ValueError, match="different BranchContexts"):
@@ -250,7 +278,9 @@ def test_exchange_state_dict_roundtrip(kind):
     inject_all(model_b, FACTORIES[kind])
     load_exchange_state_dict(model_b, sd)
     for ex_a, ex_b in zip(iter_exchanges(model_a), iter_exchanges(model_b)):
-        for (name_a, p_a), (name_b, p_b) in zip(ex_a.named_parameters(), ex_b.named_parameters()):
+        for (name_a, p_a), (name_b, p_b) in zip(
+            ex_a.named_parameters(), ex_b.named_parameters()
+        ):
             assert name_a == name_b
             assert torch.equal(p_a, p_b), name_a
 
@@ -316,7 +346,10 @@ def test_row_count_must_be_multiple_of_total():
     model = make_dit()
     ctx = inject_all(model, FACTORIES["tac"])
     inputs = make_packed_inputs((2, 2))  # 4 rows, but the context declares 5
-    with ctx.branches(counts=COUNTS), pytest.raises(RuntimeError, match="not a multiple"):
+    with (
+        ctx.branches(counts=COUNTS),
+        pytest.raises(RuntimeError, match="not a multiple"),
+    ):
         model(*inputs)
 
 
@@ -350,7 +383,9 @@ def test_failed_injection_is_atomic():
     inject_exchange(model, REGISTRY["f5_dit"], partial, BranchContext())
     wrapped = model.transformer_blocks[1]
 
-    full = ExchangeSchedule.from_spec({f"1-{DEPTH}": "P+TAC"}, depth=DEPTH, factory=FACTORIES["tac"])
+    full = ExchangeSchedule.from_spec(
+        {f"1-{DEPTH}": "P+TAC"}, depth=DEPTH, factory=FACTORIES["tac"]
+    )
     with pytest.raises(ValueError, match="already ExchangedBlocks"):
         inject_exchange(model, REGISTRY["f5_dit"], full, BranchContext())
     # Nothing was mutated: block 0 (scheduled BEFORE the offending index) is
@@ -366,7 +401,9 @@ def test_failed_injection_is_atomic():
 
 def test_schedule_spec_parsing_and_validation():
     factory = IdentityExchange
-    sched = ExchangeSchedule.from_spec({"1-2": "P", "3": "P+TAC", "4-4": "P_TAC"}, depth=4, factory=factory)
+    sched = ExchangeSchedule.from_spec(
+        {"1-2": "P", "3": "P+TAC", "4-4": "P_TAC"}, depth=4, factory=factory
+    )
     assert [sched.mode(i) for i in range(4)] == [Mode.P, Mode.P, Mode.P_TAC, Mode.P_TAC]
     assert sched.exchange_for(0) is None
     assert isinstance(sched.exchange_for(2), IdentityExchange)
@@ -387,7 +424,9 @@ def test_schedule_spec_parsing_and_validation():
 def test_p_blocks_stay_untouched():
     model = make_dit()
     orig_blocks = list(model.transformer_blocks)
-    sched = ExchangeSchedule.from_spec({"1-2": "P", "3-4": "P+TAC"}, depth=4, factory=FACTORIES["tac"])
+    sched = ExchangeSchedule.from_spec(
+        {"1-2": "P", "3-4": "P+TAC"}, depth=4, factory=FACTORIES["tac"]
+    )
     inject_exchange(model, REGISTRY["f5_dit"], sched, BranchContext())
 
     assert model.transformer_blocks[0] is orig_blocks[0]

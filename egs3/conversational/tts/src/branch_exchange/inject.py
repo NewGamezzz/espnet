@@ -57,20 +57,27 @@ class BranchContext:
         ``device`` places the derived per-row conversation ids (default CPU;
         they are moved and cached per device on first use).
 
-        With activation checkpointing (``use_reentrant=False``), ``backward()``
-        must also run inside this context: the recompute re-executes each
-        ``ExchangedBlock.forward``, which verifies the context still matches
-        the one seen at forward time and raises ``RuntimeError`` otherwise.
+        With activation checkpointing (``use_reentrant=False``) the backward
+        recompute re-executes each ``ExchangedBlock.forward``. Each block
+        snapshots the context state it saw at forward time; a recompute that
+        runs OUTSIDE any context (the Lightning case: backward happens after
+        the training step returns) uses that snapshot, while a recompute under
+        a DIFFERENT active context raises ``RuntimeError`` instead of
+        silently exchanging across the wrong conversations.
 
         Not re-entrant: activating an already-active context would overwrite
         its state and the inner exit would clear what the outer block still
         needs, so nesting raises ``RuntimeError`` instead.
         """
         if self.conv_id is not None:
-            raise RuntimeError("BranchContext is already active; ctx.branches(...) does not nest")
+            raise RuntimeError(
+                "BranchContext is already active; ctx.branches(...) does not nest"
+            )
         counts_t = torch.as_tensor(counts, dtype=torch.long)
         if counts_t.ndim != 1 or counts_t.numel() == 0 or bool((counts_t < 1).any()):
-            raise ValueError(f"counts must be a non-empty sequence of positive ints, got {counts!r}")
+            raise ValueError(
+                f"counts must be a non-empty sequence of positive ints, got {counts!r}"
+            )
         self.conv_id = torch.repeat_interleave(
             torch.arange(counts_t.numel(), dtype=torch.long), counts_t
         ).to(device)
@@ -102,13 +109,20 @@ class BranchContext:
         key = (segments, device)
         cached = self._segment_cache.get(key)
         if cached is None:
-            conv_id = self.conv_id.to(device)
-            if segments > 1:
-                offsets = torch.arange(segments, dtype=torch.long, device=device) * self.n_conv
-                conv_id = (conv_id.unsqueeze(0) + offsets[:, None]).reshape(-1)
-            cached = (conv_id, segments * self.n_conv)
+            cached = _segment_conv_id(self.conv_id, self.n_conv, segments, device)
             self._segment_cache[key] = cached
         return cached
+
+
+def _segment_conv_id(
+    conv_id: torch.Tensor, n_conv: int, segments: int, device
+) -> tuple[torch.Tensor, int]:
+    """Per-row ids for ``segments`` stacked copies of the packed layout."""
+    conv_id = conv_id.to(device)
+    if segments > 1:
+        offsets = torch.arange(segments, dtype=torch.long, device=device) * n_conv
+        conv_id = (conv_id.unsqueeze(0) + offsets[:, None]).reshape(-1)
+    return conv_id, segments * n_conv
 
 
 class ExchangedBlock(nn.Module):
@@ -124,12 +138,13 @@ class ExchangedBlock(nn.Module):
     repeat the packed layout per segment and get offset ids, so branches
     never mix across segments.
 
-    The context is read at call time, so under activation checkpointing
-    (``use_reentrant=False``) ``backward()`` must run inside the same
-    ``ctx.branches(...)`` context as the forward: each forward snapshots the
-    context state, and the checkpoint recompute raises ``RuntimeError`` if the
-    context has since been exited or changed, instead of silently skipping the
-    exchange and producing wrong gradients.
+    The context is read at call time. Under activation checkpointing
+    (``use_reentrant=False``) each real forward snapshots the context state
+    (``conv_id``, ``n_conv``) it saw; the backward recompute then uses that
+    snapshot when no context is active (Lightning calls ``backward()`` after
+    the training step has exited ``ctx.branches``), so gradients match the
+    forward exactly, and raises ``RuntimeError`` when a DIFFERENT context is
+    active, instead of silently exchanging across the wrong conversations.
 
     ``copy.deepcopy`` of an injected model (e.g. for EMA) deepcopies ``ctx``
     too: the copy's blocks share one NEW context that the original's
@@ -137,7 +152,13 @@ class ExchangedBlock(nn.Module):
     with ``get_context(copy)``.
     """
 
-    def __init__(self, base_block: nn.Module, exchange: nn.Module, ctx: BranchContext, spec: BlockSpec):
+    def __init__(
+        self,
+        base_block: nn.Module,
+        exchange: nn.Module,
+        ctx: BranchContext,
+        spec: BlockSpec,
+    ):
         super().__init__()
         self.base_block = base_block
         self.exchange = exchange
@@ -145,29 +166,49 @@ class ExchangedBlock(nn.Module):
         object.__setattr__(self, "spec", spec)
         object.__setattr__(self, "_fwd_snapshot", _NO_SNAPSHOT)
 
-    def _validate_recompute(self):
+    def _recompute_state(self):
+        """(conv_id, n_conv) to use while a checkpoint recompute runs.
+
+        Live context matching the forward snapshot: use it (cached ids).
+        No live context: fall back to the snapshot. A live context whose
+        ``conv_id`` is a different tensor than the snapshot: error.
+        """
         snapshot = self._fwd_snapshot
         if snapshot is _NO_SNAPSHOT:
-            return
-        if self.ctx.conv_id is not snapshot:
-            raise RuntimeError(
-                "BranchContext changed between the checkpointed forward and its "
-                "recomputation during backward. With activation checkpointing, "
-                "backward() must be called inside the same ctx.branches(...) "
-                "context as the forward pass."
-            )
+            return self.ctx.conv_id, self.ctx.n_conv
+        snap_conv_id, snap_n_conv = snapshot
+        if self.ctx.conv_id is snap_conv_id:
+            return self.ctx.conv_id, self.ctx.n_conv
+        if self.ctx.conv_id is None:
+            return snap_conv_id, snap_n_conv
+        raise RuntimeError(
+            "BranchContext changed between the checkpointed forward and its "
+            "recomputation during backward: a different ctx.branches(...) "
+            "context is active. Run backward() outside any context or inside "
+            "the same one as the forward pass."
+        )
 
     def forward(self, *args, **kwargs):
         if _current_graph_task_id() != -1:
-            self._validate_recompute()
+            conv_id, n_conv = self._recompute_state()
         else:
-            object.__setattr__(self, "_fwd_snapshot", self.ctx.conv_id)
+            conv_id, n_conv = self.ctx.conv_id, self.ctx.n_conv
+            object.__setattr__(self, "_fwd_snapshot", (conv_id, n_conv))
         out = self.base_block(*args, **kwargs)
-        if not self.ctx.active:
+        if conv_id is None:
             return out
         h = self.spec.unpack(out)  # (M, T, d)
-        conv_id, n_conv = self.ctx.segment_conv_id(h.shape[0], h.device)
-        return self.spec.repack(out, self.exchange(h, conv_id, n_conv=n_conv))
+        if self.ctx.conv_id is conv_id:
+            ids, n = self.ctx.segment_conv_id(h.shape[0], h.device)
+        else:
+            total = int(conv_id.shape[0])
+            if h.shape[0] % total != 0:
+                raise RuntimeError(
+                    f"packed hidden batch has {h.shape[0]} rows, not a multiple "
+                    f"of the snapshot total {total}"
+                )
+            ids, n = _segment_conv_id(conv_id, n_conv, h.shape[0] // total, h.device)
+        return self.spec.repack(out, self.exchange(h, ids, n_conv=n))
 
 
 def _is_attr_path(target: str) -> bool:
@@ -302,14 +343,20 @@ def inject_exchange(
     """
     blocks = _resolve_blocks(model, spec.target)
     if schedule.depth != len(blocks):
-        raise ValueError(f"schedule depth {schedule.depth} != number of blocks {len(blocks)}")
+        raise ValueError(
+            f"schedule depth {schedule.depth} != number of blocks {len(blocks)}"
+        )
     scheduled = [i for i in range(len(blocks)) if schedule.mode(i) is Mode.P_TAC]
     already = [i for i in scheduled if isinstance(blocks[i][2], ExchangedBlock)]
     if already:
-        raise ValueError(f"blocks {already} are already ExchangedBlocks; remove_exchange first")
+        raise ValueError(
+            f"blocks {already} are already ExchangedBlocks; remove_exchange first"
+        )
     for i in scheduled:
         parent, key, block = blocks[i]
-        _set_block(parent, key, ExchangedBlock(block, schedule.exchange_for(i), ctx, spec))
+        _set_block(
+            parent, key, ExchangedBlock(block, schedule.exchange_for(i), ctx, spec)
+        )
     return model
 
 
@@ -368,7 +415,9 @@ def exchange_state_dict(model: nn.Module) -> dict:
     return out
 
 
-def load_exchange_state_dict(model: nn.Module, state_dict: dict, strict: bool = True) -> nn.Module:
+def load_exchange_state_dict(
+    model: nn.Module, state_dict: dict, strict: bool = True
+) -> nn.Module:
     """Inverse of ``exchange_state_dict``; modifies ``model`` in place.
 
     With ``strict=True`` (default) the keys must match exactly; otherwise a
@@ -390,6 +439,8 @@ def load_exchange_state_dict(model: nn.Module, state_dict: dict, strict: bool = 
         )
     for i, block in enumerate(blocks):
         prefix = f"{i}.exchange."
-        sub = {k[len(prefix):]: v for k, v in state_dict.items() if k.startswith(prefix)}
+        sub = {
+            k[len(prefix) :]: v for k, v in state_dict.items() if k.startswith(prefix)
+        }
         block.exchange.load_state_dict(sub, strict=strict)
     return model

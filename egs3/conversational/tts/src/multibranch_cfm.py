@@ -46,7 +46,9 @@ class MultiBranchCFM(CFM):
        stays independent per channel.
     4. CFG drops are unchanged (already whole-batch Python scalars).
     5. The transformer runs inside ``with self.ctx.branches(counts)`` so the
-       injected exchanges are active.
+       injected exchanges are active.  Lightning's ``backward()`` runs after
+       this context has exited; with ``checkpoint_activations`` the exchange
+       wrappers recompute from their forward-time snapshot (inject.py).
     6. Loss is the same masked MSE; per-channel means (``loss_ch0``, ...)
        are additionally returned in a stats dict for logging.
     7. For testability, ``forward`` accepts optional pre-sampled
@@ -162,14 +164,10 @@ class MultiBranchCFM(CFM):
             if cond_frames is not None
             else torch.zeros(n_conv, dtype=torch.bool, device=device)
         )
-        conv_id = torch.arange(n_conv, device=device).repeat_interleave(
-            counts_t
-        )
+        conv_id = torch.arange(n_conv, device=device).repeat_interleave(counts_t)
         ctx_rows_t = None
         if context_rows is not None:
-            ctx_rows_t = torch.as_tensor(
-                context_rows, dtype=torch.bool, device=device
-            )
+            ctx_rows_t = torch.as_tensor(context_rows, dtype=torch.bool, device=device)
             if ctx_rows_t.numel() != rows:
                 raise ValueError(
                     f"context_rows has {ctx_rows_t.numel()} entries for "
@@ -187,9 +185,7 @@ class MultiBranchCFM(CFM):
                 )
         ctx_conv = torch.zeros(n_conv, dtype=torch.bool, device=device)
         if ctx_rows_t is not None and bool(ctx_rows_t.any()):
-            ctx_counts = torch.zeros(
-                n_conv, dtype=torch.long, device=device
-            )
+            ctx_counts = torch.zeros(n_conv, dtype=torch.long, device=device)
             ctx_counts.index_add_(0, conv_id, ctx_rows_t.long())
             if bool(((ctx_counts > 0) & (ctx_counts == counts_t)).any()):
                 raise ValueError(
@@ -211,25 +207,17 @@ class MultiBranchCFM(CFM):
         if bool(override_rows.any()):
             if row_frac_lengths is None:
                 row_fracs = (
-                    torch.zeros(
-                        (int(override_rows.sum()),), device=device
-                    )
+                    torch.zeros((int(override_rows.sum()),), device=device)
                     .float()
                     .uniform_(*self.frac_lengths_mask)
                 )
             else:
-                row_fracs = torch.as_tensor(
-                    row_frac_lengths, device=device
-                ).float()[override_rows]
-            row_span = mask_from_frac_lengths(
-                lens[override_rows], row_fracs
-            )
-            row_span = F.pad(
-                row_span, (0, seq_len - row_span.shape[1]), value=False
-            )
-            rand_span_mask[override_rows] = (
-                row_span & mask[override_rows]
-            )
+                row_fracs = torch.as_tensor(row_frac_lengths, device=device).float()[
+                    override_rows
+                ]
+            row_span = mask_from_frac_lengths(lens[override_rows], row_fracs)
+            row_span = F.pad(row_span, (0, seq_len - row_span.shape[1]), value=False)
+            rand_span_mask[override_rows] = row_span & mask[override_rows]
         if ctx_rows_t is not None and bool(ctx_rows_t.any()):
             # Context rows: fully observed, zero loss frames - forced LAST
             # so it wins over shared, per-row, and deterministic spans.
@@ -288,9 +276,7 @@ class MultiBranchCFM(CFM):
             sel = row_pos == k
             sel_span = rand_span_mask[sel]
             if bool(sel_span.any()):
-                stats[f"loss_ch{k}"] = (
-                    loss_full[sel][sel_span].mean().detach()
-                )
+                stats[f"loss_ch{k}"] = loss_full[sel][sel_span].mean().detach()
 
         extras = {
             "cond": cond,
