@@ -36,9 +36,7 @@ def channel_key_to_session(key: str) -> str:
     """
     m = _SUFFIX_RE.match(key)
     if m is None:
-        raise ValueError(
-            f"blocklist key {key!r} has no -chK / -A / -B channel suffix"
-        )
+        raise ValueError(f"blocklist key {key!r} has no -chK / -A / -B channel suffix")
     return m.group(1)
 
 

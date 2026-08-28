@@ -316,7 +316,9 @@ def test_builder_requires_vocab(tmp_path, monkeypatch):
     _fake_ffmpeg_join(monkeypatch)
     root, _ = make_chorus_corpus(tmp_path, [meeting_line("MTG_1")])
     b = ChorusBuilder()
-    kw = dict(recipe_dir=tmp_path / "r", dataset_root=root, chorus_flac_dir=tmp_path / "flac")
+    kw = dict(
+        recipe_dir=tmp_path / "r", dataset_root=root, chorus_flac_dir=tmp_path / "flac"
+    )
     b.prepare_source(**kw)
     with pytest.raises(RuntimeError, match="vocab"):
         b.build(**kw)

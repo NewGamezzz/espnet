@@ -14,9 +14,7 @@ def _ckpt_from(model, tmp_path, *, with_ema=True, perturb_ema=True):
     ckpt = {"state_dict": sd, "global_step": 123, "epoch": 4}
     if with_ema:
         ema = {
-            f"ema_model.{k}": (
-                v + 1.0 if perturb_ema and v.is_floating_point() else v
-            )
+            f"ema_model.{k}": (v + 1.0 if perturb_ema and v.is_floating_point() else v)
             for k, v in sd.items()
         }
         ema["initted"] = torch.tensor(True)

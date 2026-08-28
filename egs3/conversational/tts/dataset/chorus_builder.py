@@ -199,7 +199,9 @@ class ChorusBuilder(DatasetBuilder):
         print(f"Chorus build summary (root={root})")
         print(f"  meetings: {len(meetings)}")
         print(f"  turns dropped empty after normalization: {dropped_empty_turns}")
-        print(f"  turns dropped out-of-range (end <= start): {dropped_out_of_range_turns}")
+        print(
+            f"  turns dropped out-of-range (end <= start): {dropped_out_of_range_turns}"
+        )
         print(f"  utterances dropped benign (tag-only): {dropped_benign_utts}")
         print(
             "  utterances dropped unintelligible (exclusion spans, "
