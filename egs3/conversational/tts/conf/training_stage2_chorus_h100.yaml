@@ -343,12 +343,18 @@ trainer:
   # 2 GPUs x 7M bins x 7 accum ~= 98M tokens/step, same as stage 1.
   accumulate_grad_batches: 7
   precision: bf16-mixed
-  check_val_every_n_epoch: 1
-  # Validate (and therefore checkpoint: save_last + top-K on valid/loss)
-  # every quarter epoch, so wall-limit kills lose at most ~20 min of work.
-  val_check_interval: 0.25
+  # Epoch cadence (measured by the 2026-08-28 smoke): Chorus (570 windows
+  # at weight 0.3) anchors the epoch at ~1,510 micro-batches = ~108
+  # optimizer steps, 20x shorter than stage 1's. Quarter-epoch validation
+  # would run the full combined valid set + a 6.8 GB checkpoint every ~27
+  # steps, so validate (and checkpoint) once every 10 epochs (~1,080 steps,
+  # ~20 min at the smoke's ~1 micro-batch/s).
+  check_val_every_n_epoch: 10
+  val_check_interval: 1.0
   log_every_n_steps: 50
-  max_epochs: 1000
+  # The 100K-step schedule ends the stage; max_epochs is only a backstop.
+  max_steps: 100000
+  max_epochs: 2000
   gradient_clip_val: 1.0
   # Batch order reshuffles via ConversationBatchSampler.set_epoch; rebuilding
   # loaders every epoch is not needed and, on resume, leaked workers.

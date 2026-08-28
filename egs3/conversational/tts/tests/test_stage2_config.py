@@ -84,5 +84,10 @@ def test_init_keys_and_fresh_run_identity():
     assert CFG["model"]["init_from_ema"] is True
     assert CFG["exp_tag"] == "train_stage2_chorus_h100"
     assert CFG["scheduler"]["total_steps"] == 100000
+    assert CFG["trainer"]["max_steps"] == CFG["scheduler"]["total_steps"]
+    # ~108 optimizer steps per epoch (smoke 2026-08-28): validate on an
+    # epoch count, never a fraction of one.
+    assert CFG["trainer"]["check_val_every_n_epoch"] == 10
+    assert CFG["trainer"]["val_check_interval"] == 1.0
     assert CFG["fit"]["ckpt_path"] == "last"
     assert CFG["create_dataset"]["chorus_flac_dir"] == "${chorus_flac_root}"
