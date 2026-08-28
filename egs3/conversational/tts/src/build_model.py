@@ -226,6 +226,51 @@ def exchange_param_groups(
     ]
 
 
+_EMA_PREFIX = "ema_model."
+
+
+def load_init_checkpoint(
+    model: MultiBranchF5, init_ckpt: str | Path, *, from_ema: bool
+) -> None:
+    """Strict weights-only init from a recipe Lightning checkpoint.
+
+    Curriculum stage 2 (design 2026-08-27): the assembled model takes the
+    stage-1 weights, while optimizer / scheduler / step counters start fresh
+    (this is NOT a resume; use ``fit.ckpt_path`` for that).  Lightning's
+    ``state_dict`` holds ``MultiBranchF5`` keys directly (the recipe's
+    LightningModule delegates ``state_dict`` to ``self.model``); the EMA
+    callback saves the same keys under ``ema_model.`` plus ``initted`` /
+    ``step`` bookkeeping tensors, which are dropped.
+
+    Args:
+        model: The fully assembled ``MultiBranchF5`` (after F5 surgery and
+            exchange injection, so key sets match the checkpoint exactly).
+        init_ckpt: A ``.ckpt`` written by this recipe's trainer.
+        from_ema: Load ``ema_model_state_dict`` (the EMA callback's
+            ``ema_model.*`` tensors) instead of the raw ``state_dict``.
+
+    Raises:
+        KeyError: when ``from_ema`` and the checkpoint has no EMA block.
+        RuntimeError: on any missing / unexpected key (strict load).
+    """
+    ckpt = torch.load(
+        str(init_ckpt), map_location="cpu", mmap=True, weights_only=False
+    )
+    if from_ema:
+        if "ema_model_state_dict" not in ckpt:
+            raise KeyError(
+                f"{init_ckpt} has no ema_model_state_dict (EMA callback not active?)"
+            )
+        state = {
+            k[len(_EMA_PREFIX) :]: v
+            for k, v in ckpt["ema_model_state_dict"].items()
+            if k.startswith(_EMA_PREFIX)
+        }
+    else:
+        state = ckpt["state_dict"]
+    model.load_state_dict(state, strict=True)
+
+
 def build_multibranch_f5(
     vocab_file: str,
     arch=None,
@@ -237,6 +282,8 @@ def build_multibranch_f5(
     vocab_meta: str | None = None,
     init_noise_scale: float = 0.02,
     init_seed: int = 0,
+    init_ckpt: str | None = None,
+    init_from_ema: bool = True,
 ) -> MultiBranchF5:
     """Build the injected multi-branch F5 model (see module docstring).
 
@@ -252,6 +299,13 @@ def build_multibranch_f5(
         pretrained_vocab: Vocab file shipped with the checkpoint; checked
             against ``vocab_meta`` before any weight is loaded.
         vocab_meta: Step 2's ``tokens/vocab_meta.json``.
+        init_ckpt: Stage-2 curriculum init (design 2026-08-27): a recipe
+            Lightning ``.ckpt`` whose weights are strict-loaded AFTER the F5
+            surgery and exchange injection (so every key matches);
+            ``pretrained_ckpt`` stays for vocab provenance. Weights only -
+            optimizer, scheduler, and step counters start fresh.
+        init_from_ema: Take the EMA tensors from ``init_ckpt`` (default)
+            rather than the raw online weights.
     """
     arch = _as_dict(arch)
     cfm_config = _as_dict(cfm)
@@ -329,4 +383,8 @@ def build_multibranch_f5(
     )
     inject_exchange(transformer, REGISTRY["f5_dit"], schedule, ctx)
 
-    return MultiBranchF5(cfm=model_cfm, feats_extract=extractor)
+    model = MultiBranchF5(cfm=model_cfm, feats_extract=extractor)
+    # 4. Stage-2 init from a recipe checkpoint, on the FINAL key set.
+    if init_ckpt is not None:
+        load_init_checkpoint(model, init_ckpt, from_ema=bool(init_from_ema))
+    return model
