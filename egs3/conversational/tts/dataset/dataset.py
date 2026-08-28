@@ -131,6 +131,12 @@ class ConversationDataset(TorchDataset):
     flags. Flagged samples carry ``context_rows`` (post-permutation row
     indices trained fully observed / loss-excluded) or ``independent_mask``
     (per-row span draws in the CFM).
+
+    ``session_blocklist`` (design 2026-08-27, stage 2) names one or more
+    DNSMOS blocklist JSONs (``preprocessing.blocklist``); a session is dropped
+    at load when ANY of its channels is listed, and a blocklist matching no
+    session at all fails loudly. Train entries only: valid stays unfiltered
+    so ``valid/loss`` remains comparable across stages.
     """
 
     def __init__(
@@ -151,6 +157,7 @@ class ConversationDataset(TorchDataset):
         timestamp_align_prob: float = 0.0,
         context_channel_prob: float = 0.0,
         independent_mask_prob: float = 0.0,
+        session_blocklist: str | Path | Sequence[str | Path] | None = None,
     ) -> None:
         self.split = split
         self.fs = int(fs if fs is not None else _DATASET_CFG["sample_rate"])
@@ -192,6 +199,17 @@ class ConversationDataset(TorchDataset):
                 "egs3.conversational.tts.dataset.libritts_builder)."
             )
         self.sessions = read_session_manifest(manifest_path)
+        if session_blocklist is not None:
+            from .preprocessing.blocklist import (
+                apply_session_blocklist,
+                load_blocked_sessions,
+            )
+
+            self.sessions = apply_session_blocklist(
+                self.sessions,
+                load_blocked_sessions(session_blocklist),
+                source=str(manifest_path),
+            )
         self.window_params = WindowParams(**(window_params or {}))
         self.window_seed = int(window_seed)
         self.chunk_params = (
