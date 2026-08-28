@@ -19,9 +19,11 @@ CHORUS_MAX_CHANNELS = 8  # measured on Delta 2026-08-27 (train: 7 meetings x 8)
 # + chunk window.
 PROMPT_SLICE_MAX = 8.0
 PREV_SLICE_MAX = 10.0
-# Solo-batch ceiling for Chorus under activation checkpointing (sample-rows);
-# the smoke run measures the real peak, this pins the config's intent.
-CHORUS_SOLO_CEILING = 8 * 60.0 * FS
+# Solo-batch ceiling for Chorus under activation checkpointing (sample-rows):
+# 8 ch x 80 s measured at 12.0 GiB on a GH200 (jobs/memcheck_stage2.py,
+# 2026-08-28); this pins the config's worst case to what was measured.
+CHORUS_SOLO_CEILING = 8 * 80.0 * FS
+WINDOW_MAX_DEFAULT = 80.0  # WindowParams default; Chorus uses it uncapped
 
 
 def _entries(split):
@@ -47,17 +49,14 @@ def test_five_corpora_and_weights_sum_to_one():
     assert [e["data_src"] for e in _entries("valid")] == srcs
 
 
-def test_chorus_caps_fit_solo_ceiling_with_checkpointing():
+def test_chorus_uncapped_worst_case_matches_measured_ceiling():
     args = _chorus("train")["data_src_args"]
-    window_max = args["window_params"]["window_max"]
+    assert "window_params" not in args  # same window range as the other corpora
+    assert "window_params" not in _chorus("valid")["data_src_args"]
     ct = args["chunk_task"]
     assembled = PROMPT_SLICE_MAX + PREV_SLICE_MAX + ct["chunk_window_max"]
-    worst = max(window_max, assembled)
+    worst = max(WINDOW_MAX_DEFAULT, assembled)
     assert CHORUS_MAX_CHANNELS * worst * FS <= CHORUS_SOLO_CEILING
-    assert (
-        _chorus("valid")["data_src_args"]["window_params"]["window_max"] == window_max
-    )
-    # The ceiling exceeds batch_bins only because activations are checkpointed.
     assert CHORUS_SOLO_CEILING > CFG["dataloader"]["train"]["batch_bins"]
     assert CFG["model"]["arch"]["checkpoint_activations"] is True
 

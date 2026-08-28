@@ -8,13 +8,13 @@
 #   2. session_blocklist on the CANDOR and Fisher TRAIN entries (cornell2's
 #      DNSMOS blocklists, whole session dropped when either channel fails).
 #   3. Activation checkpointing ON (model.arch.checkpoint_activations) so the
-#      8-channel Chorus meetings fit at a useful window length: Chorus
-#      train/valid entries cap window_max at 60 s and chunk_window_max at
-#      42 s (assembled chunk sample 8 + 10 + 42 = 60 s), i.e. a worst case
-#      of 8 x 60 s x 24 kHz = 11.5M sample-rows in a solo batch. Without
-#      checkpointing the 7M-bin budget only affords ~36 s at N=8. The
-#      recompute costs ~25-30% step time for every corpus; the ceiling is
-#      MEASURED by the smoke run (peak GPU memory), not assumed.
+#      8-channel Chorus meetings train at the SAME window range as every
+#      other corpus (window_max 80, chunk_window_max 60). MEASURED on one
+#      GH200 (jobs/memcheck_stage2.py, 2026-08-28, forward+backward, bf16):
+#      8 ch x 80 s (15.4M sample-rows, the worst solo batch) peaks at 12.0
+#      GiB with checkpointing vs 64.6 GiB for 8 x 60 s without; the stage-1
+#      floor (2 x 80 s, no checkpointing) was 23.8 GiB. The recompute costs
+#      ~25-30% step time for every corpus.
 #   4. timestamp_align_prob 0.5 -> 0.2 everywhere (Mode T is the easier
 #      format, so 80% of windows train Mode O).
 #   5. weights [0.20, 0.10, 0.05, 0.35, 0.30] over [SSSD, LibriTTS, CANDOR,
@@ -166,25 +166,19 @@ dataset:
         manifest_path: ${data_dir}/manifest/sessions_chorus_train.jsonl
         dataset_root: ${chorus_flac_root}
         min_active_speakers: 1
-        # Memory caps (design section 7, revised 2026-08-27 for activation
-        # checkpointing): the packer prices N x T_assembled and lets a solo
-        # batch exceed batch_bins, so an 8-channel 80 s window (15.4M) is
-        # out; 60 s caps the worst case at 8 x 60 x 24000 = 11.5M (assembled
-        # chunk sample 8 + 10 + 42 = 60 s). Pinned by
-        # tests/test_stage2_config.py; verified by the smoke run's peak memory.
-        window_params:
-          window_max: 60.0
+        # No window cap: with activation checkpointing the worst solo
+        # batch (8 ch x 80 s = 15.4M sample-rows, > batch_bins by design)
+        # peaks at 12.0 GiB (measured, see header). Same knobs as Fisher.
         chunk_task:
           chunk_task_prob: 0.5
           prompt_only_prob: 0.5
-          chunk_window_max: 42.0
+          chunk_window_max: 60.0
         timestamp_align_prob: 0.2
         context_channel_prob: 0.3
         independent_mask_prob: 0.3
   # valid entries carry NO knobs and NO blocklists: frozen mode (epoch=None)
   # never draws a coin, and the unfiltered valid sets keep valid/loss
-  # comparable to stage 1. Chorus valid keeps the window cap (the frozen
-  # planner still needs a window that fits).
+  # comparable to stage 1.
   valid:
     - data_src: conversational/tts
       data_src_args:
@@ -224,8 +218,6 @@ dataset:
         manifest_path: ${data_dir}/manifest/sessions_chorus_valid.jsonl
         dataset_root: ${chorus_flac_root}
         min_active_speakers: 1
-        window_params:
-          window_max: 60.0
   # Runtime tokenization against the EXTENDED vocab (base + 5 new tokens).
   preprocessor:
     _target_: egs3.conversational.tts.dataset.preprocessor.ConversationalTextPreprocessor
@@ -253,7 +245,7 @@ model:
   arch:
     # Activation checkpointing (torch.utils.checkpoint per DiT block,
     # non-reentrant): ~25-30% slower steps, memory no longer scales with
-    # depth, which is what lets 8-channel 60 s Chorus windows fit. The
+    # depth, which is what lets 8-channel 80 s Chorus windows fit. The
     # exchange wrappers snapshot the branch context at forward time so
     # Lightning's out-of-context backward recomputes correctly
     # (src/branch_exchange/inject.py).
@@ -317,8 +309,9 @@ dataloader:
   train:
     # Packed row budget in sample-rows: N x T_24k summed over the batch,
     # padded to the longest window. Same 7M as stage 1 for equal-compute
-    # comparability; the capped 8-channel Chorus sample (11.5M solo) exceeds
-    # it by design (solo batches may) and relies on activation checkpointing.
+    # comparability; an 8-channel 80 s Chorus window (15.4M solo) exceeds it
+    # by design (solo batches may) and relies on activation checkpointing
+    # (12.0 GiB measured; there is headroom to raise batch_bins later).
     batch_bins: 7000000
     min_batch_size: 1      # conversations, not rows
     shuffle: true

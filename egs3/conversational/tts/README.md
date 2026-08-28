@@ -281,7 +281,7 @@ The pipeline is channel-count generic (session `num_channels` flows through the 
 3. `model.init_ckpt` + `model.init_from_ema` (`src/build_model.py`): strict weights-only init from a recipe Lightning checkpoint, applied after the F5 surgery and exchange injection; optimizer, scheduler, EMA, and step counters start fresh (`fit.ckpt_path: last` still handles requeues).
 
 Memory: the packer prices a window at `N x T_assembled` and lets a solo batch exceed `batch_bins`, so an 8-channel 80 s window (15.4M sample-rows) would OOM.
-Stage 2 turns on `model.arch.checkpoint_activations` (per-block `torch.utils.checkpoint`, ~25-30% slower steps) and caps Chorus at `window_max 60` / `chunk_window_max 42` (worst case 11.5M solo); `tests/test_stage2_config.py` pins the numbers and the smoke run measures the real peak.
+Stage 2 turns on `model.arch.checkpoint_activations` (per-block `torch.utils.checkpoint`, ~25-30% slower steps), which lets Chorus use the default window range uncapped: measured on one GH200 (`jobs/memcheck_stage2.py` in the Delta checkout, 2026-08-28), an 8-channel 80 s solo batch peaks at 12.0 GiB with checkpointing vs 64.6 GiB for 8 x 60 s without (the stage-1 2 x 80 s floor was 23.8 GiB); `tests/test_stage2_config.py` pins the worst case to that measurement.
 Under checkpointing the exchange wrappers snapshot the branch context at forward time, so Lightning's out-of-context `backward()` recomputes the exchange correctly (`src/branch_exchange/inject.py`).
 
 ## Training (multi-branch CFM POC)
