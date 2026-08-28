@@ -131,10 +131,13 @@ def clean_chorus_text(text: str) -> CleanResult:
     """Strip Chorus markup from one utterance (see module docstring).
 
     ``<PName>x</PName>`` unwraps to ``x``; known self-closing tags are
-    deleted; ``<UNKNOWN/>`` marks one unintelligible word and is deleted,
-    but an utterance whose only content was ``<UNKNOWN/>`` is unintelligible
-    (its span must not survive into windows).  Any other tag is an error so
-    corpus changes surface at build time.
+    deleted; ``<UNKNOWN/>`` marks one unintelligible word and is deleted.
+    An utterance whose only content was ``<UNKNOWN/>`` is reported as
+    unintelligible so the builder can COUNT it, but (unlike Fisher's unclear
+    spans) it does NOT become an exclusion span: measured 2026-08-28, the
+    230 such spans in train total 1.9 min (median 0.44 s, one word each)
+    yet would kill 2.5 h of the 6.75 h of windowable audio.  Any other tag
+    is an error so corpus changes surface at build time.
 
     Args:
         text: Raw utterance text.
@@ -166,8 +169,10 @@ def clean_chorus_supervisions(
         sups: One meeting's utterances.
 
     Returns:
-        ``(kept, unintelligible_spans, n_benign_dropped)`` with the same
-        contract as ``fisher.clean_fisher_supervisions``.
+        ``(kept, unknown_only_spans, n_benign_dropped)``: the same shape as
+        ``fisher.clean_fisher_supervisions``, but ``unknown_only_spans`` is
+        informational (the builder logs their total and does NOT write them
+        as ``exclusion_spans`` - see ``clean_chorus_text``).
     """
     kept: list[Supervision] = []
     spans: list[tuple[float, float]] = []

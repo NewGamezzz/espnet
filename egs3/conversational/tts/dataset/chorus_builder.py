@@ -6,7 +6,9 @@ normalized against that charset.  ``prepare_source`` runs the one-time
 per-speaker wav -> N-channel FLAC merge (a short compute job: 16 GB in);
 ``build`` cleans the markup, merges turns against measured FLAC durations,
 and writes one ``SessionRecord`` per meeting into the corpus's OWN splits
-(train/dev/eval -> train/valid/test).
+(train/dev/eval -> train/valid/test).  No exclusion spans are written: the
+``<UNKNOWN/>``-only utterances are one-word gaps whose spans would kill far
+more window time than they cover (see ``preprocessing.chorus``).
 
 Chorus sessions come out as ordinary N-channel conversations; the planner,
 collator, and TAC exchanges are channel-count generic, so nothing downstream
@@ -189,7 +191,10 @@ class ChorusBuilder(DatasetBuilder):
                     sample_rate=m.sample_rate,
                     duration=duration,
                     turns=tuple(normalized),
-                    exclusion_spans=tuple(spans),
+                    # <UNKNOWN/>-only utterances are NOT exclusion spans
+                    # (see preprocessing.chorus.clean_chorus_text): 1.9 min
+                    # of one-word gaps would otherwise kill 2.5 h of windows.
+                    exclusion_spans=(),
                 )
             )
 
@@ -204,9 +209,9 @@ class ChorusBuilder(DatasetBuilder):
         )
         print(f"  utterances dropped benign (tag-only): {dropped_benign_utts}")
         print(
-            "  utterances dropped unintelligible (exclusion spans, "
-            f"{exclusion_span_seconds:.1f}s total, dropped online by the "
-            f"planner): {dropped_unintelligible_utts}"
+            "  utterances dropped <UNKNOWN/>-only (untranscribed one-word gaps, "
+            f"{exclusion_span_seconds:.1f}s total, NOT excluded from windows): "
+            f"{dropped_unintelligible_utts}"
         )
         for split in ("train", "valid", "test"):
             counts = sorted(set(channel_counts[split]))

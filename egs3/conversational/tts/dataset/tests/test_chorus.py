@@ -308,7 +308,8 @@ def test_builder_end_to_end_uses_given_splits(tmp_path, monkeypatch):
     assert sum(1 for t in s.turns if t.speaker == "Bert") == 2  # gap 0.5 > 0.2
     t3 = test[0]
     assert t3.num_channels == 3
-    assert t3.exclusion_spans == ((1.5, 2.0),)
+    # <UNKNOWN/>-only utterances are dropped but never become exclusion spans
+    assert t3.exclusion_spans == ()
     assert [t.text for t in t3.turns if t.speaker == "Cid"] == ["one"]
 
 
