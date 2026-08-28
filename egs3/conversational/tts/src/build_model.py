@@ -34,6 +34,8 @@ import hashlib
 import json
 from pathlib import Path
 
+import logging
+
 import torch
 
 from egs3.conversational.tts.dataset.preprocessing.text import (
@@ -226,6 +228,8 @@ def exchange_param_groups(
     ]
 
 
+logger = logging.getLogger(__name__)
+
 _EMA_PREFIX = "ema_model."
 
 
@@ -253,9 +257,7 @@ def load_init_checkpoint(
         KeyError: when ``from_ema`` and the checkpoint has no EMA block.
         RuntimeError: on any missing / unexpected key (strict load).
     """
-    ckpt = torch.load(
-        str(init_ckpt), map_location="cpu", mmap=True, weights_only=False
-    )
+    ckpt = torch.load(str(init_ckpt), map_location="cpu", mmap=True, weights_only=False)
     if from_ema:
         if "ema_model_state_dict" not in ckpt:
             raise KeyError(
@@ -269,6 +271,13 @@ def load_init_checkpoint(
     else:
         state = ckpt["state_dict"]
     model.load_state_dict(state, strict=True)
+    logger.info(
+        "init_ckpt: loaded %d %s tensors from %s (global_step %s)",
+        len(state),
+        "EMA" if from_ema else "raw",
+        init_ckpt,
+        ckpt.get("global_step"),
+    )
 
 
 def build_multibranch_f5(
