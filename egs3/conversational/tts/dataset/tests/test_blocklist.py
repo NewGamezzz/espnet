@@ -78,3 +78,19 @@ def test_dataset_kwarg_filters_sessions(corpus, tmp_path):  # noqa: F811
     assert len(ds.sessions) == len(ds_all.sessions) - 1
     assert sid not in {s.session_id for s in ds.sessions}
     assert len(ds) < len(ds_all)
+    assert ds_all.blocklist_summary is None
+    assert ds.blocklist_summary.startswith(f"kept {len(ds.sessions)} / dropped 1 ")
+
+
+def test_dataset_relogs_blocklist_summary_per_epoch(
+    corpus, tmp_path, caplog
+):  # noqa: F811
+    sid = make_dataset(corpus).sessions[0].session_id
+    bl = tmp_path / "bl.json"
+    bl.write_text(json.dumps({"drop": {f"{sid}-ch1": ["x"]}}))
+    ds = make_dataset(corpus, session_blocklist=bl)
+    with caplog.at_level("INFO"):
+        ds.plan_windows(epoch=None)
+        assert "session blocklist" not in caplog.text  # frozen plan: silent
+        ds.plan_windows(epoch=0)
+    assert "session blocklist" in caplog.text and "dropped 1 sessions" in caplog.text
