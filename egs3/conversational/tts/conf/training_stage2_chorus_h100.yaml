@@ -41,7 +41,7 @@ pretrained_dir: ${recipe_dir}/downloads/F5TTS_Base
 # Weights only: optimizer, scheduler, EMA, and the step counter start fresh.
 # Replace the filename with the real backup_stepN name before launching; a
 # missing file fails at model build.
-init_ckpt: /work/hdd/bbjs/ttrachu/espnet_conv_allon/egs3/conversational/tts/exp/train_mixed4_allon_h100/checkpoints/backup_step100000.ckpt
+init_ckpt: /work/hdd/bbjs/ttrachu/espnet_conv_allon/egs3/conversational/tts/exp/train_mixed4_allon_h100/backup_step100000.ckpt
 
 # SSSD corpus root, pinned explicitly to the durable /work/hdd copy (the
 # repo default resolves into cornell2's PURGEABLE scratch).
