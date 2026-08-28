@@ -24,6 +24,7 @@ PREV_SLICE_MAX = 10.0
 # chunk_window_max 120) probed by jobs/memcheck_stage2.py before launch;
 # this pins the config's worst case to what that probe covers.
 CHORUS_WINDOW_MAX = 120.0  # Thanapat 2026-08-28: cover all 4-8 speakers
+WINDOW_MAX_DEFAULT = 80.0  # WindowParams default, used by the other corpora
 CHORUS_SOLO_CEILING = 8 * (PROMPT_SLICE_MAX + PREV_SLICE_MAX + 120.0) * FS
 # Stage-1 per-GPU budget per optimizer step: 7M bins x 7 accumulation.
 STAGE1_ROWS_PER_STEP = 7_000_000 * 7
@@ -69,6 +70,21 @@ def test_chorus_long_windows_within_probed_ceiling():
     assert CHORUS_MAX_CHANNELS * worst * FS <= CHORUS_SOLO_CEILING
     assert CHORUS_SOLO_CEILING > CFG["dataloader"]["train"]["batch_bins"]
     assert CFG["model"]["arch"]["checkpoint_activations"] is True
+
+
+def test_text_position_table_covers_the_longest_sample():
+    # espnet2/tts/f5/backbones/dit.py raises when a sample exceeds this table.
+    table = CFG["model"]["arch"]["text_precompute_max_pos"]
+    longest = 0.0
+    for e in _entries("train") + _entries("valid"):
+        args = e["data_src_args"]
+        window = args.get("window_params", {}).get("window_max", WINDOW_MAX_DEFAULT)
+        ct = args.get("chunk_task")
+        assembled = (
+            PROMPT_SLICE_MAX + PREV_SLICE_MAX + ct["chunk_window_max"] if ct else 0.0
+        )
+        longest = max(longest, window, assembled)
+    assert longest * FS / int(CFG["hop_length"]) <= table, (longest, table)
 
 
 def test_chunk_task_knobs_everywhere_chunk_capable():

@@ -289,11 +289,19 @@ model:
   arch:
     # Activation checkpointing (torch.utils.checkpoint per DiT block,
     # non-reentrant): ~25-30% slower steps, memory no longer scales with
-    # depth, which is what lets 8-channel 80 s Chorus windows fit. The
+    # depth, which is what lets 8-channel 120 s Chorus windows fit. The
     # exchange wrappers snapshot the branch context at forward time so
     # Lightning's out-of-context backward recomputes correctly
     # (src/branch_exchange/inject.py).
     checkpoint_activations: true
+    # The text branch's sinusoidal position table (espnet2/tts/f5/backbones/
+    # dit.py) defaults to 8192 mel frames = 87.4 s, which the 120 s Chorus
+    # windows exceed (smoke 3042228 died at 9278 frames). 16384 = 174.8 s
+    # covers the worst assembled sample (8 + 10 + 120 = 138 s = 12,938
+    # frames). The buffer is deterministic and non-persistent: no new
+    # parameters, no checkpoint key change. Positions past 8192 are ones the
+    # stage-1 weights never saw; this stage trains them.
+    text_precompute_max_pos: 16384
     dim: 1024
     depth: 22
     heads: 16

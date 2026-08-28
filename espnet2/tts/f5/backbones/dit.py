@@ -32,7 +32,14 @@ from espnet2.tts.f5.modules import (
 
 class TextEmbedding(nn.Module):
     def __init__(
-        self, text_num_embeds, text_dim, mask_padding=True, average_upsampling=False, conv_layers=0, conv_mult=2
+        self,
+        text_num_embeds,
+        text_dim,
+        mask_padding=True,
+        average_upsampling=False,
+        conv_layers=0,
+        conv_mult=2,
+        precompute_max_pos=8192,
     ):
         super().__init__()
         self.text_embed = nn.Embedding(text_num_embeds + 1, text_dim)  # use 0 as filler token
@@ -44,7 +51,13 @@ class TextEmbedding(nn.Module):
 
         if conv_layers > 0:
             self.extra_modeling = True
-            self.precompute_max_pos = 8192  # 8192 is ~87.38s of 24khz audio; 4096 is ~43.69s of 24khz audio
+            # Longest sample (in 24 kHz mel frames) this sinusoidal table can
+            # position: 8192 is ~87.38 s, 4096 is ~43.69 s, 16384 is ~174.8 s.
+            # A sample longer than the table raises in forward(), so the value
+            # must cover the longest assembled training sample. The buffer is
+            # deterministic and non-persistent, so raising it adds no
+            # parameters and does not change any checkpoint's key set.
+            self.precompute_max_pos = int(precompute_max_pos)
             self.register_buffer("freqs_cis", precompute_freqs_cis(text_dim, self.precompute_max_pos), persistent=False)
             self.text_blocks = nn.Sequential(
                 *[ConvNeXtV2Block(text_dim, text_dim * conv_mult) for _ in range(conv_layers)]
@@ -114,6 +127,13 @@ class TextEmbedding(nn.Module):
         # possible extra modeling
         if self.extra_modeling:
             # sinus pos emb; for variable seq lengths, only add positions within each sample's valid range.
+            if max_seq_len > self.precompute_max_pos:
+                raise ValueError(
+                    f"sample of {max_seq_len} mel frames exceeds the text "
+                    f"position table ({self.precompute_max_pos} frames, "
+                    f"~{self.precompute_max_pos * 256 / 24000:.1f} s at 24 kHz); "
+                    "raise DiT's text_precompute_max_pos"
+                )
             freqs = self.freqs_cis[:max_seq_len, :]
             if valid_pos_mask is not None:
                 freqs = freqs.unsqueeze(0) * valid_pos_mask.unsqueeze(-1).to(freqs.dtype)
@@ -189,6 +209,7 @@ class DiT(nn.Module):
         attn_mask_enabled=False,
         long_skip_connection=False,
         checkpoint_activations=False,
+        text_precompute_max_pos=8192,
     ):
         super().__init__()
 
@@ -201,6 +222,7 @@ class DiT(nn.Module):
             mask_padding=text_mask_padding,
             average_upsampling=text_embedding_average_upsampling,
             conv_layers=conv_layers,
+            precompute_max_pos=text_precompute_max_pos,
         )
         self.input_embed = InputEmbedding(mel_dim, text_dim, dim)
 
