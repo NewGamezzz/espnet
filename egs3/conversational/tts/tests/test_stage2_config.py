@@ -51,14 +51,28 @@ def test_five_corpora_and_weights_sum_to_one():
 
 def test_chorus_uncapped_worst_case_matches_measured_ceiling():
     args = _chorus("train")["data_src_args"]
-    assert "window_params" not in args  # same window range as the other corpora
-    assert "window_params" not in _chorus("valid")["data_src_args"]
+    # same window RANGE as the other corpora: no window_min/max override
+    assert set(args.get("window_params", {})) == {"exclusion_mode"}
+    assert set(_chorus("valid")["data_src_args"].get("window_params", {})) == {
+        "exclusion_mode"
+    }
     ct = args["chunk_task"]
     assembled = PROMPT_SLICE_MAX + PREV_SLICE_MAX + ct["chunk_window_max"]
     worst = max(WINDOW_MAX_DEFAULT, assembled)
     assert CHORUS_MAX_CHANNELS * worst * FS <= CHORUS_SOLO_CEILING
     assert CHORUS_SOLO_CEILING > CFG["dataloader"]["train"]["batch_bins"]
     assert CFG["model"]["arch"]["checkpoint_activations"] is True
+
+
+def test_exclusion_cut_on_fisher_and_chorus_both_splits():
+    for split in ("train", "valid"):
+        for e in _entries(split):
+            src = e["data_src"]
+            mode = e["data_src_args"].get("window_params", {}).get("exclusion_mode")
+            expect = (
+                "cut" if src.endswith(("dataset_fisher", "dataset_chorus")) else None
+            )
+            assert mode == expect, (split, src)
 
 
 def test_mode_o_coin_everywhere():

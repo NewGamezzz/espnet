@@ -19,6 +19,11 @@
 #      format, so 80% of windows train Mode O).
 #   5. weights [0.20, 0.10, 0.05, 0.35, 0.30] over [SSSD, LibriTTS, CANDOR,
 #      Fisher, Chorus]; scheduler total_steps 100K.
+#   6. window_params.exclusion_mode: cut on Fisher and Chorus (train AND
+#      valid): exclusion spans (unintelligible utterances) become window
+#      boundaries instead of killing the window they touch. Clean (no
+#      untranscribed words enter a window) and recovers most of the 238 h
+#      Fisher / 2.5 h Chorus that the drop rule lost.
 # The session manifests + 2550-token vocab are COPIED verbatim from the
 # stage-1 checkout (byte-identical vocab is what lets the checkpoint
 # strict-load); only the Chorus builder runs in this checkout.
@@ -151,6 +156,11 @@ dataset:
         dataset_root: ${fisher_flac_root}
         session_blocklist: ${fisher_blocklist}
         min_active_speakers: 1
+        # Exclusion spans become window boundaries instead of killing the
+        # window they touch (design 2026-08-28, option C): no untranscribed
+        # words enter a window, and only the span itself is lost.
+        window_params:
+          exclusion_mode: cut
         chunk_task:
           chunk_task_prob: 0.5
           prompt_only_prob: 0.5
@@ -166,6 +176,11 @@ dataset:
         manifest_path: ${data_dir}/manifest/sessions_chorus_train.jsonl
         dataset_root: ${chorus_flac_root}
         min_active_speakers: 1
+        # Exclusion spans become window boundaries instead of killing the
+        # window they touch (design 2026-08-28, option C): no untranscribed
+        # words enter a window, and only the span itself is lost.
+        window_params:
+          exclusion_mode: cut
         # No window cap: with activation checkpointing the worst solo
         # batch (8 ch x 80 s = 15.4M sample-rows, > batch_bins by design)
         # peaks at 12.0 GiB (measured, see header). Same knobs as Fisher.
@@ -176,9 +191,10 @@ dataset:
         timestamp_align_prob: 0.2
         context_channel_prob: 0.3
         independent_mask_prob: 0.3
-  # valid entries carry NO knobs and NO blocklists: frozen mode (epoch=None)
-  # never draws a coin, and the unfiltered valid sets keep valid/loss
-  # comparable to stage 1.
+  # valid entries carry NO coin knobs and NO blocklists: frozen mode
+  # (epoch=None) never draws a coin, and the unfiltered valid sets keep
+  # valid/loss comparable to stage 1. exclusion_mode: cut IS set on the
+  # Fisher/Chorus valid entries (same clean rule, more valid windows).
   valid:
     - data_src: conversational/tts
       data_src_args:
@@ -210,6 +226,8 @@ dataset:
         manifest_path: ${data_dir}/manifest/sessions_fisher_valid.jsonl
         dataset_root: ${fisher_flac_root}
         min_active_speakers: 1
+        window_params:
+          exclusion_mode: cut
     - data_src: egs3.conversational.tts.dataset_chorus
       data_src_args:
         split: valid
@@ -218,6 +236,8 @@ dataset:
         manifest_path: ${data_dir}/manifest/sessions_chorus_valid.jsonl
         dataset_root: ${chorus_flac_root}
         min_active_speakers: 1
+        window_params:
+          exclusion_mode: cut
   # Runtime tokenization against the EXTENDED vocab (base + 5 new tokens).
   preprocessor:
     _target_: egs3.conversational.tts.dataset.preprocessor.ConversationalTextPreprocessor

@@ -83,14 +83,22 @@ def test_dataset_kwarg_filters_sessions(corpus, tmp_path):  # noqa: F811
 
 
 def test_dataset_relogs_blocklist_summary_per_epoch(
-    corpus, tmp_path, caplog
+    corpus, tmp_path, caplog, monkeypatch
 ):  # noqa: F811
+    import logging
+
     sid = make_dataset(corpus).sessions[0].session_id
     bl = tmp_path / "bl.json"
     bl.write_text(json.dumps({"drop": {f"{sid}-ch1": ["x"]}}))
     ds = make_dataset(corpus, session_blocklist=bl)
-    with caplog.at_level("INFO"):
-        ds.plan_windows(epoch=None)
-        assert "session blocklist" not in caplog.text  # frozen plan: silent
-        ds.plan_windows(epoch=0)
+    # Other suites (Lightning runs) may reconfigure this logger; pin what the
+    # assertion needs so the test does not depend on run order.
+    name = "egs3.conversational.tts.dataset.dataset"
+    monkeypatch.setattr(logging.getLogger(name), "propagate", True)
+    monkeypatch.setattr(logging.getLogger(name), "disabled", False)
+    caplog.set_level(logging.INFO, logger=name)
+    caplog.clear()  # drop the __init__-time line from the blocklist module
+    ds.plan_windows(epoch=None)
+    assert "session blocklist" not in caplog.text  # frozen plan: silent
+    ds.plan_windows(epoch=0)
     assert "session blocklist" in caplog.text and "dropped 1 sessions" in caplog.text
