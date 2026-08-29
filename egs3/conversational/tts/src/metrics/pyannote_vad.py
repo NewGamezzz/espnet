@@ -44,12 +44,23 @@ class PyannoteVADSegmenter:
         token: Optional[str] = None,
         hyper_parameters: Optional[dict] = None,
         pipeline: Any = None,
+        silence_gate_dbfs: Optional[float] = None,
+        gate_frame_ms: float = 20.0,
     ) -> None:
         self.pipeline_name = pipeline_name
         self.device = device
         self.token = token
         self.hyper_parameters = dict(hyper_parameters or {})
         self._pipeline = pipeline
+        # Optional absolute silence gate (see :func:`silence_gate`). The
+        # pyannote segmentation model is amplitude-normalised (SincNet +
+        # instance norm) and reads a faint speech-shaped vocoder residue on
+        # a synthetic system's idle channel (-79 dBFS measured on the
+        # ZipVoice-Dialog stereo baseline) as speech 64 % of the time. The
+        # paper's human recordings never had such near-digital silence.
+        # Applied identically to every system, anchor included; None = off.
+        self.silence_gate_dbfs = silence_gate_dbfs
+        self.gate_frame_ms = gate_frame_ms
 
     def _load(self) -> None:
         if self._pipeline is not None:
@@ -84,7 +95,10 @@ class PyannoteVADSegmenter:
         self._load()
         import torch
 
-        waveform = torch.as_tensor(np.asarray(wav, dtype=np.float32)).reshape(1, -1)
+        wav = np.asarray(wav, dtype=np.float32)
+        if self.silence_gate_dbfs is not None:
+            wav = silence_gate(wav, sr, self.silence_gate_dbfs, self.gate_frame_ms)
+        waveform = torch.as_tensor(wav).reshape(1, -1)
         annotation = self._pipeline({"waveform": waveform, "sample_rate": int(sr)})
         return spans_from_annotation(annotation)
 
@@ -140,6 +154,24 @@ class _torch_load_full:
 
         torch.load = self._orig
         return False
+
+
+def silence_gate(
+    wav: np.ndarray, sr: int, threshold_dbfs: float, frame_ms: float = 20.0
+) -> np.ndarray:
+    """Zero every ``frame_ms`` frame whose RMS is below ``threshold_dbfs``
+    (dB re full scale 1.0); the trailing partial frame is judged on its own.
+    Frames at or above the threshold are returned untouched, so speech is
+    never altered; only near-silence is made exactly silent."""
+    wav = np.asarray(wav, dtype=np.float32)
+    n = max(int(round(sr * frame_ms / 1000.0)), 1)
+    out = wav.copy()
+    thr = 10.0 ** (threshold_dbfs / 20.0)
+    for a in range(0, len(wav), n):
+        seg = wav[a : a + n]
+        if len(seg) and float(np.sqrt(np.mean(seg.astype(np.float64) ** 2))) < thr:
+            out[a : a + n] = 0.0
+    return out
 
 
 def spans_from_annotation(annotation: Any) -> List[Tuple[float, float]]:

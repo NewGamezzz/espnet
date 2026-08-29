@@ -11,6 +11,7 @@ from egs3.conversational.tts.src.metrics.pyannote_vad import (
     PyannoteVADSegmenter,
     _shim_pyannote_compat,
     _torch_load_full,
+    silence_gate,
     spans_from_annotation,
 )
 from egs3.conversational.tts.src.metrics.turn_taking_judge import (
@@ -150,3 +151,33 @@ class TestCompatShims:
             assert torch.load(f)["a"] == 1
             assert torch.load(f, weights_only=True)["a"] == 1  # explicit True overridden
         assert torch.load is orig
+
+
+class TestSilenceGate:
+    def test_quiet_frames_zeroed_loud_frames_untouched(self):
+        sr = 1000
+        loud = np.full(20, 0.1, np.float32)  # -20 dBFS
+        quiet = np.full(20, 1e-4, np.float32)  # -80 dBFS
+        wav = np.concatenate([loud, quiet, loud, quiet[:7]])  # partial last frame
+        out = silence_gate(wav, sr, -60.0, frame_ms=20.0)
+        assert np.array_equal(out[:20], loud) and np.array_equal(out[40:60], loud)
+        assert not out[20:40].any() and not out[60:].any()
+        assert wav[20:40].any()  # input not modified in place
+
+    def test_gate_is_applied_before_the_pipeline(self):
+        sr = SR
+        pipe = FakePipeline([(0.0, 0.5)])
+
+        class Recorder(FakePipeline):
+            def __call__(self, file):
+                self.last = file["waveform"].numpy().copy()
+                return super().__call__(file)
+
+        rec = Recorder([(0.0, 0.5)])
+        wav = np.concatenate([np.full(sr // 2, 0.1, np.float32), np.full(sr // 2, 1e-4, np.float32)])
+        PyannoteVADSegmenter(pipeline=rec, silence_gate_dbfs=-60.0)(wav, sr)
+        assert rec.last[0, : sr // 2].all() and not rec.last[0, sr // 2 :].any()
+        ungated = Recorder([(0.0, 0.5)])
+        PyannoteVADSegmenter(pipeline=ungated)(wav, sr)
+        assert ungated.last[0, sr // 2 :].any()
+        del pipe
