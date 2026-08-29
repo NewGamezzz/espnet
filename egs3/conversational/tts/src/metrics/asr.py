@@ -116,12 +116,16 @@ class FasterWhisperTranscriber:
         device: str = "cpu",
         compute_type: str = "float32",
         language: str = "en",
+        vad_filter: bool = True,
         **model_kwargs: Any,
     ) -> None:
         self.model_size = model_size
         self.device = device
         self.compute_type = compute_type
         self.language = language
+        # False for short IPU clips (the judge's lexical backchannel rule):
+        # the internal VAD would drop a quiet 0.4 s "um-hum" before ASR.
+        self.vad_filter = vad_filter
         self.model_kwargs = model_kwargs
         self._model = None
 
@@ -140,7 +144,10 @@ class FasterWhisperTranscriber:
     def __call__(self, wav: np.ndarray, sr: int) -> str:
         self._load()
         segments_iter, _info = self._model.transcribe(
-            wav, language=self.language, vad_filter=True
+            wav,
+            language=self.language,
+            vad_filter=self.vad_filter,
+            condition_on_previous_text=self.vad_filter,
         )
         return " ".join(
             seg.text.strip() for seg in segments_iter if seg.text.strip()
