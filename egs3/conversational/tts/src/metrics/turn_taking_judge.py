@@ -19,11 +19,18 @@ Turn-Taking Evaluation"):
 * the upstream Switchboard label state machine
   (``local/create_switchboard_data_2channels_mono.py``) is ported VERBATIM,
   state resetting per window;
-* backchannels have no annotation on generated audio, so a proxy relabels a
-  span as ``BC`` when it is <= 1.08 s (Switchboard annotated-backchannel
-  duration p95), starts while the other channel holds the floor, and the
-  floor does not pass to it afterwards - applied identically to every
-  system, ground-truth anchor included;
+* backchannels have no annotation on generated audio; two rules exist
+  (``bc_rule``), applied identically to every system, anchor included:
+  ``duration`` (default, the first-round proxy) relabels a span as ``BC``
+  when it is <= 1.08 s (Switchboard annotated-backchannel duration p95),
+  starts while the other channel holds the floor, and the floor does not
+  pass to it afterwards; ``lexical`` is the paper's own rule (Sec. 4.2 /
+  A.4): the IPU is transcribed and is ``BC`` when its text is an isolated
+  Switchboard backchannel phrase uttered while the other channel holds the
+  floor (:mod:`.backchannel_lexicon`);
+* ``tag`` isolates a label policy: keys become ``judge_<tag>_*`` and labels
+  go to ``labels_<tag>/``, so several policies coexist in one
+  ``metrics.json`` (likelihoods are shared);
 * layer 1 = the paper's judge-validation protocol (``human_human=True`` in
   ``compute_turn_take_metrics``): per-class macro-F1 and ROC-AUC of judge
   vs realized, pooled over the run; layer 2 = the paper's role-conditioned
@@ -58,6 +65,7 @@ import numpy as np
 from espnet3.components.metrics.base_metric import BaseMetric
 
 from ._common import load_wav, summary_value
+from .backchannel_lexicon import DEFAULT_MAX_IPU_SEC, LexicalBackchannelLabeler
 from .quality import SileroVADSegmenter, VADBackend
 
 Span = Tuple[float, float]
@@ -192,22 +200,32 @@ def _rasterise_with_bc(
     return ["BC" if b == "IPU" else i for i, b in zip(ipu, bc)]
 
 
+def pad_channels(channel_spans: Sequence[Sequence[Span]]) -> List[List[Span]]:
+    """One-channel windows get a silent partner; anything but 2 is an error."""
+    chans = [list(ch) for ch in channel_spans]
+    if len(chans) == 1:
+        chans.append([])
+    if len(chans) != 2:
+        raise ValueError(f"judge labels are defined for 2 channels, got {len(chans)}")
+    return chans
+
+
 def label_rows(
     window_id: str,
     channel_spans: Sequence[Sequence[Span]],
     duration_sec: float,
     bc_max_sec: float = BC_MAX_SEC,
+    labelled: Optional[Sequence[Sequence[Tuple[Span, str]]]] = None,
 ) -> List[str]:
     """Upstream ``*_Two_Channel_Label_Mono.csv`` rows for one window:
-    ``wid,start,end,label,turn`` per chunk."""
-    if len(channel_spans) == 1:
-        channel_spans = [channel_spans[0], []]
-    if len(channel_spans) != 2:
-        raise ValueError(
-            f"judge labels are defined for 2 channels, got {len(channel_spans)}"
-        )
+    ``wid,start,end,label,turn`` per chunk. ``labelled`` (per channel
+    ``[((s, e), 'IPU'|'BC')]``) overrides the duration proxy when given."""
+    channel_spans = pad_channels(channel_spans)
     ends = chunk_ends(duration_sec)
-    labelled = apply_backchannel_proxy(channel_spans, duration_sec, bc_max_sec)
+    if labelled is None:
+        labelled = apply_backchannel_proxy(channel_spans, duration_sec, bc_max_sec)
+    else:
+        labelled = pad_channels(labelled)
     la = _rasterise_with_bc(labelled[0], ends)
     lb = _rasterise_with_bc(labelled[1], ends)
     labels, turns = _mono_labels(la, lb)
@@ -401,6 +419,11 @@ class TurnTakingJudgeMetric(BaseMetric):
         cache_likelihoods: bool = True,
         report_role_metrics: bool = False,
         window_batch: int = 1,
+        bc_rule: str = "duration",
+        transcriber: Optional[Callable[[np.ndarray, int], str]] = None,
+        bc_lexicon: Optional[str] = None,
+        bc_max_ipu_sec: float = DEFAULT_MAX_IPU_SEC,
+        tag: str = "",
     ) -> None:
         self.judge = judge if judge is not None else TurnTakingJudge()
         self.vad_backend = (
@@ -410,6 +433,31 @@ class TurnTakingJudgeMetric(BaseMetric):
         self.cache_likelihoods = cache_likelihoods
         self.report_role_metrics = report_role_metrics
         self.window_batch = window_batch
+        if bc_rule not in ("duration", "lexical"):
+            raise ValueError(f"bc_rule must be 'duration' or 'lexical', got {bc_rule!r}")
+        self.bc_rule = bc_rule
+        self.tag = tag
+        self.lexical: Optional[LexicalBackchannelLabeler] = None
+        if bc_rule == "lexical":
+            if transcriber is None:
+                from .asr import FasterWhisperTranscriber
+
+                transcriber = FasterWhisperTranscriber(vad_filter=False)
+            self.lexical = LexicalBackchannelLabeler(
+                transcriber,
+                lexicon_path=Path(bc_lexicon) if bc_lexicon else None,
+                max_ipu_sec=bc_max_ipu_sec,
+            )
+
+    def _tagged(self, name: str) -> str:
+        return f"{name}_{self.tag}" if self.tag else name
+
+    def _key(self, key: str) -> str:
+        """``judge_x`` -> ``judge_<tag>_x`` when a tag is set."""
+        if not self.tag:
+            return key
+        assert key.startswith("judge_"), key
+        return f"judge_{self.tag}_{key[len('judge_'):]}"
 
     # -- BaseMetric entrypoint ------------------------------------------- #
     def __call__(
@@ -418,7 +466,9 @@ class TurnTakingJudgeMetric(BaseMetric):
         test_dir = Path(data["meta"]).parent
         out_dir = Path(output_dir) / test_name / "scoring" / "turn_taking_judge"
         (out_dir / "likelihoods").mkdir(parents=True, exist_ok=True)
-        (out_dir / "labels").mkdir(parents=True, exist_ok=True)
+        (out_dir / self._tagged("labels")).mkdir(parents=True, exist_ok=True)
+        if self.lexical is not None:
+            (out_dir / "bc_lexical").mkdir(parents=True, exist_ok=True)
 
         lik_lines: List[str] = []
         label_lines: List[str] = []
@@ -431,7 +481,9 @@ class TurnTakingJudgeMetric(BaseMetric):
         self._fill_likelihood_cache(
             [m for m in metas if len(m["channels"]) <= 2], test_dir, out_dir
         )
-        with (out_dir / "windows.jsonl").open("w", encoding="utf-8") as fout:
+        with (out_dir / f"{self._tagged('windows')}.jsonl").open(
+            "w", encoding="utf-8"
+        ) as fout:
             for meta in metas:
                 if len(meta["channels"]) > 2:
                     skipped += 1
@@ -449,10 +501,11 @@ class TurnTakingJudgeMetric(BaseMetric):
                 per_window.append(rec)
 
         summary, confusion = self._summarize(lik_lines, label_lines, per_window, skipped)
-        (out_dir / "confusion.json").write_text(
+        summary = {self._key(k): v for k, v in summary.items()}
+        (out_dir / f"{self._tagged('confusion')}.json").write_text(
             json.dumps(confusion, indent=2), encoding="utf-8"
         )
-        (out_dir / "summary.json").write_text(
+        (out_dir / f"{self._tagged('summary')}.json").write_text(
             json.dumps(summary, indent=2), encoding="utf-8"
         )
         return summary
@@ -494,22 +547,22 @@ class TurnTakingJudgeMetric(BaseMetric):
         # written by _fill_likelihood_cache (always, cache on or off)
         lik_line = lik_path.read_text("utf-8").strip()
 
-        spans = []
+        spans, wavs = [], []
         for ch in meta["channels"]:
             wav, sr = load_wav(test_dir / ch["gen_wav"], target_sr=JUDGE_SR)
             spans.append(self.vad_backend(wav, sr))
-        rows = label_rows(wid, spans, dur, self.bc_max_sec)
-        (out_dir / "labels" / f"{wid}.txt").write_text(
+            wavs.append(wav)
+        if self.lexical is None:
+            labelled = apply_backchannel_proxy(spans, dur, self.bc_max_sec)
+        else:
+            labelled = self._lexical_labels(wid, spans, wavs, out_dir)
+        rows = label_rows(wid, spans, dur, self.bc_max_sec, labelled=labelled)
+        (out_dir / self._tagged("labels") / f"{wid}.txt").write_text(
             "".join(r + "\n" for r in rows), encoding="utf-8"
         )
 
         labels = [r.split(",")[3] for r in rows]
-        bc_spans = sum(
-            1
-            for ch in apply_backchannel_proxy(spans, dur, self.bc_max_sec)
-            for _, kind in ch
-            if kind == "BC"
-        )
+        bc_spans = sum(1 for ch in labelled for _, kind in ch if kind == "BC")
         return (
             {
                 "window_id": wid,
@@ -527,6 +580,28 @@ class TurnTakingJudgeMetric(BaseMetric):
             lik_line,
             rows,
         )
+
+    def _lexical_labels(self, wid: str, spans, wavs, out_dir: Path):
+        """Paper rule: transcripts are cached per window under
+        ``bc_lexical/<wid>.json`` (keyed by the VAD spans, so a changed VAD
+        invalidates the cache); the lexicon match itself is recomputed, so a
+        new lexicon or cutoff never re-runs ASR."""
+        assert self.lexical is not None
+        path = out_dir / "bc_lexical" / f"{wid}.json"
+        key = [[[float(s), float(e)] for s, e in ch] for ch in spans]
+        records = None
+        if path.exists():
+            cached = json.loads(path.read_text("utf-8"))
+            if cached.get("spans") == key:
+                records = cached["channels"]
+        if records is None:
+            records = self.lexical.transcribe_spans(spans, wavs, JUDGE_SR)
+        labelled = self.lexical.label_records(records)
+        path.write_text(
+            json.dumps({"spans": key, "channels": records}, ensure_ascii=False, indent=1),
+            encoding="utf-8",
+        )
+        return labelled
 
     # -- run level -------------------------------------------------------- #
     @staticmethod

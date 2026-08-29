@@ -12,12 +12,14 @@ estimate) by wrapping sklearn's accuracy_score.
 
 Usage::
 
-    python local/turn_judge_bootstrap.py <n_reps> <seed> <label>=<test_dir> ...
+    python local/turn_judge_bootstrap.py [--labels DIR] <n_reps> <seed> <label>=<test_dir> ...
 
 ``<test_dir>`` is ``<inference_dir>/<test_name>`` of an already-scored run
 (its ``scoring/turn_taking_judge/{likelihoods,labels}`` are read). Writes
 ``judge_bootstrap_<labels>.json`` next to the inference dirs and prints a
 markdown table (point [95% CI] (N) per run, paired differences).
+``--labels labels_lex`` reads a tagged label policy instead of ``labels``
+(output name gets the same suffix); likelihoods are always the shared cache.
 """
 from __future__ import annotations
 
@@ -54,13 +56,20 @@ class _Arrays:
         self.true_arr_soft_label, self.true_arr_hard_label = soft, hard
 
 
-def per_window(test_dir: Path):
+LABELS_DIR = "labels"
+
+
+def per_window(test_dir: Path, labels_dir: str = None):
     d = test_dir / "scoring" / "turn_taking_judge"
+    labels_dir = labels_dir or LABELS_DIR
     wins = {}
     for lp in sorted((d / "likelihoods").glob("*.txt")):
         wid = lp.stem
+        lab = d / labels_dir / f"{wid}.txt"
+        if not lab.exists():
+            continue
         lik_line = lp.read_text().strip()
-        rows = (d / "labels" / f"{wid}.txt").read_text().splitlines()
+        rows = lab.read_text().splitlines()
         lik = lib.compute_turn_likelihoods([lik_line], lib.ModelParam.min_start_time.value, lib.ModelParam.chunk_length.value)
         dec, turn = lib.compute_turn_decisions(rows)
         hh = lib.ScoreResult(dec, lik, turn, list(CLASSES), human_human=True)
@@ -141,11 +150,17 @@ def one_rep(seed):
 
 
 def main():
-    n_reps, seed = int(sys.argv[1]), int(sys.argv[2])
+    global LABELS_DIR
+    argv = list(sys.argv[1:])
+    if argv and argv[0] == "--labels":
+        LABELS_DIR = argv[1]
+        argv = argv[2:]
+    n_reps, seed = int(argv[0]), int(argv[1])
+    specs = argv[2:]
     runs = {}
-    for spec in sys.argv[3:]:
+    for spec in specs:
         name, path = spec.split("=", 1)
-        runs[name] = per_window(Path(path))
+        runs[name] = per_window(Path(path), LABELS_DIR)
         print(f"loaded {name}: {len(runs[name])} windows", flush=True)
     ids_all = sorted(set.intersection(*[set(w) for w in runs.values()]))
     print(f"common windows: {len(ids_all)}", flush=True)
@@ -181,7 +196,8 @@ def main():
                     "point": None if np.isnan(pa) or np.isnan(pb) else float(pa - pb),
                     "ci": [float(np.percentile(arr, 2.5)), float(np.percentile(arr, 97.5))] if len(arr) else None,
                 }
-    out = Path(sys.argv[3].split("=", 1)[1]).parent.parent / f"judge_bootstrap_{'_'.join(names)}.json"
+    suffix = "" if LABELS_DIR == "labels" else f"_{LABELS_DIR}"
+    out = Path(specs[0].split("=", 1)[1]).parent.parent / f"judge_bootstrap_{'_'.join(names)}{suffix}.json"
     out.write_text(json.dumps(result, indent=1))
     print("wrote", out)
     # human table
