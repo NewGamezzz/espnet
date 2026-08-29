@@ -270,6 +270,23 @@ Conversational F5" (vault) for the epoch-composition rule and "Design -
 Fisher Conversational Corpus Mixing" (vault) for the Fisher build, text-
 cleaning, and windowing decisions.
 
+## NSF Chorus and curriculum stage 2 (multi-party, 4-8 channels)
+
+Stage 2 (vault: "Design - NSF Chorus Multi-Speaker Curriculum Stage 2", 2026-08-27) continues the all-on two-speaker model on a five-corpus mix that adds NSF Chorus, 182 meetings of 4-8 close-talk speakers (`conf/training_stage2_chorus_h100.yaml`).
+The pipeline is channel-count generic (session `num_channels` flows through the planner, the collator, and the set-invariant TAC exchanges), so Chorus needs no model change; three small additions carry the stage:
+
+1. `dataset/chorus_builder.py` (`data_src: egs3.conversational.tts.dataset_chorus`, config section `chorus_builder:`): `prepare_source` ffmpeg-joins each meeting's per-speaker mono wavs into one N-channel FLAC under `chorus_builder.flac_dir` (channel i = i-th speaker in sorted name order), `build` strips the markup (`<ST/>`, `<FILL/>`, `<PName>x</PName>` ...; any utterance containing `<UNKNOWN/>`, inline or alone, is unintelligible and becomes an exclusion span, Fisher's standard) and writes `manifest/sessions_chorus_{train,valid,test}.jsonl` from the corpus's own train/dev/eval splits.
+   `python -m egs3.conversational.tts.dataset.chorus_builder --chorus-flac-dir <dir>` (the builder kwarg is `chorus_flac_dir`; `flac_dir` is CANDOR's).
+2. `session_blocklist` on a `ConversationDataset` entry (`dataset/preprocessing/blocklist.py`): one or more DNSMOS blocklist JSONs; a session is dropped at load when any of its channels is listed, and a blocklist matching no session fails loudly. Train entries only.
+3. `model.init_ckpt` + `model.init_from_ema` (`src/build_model.py`): strict weights-only init from a recipe Lightning checkpoint, applied after the F5 surgery and exchange injection; optimizer, scheduler, EMA, and step counters start fresh (`fit.ckpt_path: last` still handles requeues).
+
+Memory: the packer prices a window at `N x T_assembled` and lets a solo batch exceed `batch_bins`, so an 8-channel 80 s window (15.4M sample-rows) would OOM.
+Stage 2 turns on `model.arch.checkpoint_activations` (per-block `torch.utils.checkpoint`, ~25-30% slower steps), which lets Chorus use a LONGER window range than the other corpora (`window_max 120`, `chunk_window_max 120`, so one window can cover all 4-8 speakers; the others keep 80 / 60): measured on one GH200 (`jobs/memcheck_stage2.py` in the Delta checkout, 2026-08-28), an 8-channel 80 s solo batch peaks at 12.0 GiB with checkpointing vs 64.6 GiB for 8 x 60 s without (the stage-1 2 x 80 s floor was 23.8 GiB); the 8 x 138 s worst case (8 + 10 + 120 s assembled chunk sample) is probed by the same script before launch, and `tests/test_stage2_config.py` pins the config to that ceiling.
+The stage-2 loader uses `batch_bins 9.8M` with `accumulate_grad_batches 5` (stage 1: 7M x 7), the same 49M rows per GPU per optimizer step; the chunk task runs at `chunk_task_prob 0.7` with `prompt_slice_min 2` / `prompt_speech_floor 1` (the floor decides whether a sparse Chorus speaker can anchor a prompt at all).
+Under checkpointing the exchange wrappers snapshot the branch context at forward time, so Lightning's out-of-context `backward()` recomputes the exchange correctly (`src/branch_exchange/inject.py`).
+
+Exclusion spans: `window_params.exclusion_mode` (`dataset/preprocessing/planner.py`) is `drop` by default (a window overlapping any span is discarded; a 0.8 s unintelligible utterance kills a whole 10-80 s window, measured at 21% of Fisher and 37% of Chorus) and `cut` in the stage-2 config for Fisher and Chorus: spans become window boundaries, any turn overlapping a span is excluded with it, and windows are planned segment by segment, so no untranscribed words ever enter a window and only the spans themselves are lost.
+
 ## Training (multi-branch CFM POC)
 
 `run.py --stages train --training_config conf/training_poc.yaml` fine-tunes pretrained F5TTS_Base on SSSD windows as a multi-branch CFM: every channel of a window is one packed transformer row, and the injected `branch_exchange` modules are the only cross-channel communication.

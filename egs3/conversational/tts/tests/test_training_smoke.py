@@ -11,6 +11,7 @@ from .conftest import (
     EXT_TOKENS,
     MEL,
     T,
+    TINY_ARCH,
     AJ_TEXTS,
     make_packed_mels,
     randomize_params,
@@ -86,6 +87,54 @@ def test_training_smoke(ext_vocab_file):
         optimizer.step()
 
     assert any(g.detach().abs() > 0 for g in gates), "no gate moved off zero"
+
+
+def test_training_smoke_checkpoint_activations_matches_plain(ext_vocab_file):
+    """Stage-2 knob: with ``checkpoint_activations`` the exchange recompute
+    runs after ``ctx.branches`` has exited (backward() outside the context,
+    exactly how Lightning drives it) and must yield the same gradients as the
+    plain model, then keep training for a few steps."""
+    torch.manual_seed(0)
+    plain = build_tiny(ext_vocab_file)
+    randomize_params(plain, seed=42)
+    ckpt = build_tiny(
+        ext_vocab_file, arch={**TINY_ARCH, "checkpoint_activations": True}
+    )
+    ckpt.load_state_dict(plain.state_dict())
+    for m in (plain, ckpt):
+        m.train()
+        for mod in m.modules():
+            if isinstance(mod, ExchangedBlock):
+                mod.exchange.g.data.fill_(0.5)  # exchanges must matter
+    collator = PackedConversationCollator()
+
+    grads = {}
+    for name, m in (("plain", plain), ("ckpt", ckpt)):
+        torch.manual_seed(123)
+        _, batch = collator(_fake_samples(0))
+        loss, _, _ = m(**batch)
+        m.zero_grad(set_to_none=True)
+        loss.backward()
+        assert not m.cfm.ctx.active
+        grads[name] = {
+            n: p.grad.clone() for n, p in m.named_parameters() if p.grad is not None
+        }
+    assert grads["plain"].keys() == grads["ckpt"].keys()
+    for n in grads["plain"]:
+        torch.testing.assert_close(
+            grads["ckpt"][n], grads["plain"][n], rtol=1e-5, atol=1e-6
+        )
+
+    optimizer = torch.optim.AdamW(
+        exchange_param_groups(ckpt, lr_exchange=1e-2, lr_backbone=1e-4)
+    )
+    for step in range(1, 6):
+        _, batch = collator(_fake_samples(step))
+        loss, _, _ = ckpt(**batch)
+        assert torch.isfinite(loss)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
 
 
 def test_ema_deepcopy_safety(ext_vocab_file):

@@ -1,0 +1,433 @@
+# Curriculum stage 2 (design 2026-08-27, vault note "Design - NSF Chorus
+# Multi-Speaker Curriculum Stage 2"): continue the all-on two-speaker model
+# (train_mixed4_allon_h100, frozen at >= 100K steps) on a five-corpus mix that
+# adds the NSF Chorus multi-party meetings (4-8 close-talk channels).
+# Clone of the stage-1 training_mixed_allon_h100.yaml with ONLY these edits:
+#   1. init_ckpt / init_from_ema: weights-only init from the stage-1 EMA
+#      weights; optimizer, scheduler, EMA, and step counters start fresh.
+#   2. session_blocklist on the CANDOR and Fisher TRAIN entries (cornell2's
+#      DNSMOS blocklists, whole session dropped when either channel fails).
+#   3. Activation checkpointing ON (model.arch.checkpoint_activations) so the
+#      8-channel Chorus meetings train on LONGER windows than the other
+#      corpora (Thanapat 2026-08-28: a meeting needs a long window to cover
+#      all its speakers): Chorus window_max 120 / chunk_window_max 120, the
+#      others keep the defaults (80 / 60). MEASURED on one GH200
+#      (jobs/memcheck_stage2.py, forward+backward, bf16): 8 ch x 80 s peaks
+#      at 12.0 GiB with checkpointing vs 64.6 GiB for 8 x 60 s without; the
+#      stage-1 floor (2 x 80 s, no checkpointing) was 23.8 GiB. The 8 ch x
+#      138 s worst case (8 + 10 + 120 s assembled chunk sample) is probed by
+#      the same script before launch. Recompute costs ~25-30% step time.
+#   4. timestamp_align_prob 0.5 -> 0.2 everywhere (Mode T is the easier
+#      format, so 80% of windows train Mode O).
+#   5. weights [0.20, 0.10, 0.05, 0.35, 0.30] over [SSSD, LibriTTS, CANDOR,
+#      Fisher, Chorus]; scheduler total_steps 100K.
+#   6. window_params.exclusion_mode: cut on Fisher and Chorus (train AND
+#      valid): exclusion spans (unintelligible utterances) become window
+#      boundaries instead of killing the window they touch. Clean (no
+#      untranscribed words enter a window) and recovers most of the 238 h
+#      Fisher / 2.5 h Chorus that the drop rule lost.
+#   7. Chunk-task knobs (Thanapat 2026-08-28): chunk_task_prob 0.5 -> 0.7 on
+#      every chunk-capable entry (the special-token format is what we infer
+#      with), prompt_slice_min 3 -> 2 and prompt_speech_floor 3 -> 1 (the
+#      per-channel floor decides whether a sparse Chorus speaker can anchor a
+#      prompt at all; below it the whole window degrades to plain). The
+#      shared prompt length is max(draw in [2, 8], largest channel floor
+#      extent), so prompts stay >= 2 s.
+#   8. batch_bins 7M -> 9.8M and accumulate_grad_batches 7 -> 5: the stage-1
+#      run used ~60% of the GPU WITHOUT checkpointing, so there is room. The
+#      per-optimizer-step budget is unchanged (7M x 7 = 9.8M x 5 = 49M rows
+#      per GPU) and so is the number of optimizer steps per epoch.
+# The session manifests + 2550-token vocab are COPIED verbatim from the
+# stage-1 checkout (byte-identical vocab is what lets the checkpoint
+# strict-load); only the Chorus builder runs in this checkout.
+exp_tag: train_stage2_chorus_h100
+
+num_device: 2
+num_nodes: 1
+seed: 0
+
+recipe_dir: .
+data_dir: ${recipe_dir}/data
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+
+# Pretrained F5TTS_Base (SWivid/F5-TTS) checkpoint + the vocab shipped with
+# it. Still loaded first (embedding surgery + vocab provenance gate); the
+# stage-1 weights then overwrite everything via init_ckpt.
+pretrained_dir: ${recipe_dir}/downloads/F5TTS_Base
+
+# Stage-1 checkpoint: backup_step100878 of the all-on run, the first backup
+# past 100K steps (Thanapat 2026-08-28), COPIED into this checkout's init/ so
+# the all-on tree is never touched. Weights only: optimizer, scheduler, EMA,
+# and the step counter start fresh. A missing file fails at model build.
+init_ckpt: ${recipe_dir}/init/backup_step100878.ckpt
+
+# SSSD corpus root, pinned explicitly to the durable /work/hdd copy (the
+# repo default resolves into cornell2's PURGEABLE scratch).
+sssd_root: /work/hdd/bbjs/ttrachu/development/delta_ai/dataset/ScalableSpontaneousSpeechDataset
+
+# LibriTTS corpus root (single-speaker mix-in).
+libritts_root: /work/hdd/bbjs/ttrachu/development/delta_ai/dataset/LibriTTS
+
+# CANDOR transcoded-FLAC root.
+candor_flac_root: /work/hdd/bbjs/ttrachu/dataset/candor_flac
+
+# Fisher merged-FLAC root (A/B mono pairs joined to stereo).
+fisher_flac_root: /work/hdd/bbjs/ttrachu/dataset/fisher_flac
+
+# NSF Chorus merged N-channel FLAC root (per-speaker wavs joined, channel i =
+# i-th speaker in sorted name order; dataset/chorus_builder.py).
+chorus_flac_root: /work/hdd/bbjs/ttrachu/dataset/chorus_flac
+
+# DNSMOS blocklists (cornell2's, copied off purgeable /scratch 2026-08-27).
+# A session is dropped from TRAINING when either channel is listed:
+# CANDOR = session-mean OVRL >= 3.0 (keeps 115 sessions / 64 h),
+# Fisher = window-min OVRL >= 3.0 (keeps 8,250 sessions / 1,380 h).
+# Valid entries stay unfiltered so valid/loss stays comparable to stage 1.
+candor_blocklist: /work/hdd/bbjs/ttrachu/dataset/dnsmos/blocklist_candor.json
+fisher_blocklist: /work/hdd/bbjs/ttrachu/dataset/dnsmos/blocklist_fisher.json
+
+# Mel / audio front-end shared by feats_extract and the model (must stay
+# bit-compatible with the pretrained checkpoint and the vocos vocoder).
+sample_rate: 24000
+n_mel_channels: 100
+hop_length: 256
+win_length: 1024
+n_fft: 1024
+mel_spec_type: vocos
+
+# create_dataset stage: in the stage-2 checkout the SSSD/LibriTTS/CANDOR/
+# Fisher manifests and the vocab are copied from stage 1, so the stage only
+# has to run the Chorus builder (python -m
+# egs3.conversational.tts.dataset.chorus_builder). Passthrough keys are kept
+# so a full re-run would still resolve every corpus.
+create_dataset:
+  recipe_dir: ${recipe_dir}
+  base_vocab_path: ${pretrained_dir}/vocab.txt
+  # Per-corpus passthroughs (each read by exactly one builder, the others
+  # ignore them via **_).
+  libritts_root: ${libritts_root}
+  flac_dir: ${candor_flac_root}
+  fisher_flac_dir: ${fisher_flac_root}
+  chorus_flac_dir: ${chorus_flac_root}
+
+dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  recipe_dir: ${recipe_dir}
+  # Entry order defines the corpus order that dataloader.train.weights and
+  # dataloader.valid (unweighted) refer to: [SSSD, LibriTTS, CANDOR, Fisher,
+  # Chorus]. Calibrate the realized knob shares against the per-epoch
+  # planner log lines, not the coin values:
+  #   chunk-task plan: N full / N prompt_only / N degraded / N fallback
+  #   timestamp-text plan: N mode-T / N degraded of N windows
+  #   mask plan: N context / N independent / N shared / N degraded of N
+  #   session blocklist <manifest>: kept N / dropped M sessions (H h dropped)
+  train:
+    - data_src: conversational/tts
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        dataset_root: ${sssd_root}
+        min_active_speakers: 1
+        chunk_task:
+          chunk_task_prob: 0.7
+          prompt_only_prob: 0.5
+          chunk_window_max: 60.0
+          prompt_slice_min: 2.0
+          prompt_speech_floor: 1.0
+        timestamp_align_prob: 0.2
+        context_channel_prob: 0.3
+        independent_mask_prob: 0.3
+    - data_src: egs3.conversational.tts.dataset_libritts
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_libritts_train.jsonl
+        dataset_root: ${libritts_root}
+        timestamp_align_prob: 0.2
+    - data_src: egs3.conversational.tts.dataset_candor
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_candor_train.jsonl
+        dataset_root: ${candor_flac_root}
+        session_blocklist: ${candor_blocklist}
+        min_active_speakers: 1
+        chunk_task:
+          chunk_task_prob: 0.7
+          prompt_only_prob: 0.5
+          chunk_window_max: 60.0
+          prompt_slice_min: 2.0
+          prompt_speech_floor: 1.0
+        timestamp_align_prob: 0.2
+        context_channel_prob: 0.3
+        independent_mask_prob: 0.3
+    - data_src: egs3.conversational.tts.dataset_fisher
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_fisher_train.jsonl
+        dataset_root: ${fisher_flac_root}
+        session_blocklist: ${fisher_blocklist}
+        min_active_speakers: 1
+        # Exclusion spans become window boundaries instead of killing the
+        # window they touch (design 2026-08-28, option C): no untranscribed
+        # words enter a window, and only the span itself is lost.
+        window_params:
+          exclusion_mode: cut
+        chunk_task:
+          chunk_task_prob: 0.7
+          prompt_only_prob: 0.5
+          chunk_window_max: 60.0
+          prompt_slice_min: 2.0
+          prompt_speech_floor: 1.0
+        timestamp_align_prob: 0.2
+        context_channel_prob: 0.3
+        independent_mask_prob: 0.3
+    - data_src: egs3.conversational.tts.dataset_chorus
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_chorus_train.jsonl
+        dataset_root: ${chorus_flac_root}
+        min_active_speakers: 1
+        # Exclusion spans become window boundaries instead of killing the
+        # window they touch (design 2026-08-28, option C): no untranscribed
+        # words enter a window, and only the span itself is lost.
+        # Longer windows than the other corpora so one window can cover
+        # all 4-8 speakers (header item 3). The worst solo batch is
+        # 8 ch x (8 + 10 + 120) s = 26.5M sample-rows, > batch_bins by
+        # design; activation checkpointing is what makes it fit.
+        window_params:
+          exclusion_mode: cut
+          window_max: 120.0
+        chunk_task:
+          chunk_task_prob: 0.7
+          prompt_only_prob: 0.5
+          chunk_window_max: 120.0
+          prompt_slice_min: 2.0
+          prompt_speech_floor: 1.0
+        timestamp_align_prob: 0.2
+        context_channel_prob: 0.3
+        independent_mask_prob: 0.3
+  # valid entries carry NO coin knobs and NO blocklists: frozen mode
+  # (epoch=None) never draws a coin, and the unfiltered valid sets keep
+  # valid/loss comparable to stage 1. exclusion_mode: cut IS set on the
+  # Fisher/Chorus valid entries (same clean rule, more valid windows).
+  valid:
+    - data_src: conversational/tts
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        dataset_root: ${sssd_root}
+        min_active_speakers: 1
+    - data_src: egs3.conversational.tts.dataset_libritts
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_libritts_valid.jsonl
+        dataset_root: ${libritts_root}
+    - data_src: egs3.conversational.tts.dataset_candor
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_candor_valid.jsonl
+        dataset_root: ${candor_flac_root}
+        min_active_speakers: 1
+    - data_src: egs3.conversational.tts.dataset_fisher
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_fisher_valid.jsonl
+        dataset_root: ${fisher_flac_root}
+        min_active_speakers: 1
+        window_params:
+          exclusion_mode: cut
+    - data_src: egs3.conversational.tts.dataset_chorus
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_chorus_valid.jsonl
+        dataset_root: ${chorus_flac_root}
+        min_active_speakers: 1
+        window_params:
+          exclusion_mode: cut
+          window_max: 120.0
+  # Runtime tokenization against the EXTENDED vocab (base + 5 new tokens).
+  preprocessor:
+    _target_: egs3.conversational.tts.dataset.preprocessor.ConversationalTextPreprocessor
+    train: true
+    token_list: ${data_dir}/tokens/vocab.txt
+
+# Model assembly (src/build_model.py): DiT with the extended vocab, native
+# F5TTS_Base weights with text-embedding surgery, TAC exchanges injected at
+# every block, THEN the stage-1 weights strict-loaded over the whole model.
+model:
+  _target_: egs3.conversational.tts.src.build_model.build_multibranch_f5
+  vocab_file: ${data_dir}/tokens/vocab.txt
+  vocab_meta: ${data_dir}/tokens/vocab_meta.json
+  pretrained_ckpt: ${pretrained_dir}/model_1200000.safetensors
+  pretrained_vocab: ${pretrained_dir}/vocab.txt
+  init_noise_scale: 0.02
+  init_seed: ${seed}
+  # Stage-2 init: EMA tensors of the stage-1 checkpoint, applied after
+  # surgery + injection so every key matches (strict). Weights only.
+  init_ckpt: ${init_ckpt}
+  init_from_ema: true
+  # F5TTS_Base architecture, copied verbatim from the libritts recipe's
+  # training_f5_tts.yaml (getting text_mask_padding or pe_attn_head wrong
+  # loads cleanly but produces noise).
+  arch:
+    # Activation checkpointing (torch.utils.checkpoint per DiT block,
+    # non-reentrant): ~25-30% slower steps, memory no longer scales with
+    # depth, which is what lets 8-channel 120 s Chorus windows fit. The
+    # exchange wrappers snapshot the branch context at forward time so
+    # Lightning's out-of-context backward recomputes correctly
+    # (src/branch_exchange/inject.py).
+    checkpoint_activations: true
+    # The text branch's sinusoidal position table (espnet2/tts/f5/backbones/
+    # dit.py) defaults to 8192 mel frames = 87.4 s, which the 120 s Chorus
+    # windows exceed (smoke 3042228 died at 9278 frames). 16384 = 174.8 s
+    # covers the worst assembled sample (8 + 10 + 120 = 138 s = 12,938
+    # frames). The buffer is deterministic and non-persistent: no new
+    # parameters, no checkpoint key change. Positions past 8192 are ones the
+    # stage-1 weights never saw; this stage trains them.
+    text_precompute_max_pos: 16384
+    dim: 1024
+    depth: 22
+    heads: 16
+    dim_head: 64
+    ff_mult: 2
+    text_dim: 512
+    text_mask_padding: false
+    pe_attn_head: 1
+    conv_layers: 4
+    dropout: 0.1
+  cfm:
+    sigma: 0.0
+    audio_drop_prob: 0.3
+    cond_drop_prob: 0.2
+    frac_lengths_mask: [0.7, 1.0]
+    odeint_method: euler
+  exchange:
+    type: tac
+    schedule:
+      "1-22": P+TAC
+    hidden: null            # TAC hidden dim; null = dim
+  feats_extract:
+    fs: ${sample_rate}
+    n_fft: ${n_fft}
+    hop_length: ${hop_length}
+    win_length: ${win_length}
+    n_mels: ${n_mel_channels}
+    mel_spec_type: ${mel_spec_type}
+
+# One AdamW over two param groups (src/lit_module.py): the injected
+# exchanges train faster than the pretrained trunk. Fresh optimizer state.
+optim:
+  _target_: torch.optim.AdamW
+  lr_exchange: 1.0e-4
+  lr_backbone: 1.0e-5
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+
+# Fresh schedule for the stage (warmup then linear decay over 100K steps).
+scheduler:
+  _target_: espnet2.schedulers.linear_warmup_decay.linear_warmup_decay
+  warmup_steps: 2000
+  total_steps: 100000
+scheduler_interval: step
+
+best_model_criterion:
+  - - valid/loss
+    - 3
+    - min
+
+# Standard PyTorch DataLoader around ConversationBatchSampler (built per
+# epoch by the recipe LightningModule; the espnet3 iter_factory path is not
+# used - it cannot reshuffle batches across epochs, see src/sampler.py).
+dataloader:
+  collate_fn:
+    _target_: egs3.conversational.tts.src.lit_module.PackedConversationCollator
+  train:
+    # Packed row budget in sample-rows: N x T_24k summed over the batch,
+    # padded to the longest window. 9.8M (stage 1: 7M, ~60% of the GPU
+    # without checkpointing) with accumulate_grad_batches 5 keeps the
+    # per-optimizer-step budget at 49M rows per GPU, exactly stage 1's.
+    # A solo 8-channel Chorus window (up to 26.5M) exceeds it by design
+    # (solo batches may) and relies on activation checkpointing.
+    batch_bins: 9800000
+    min_batch_size: 1      # conversations, not rows
+    shuffle: true
+    num_workers: 4
+    pin_memory: true
+    # Fraction of optimizer steps per corpus, aligned with dataset.train
+    # entry order [SSSD, LibriTTS, CANDOR, Fisher, Chorus] (Thanapat
+    # 2026-08-27: Chorus is the point of the stage; CANDOR shrinks to match
+    # its 64 filtered hours; the clean Fisher pool carries the bulk).
+    weights: [0.2, 0.1, 0.05, 0.35, 0.3]
+  valid:
+    batch_bins: ${dataloader.train.batch_bins}
+    min_batch_size: 1
+    shuffle: false
+    num_workers: 4
+    pin_memory: true
+
+trainer:
+  accelerator: auto
+  devices: ${num_device}
+  num_nodes: ${num_nodes}
+  # 2 GPUs x 9.8M bins x 5 accum = 98M rows/step, same as stage 1's
+  # 2 x 7M x 7 (header item 8).
+  accumulate_grad_batches: 5
+  precision: bf16-mixed
+  # Epoch cadence (measured by the 2026-08-28 smoke): Chorus (570 windows
+  # at weight 0.3) anchors the epoch at ~1,510 micro-batches = ~108
+  # optimizer steps, 20x shorter than stage 1's. Quarter-epoch validation
+  # would run the full combined valid set + a 6.8 GB checkpoint every ~27
+  # steps, so validate (and checkpoint) once every 10 epochs (~1,080 steps,
+  # ~20 min at the smoke's ~1 micro-batch/s).
+  check_val_every_n_epoch: 10
+  val_check_interval: 1.0
+  log_every_n_steps: 50
+  # The 100K-step schedule ends the stage; max_epochs is only a backstop.
+  max_steps: 100000
+  max_epochs: 2000
+  gradient_clip_val: 1.0
+  # Batch order reshuffles via ConversationBatchSampler.set_epoch; rebuilding
+  # loaders every epoch is not needed and, on resume, leaked workers.
+  reload_dataloaders_every_n_epochs: 0
+  num_sanity_val_steps: 2
+  strategy: auto
+  # Load resume checkpoints with torch.load(mmap=True) (resume-stall
+  # livelock fix, 2026-07-28 investigation).
+  plugins:
+    - _target_: egs3.conversational.tts.src.checkpoint_io.MmapCheckpointIO
+  callbacks:
+    # Re-seeds from the init_ckpt weights at fit start (EMA.init_ema copies
+    # the online model), so stage 2 starts its own EMA trajectory.
+    - _target_: espnet3.components.callbacks.ema.EMACallback
+      decay: 0.9999
+  logger:
+    _target_: lightning.pytorch.loggers.WandbLogger
+    project: espnet3-conversational-f5
+    name: ${exp_tag}
+    save_dir: ${exp_dir}
+    log_model: false
+    id: ${exp_tag}
+    resume: allow
+
+# ckpt_path "last" = Lightning finds last.ckpt if it exists (requeue after a
+# wall-limit kill resumes automatically) and warns + starts fresh when the
+# exp dir is empty (first launch, where init_ckpt supplies the weights).
+fit:
+  ckpt_path: last

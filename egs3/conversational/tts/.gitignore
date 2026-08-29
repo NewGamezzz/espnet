@@ -6,6 +6,8 @@
 !dataset/
 !dataset_libritts/
 !dataset_candor/
+!dataset_fisher/
+!dataset_chorus/
 
 # README.md's anchor-mode recipe (gt/resynth) sed-generates mode-edited
 # copies of conf/inference_conversational.yaml and conf/metrics.yaml here.

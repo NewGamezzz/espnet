@@ -131,6 +131,12 @@ class ConversationDataset(TorchDataset):
     flags. Flagged samples carry ``context_rows`` (post-permutation row
     indices trained fully observed / loss-excluded) or ``independent_mask``
     (per-row span draws in the CFM).
+
+    ``session_blocklist`` (design 2026-08-27, stage 2) names one or more
+    DNSMOS blocklist JSONs (``preprocessing.blocklist``); a session is dropped
+    at load when ANY of its channels is listed, and a blocklist matching no
+    session at all fails loudly. Train entries only: valid stays unfiltered
+    so ``valid/loss`` remains comparable across stages.
     """
 
     def __init__(
@@ -151,6 +157,7 @@ class ConversationDataset(TorchDataset):
         timestamp_align_prob: float = 0.0,
         context_channel_prob: float = 0.0,
         independent_mask_prob: float = 0.0,
+        session_blocklist: str | Path | Sequence[str | Path] | None = None,
     ) -> None:
         self.split = split
         self.fs = int(fs if fs is not None else _DATASET_CFG["sample_rate"])
@@ -192,6 +199,32 @@ class ConversationDataset(TorchDataset):
                 "egs3.conversational.tts.dataset.libritts_builder)."
             )
         self.sessions = read_session_manifest(manifest_path)
+        if session_blocklist is not None:
+            from .preprocessing.blocklist import (
+                apply_session_blocklist,
+                load_blocked_sessions,
+            )
+
+            before = self.sessions
+            self.sessions = apply_session_blocklist(
+                before,
+                load_blocked_sessions(session_blocklist),
+                source=str(manifest_path),
+            )
+            kept_ids = {s.session_id for s in self.sessions}
+            dropped_h = (
+                sum(s.duration for s in before if s.session_id not in kept_ids) / 3600.0
+            )
+            # Re-logged with every epoch plan (plan_windows): __init__ runs
+            # before the trainer configures logging, so the blocklist
+            # module's own INFO line never reaches the training log.
+            self.blocklist_summary = (
+                f"kept {len(self.sessions)} / dropped {len(before) - len(self.sessions)} "
+                f"sessions ({dropped_h:.1f} h dropped)"
+            )
+        else:
+            self.blocklist_summary = None
+        self._manifest_path = manifest_path
         self.window_params = WindowParams(**(window_params or {}))
         self.window_seed = int(window_seed)
         self.chunk_params = (
@@ -246,6 +279,10 @@ class ConversationDataset(TorchDataset):
                 self.independent_mask_prob if epoch is not None else 0.0
             ),
         )
+        if epoch is not None and self.blocklist_summary is not None:
+            logger.info(
+                "session blocklist %s: %s", self._manifest_path, self.blocklist_summary
+            )
         if chunk_params is not None and chunk_params.chunk_task_prob > 0:
             # All five numbers come from plan_sessions' pre-filter stats, i.e.
             # BEFORE the min_active_speakers filter below: logging len(records)
@@ -282,9 +319,7 @@ class ConversationDataset(TorchDataset):
                 "%d degraded of %d windows",
                 stats.n_context_windows,
                 stats.n_independent_windows,
-                stats.n_windows
-                - stats.n_context_windows
-                - stats.n_independent_windows,
+                stats.n_windows - stats.n_context_windows - stats.n_independent_windows,
                 stats.n_context_degraded,
                 stats.n_windows,
             )
@@ -443,9 +478,7 @@ class ConversationDataset(TorchDataset):
         # exact dict every existing consumer expects. context_rows holds
         # POST-permutation row indices (same remap as turns above).
         if record.context_channels is not None:
-            sample["context_rows"] = sorted(
-                inv[c] for c in record.context_channels
-            )
+            sample["context_rows"] = sorted(inv[c] for c in record.context_channels)
         if record.independent_mask:
             sample["independent_mask"] = True
         if self.inference:

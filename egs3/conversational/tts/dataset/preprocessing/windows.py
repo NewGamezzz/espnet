@@ -145,6 +145,12 @@ class WindowingStats:
     n_context_windows: int = 0
     n_independent_windows: int = 0
     n_context_degraded: int = 0
+    # Exclusion-span "cut" mode (planner.WindowParams.exclusion_mode, design
+    # 2026-08-28): seconds inside exclusion spans (extended over any turn that
+    # overlapped one) that windows are cut around, and how many turns were
+    # removed by that extension. Both stay 0 in the default "drop" mode.
+    excluded_sec: float = 0.0
+    n_excluded_turns: int = 0
 
     def merge(self, other: "WindowingStats") -> None:
         self.n_windows += other.n_windows
@@ -167,6 +173,8 @@ class WindowingStats:
         self.n_context_windows += other.n_context_windows
         self.n_independent_windows += other.n_independent_windows
         self.n_context_degraded += other.n_context_degraded
+        self.excluded_sec += other.excluded_sec
+        self.n_excluded_turns += other.n_excluded_turns
 
 
 def blocked_intervals(
@@ -236,8 +244,13 @@ def select_window_spans(
     rng: random.Random,
     turn_starts: Sequence[float] = (),
     snap_start_to_turn: bool = False,
+    start: float = 0.0,
 ) -> tuple[list[tuple[float, float]], WindowingStats]:
     """Greedy left-to-right span selection against the blocked-interval list.
+
+    ``start`` (default 0.0, bit-identical to the original behavior) is where
+    the scan begins; with ``duration`` it bounds the selection to one segment
+    of a session (the planner's exclusion-span "cut" mode).
 
     With ``snap_start_to_turn`` (off by default), each iteration first advances
     ``cur`` to the next turn start (``turn_starts`` ascending), skipping any
@@ -274,7 +287,7 @@ def select_window_spans(
         )
     stats = WindowingStats()
     spans: list[tuple[float, float]] = []
-    cur = 0.0
+    cur = float(start)
     while cur < duration - _EPS:
         if snap_start_to_turn:
             # Begin the next window on the next turn, skipping the intervening
@@ -350,8 +363,16 @@ def build_windows(
     trim_to_turns: bool = False,
     min_coverage: float = 0.0,
     snap_start_to_turn: bool = False,
+    region: tuple[float, float] | None = None,
+    first_index: int = 0,
 ) -> tuple[list[WindowRecord], WindowingStats]:
     """Window one session: boundary selection, turn assignment, empty-window drop.
+
+    ``region`` (default None = the whole recording, bit-identical to the
+    original behavior) restricts selection to ``[start, end]`` of the session
+    and to the turns fully inside it; ``first_index`` offsets the window ids
+    so several regions of one session stay unique. Both serve the planner's
+    exclusion-span "cut" mode.
 
     Three optional guards strip transcription holes - stretches of real audible
     speech that carry no turn (SSSD's Parakeet pseudo-labels have such gaps).
@@ -373,17 +394,25 @@ def build_windows(
     silent pause and drops both, which is why trimming is the primary fix and
     this is only a floor.
     """
+    region_start, region_end = (0.0, rec.duration) if region is None else region
+    if region is not None:
+        turns = [
+            t
+            for t in turns
+            if t.start >= region_start - _EPS and t.end <= region_end + _EPS
+        ]
     blocked = blocked_intervals(turns, boundary_guard)
     turn_starts = sorted(t.start for t in turns)
     spans, stats = select_window_spans(
         blocked,
-        rec.duration,
+        region_end,
         window_min=window_min,
         window_max=window_max,
         tail_min=tail_min,
         rng=rng,
         turn_starts=turn_starts,
         snap_start_to_turn=snap_start_to_turn,
+        start=region_start,
     )
     records: list[WindowRecord] = []
     edges: set[float] = set()
@@ -421,7 +450,7 @@ def build_windows(
         edges.update(edge for edge in (w_t0, w_t1) if _EPS < edge < rec.duration - _EPS)
         records.append(
             WindowRecord(
-                window_id=f"{session_id}_w{len(records):05d}",
+                window_id=f"{session_id}_w{first_index + len(records):05d}",
                 session_id=session_id,
                 audio_relpath=rec.audio_relpath,
                 num_channels=rec.num_channels,
