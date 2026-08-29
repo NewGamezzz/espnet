@@ -140,7 +140,8 @@ def test_blocklists_on_candor_and_fisher_train_only():
 
 
 def test_init_keys_and_fresh_run_identity():
-    assert CFG["init_ckpt"] == "${recipe_dir}/init/backup_step98900.ckpt"
+    # The first all-on backup past 100K steps (design decision 8).
+    assert CFG["init_ckpt"] == "${recipe_dir}/init/backup_step100878.ckpt"
     assert CFG["model"]["init_ckpt"] == "${init_ckpt}"
     assert CFG["model"]["init_from_ema"] is True
     assert CFG["exp_tag"] == "train_stage2_chorus_h100"

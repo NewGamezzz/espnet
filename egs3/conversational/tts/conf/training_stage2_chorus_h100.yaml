@@ -55,11 +55,11 @@ exp_dir: ${recipe_dir}/exp/${exp_tag}
 # stage-1 weights then overwrite everything via init_ckpt.
 pretrained_dir: ${recipe_dir}/downloads/F5TTS_Base
 
-# Stage-1 checkpoint: backup_step98900 of the all-on run (Thanapat
-# 2026-08-28), COPIED into this checkout's init/ so the all-on tree is never
-# touched. Weights only: optimizer, scheduler, EMA, and the step counter
-# start fresh. A missing file fails at model build.
-init_ckpt: ${recipe_dir}/init/backup_step98900.ckpt
+# Stage-1 checkpoint: backup_step100878 of the all-on run, the first backup
+# past 100K steps (Thanapat 2026-08-28), COPIED into this checkout's init/ so
+# the all-on tree is never touched. Weights only: optimizer, scheduler, EMA,
+# and the step counter start fresh. A missing file fails at model build.
+init_ckpt: ${recipe_dir}/init/backup_step100878.ckpt
 
 # SSSD corpus root, pinned explicitly to the durable /work/hdd copy (the
 # repo default resolves into cornell2's PURGEABLE scratch).
