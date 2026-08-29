@@ -37,7 +37,11 @@ def merge_metrics(inference_dir: Path, new_results: dict) -> dict:
         merged = json.loads(path.read_text("utf-8"))
         shutil.copy2(path, path.with_suffix(".json.bak"))
     for key, per_test in new_results.items():
-        merged.setdefault(key, {}).update(per_test)
+        # key-level merge inside each (metric class, test): a tagged judge
+        # policy (judge_lex_*, judge_paper_*) must never erase another
+        # policy's keys of the same class; same-name keys are replaced
+        for test, summary in per_test.items():
+            merged.setdefault(key, {}).setdefault(test, {}).update(summary)
     path.write_text(json.dumps(merged, indent=2, ensure_ascii=False), "utf-8")
     return merged
 

@@ -73,3 +73,17 @@ class TestMergeMetrics:
         stub_key = [k for k in merged if k.endswith("CountingStubMetric")][0]
         assert merged[stub_key] == {"valid": {"n_windows": 1}}
         assert json.loads((inference_dir / "metrics.json").read_text()) == merged
+
+
+    def test_merge_is_key_level_within_a_metric_class(self, tmp_path):
+        from egs3.conversational.tts.local.measure_merge import merge_metrics
+
+        cls = "x.TurnTakingJudgeMetric"
+        merge_metrics(tmp_path, {cls: {"valid": {"judge_f1_macro": 0.5, "judge_acc_bc": 1.0}}})
+        merge_metrics(tmp_path, {cls: {"valid": {"judge_lex_f1_macro": 0.6}}})
+        out = merge_metrics(tmp_path, {cls: {"valid": {"judge_f1_macro": 0.55}}})
+        assert out[cls]["valid"] == {
+            "judge_f1_macro": 0.55,  # same key replaced
+            "judge_acc_bc": 1.0,  # untouched
+            "judge_lex_f1_macro": 0.6,  # other policy survives
+        }
