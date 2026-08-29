@@ -127,7 +127,9 @@ class _torch_load_full:
         self._orig = torch.load
 
         def load(*a, **k):
-            k.setdefault("weights_only", False)
+            # lightning's pl_load passes weights_only=True explicitly on
+            # torch >= 2.6, so this must override, not default
+            k["weights_only"] = False
             return self._orig(*a, **k)
 
         torch.load = load

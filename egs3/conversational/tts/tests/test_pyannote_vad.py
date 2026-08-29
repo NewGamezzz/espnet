@@ -148,4 +148,5 @@ class TestCompatShims:
         with _torch_load_full():
             assert torch.load is not orig
             assert torch.load(f)["a"] == 1
+            assert torch.load(f, weights_only=True)["a"] == 1  # explicit True overridden
         assert torch.load is orig
