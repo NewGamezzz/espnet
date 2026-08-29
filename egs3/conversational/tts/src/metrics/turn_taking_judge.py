@@ -471,7 +471,7 @@ class TurnTakingJudgeMetric(BaseMetric):
         (out_dir / "likelihoods").mkdir(parents=True, exist_ok=True)
         (out_dir / self._tagged("labels")).mkdir(parents=True, exist_ok=True)
         if self.lexical is not None:
-            (out_dir / "bc_lexical").mkdir(parents=True, exist_ok=True)
+            (out_dir / self._tagged("bc_lexical")).mkdir(parents=True, exist_ok=True)
 
         lik_lines: List[str] = []
         label_lines: List[str] = []
@@ -600,11 +600,12 @@ class TurnTakingJudgeMetric(BaseMetric):
 
     def _lexical_labels(self, wid: str, spans, wavs, out_dir: Path):
         """Paper rule: transcripts are cached per window under
-        ``bc_lexical/<wid>.json`` (keyed by the VAD spans, so a changed VAD
-        invalidates the cache); the lexicon match itself is recomputed, so a
-        new lexicon or cutoff never re-runs ASR."""
+        ``bc_lexical[_<tag>]/<wid>.json`` (tag-scoped, and keyed by the VAD
+        spans, so a policy with another VAD never overwrites or reuses
+        another policy's transcripts); the lexicon match itself is
+        recomputed, so a new lexicon or cutoff never re-runs ASR."""
         assert self.lexical is not None
-        path = out_dir / "bc_lexical" / f"{wid}.json"
+        path = out_dir / self._tagged("bc_lexical") / f"{wid}.json"
         key = [[[float(s), float(e)] for s, e in ch] for ch in spans]
         records = None
         if path.exists():

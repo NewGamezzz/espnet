@@ -236,7 +236,7 @@ class TestMetricPlumbing:
         lab_lex = [r.split(",")[3] for r in (d / "labels_lex" / "w1.txt").read_text().splitlines()]
         assert "BC" in lab_lex and "BC" not in lab_dur
         # transcript cache: both IPUs recorded, only the short one transcribed
-        cache = json.loads((d / "bc_lexical" / "w1.json").read_text())
+        cache = json.loads((d / "bc_lexical_lex" / "w1.json").read_text())
         recs = cache["channels"]
         assert recs[1][0]["is_bc"] is True and recs[1][0]["normalized"] == "uh-huh"
         assert recs[0][0]["candidate"] is True  # 2.8 s <= 3.0
@@ -257,8 +257,8 @@ class TestMetricPlumbing:
         vad = KeyedFakeVADBackend()
         test_dir, dur = self._window(tmp_path, vad)
         d = tmp_path / "infer" / "valid" / "scoring" / "turn_taking_judge"
-        (d / "bc_lexical").mkdir(parents=True)
-        (d / "bc_lexical" / "w1.json").write_text(
+        (d / "bc_lexical_lex").mkdir(parents=True)
+        (d / "bc_lexical_lex" / "w1.json").write_text(
             json.dumps({"spans": [[[0.0, 9.0]], []], "channels": [[], []]})
         )
         calls = {"n": 0}
