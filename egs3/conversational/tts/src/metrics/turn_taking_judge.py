@@ -29,8 +29,11 @@ Turn-Taking Evaluation"):
   Switchboard backchannel phrase uttered while the other channel holds the
   floor (:mod:`.backchannel_lexicon`);
 * ``tag`` isolates a label policy: keys become ``judge_<tag>_*`` and labels
-  go to ``labels_<tag>/``, so several policies coexist in one
-  ``metrics.json`` (likelihoods are shared);
+  go to ``labels_<tag>/`` (VAD spans cached in ``spans_<tag>/``), so
+  several policies coexist in one ``metrics.json`` (likelihoods are shared);
+* ``vad_backend`` may be the paper's pyannote VAD
+  (:class:`.pyannote_vad.PyannoteVADSegmenter`) instead of Silero; with
+  ``bc_rule: lexical`` that is the paper's full labeling pipeline;
 * layer 1 = the paper's judge-validation protocol (``human_human=True`` in
   ``compute_turn_take_metrics``): per-class macro-F1 and ROC-AUC of judge
   vs realized, pooled over the run; layer 2 = the paper's role-conditioned
@@ -548,10 +551,24 @@ class TurnTakingJudgeMetric(BaseMetric):
         lik_line = lik_path.read_text("utf-8").strip()
 
         spans, wavs = [], []
-        for ch in meta["channels"]:
+        span_cache = out_dir / f"spans_{self.tag}" / f"{wid}.json" if self.tag else None
+        cached = (
+            json.loads(span_cache.read_text("utf-8"))
+            if span_cache is not None and span_cache.exists()
+            else None
+        )
+        for k, ch in enumerate(meta["channels"]):
             wav, sr = load_wav(test_dir / ch["gen_wav"], target_sr=JUDGE_SR)
-            spans.append(self.vad_backend(wav, sr))
+            if cached is not None and k < len(cached):
+                spans.append([(float(a), float(b)) for a, b in cached[k]])
+            else:
+                spans.append(self.vad_backend(wav, sr))
             wavs.append(wav)
+        if span_cache is not None and cached is None:
+            # tagged policies may use a GPU VAD (pyannote): cache its spans so
+            # a relabel never re-runs it; the default policy keeps Silero live
+            span_cache.parent.mkdir(parents=True, exist_ok=True)
+            span_cache.write_text(json.dumps(spans), encoding="utf-8")
         if self.lexical is None:
             labelled = apply_backchannel_proxy(spans, dur, self.bc_max_sec)
         else:
