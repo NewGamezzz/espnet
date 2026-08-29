@@ -9,6 +9,8 @@ import pytest
 
 from egs3.conversational.tts.src.metrics.pyannote_vad import (
     PyannoteVADSegmenter,
+    _shim_pyannote_compat,
+    _torch_load_full,
     spans_from_annotation,
 )
 from egs3.conversational.tts.src.metrics.turn_taking_judge import (
@@ -117,3 +119,33 @@ class TestSpanCache:
         vad2.register(g1, [(0.2, 3.0)])
         TurnTakingJudgeMetric(judge=judge, vad_backend=vad2)(data, "valid", tmp_path / "infer")
         assert not (d / "spans_").exists() and not (d / "spans").exists()
+
+
+class TestCompatShims:
+    def test_use_auth_token_is_translated_once(self, monkeypatch):
+        import huggingface_hub
+
+        seen = []
+
+        def fake(repo_id, filename, token=None, **k):
+            seen.append((repo_id, filename, token))
+            return "path"
+
+        monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake)
+        _shim_pyannote_compat()
+        first = huggingface_hub.hf_hub_download
+        _shim_pyannote_compat()  # idempotent
+        assert huggingface_hub.hf_hub_download is first
+        assert first("r", "f", use_auth_token="tok") == "path"
+        assert seen == [("r", "f", "tok")]
+
+    def test_torch_load_full_restores_default(self, tmp_path):
+        import torch
+
+        f = tmp_path / "x.pt"
+        torch.save({"a": 1}, f)
+        orig = torch.load
+        with _torch_load_full():
+            assert torch.load is not orig
+            assert torch.load(f)["a"] == 1
+        assert torch.load is orig

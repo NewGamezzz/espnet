@@ -56,6 +56,8 @@ class PyannoteVADSegmenter:
             return
         try:
             import torch
+
+            _shim_pyannote_compat()
             from pyannote.audio import Pipeline  # deferred: heavy, gated weights
         except ImportError as exc:
             raise ImportError(
@@ -65,7 +67,8 @@ class PyannoteVADSegmenter:
                 "huggingface.co and log in)."
             ) from exc
         kwargs = {"use_auth_token": self.token} if self.token else {}
-        pipe = Pipeline.from_pretrained(self.pipeline_name, **kwargs)
+        with _torch_load_full():
+            pipe = Pipeline.from_pretrained(self.pipeline_name, **kwargs)
         if pipe is None:
             raise RuntimeError(
                 f"Pipeline.from_pretrained({self.pipeline_name!r}) returned None: "
@@ -84,6 +87,57 @@ class PyannoteVADSegmenter:
         waveform = torch.as_tensor(np.asarray(wav, dtype=np.float32)).reshape(1, -1)
         annotation = self._pipeline({"waveform": waveform, "sample_rate": int(sr)})
         return spans_from_annotation(annotation)
+
+
+def _shim_pyannote_compat() -> None:
+    """pyannote.audio 3.3.2 (the paper-era release that still ships the
+    ``pyannote/voice-activity-detection`` pipeline) predates huggingface_hub
+    1.x, which dropped the ``use_auth_token`` keyword it passes to
+    ``hf_hub_download``. Wrap the function IN PLACE (idempotent) before
+    pyannote imports it, translating the keyword; a hub that still accepts
+    it is left alone."""
+    import inspect
+
+    import huggingface_hub
+
+    fn = huggingface_hub.hf_hub_download
+    if getattr(fn, "_pyannote_shim", False):
+        return
+    if "use_auth_token" in inspect.signature(fn).parameters:
+        return
+
+    def hf_hub_download(*args, use_auth_token=None, **kwargs):
+        if use_auth_token is not None and "token" not in kwargs:
+            kwargs["token"] = use_auth_token
+        return fn(*args, **kwargs)
+
+    hf_hub_download._pyannote_shim = True  # type: ignore[attr-defined]
+    huggingface_hub.hf_hub_download = hf_hub_download
+
+
+class _torch_load_full:
+    """torch >= 2.6 defaults ``torch.load(weights_only=True)``, which refuses
+    the pickled hyper-parameter objects inside pyannote 3.x checkpoints.
+    Restore the pre-2.6 default only while the pipeline is being loaded;
+    the weights are the gated, licence-accepted Hugging Face files."""
+
+    def __enter__(self):
+        import torch
+
+        self._orig = torch.load
+
+        def load(*a, **k):
+            k.setdefault("weights_only", False)
+            return self._orig(*a, **k)
+
+        torch.load = load
+        return self
+
+    def __exit__(self, *exc):
+        import torch
+
+        torch.load = self._orig
+        return False
 
 
 def spans_from_annotation(annotation: Any) -> List[Tuple[float, float]]:
