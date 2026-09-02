@@ -101,6 +101,7 @@ Nothing here is imported by the training path.
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import logging
 import random
@@ -164,6 +165,23 @@ def _build_turn_pools(records) -> dict[str, list[Any]]:
     return pools
 
 
+def load_excluded_spans(path) -> dict[str, frozenset[tuple[int, float, float]]]:
+    """``prompt.exclude_spans`` sidecar (written by local/ami_prompt_gate.py):
+    turns that may never serve as a prompt, keyed by session.  Applied to
+    every ladder tier - a gated turn is not a candidate at all."""
+    data = json.loads(Path(path).read_text("utf-8"))
+    if data.get("version") != 1:
+        raise ValueError(
+            f"{path}: unsupported exclude_spans version {data.get('version')!r}"
+        )
+    out: dict[str, set] = {}
+    for s in data["spans"]:
+        out.setdefault(str(s["session_id"]), set()).add(
+            (int(s["channel"]), round(float(s["start"]), 6), round(float(s["end"]), 6))
+        )
+    return {k: frozenset(v) for k, v in out.items()}
+
+
 def _select_prompt_turn(
     pool_turns: Sequence[Any],
     channel: int,
@@ -173,22 +191,33 @@ def _select_prompt_turn(
     turn_max: float,
     seed: Any,
     window_id: str,
+    *,
+    solo_guard: float = 0.0,
+    excluded: frozenset = frozenset(),
 ):
     """Pick one prompt turn for ``channel`` via the relaxation ladder (module
     docstring).  Returns ``None`` iff even the loosest tier (non-window) is
     empty - target leakage is never allowed, so that tier is never relaxed.
+
+    ``channel`` is a SOURCE channel (a headset index for AMI; identical to
+    the row index when the window uses every column).  ``solo_guard`` widens
+    the candidate span by that many seconds per side before the solo test;
+    ``excluded`` (``(channel, start, end)`` keys, see ``load_excluded_spans``)
+    removes turns from every tier.
     """
     non_window = [
         t
         for t in pool_turns
-        if t.channel == channel and not _overlaps(t.start, t.end, t0, t1)
+        if t.channel == channel
+        and not _overlaps(t.start, t.end, t0, t1)
+        and (t.channel, round(t.start, 6), round(t.end, 6)) not in excluded
     ]
     if not non_window:
         return None
 
     def _is_solo(turn) -> bool:
         return not any(
-            _overlaps(turn.start, turn.end, other.start, other.end)
+            _overlaps(turn.start - solo_guard, turn.end + solo_guard, other.start, other.end)
             for other in pool_turns
             if other.channel != channel
         )
@@ -282,21 +311,23 @@ def _resolve_pinned_turns(pool_turns, prompts, record) -> list[Any]:
         if ch in by_channel:
             raise ValueError(f"{record.window_id}: channel {ch} pinned twice")
         by_channel[ch] = entry
-    missing = [c for c in range(record.num_channels) if c not in by_channel]
+    # Pinned channels are SOURCE channels; the result is in ROW order.
+    rows = record.row_channels
+    missing = [c for c in rows if c not in by_channel]
     if missing:
         raise ValueError(
             f"{record.window_id}: no pinned prompt for channel(s) {missing} "
             "- every channel needs a voice reference"
         )
-    extra = sorted(c for c in by_channel if c >= record.num_channels)
+    extra = sorted(c for c in by_channel if c not in rows)
     if extra:
         raise ValueError(
             f"{record.window_id}: pinned prompt for channel(s) {extra}, but "
-            f"the window has {record.num_channels}"
+            f"the window uses source channels {rows}"
         )
 
     selected: list[Any] = []
-    for ch in range(record.num_channels):
+    for ch in rows:
         entry = by_channel[ch]
         start, end = float(entry["start"]), float(entry["end"])
         if _overlaps(start, end, record.t0, record.t1):
@@ -495,6 +526,12 @@ def run_inference(
     turn_min = float(prompt_cfg.get("turn_min_sec", 2.0))
     turn_max = float(prompt_cfg.get("turn_max_sec", 10.0))
     prompt_seed = prompt_cfg.get("seed", 0)
+    solo_guard = float(prompt_cfg.get("solo_guard_sec", 0.0) or 0.0)
+    excluded_by_session = (
+        load_excluded_spans(prompt_cfg.exclude_spans)
+        if prompt_cfg.get("exclude_spans")
+        else {}
+    )
     samp = cfg.sampling
     # tqdm renders a live bar on a tty; under a non-tty Slurm log it prints
     # one plain line per refresh (rate + ETA), so long infer runs are
@@ -502,6 +539,10 @@ def run_inference(
     for idx in tqdm(indices, desc=f"infer[{mode}]", unit="window"):
         record = dataset.records[idx]
         pool_turns = pools.get(record.session_id, [])
+        # Source channels behind the window's rows (identity unless the
+        # record carries a `channels` subset, as AMI K-strata windows do).
+        rows = record.row_channels
+        excluded = excluded_by_session.get(record.session_id, frozenset())
 
         selected: list[Any] = []
         skip_channel: int | None = None
@@ -512,7 +553,7 @@ def run_inference(
                 pool_turns, pinned_prompts[record.window_id], record
             )
         else:
-            for ch in range(record.num_channels):
+            for ch in rows:
                 turn = _select_prompt_turn(
                     pool_turns,
                     ch,
@@ -522,6 +563,8 @@ def run_inference(
                     turn_max,
                     prompt_seed,
                     record.window_id,
+                    solo_guard=solo_guard,
+                    excluded=excluded,
                 )
                 if turn is None:
                     skip_channel = ch
@@ -539,12 +582,22 @@ def run_inference(
 
         sample = dataset[idx]
         n = sample["num_channels"]
+        # Row-space window turns, captured before any Mode T / prompt mutation.
+        window_turns = list(sample["turns"])
         window_speech = sample["speech"]  # (N, T_window), CPU
 
         audio_path = dataset.dataset_root / record.audio_relpath
         blocks = [
-            read_audio_span(audio_path, record.sample_rate, t.start, t.end, fs)
+            read_audio_span(
+                audio_path, record.sample_rate, t.start, t.end, fs, channels=rows
+            )
             for t in selected
+        ]
+        # `source_selected` stays in SOURCE-channel space (provenance);
+        # `selected` becomes ROW space, like everything downstream.
+        source_selected = list(selected)
+        selected = [
+            dataclasses.replace(t, channel=row) for row, t in enumerate(selected)
         ]
         prompt_raw = torch.cat(blocks, dim=1)  # (N, P), CPU
         prompt_frames = prompt_raw.shape[1] // hop
@@ -567,7 +620,7 @@ def run_inference(
                 layout_turns = prompt_window_layout(
                     selected,
                     [b.shape[1] for b in blocks],
-                    sample["turns"],
+                    window_turns,
                     record.t0,
                     fs=fs,
                 )
@@ -586,9 +639,9 @@ def run_inference(
                         wid,
                     )
                     n_timestamp_degraded += 1
-                    sample["turns"] = list(selected) + list(sample["turns"])
+                    sample["turns"] = list(selected) + list(window_turns)
             else:
-                sample["turns"] = list(selected) + list(sample["turns"])
+                sample["turns"] = list(selected) + list(window_turns)
             sample = preprocessor(str(idx), sample)
             text = pad_branch_text(sample, device)
             gen_wavs, elapsed = generate_region(
@@ -606,7 +659,7 @@ def run_inference(
             gen_seconds = gen_wavs.shape[1] / fs
             rtf = float(elapsed / gen_seconds) if gen_seconds > 0 else None
 
-        ref_texts = _reference_texts(record.turns, n)
+        ref_texts = _reference_texts(window_turns, n)
         channels = []
         for ch in range(n):
             gen_rel = f"wav/{wid}_ch{ch}.wav"
@@ -637,6 +690,8 @@ def run_inference(
             "mode": mode,
             "sample_rate": fs,
             "num_channels": n,
+            # Source column (headset index for AMI) behind each row.
+            "source_channels": list(rows),
             "window_duration_sec": round(record.t1 - record.t0, 6),
             "text_format": effective_text_format,
             # `layout` is the ONE meta key that intentionally breaks
@@ -652,10 +707,13 @@ def run_inference(
             "prompt": {
                 "total_sec": round(prompt_samples / fs, 6),
                 "total_frames": prompt_frames,
-                "turns": _prompt_turn_meta(selected),
+                "turns": [
+                    {**m, "source_channel": int(src.channel)}
+                    for m, src in zip(_prompt_turn_meta(selected), source_selected)
+                ],
             },
             "channels": channels,
-            "turns": _turn_spans(record.turns, record.t0),
+            "turns": _turn_spans(window_turns, record.t0),
         }
         meta_rel = f"meta/{wid}.json"
         (test_dir / meta_rel).write_text(

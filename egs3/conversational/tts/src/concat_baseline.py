@@ -320,19 +320,21 @@ def _sssd_items(cfg, training_config, fs: int) -> tuple[list[BaselineItem], dict
         pool = pools.get(record.session_id, [])
         selected = _resolve_pinned_turns(pool, pinned[record.window_id], record)
         audio_path = dataset.dataset_root / record.audio_relpath
+        rows = record.row_channels  # source column per row
+        row_of = {c: i for i, c in enumerate(rows)}
         prompt_wavs, prompt_texts, prompt_secs = [], [], []
-        for ch, turn in enumerate(selected):
+        for row, turn in enumerate(selected):
             block = read_audio_span(
-                audio_path, record.sample_rate, turn.start, turn.end, fs
+                audio_path, record.sample_rate, turn.start, turn.end, fs, channels=rows
             )
-            prompt_wavs.append(block[ch])
+            prompt_wavs.append(block[row])
             prompt_texts.append(turn.text)
             prompt_secs.append(float(turn.end - turn.start))
         items.append(
             BaselineItem(
                 dialogue_id=record.window_id,
-                num_channels=record.num_channels,
-                turn_channels=[t.channel for t in record.turns],
+                num_channels=record.num_rows,
+                turn_channels=[row_of[t.channel] for t in record.turns],
                 turn_texts=[t.text for t in record.turns],
                 turn_secs=[float(t.end - t.start) for t in record.turns],
                 prompt_wavs=prompt_wavs,

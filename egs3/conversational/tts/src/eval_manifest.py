@@ -88,6 +88,7 @@ def build_eval_manifest(inference_config, *, training_config=None):
         _build_turn_pools,
         _select_indices,
         _select_prompt_turn,
+        load_excluded_spans,
     )
 
     cfg = inference_config
@@ -111,6 +112,12 @@ def build_eval_manifest(inference_config, *, training_config=None):
     turn_min = float(prompt_cfg.get("turn_min_sec", 2.0))
     turn_max = float(prompt_cfg.get("turn_max_sec", 10.0))
     prompt_seed = prompt_cfg.get("seed", 0)
+    solo_guard = float(prompt_cfg.get("solo_guard_sec", 0.0) or 0.0)
+    excluded_by_session = (
+        load_excluded_spans(prompt_cfg.exclude_spans)
+        if prompt_cfg.get("exclude_spans")
+        else {}
+    )
 
     rows: list[dict[str, Any]] = []
     n_skipped = 0
@@ -118,7 +125,8 @@ def build_eval_manifest(inference_config, *, training_config=None):
         record = dataset.records[idx]
         pool_turns = pools.get(record.session_id, [])
         selected = []
-        for ch in range(record.num_channels):
+        excluded = excluded_by_session.get(record.session_id, frozenset())
+        for ch in record.row_channels:  # SOURCE channels, row order
             turn = _select_prompt_turn(
                 pool_turns,
                 ch,
@@ -128,6 +136,8 @@ def build_eval_manifest(inference_config, *, training_config=None):
                 turn_max,
                 prompt_seed,
                 record.window_id,
+                solo_guard=solo_guard,
+                excluded=excluded,
             )
             if turn is None:
                 selected = None
@@ -145,6 +155,7 @@ def build_eval_manifest(inference_config, *, training_config=None):
                 "session_id": record.session_id,
                 "t0": round(float(record.t0), 6),
                 "t1": round(float(record.t1), 6),
+                "source_channels": list(record.row_channels),
                 "prompts": [
                     {
                         "channel": int(t.channel),

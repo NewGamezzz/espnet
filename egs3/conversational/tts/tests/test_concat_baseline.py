@@ -367,3 +367,38 @@ class TestExternalSource:
         assert items[0].num_channels == 2
         assert items[0].turn_channels == [0, 1, 0]
         assert items[0].prompt_texts == ["abc", "de"]
+
+
+def test_sssd_items_select_columns_and_remap_rows(tmp_path):
+    """A pinned manifest on a 4-column session with ``channels=(1, 3)`` yields
+    a 2-channel baseline item whose turns and prompts are in row space."""
+    from egs3.conversational.tts.src.concat_baseline import _sssd_items
+    from egs3.conversational.tts.src.eval_manifest import write_eval_manifest
+
+    from .test_inference import FS, _infer_config, _write_four_fixture
+
+    fx = _write_four_fixture(tmp_path)
+    man = tmp_path / "eval.jsonl"
+    write_eval_manifest(
+        man,
+        {"record_type": "header", "manifest_version": 1, "split": "valid"},
+        [
+            {
+                "record_type": "window",
+                "window_id": "four_w00000",
+                "session_id": "four",
+                "t0": 5.0,
+                "t1": 13.0,
+                "prompts": [
+                    {"channel": 1, "start": 20.0, "end": 23.0},
+                    {"channel": 3, "start": 25.0, "end": 28.0},
+                ],
+            }
+        ],
+    )
+    cfg = _infer_config(fx, "generate_concat_baseline", tmp_path / "out")
+    cfg.selection.manifest = str(man)
+    items, _ = _sssd_items(cfg, fx["training_config"], FS)
+    assert items[0].num_channels == 2
+    assert items[0].turn_channels == [0, 1]
+    assert len(items[0].prompt_wavs) == 2 and items[0].prompt_wavs[0].ndim == 1

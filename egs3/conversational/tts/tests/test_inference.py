@@ -387,6 +387,9 @@ class TestGtContract:
             "mode": "gt",
             "sample_rate": FS,
             "num_channels": 2,
+            # Source column behind each row (identity for a 2-channel
+            # session; headset indices for AMI K-strata windows).
+            "source_channels": [0, 1],
             "window_duration_sec": 8.0,
             # Always present, in every mode: `TestModeParity` requires the
             # gt/generate meta key sets to match, and only Mode T adds the
@@ -404,6 +407,7 @@ class TestGtContract:
                         "start": 25.5,
                         "end": 28.0,
                         "duration_sec": 2.5,
+                        "source_channel": 0,
                     },
                     {
                         "channel": 1,
@@ -411,6 +415,7 @@ class TestGtContract:
                         "start": 28.5,
                         "end": 31.0,
                         "duration_sec": 2.5,
+                        "source_channel": 1,
                     },
                 ],
             },
@@ -1084,3 +1089,156 @@ class TestReadAudioSpanChannels:
         _write_flac(tmp_path / "two.flac", 2, 1.0, SRC_SR)
         with pytest.raises(RuntimeError, match="columns"):
             read_audio_span(tmp_path / "two.flac", SRC_SR, 0.0, 0.5, FS, channels=(0, 2))
+
+
+# --- channel subsets (AMI K-strata), solo guard, excluded spans -------------
+from egs3.conversational.tts.src.inference import (  # noqa: E402
+    _resolve_pinned_turns,
+    load_excluded_spans,
+)
+
+
+def _window_four() -> WindowRecord:
+    return WindowRecord(
+        window_id="four_w00000",
+        session_id="four",
+        audio_relpath="ami_flac/four.flac",
+        num_channels=4,
+        sample_rate=SRC_SR,
+        t0=5.0,
+        t1=13.0,
+        turns=(
+            Turn(1, "spk_b", "abc def ghi", 5.5, 8.0),
+            Turn(3, "spk_d", "bead cab fed", 8.5, 11.0),
+        ),
+        channels=(1, 3),
+    )
+
+
+def _window_four_pool() -> WindowRecord:
+    """A sibling window whose turns are the prompt candidates of the session."""
+    return WindowRecord(
+        window_id="four_w00001",
+        session_id="four",
+        audio_relpath="ami_flac/four.flac",
+        num_channels=4,
+        sample_rate=SRC_SR,
+        t0=19.5,
+        t1=28.5,
+        turns=(
+            Turn(1, "spk_b", "cage jade", 20.0, 23.0),  # prompt candidate ch1
+            Turn(0, "spk_a", "aa", 22.9, 23.2),  # overlaps ch1's tail by 0.1 s
+            Turn(3, "spk_d", "badge fig", 25.0, 28.0),  # prompt candidate ch3
+        ),
+        channels=(0, 1, 3),
+    )
+
+
+def _pool_four():
+    return list(_window_four().turns) + list(_window_four_pool().turns)
+
+
+class TestSoloGuardAndExclusion:
+    def test_guard_zero_treats_touching_turn_as_overlap_only(self):
+        t = _select_prompt_turn(_pool_four(), 1, 5.0, 13.0, 2.0, 10.0, 0, "w")
+        assert t.start == 20.0  # solo tier fails (0.1 s overlap), non-window tier picks it
+
+    def test_guard_expands_span(self):
+        pool = _pool_four() + [Turn(1, "spk_b", "solo one", 40.0, 43.0)]
+        t = _select_prompt_turn(pool, 1, 5.0, 13.0, 2.0, 10.0, 0, "w", solo_guard=0.3)
+        assert t.start == 40.0  # the only candidate solo under a 0.3 s guard
+
+    def test_excluded_span_is_never_a_candidate(self):
+        excluded = frozenset({(3, 25.0, 28.0)})
+        assert (
+            _select_prompt_turn(_pool_four(), 3, 5.0, 13.0, 2.0, 10.0, 0, "w", excluded=excluded)
+            is None
+        )
+
+    def test_load_excluded_spans(self, tmp_path):
+        p = tmp_path / "ex.json"
+        p.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "spans": [
+                        {"session_id": "four", "channel": 3, "start": 25.0, "end": 28.0, "reason": "energy"}
+                    ],
+                }
+            )
+        )
+        assert load_excluded_spans(p) == {"four": frozenset({(3, 25.0, 28.0)})}
+
+    def test_load_excluded_spans_rejects_other_version(self, tmp_path):
+        p = tmp_path / "ex.json"
+        p.write_text(json.dumps({"version": 2, "spans": []}))
+        with pytest.raises(ValueError, match="version"):
+            load_excluded_spans(p)
+
+
+class TestPinnedTurnsOnSubset:
+    def test_resolves_in_row_order_by_source_channel(self):
+        sel = _resolve_pinned_turns(
+            _pool_four(),
+            [
+                {"channel": 3, "start": 25.0, "end": 28.0},
+                {"channel": 1, "start": 20.0, "end": 23.0},
+            ],
+            _window_four(),
+        )
+        assert [t.channel for t in sel] == [1, 3]
+
+    def test_rejects_channel_outside_subset(self):
+        with pytest.raises(ValueError, match="channel"):
+            _resolve_pinned_turns(
+                _pool_four(),
+                [
+                    {"channel": 0, "start": 22.9, "end": 23.2},
+                    {"channel": 1, "start": 20.0, "end": 23.0},
+                ],
+                _window_four(),
+            )
+
+
+def _write_four_fixture(tmp_path):
+    root = tmp_path / "data"
+    _write_flac(root / "ami_flac" / "four.flac", 4, 40.0, SRC_SR)
+    manifest = root / "ami.jsonl"
+    manifest.write_text(
+        "".join(json.dumps(to_json(w)) + "\n" for w in (_window_four(), _window_four_pool()))
+    )
+    vocab = tmp_path / "vocab.txt"
+    vocab.write_text("\n".join(EXT_TOKENS) + "\n", encoding="utf-8")
+    training_config = OmegaConf.create(
+        {
+            "recipe_dir": str(tmp_path),
+            "sample_rate": FS,
+            "hop_length": HOP,
+            "dataset": {"preprocessor": {"token_list": str(vocab)}},
+        }
+    )
+    return {
+        "tmp_path": tmp_path,
+        "manifest": manifest,
+        "dataset_root": root,
+        "training_config": training_config,
+    }
+
+
+class TestGtOnChannelSubset:
+    def test_gt_run_writes_two_rows_from_four_channel_file(self, tmp_path):
+        fx = _write_four_fixture(tmp_path)
+        inf_dir = tmp_path / "infer"
+        cfg = _infer_config(fx, "gt", inf_dir)
+        cfg.selection.num_active_speakers = 2
+        stats = run_inference(cfg, training_config=fx["training_config"])
+        assert stats == {"n_selected": 1, "n_skipped": 0, "n_timestamp_degraded": 0}
+        meta = json.loads((inf_dir / "valid" / "meta" / "four_w00000.json").read_text())
+        assert meta["num_channels"] == 2
+        assert meta["source_channels"] == [1, 3]
+        assert [p["source_channel"] for p in meta["prompt"]["turns"]] == [1, 3]
+        assert [p["channel"] for p in meta["prompt"]["turns"]] == [0, 1]
+        assert [t["channel"] for t in meta["turns"]] == [0, 1]
+        assert meta["channels"][0]["ref_text"] == "abc def ghi"
+        wav, sr = _read_wav(inf_dir / "valid" / meta["channels"][1]["gt_wav"])
+        assert wav.ndim == 1 and sr == FS

@@ -72,6 +72,12 @@ selection:
 prompt:
   turn_min_sec: 2.0
   turn_max_sec: 10.0
+  # "solo" widens the candidate span by this much per side before the
+  # overlap test (0.0 = today's rule; AMI uses 0.3 against alignment jitter).
+  solo_guard_sec: 0.0
+  # Sidecar from local/ami_prompt_gate.py listing turns that may never be
+  # prompts (bleed / not solo by annotation); null = no gate.
+  exclude_spans: null
   seed: 0
 
 # Multi-branch ODE sampling (as generate_dev.py / the F5 inference path).
