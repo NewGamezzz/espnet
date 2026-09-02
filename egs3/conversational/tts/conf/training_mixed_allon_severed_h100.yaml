@@ -1,0 +1,334 @@
+# Table 4 communication-block ablation, row c: SEVERED TAC.
+# Design note: "Design - Table 4 Communication-Block Ablation" (vault).
+#
+# The paired arm (row d) is the EXISTING all-on run train_mixed4_allon_h100;
+# no row-d training is needed. This file is its config with exactly two
+# changes, enforced by tests/test_tac_ablation_config.py:
+#   1. exp_tag
+#   2. model.exchange.severed: true - the TAC block keeps every parameter and
+#      still trains, but the cross-channel average is replaced by the branch's
+#      own transform, so no information crosses channels. Row d minus row c is
+#      therefore communication at matched capacity, matched init, matched slot,
+#      matched gate and matched text conditioning.
+#
+# There is deliberately NO step cap. Both arms follow the identical 200K-step
+# LR schedule, this arm is stopped by simply not chaining another job, and the
+# matched step is chosen at EVALUATION time from the quarter-epoch backups
+# (saved every 1978 optimizer steps in this configuration).
+#
+# CODE PARITY: this config must be run from the all-on run's own code tip
+# c6c4f7d8aa (branch conversational_f5_channel_mask, 2026-08-15), which is
+# what the Delta checkout espnet_conv_allon has checked out, plus ONLY the
+# severed knob (src/branch_exchange/exchange.py). exchange.py is byte-identical
+# between that tip and later branches, so the knob is the single code delta.
+#
+# The reference copy of the row-d config lives beside this file as
+# training_mixed_allon_h100.yaml, vendored from the Delta checkout on
+# 2026-09-02 (md5 47a5f0c9b90f2666e9debccb1917d6ef, verified both sides).
+# It was previously untracked, so the pairing was not auditable from git.
+#
+# ---- original all-on header follows ----
+# All-mechanisms training run (2026-08-16): PR #38 online sampling +
+# PR #39 special-token chunk task + PR #42 dual-mode Mode O/T text +
+# PR #43 per-channel masking, all knobs LIVE, from pretrained F5 Base on
+# the 4-corpus mix. Clone of the fisher checkout's training_mixed_h100.yaml
+# (the no-knob control run) with ONLY the knob additions below, so the
+# control comparison stays one-variable-set at equal epochs.
+# Knob values (Thanapat 2026-08-16): chunk_task_prob 0.5,
+# prompt_only_prob 0.5, chunk windows 15-60 s (chunk_window_max raised
+# from the 35 s placeholder), timestamp_align_prob 0.5,
+# context_channel_prob 0.3, independent_mask_prob 0.3 on the three
+# conversational corpora; LibriTTS (atomic, N=1) gets ONLY the timestamp
+# coin - the planner never draws the chunk coin for atomic sessions and a
+# context coin at N=1 always degrades.
+# Windowing: no window_params override anywhere - the WindowParams
+# defaults ARE the ratified live values (window_min 10, window_max 80,
+# trim_to_turns true = trailing-edge snap, snap_start_to_turn true).
+# Memory ceiling unchanged: max assembled chunk sample = 8 + 10 + 60 =
+# 78 s < the 80 s infill window that already sets the solo-window floor.
+exp_tag: train_mixed4_allon_severed_h100
+
+num_device: 2
+num_nodes: 1
+seed: 0
+
+recipe_dir: .
+data_dir: ${recipe_dir}/data
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+
+# Pretrained F5TTS_Base (SWivid/F5-TTS) checkpoint + the vocab shipped with
+# it. downloads/F5TTS_Base here is a symlink to the fisher worktree's copy
+# (same files).
+pretrained_dir: ${recipe_dir}/downloads/F5TTS_Base
+
+# SSSD corpus root, pinned explicitly to the durable /work/hdd copy (the
+# repo default resolves into cornell2's PURGEABLE scratch).
+sssd_root: /work/hdd/bbjs/ttrachu/development/delta_ai/dataset/ScalableSpontaneousSpeechDataset
+
+# LibriTTS corpus root (single-speaker mix-in).
+libritts_root: /work/hdd/bbjs/ttrachu/development/delta_ai/dataset/LibriTTS
+
+# CANDOR transcoded-FLAC root.
+candor_flac_root: /work/hdd/bbjs/ttrachu/dataset/candor_flac
+
+# Fisher merged-FLAC root (A/B mono pairs joined to stereo).
+fisher_flac_root: /work/hdd/bbjs/ttrachu/dataset/fisher_flac
+
+# Mel / audio front-end shared by feats_extract and the model (must stay
+# bit-compatible with the pretrained checkpoint and the vocos vocoder).
+sample_rate: 24000
+n_mel_channels: 100
+hop_length: 256
+win_length: 1024
+n_fft: 1024
+mel_spec_type: vocos
+
+# create_dataset stage: run ONCE in this checkout before training (writes
+# the 2550-token vocab - base 2545 + <turn>/<OTHER>/<speaker_prompt>/
+# <prev_chunk>/<turn_fill> - plus vocab_meta.json and the session
+# manifests). Training fails loudly at the sha256/NEW_TOKENS gates against
+# a stale vocab.
+create_dataset:
+  recipe_dir: ${recipe_dir}
+  base_vocab_path: ${pretrained_dir}/vocab.txt
+  # Per-corpus passthroughs (each read by exactly one builder, the others
+  # ignore them via **_).
+  libritts_root: ${libritts_root}
+  flac_dir: ${candor_flac_root}
+  fisher_flac_dir: ${fisher_flac_root}
+
+dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  recipe_dir: ${recipe_dir}
+  # Entry order defines the corpus order that dataloader.train.weights and
+  # dataloader.valid (unweighted) refer to: [SSSD, LibriTTS, CANDOR, Fisher].
+  # Calibrate the realized knob shares against the per-epoch planner log
+  # lines, not the coin values (the chunk coin is per SESSION and chunk
+  # sessions repack into different window counts):
+  #   chunk-task plan: N full / N prompt_only / N degraded / N fallback
+  #   timestamp-text plan: N mode-T / N degraded of N windows
+  #   mask plan: N context / N independent / N shared / N degraded of N
+  train:
+    - data_src: conversational/tts
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        dataset_root: ${sssd_root}
+        min_active_speakers: 1
+        chunk_task:
+          chunk_task_prob: 0.5
+          prompt_only_prob: 0.5
+          chunk_window_max: 60.0
+        timestamp_align_prob: 0.5
+        context_channel_prob: 0.3
+        independent_mask_prob: 0.3
+    - data_src: egs3.conversational.tts.dataset_libritts
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_libritts_train.jsonl
+        dataset_root: ${libritts_root}
+        timestamp_align_prob: 0.5
+    - data_src: egs3.conversational.tts.dataset_candor
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_candor_train.jsonl
+        dataset_root: ${candor_flac_root}
+        min_active_speakers: 1
+        chunk_task:
+          chunk_task_prob: 0.5
+          prompt_only_prob: 0.5
+          chunk_window_max: 60.0
+        timestamp_align_prob: 0.5
+        context_channel_prob: 0.3
+        independent_mask_prob: 0.3
+    - data_src: egs3.conversational.tts.dataset_fisher
+      data_src_args:
+        split: train
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_fisher_train.jsonl
+        dataset_root: ${fisher_flac_root}
+        min_active_speakers: 1
+        chunk_task:
+          chunk_task_prob: 0.5
+          prompt_only_prob: 0.5
+          chunk_window_max: 60.0
+        timestamp_align_prob: 0.5
+        context_channel_prob: 0.3
+        independent_mask_prob: 0.3
+  # valid entries carry NO knobs: frozen mode (epoch=None) never draws a
+  # coin regardless, so valid/loss stays comparable to the control run.
+  valid:
+    - data_src: conversational/tts
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        dataset_root: ${sssd_root}
+        min_active_speakers: 1
+    - data_src: egs3.conversational.tts.dataset_libritts
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_libritts_valid.jsonl
+        dataset_root: ${libritts_root}
+    - data_src: egs3.conversational.tts.dataset_candor
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_candor_valid.jsonl
+        dataset_root: ${candor_flac_root}
+        min_active_speakers: 1
+    - data_src: egs3.conversational.tts.dataset_fisher
+      data_src_args:
+        split: valid
+        recipe_dir: ${recipe_dir}
+        fs: ${sample_rate}
+        manifest_path: ${data_dir}/manifest/sessions_fisher_valid.jsonl
+        dataset_root: ${fisher_flac_root}
+        min_active_speakers: 1
+  # Runtime tokenization against the EXTENDED vocab (base + 5 new tokens).
+  preprocessor:
+    _target_: egs3.conversational.tts.dataset.preprocessor.ConversationalTextPreprocessor
+    train: true
+    token_list: ${data_dir}/tokens/vocab.txt
+
+# Model assembly (src/build_model.py): DiT with the extended vocab, native
+# F5TTS_Base weights with text-embedding surgery, TAC exchanges injected at
+# every block with zero-init gates.
+model:
+  _target_: egs3.conversational.tts.src.build_model.build_multibranch_f5
+  vocab_file: ${data_dir}/tokens/vocab.txt
+  vocab_meta: ${data_dir}/tokens/vocab_meta.json
+  pretrained_ckpt: ${pretrained_dir}/model_1200000.safetensors
+  pretrained_vocab: ${pretrained_dir}/vocab.txt
+  init_noise_scale: 0.02
+  init_seed: ${seed}
+  # F5TTS_Base architecture, copied verbatim from the libritts recipe's
+  # training_f5_tts.yaml (getting text_mask_padding or pe_attn_head wrong
+  # loads cleanly but produces noise).
+  arch:
+    dim: 1024
+    depth: 22
+    heads: 16
+    dim_head: 64
+    ff_mult: 2
+    text_dim: 512
+    text_mask_padding: false
+    pe_attn_head: 1
+    conv_layers: 4
+    dropout: 0.1
+  cfm:
+    sigma: 0.0
+    audio_drop_prob: 0.3
+    cond_drop_prob: 0.2
+    frac_lengths_mask: [0.7, 1.0]
+    odeint_method: euler
+  exchange:
+    type: tac
+    schedule:
+      "1-22": P+TAC
+    hidden: null            # TAC hidden dim; null = dim
+    severed: true           # row c: block present, cross-channel average cut
+  feats_extract:
+    fs: ${sample_rate}
+    n_fft: ${n_fft}
+    hop_length: ${hop_length}
+    win_length: ${win_length}
+    n_mels: ${n_mel_channels}
+    mel_spec_type: ${mel_spec_type}
+
+# One AdamW over two param groups (src/lit_module.py): the injected
+# exchanges train faster than the pretrained trunk.
+optim:
+  _target_: torch.optim.AdamW
+  lr_exchange: 1.0e-4
+  lr_backbone: 1.0e-5
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+
+scheduler:
+  _target_: espnet2.schedulers.linear_warmup_decay.linear_warmup_decay
+  warmup_steps: 2000
+  total_steps: 200000
+scheduler_interval: step
+
+best_model_criterion:
+  - - valid/loss
+    - 3
+    - min
+
+# Standard PyTorch DataLoader around ConversationBatchSampler (built per
+# epoch by the recipe LightningModule; the espnet3 iter_factory path is not
+# used - it cannot reshuffle batches across epochs, see src/sampler.py).
+dataloader:
+  collate_fn:
+    _target_: egs3.conversational.tts.src.lit_module.PackedConversationCollator
+  train:
+    # Packed row budget in sample-rows: N x T_24k summed over the batch,
+    # padded to the longest window. Same 7M as the control h100 run: the
+    # 80 s N=2 infill window (3.84M solo) is still the memory floor; the
+    # largest chunk sample (78 s assembled) sits just under it.
+    batch_bins: 7000000
+    min_batch_size: 1      # conversations, not rows
+    shuffle: true
+    num_workers: 4
+    pin_memory: true
+    # Fraction of optimizer steps per corpus, aligned with dataset.train
+    # entry order [SSSD, LibriTTS, CANDOR, Fisher].
+    weights: [0.25, 0.25, 0.25, 0.25]
+  valid:
+    batch_bins: ${dataloader.train.batch_bins}
+    min_batch_size: 1
+    shuffle: false
+    num_workers: 4
+    pin_memory: true
+
+trainer:
+  accelerator: auto
+  devices: ${num_device}
+  num_nodes: ${num_nodes}
+  # 2 GPUs x 7M bins x 7 accum ~= 98M tokens/step, matching the control
+  # h100 run and the 4-corpus A100 run (4 x 2M x 12 ~= 96M) to within ~2%.
+  accumulate_grad_batches: 7
+  precision: bf16-mixed
+  check_val_every_n_epoch: 1
+  # Validate (and therefore checkpoint: save_last + top-K on valid/loss)
+  # every quarter epoch, so wall-limit kills lose at most ~20 min of work.
+  val_check_interval: 0.25
+  log_every_n_steps: 50
+  max_epochs: 1000
+  gradient_clip_val: 1.0
+  # Batch order reshuffles via ConversationBatchSampler.set_epoch; rebuilding
+  # loaders every epoch is not needed and, on resume, leaked workers.
+  reload_dataloaders_every_n_epochs: 0
+  num_sanity_val_steps: 2
+  strategy: auto
+  # Load resume checkpoints with torch.load(mmap=True) (resume-stall
+  # livelock fix, 2026-07-28 investigation).
+  plugins:
+    - _target_: egs3.conversational.tts.src.checkpoint_io.MmapCheckpointIO
+  callbacks:
+    - _target_: espnet3.components.callbacks.ema.EMACallback
+      decay: 0.9999
+  logger:
+    _target_: lightning.pytorch.loggers.WandbLogger
+    project: espnet3-conversational-f5
+    name: ${exp_tag}
+    save_dir: ${exp_dir}
+    log_model: false
+    id: ${exp_tag}
+    resume: allow
+
+# ckpt_path "last" = Lightning finds last.ckpt if it exists (requeue after a
+# wall-limit kill resumes automatically) and warns + starts fresh when the
+# exp dir is empty (first launch). One config serves both submits.
+fit:
+  ckpt_path: last

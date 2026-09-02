@@ -100,3 +100,55 @@ def test_identity_exchange():
     h = make_h(COUNTS)
     ex = IdentityExchange()
     assert torch.equal(ex(h, conv_id_of(COUNTS)), h)
+
+
+# --- severed TAC: the capacity-matched no-communication control (Table 4 row c)
+
+
+def test_severed_tac_defaults_off_and_changes_output_when_on():
+    ex = randomize(TACExchange(DIM))
+    assert ex.severed is False
+    h = make_h(COUNTS, seed=5)
+    with torch.no_grad():
+        full = ex(h, conv_id_of(COUNTS))
+        ex.severed = True
+        cut = ex(h, conv_id_of(COUNTS))
+    assert not torch.equal(full, cut)
+
+
+def test_severed_tac_equals_every_branch_alone():
+    """Severing == treating every branch as its own one-branch conversation:
+    bit-identical to the unsevered module on conv_id = arange(M), which keeps
+    the batch shape (and therefore the matmul reduction order) identical.
+
+    Run branch-by-branch instead and the same identity holds only to ~1e-7,
+    because a five-row matmul does not reduce in the same order as five
+    one-row matmuls; that is arithmetic, not communication.
+    """
+    ex = randomize(TACExchange(DIM, severed=True))
+    h = make_h(COUNTS, seed=7)
+    with torch.no_grad():
+        cut = ex(h, conv_id_of(COUNTS))
+        ex.severed = False
+        alone = ex(h, torch.arange(h.shape[0]))
+        per_branch = torch.cat(
+            [ex(h[i : i + 1], torch.zeros(1, dtype=torch.long)) for i in range(h.shape[0])]
+        )
+    assert torch.equal(cut, alone)
+    assert torch.allclose(cut, per_branch, atol=1e-5)
+
+
+def test_severed_tac_has_zero_cross_channel_gradient():
+    ex = randomize(TACExchange(DIM, severed=True))
+    h = make_h(COUNTS, seed=9).requires_grad_(True)
+    conv_id = conv_id_of(COUNTS)
+    # Row 3 is the second channel of the 3-channel conversation (rows 2, 3, 4).
+    (grad,) = torch.autograd.grad(ex(h, conv_id)[3].sum(), h)
+    assert torch.count_nonzero(grad[3]) > 0
+    for j in (0, 1, 2, 4):
+        assert torch.equal(grad[j], torch.zeros_like(grad[j])), j
+    # Sanity: the same weights with the average live DO leak gradient.
+    ex.severed = False
+    (grad_full,) = torch.autograd.grad(ex(h, conv_id)[3].sum(), h)
+    assert torch.count_nonzero(grad_full[2]) > 0 and torch.count_nonzero(grad_full[4]) > 0
+    assert torch.equal(grad_full[0], torch.zeros_like(grad_full[0]))

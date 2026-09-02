@@ -241,3 +241,35 @@ def test_builder_zero_init_gates(ext_vocab_file):
     assert all(
         m.ctx is model.cfm.ctx for m in model.modules() if isinstance(m, ExchangedBlock)
     )
+
+
+def test_builder_passes_severed_to_every_tac(ext_vocab_file):
+    """Table 4 row c: `exchange.severed: true` reaches every injected TAC."""
+    model = build_tiny(ext_vocab_file, exchange={**BUILD_EXCHANGE, "severed": True})
+    flags = [m.exchange.severed for m in model.modules() if isinstance(m, ExchangedBlock)]
+    assert flags == [True] * TINY_ARCH["depth"]
+    model = build_tiny(ext_vocab_file)
+    flags = [m.exchange.severed for m in model.modules() if isinstance(m, ExchangedBlock)]
+    assert flags == [False] * TINY_ARCH["depth"]
+
+
+def test_severed_is_a_config_property_not_a_checkpoint_key(ext_vocab_file):
+    """Characterization guard for a silent-corruption trap in the Table 4 rows.
+
+    `severed` changes no parameter, so the two rows' state dicts are
+    identical in keys and shapes and `load_state_dict(strict=True)` cannot
+    tell them apart. Row c's weights loaded through row d's config would
+    therefore run a live average path they were never trained with, with no
+    error. The eval config's `train_config` MUST name the severed training
+    yaml; this test fails if a future change makes `severed` a buffer or
+    parameter, at which point the guard can be relaxed.
+    """
+    tac = build_tiny(ext_vocab_file)
+    severed = build_tiny(ext_vocab_file, exchange={**BUILD_EXCHANGE, "severed": True})
+    a, b = tac.state_dict(), severed.state_dict()
+    assert a.keys() == b.keys()
+    assert all(a[k].shape == b[k].shape for k in a)
+    severed.load_state_dict(a, strict=True)  # no error: the trap
+    assert all(
+        m.exchange.severed for m in severed.modules() if isinstance(m, ExchangedBlock)
+    )

@@ -65,18 +65,25 @@ class TACExchange(nn.Module):
     Permutation-equivariant on the branch axis (the segment mean is
     order-free); no positional encoding anywhere on the branch axis.
 
+    ``severed=True`` is the capacity-matched no-communication control
+    (Table 4 row c): step 2 uses each branch's OWN ``z_i`` in place of the
+    conversation mean, so every parameter stays live and trained but no
+    information crosses branches. On a one-branch conversation the two
+    settings are the same computation (the test oracle).
+
     Note: the segment mean uses ``index_add_``/``bincount``, which are
     nondeterministic on CUDA and will raise under
     ``torch.use_deterministic_algorithms(True)``.
     """
 
-    def __init__(self, dim: int, hidden: int | None = None):
+    def __init__(self, dim: int, hidden: int | None = None, severed: bool = False):
         super().__init__()
         hidden = dim if hidden is None else hidden
         self.transform = nn.Sequential(nn.Linear(dim, hidden), nn.PReLU())
         self.average = nn.Sequential(nn.Linear(hidden, hidden), nn.PReLU())
         self.concat = nn.Sequential(nn.Linear(2 * hidden, dim), nn.PReLU())
         self.g = nn.Parameter(torch.zeros(()))
+        self.severed = bool(severed)
 
     def forward(
         self, h: torch.Tensor, conv_id: torch.Tensor, n_conv: int | None = None
@@ -84,10 +91,14 @@ class TACExchange(nn.Module):
         conv_id = conv_id.long()
         n_conv = _check_conv_id(h, conv_id, n_conv)
         z = self.transform(h)  # (M, T, hidden)
-        z_sum = z.new_zeros((n_conv,) + z.shape[1:]).index_add_(0, conv_id, z)
-        count = torch.bincount(conv_id, minlength=n_conv).clamp(min=1)
-        z_bar = self.average(z_sum / count[:, None, None].to(z.dtype))  # (n_conv, T, hidden)
-        u = self.concat(torch.cat((z, z_bar[conv_id]), dim=-1))
+        if self.severed:
+            z_bar_rows = self.average(z)  # own branch only: no cross path
+        else:
+            z_sum = z.new_zeros((n_conv,) + z.shape[1:]).index_add_(0, conv_id, z)
+            count = torch.bincount(conv_id, minlength=n_conv).clamp(min=1)
+            z_bar = self.average(z_sum / count[:, None, None].to(z.dtype))  # (n_conv, T, hidden)
+            z_bar_rows = z_bar[conv_id]
+        u = self.concat(torch.cat((z, z_bar_rows), dim=-1))
         return h + self.g * u
 
 
