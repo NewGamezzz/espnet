@@ -74,3 +74,31 @@ dataset:
   # F5 convention: the model does text + 1 and uses 0 as its internal filler,
   # so batches pad text ids with -1 (see espnet2/tts/f5/backbones/dit.py).
   text_pad_value: -1
+
+ami_builder:
+  # AMI test partition root: amicorpus/<MID>/audio/<MID>.Headset-<ch>.wav,
+  # annotations/ (ami_manual_1.6.1 unpacked: words/, corpusResources/),
+  # ami_flac/ (written by local/transcode_ami.py).
+  # Design note: "Design - Beyond Two Speakers Evaluation on AMI".
+  dataset_root: /work/hdd/bbjs/ttrachu/dataset/ami
+  annotations_subdir: annotations
+  flac_subdir: ami_flac
+  manifest_path: manifest/ami_test.jsonl
+  sessions_path: manifest/ami_test_sessions.jsonl
+  report_path: exp/ami/window_report.json
+  # Word runs split at silences longer than utterance_gap; same-channel
+  # utterances closer than merge_gap merge into one turn (shared rule).
+  utterance_gap: 1.0
+  merge_gap: 1.0
+  # Window band (design note section 2): test-en regime, hybrid t45 budget.
+  window_min: 15.0
+  window_max: 45.0
+  tail_min: 10.0
+  # Forced-alignment jitter; SSSD used 0.0 on human timestamps.
+  boundary_guard: 0.1
+  trim_to_turns: true
+  min_coverage: 0.0
+  snap_start_to_turn: true
+  # A participant is active in a window iff one of its turns has >= min_words tokens.
+  min_words: 3
+  seed: 0
