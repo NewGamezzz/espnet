@@ -163,7 +163,7 @@ class TestTranscode:
         rec = transcode_meeting(tmp_path, "ES2004a", tmp_path / "ami_flac")
         info = sf.info(str(tmp_path / "ami_flac" / "ES2004a.flac"))
         assert (info.channels, info.samplerate) == (4, 24000)
-        assert info.frames == round(3.0 * 16000 * 24000 / 16000)
+        assert abs(info.frames - round(3.0 * 16000 * 24000 / 16000)) <= 1
         loaded = load_ami_recordings(tmp_path, tmp_path / "ami_flac", ["ES2004a"])
         assert rec == loaded["ES2004a"]
         assert rec.audio_relpath == "ami_flac/ES2004a.flac"

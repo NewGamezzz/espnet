@@ -232,15 +232,18 @@ def transcode_meeting(
     n = min(lengths)
     expected_frames = round(n * TARGET_SAMPLE_RATE / SOURCE_SAMPLE_RATE)
     out = flac_dir / f"{meeting_id}.flac"
-    if not (out.is_file() and sf.info(str(out)).frames == expected_frames):
+    # torchaudio's polyphase resampler can land one frame short of the
+    # rounded ratio at exact multiples (EN2002a: 51425024 vs 51425025), so
+    # parity is checked to one frame, not to equality.
+    if not (out.is_file() and abs(sf.info(str(out)).frames - expected_frames) <= 1):
         stacked = torch.from_numpy(np.stack([m[:n] for m in mono], axis=0))
         resampled = torchaudio.functional.resample(
             stacked, orig_freq=SOURCE_SAMPLE_RATE, new_freq=TARGET_SAMPLE_RATE
         )
-        if resampled.shape[1] != expected_frames:
+        if abs(resampled.shape[1] - expected_frames) > 1:
             raise RuntimeError(
                 f"{meeting_id}: resampled to {resampled.shape[1]} frames, "
-                f"expected {expected_frames}"
+                f"expected {expected_frames} (+-1)"
             )
         flac_dir.mkdir(parents=True, exist_ok=True)
         tmp = out.with_name(out.name + ".tmp")
