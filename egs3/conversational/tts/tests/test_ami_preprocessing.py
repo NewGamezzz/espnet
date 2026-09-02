@@ -75,10 +75,19 @@ class TestMeetings:
             Participant("D", 3, "FEE016"),
         ]
 
-    def test_load_meetings_rejects_duplicate_channel(self, tmp_path):
+    def test_load_meetings_rejects_duplicate_channel_when_required(self, tmp_path):
         bad = MEETINGS_XML.replace('channel="3"', 'channel="2"')
+        path = _write(tmp_path, "meetings.xml", bad)
         with pytest.raises(ValueError, match="ES2004a.*channel"):
-            load_meetings(_write(tmp_path, "meetings.xml", bad))
+            load_meetings(path, require=["ES2004a"])
+        # the corpus file carries 3-participant meetings we never use: no
+        # validation unless required
+        assert "ES2004a" in load_meetings(path)
+
+    def test_load_meetings_requires_presence(self, tmp_path):
+        path = _write(tmp_path, "meetings.xml", MEETINGS_XML)
+        with pytest.raises(KeyError, match="IN1001"):
+            load_meetings(path, require=["IN1001"])
 
 
 class TestWords:

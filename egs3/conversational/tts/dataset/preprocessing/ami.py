@@ -55,12 +55,27 @@ class Word:
     punc: bool
 
 
-def load_meetings(path: str | Path) -> dict[str, list[Participant]]:
+def validate_participants(mid: str, parts: Sequence[Participant]) -> None:
+    """A usable meeting has four distinct speakers on headset channels 0..3;
+    the window loader would otherwise mis-assign audio rows silently."""
+    channels = sorted(p.channel for p in parts)
+    names = {p.global_name for p in parts}
+    if channels != list(range(NUM_HEADSETS)) or len(names) != NUM_HEADSETS:
+        raise ValueError(
+            f"{mid}: expected {NUM_HEADSETS} speakers on distinct channels "
+            f"0..{NUM_HEADSETS - 1}, got channels {channels} names {sorted(names)}"
+        )
+
+
+def load_meetings(
+    path: str | Path, require: Sequence[str] | None = None
+) -> dict[str, list[Participant]]:
     """Parse ``corpusResources/meetings.xml`` into ``{meeting_id: participants}``.
 
-    Fails loudly on a meeting whose speakers do not cover four distinct
-    headset channels with four distinct speakers - the window loader would
-    otherwise mis-assign audio rows silently.
+    The file covers the whole corpus, and some non-test meetings (IN1001,
+    for one) have three participants, so validation runs only on
+    ``require`` - the meetings the caller will use - each of which must be
+    present and pass :func:`validate_participants`.
     """
     root = ET.parse(str(path)).getroot()
     out: dict[str, list[Participant]] = {}
@@ -68,7 +83,7 @@ def load_meetings(path: str | Path) -> dict[str, list[Participant]]:
         mid = meeting.get("observation")
         if not mid:
             continue
-        parts = [
+        out[mid] = [
             Participant(
                 agent=spk.get("nxt_agent"),
                 channel=int(spk.get("channel")),
@@ -76,14 +91,10 @@ def load_meetings(path: str | Path) -> dict[str, list[Participant]]:
             )
             for spk in meeting.iter("speaker")
         ]
-        channels = sorted(p.channel for p in parts)
-        names = {p.global_name for p in parts}
-        if channels != list(range(NUM_HEADSETS)) or len(names) != NUM_HEADSETS:
-            raise ValueError(
-                f"{mid}: expected {NUM_HEADSETS} speakers on distinct channels "
-                f"0..{NUM_HEADSETS - 1}, got channels {channels} names {sorted(names)}"
-            )
-        out[mid] = parts
+    for mid in require or ():
+        if mid not in out:
+            raise KeyError(f"{mid}: not in {path}")
+        validate_participants(mid, out[mid])
     return out
 
 

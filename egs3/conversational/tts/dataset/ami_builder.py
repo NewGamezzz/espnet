@@ -139,7 +139,9 @@ class AMIBuilder:
         charset = vocab_charset(tokens)
 
         ann = root / cfg["annotations_subdir"]
-        participants = load_meetings(ann / "corpusResources" / "meetings.xml")
+        participants = load_meetings(
+            ann / "corpusResources" / "meetings.xml", require=list(meetings)
+        )
         recordings = load_ami_recordings(root, root / cfg["flac_subdir"], meetings)
 
         manifest_path = data_dir / cfg["manifest_path"]
