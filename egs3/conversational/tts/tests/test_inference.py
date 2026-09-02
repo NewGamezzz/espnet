@@ -1281,3 +1281,57 @@ class TestMaskToTurns:
         run_inference(cfg, training_config=fixture["training_config"], model=model, vocoder=FakeVocoder())
         meta = json.loads((inf_dir / "valid" / "meta" / "sess_w00000.json").read_text())
         assert meta["anchor"] == {"masked": False, "guard_sec": 0.1}
+
+
+# --- selection.per_session_cap -----------------------------------------------
+from egs3.conversational.tts.src.inference import _select_indices  # noqa: E402
+
+
+class TestPerSessionCap:
+    def _records(self):
+        recs = []
+        for sid in ("s1", "s2"):
+            for i in range(5):
+                recs.append(
+                    WindowRecord(
+                        window_id=f"{sid}_w{i}",
+                        session_id=sid,
+                        audio_relpath="x.flac",
+                        num_channels=2,
+                        sample_rate=SRC_SR,
+                        t0=10.0 * i,
+                        t1=10.0 * i + 8,
+                        turns=(
+                            Turn(0, "a", "aa bb cc", 10.0 * i + 1, 10.0 * i + 3),
+                            Turn(1, "b", "dd ee ff", 10.0 * i + 4, 10.0 * i + 6),
+                        ),
+                    )
+                )
+        return recs
+
+    def test_cap_limits_each_session_then_global_cap_applies(self):
+        recs = self._records()
+        sel = OmegaConf.create(
+            {"num_active_speakers": 2, "per_session_cap": 2, "num_windows": 3, "seed": 0}
+        )
+        idx = _select_indices(recs, sel)
+        assert len(idx) == 3 and idx == sorted(idx)
+        by_session = {}
+        for i in idx:
+            by_session[recs[i].session_id] = by_session.get(recs[i].session_id, 0) + 1
+        assert max(by_session.values()) <= 2
+
+    def test_cap_alone_keeps_cap_per_session(self):
+        recs = self._records()
+        sel = OmegaConf.create({"num_active_speakers": 2, "per_session_cap": 2, "seed": 0})
+        idx = _select_indices(recs, sel)
+        assert len(idx) == 4
+        assert sorted(recs[i].session_id for i in idx) == ["s1", "s1", "s2", "s2"]
+
+    def test_cap_null_is_identity(self):
+        recs = self._records()
+        a = _select_indices(recs, OmegaConf.create({"num_active_speakers": 2, "seed": 0}))
+        b = _select_indices(
+            recs, OmegaConf.create({"num_active_speakers": 2, "per_session_cap": None, "seed": 0})
+        )
+        assert a == b == list(range(10))

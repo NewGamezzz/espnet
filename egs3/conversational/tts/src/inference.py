@@ -289,6 +289,20 @@ def _select_indices(records, selection, pinned_rows=None) -> list[int]:
             selection.get("max_duration"),
         )
     ]
+    cap = selection.get("per_session_cap")
+    if cap is not None:
+        # Balance sessions (AMI: no meeting dominates a stratum) BEFORE the
+        # global cap; seeded per session so a slice re-draw is stable.
+        by_session: dict[str, list[int]] = {}
+        for i in eligible:
+            by_session.setdefault(records[i].session_id, []).append(i)
+        seed = int(selection.get("seed", 0))
+        kept: list[int] = []
+        for sid, idxs in by_session.items():
+            if len(idxs) > int(cap):
+                idxs = random.Random(f"{seed}:cap:{sid}").sample(idxs, int(cap))
+            kept.extend(idxs)
+        eligible = sorted(kept)
     num_windows = selection.get("num_windows")
     if num_windows is not None and len(eligible) > int(num_windows):
         rng = random.Random(int(selection.get("seed", 0)))

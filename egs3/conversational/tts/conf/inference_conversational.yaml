@@ -59,6 +59,7 @@ selection:
   num_active_speakers: 2
   min_duration: null    # optional duration band (seconds); null = no bound
   max_duration: null
+  per_session_cap: null  # at most this many windows per session (AMI: balance meetings)
   num_windows: 50
   seed: 0
 
