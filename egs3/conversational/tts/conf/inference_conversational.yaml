@@ -80,6 +80,15 @@ prompt:
   exclude_spans: null
   seed: 0
 
+# Anchor masking (gt/resynth only): zero every GT sample outside the row's
+# own annotated turns (+guard).  Off = bit-identical anchors.  On for corpora
+# with headset crosstalk (AMI); see the design note "Beyond Two Speakers
+# Evaluation on AMI", section 4.
+anchor:
+  mask_to_turns:
+    enabled: false
+    guard_sec: 0.15
+
 # Multi-branch ODE sampling (as generate_dev.py / the F5 inference path).
 sampling:
   steps: 32

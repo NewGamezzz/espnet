@@ -396,6 +396,8 @@ class TestGtContract:
             # sibling "layout" block.
             "text_format": "order",
             "rtf": None,
+            # Present in every mode; True only for masked gt/resynth anchors.
+            "anchor": {"masked": False, "guard_sec": 0.15},
             "mix_wav": "mix/sess_w00000.wav",
             "prompt": {
                 "total_sec": prompt_sec,
@@ -1242,3 +1244,40 @@ class TestGtOnChannelSubset:
         assert meta["channels"][0]["ref_text"] == "abc def ghi"
         wav, sr = _read_wav(inf_dir / "valid" / meta["channels"][1]["gt_wav"])
         assert wav.ndim == 1 and sr == FS
+
+
+# --- masked anchors (anchor.mask_to_turns) ----------------------------------
+from egs3.conversational.tts.src.inference import mask_to_turns  # noqa: E402
+
+
+class TestMaskToTurns:
+    def test_pure_mask(self):
+        fs = 100
+        speech = torch.ones(2, 10 * fs)
+        turns = [Turn(0, "a", "x", 12.0, 14.0), Turn(1, "b", "y", 15.0, 16.0)]
+        out = mask_to_turns(speech, turns, t0=10.0, fs=fs, guard_sec=0.5)
+        assert out[0, :150].sum() == 0 and out[0, 150:450].sum() == 300 and out[0, 450:].sum() == 0
+        assert out[1, :450].sum() == 0 and out[1, 450:650].sum() == 200 and out[1, 650:].sum() == 0
+        assert torch.equal(speech, torch.ones(2, 10 * fs))  # input untouched
+
+    def test_gt_run_masks_when_enabled_and_not_otherwise(self, fixture):
+        for enabled in (False, True):
+            inf_dir = fixture["tmp_path"] / f"infer_{int(enabled)}"
+            cfg = _infer_config(fixture, "gt", inf_dir)
+            cfg.anchor = {"mask_to_turns": {"enabled": enabled, "guard_sec": 0.1}}
+            run_inference(cfg, training_config=fixture["training_config"])
+            meta = json.loads((inf_dir / "valid" / "meta" / "sess_w00000.json").read_text())
+            assert meta["anchor"] == {"masked": enabled, "guard_sec": 0.1}
+            wav, _ = _read_wav(inf_dir / "valid" / meta["channels"][0]["gen_wav"])
+            # ch0 turn is rel 0.5-3.0 s; the sample at 4.0 s is outside every ch0 turn
+            outside = abs(float(wav[int(4.0 * FS)]))
+            assert (outside == 0.0) == enabled
+
+    def test_generate_never_masks(self, fixture, ext_vocab_file):
+        inf_dir = fixture["tmp_path"] / "infer_gen"
+        cfg = _infer_config(fixture, "generate", inf_dir)
+        cfg.anchor = {"mask_to_turns": {"enabled": True, "guard_sec": 0.1}}
+        model = build_tiny(ext_vocab_file).eval()
+        run_inference(cfg, training_config=fixture["training_config"], model=model, vocoder=FakeVocoder())
+        meta = json.loads((inf_dir / "valid" / "meta" / "sess_w00000.json").read_text())
+        assert meta["anchor"] == {"masked": False, "guard_sec": 0.1}

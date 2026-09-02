@@ -357,6 +357,25 @@ def _resolve_pinned_turns(pool_turns, prompts, record) -> list[Any]:
     return selected
 
 
+def mask_to_turns(
+    speech: torch.Tensor, turns, t0: float, fs: int, guard_sec: float
+) -> torch.Tensor:
+    """Zero every sample of row ``r`` outside all of row ``r``'s turn spans
+    (widened by ``guard_sec``).  Used for the gt/resynth anchors on corpora
+    with headset crosstalk (AMI): the annotation defines the ground truth,
+    bleed from other participants is removed, and one pipeline then scores
+    masked GT and generated audio alike (design note "Beyond Two Speakers",
+    section 4).  ``turns`` are row-space with absolute times."""
+    mask = torch.zeros_like(speech, dtype=torch.bool)
+    total = speech.shape[1]
+    for t in turns:
+        a = max(0, int(round((t.start - t0 - guard_sec) * fs)))
+        b = min(total, int(round((t.end - t0 + guard_sec) * fs)))
+        if b > a:
+            mask[t.channel, a:b] = True
+    return speech * mask
+
+
 def _reference_texts(turns, num_channels: int) -> list[str]:
     """Per-channel reference text: all of that channel's turn texts,
     space-joined in window order (the whole window is generated now)."""
@@ -532,6 +551,10 @@ def run_inference(
         if prompt_cfg.get("exclude_spans")
         else {}
     )
+    anchor_cfg = cfg.get("anchor", {}) or {}
+    mask_cfg = anchor_cfg.get("mask_to_turns", {}) or {}
+    mask_enabled = bool(mask_cfg.get("enabled", False))
+    mask_guard = float(mask_cfg.get("guard_sec", 0.15))
     samp = cfg.sampling
     # tqdm renders a live bar on a tty; under a non-tty Slurm log it prints
     # one plain line per refresh (rate + ETA), so long infer runs are
@@ -585,6 +608,14 @@ def run_inference(
         # Row-space window turns, captured before any Mode T / prompt mutation.
         window_turns = list(sample["turns"])
         window_speech = sample["speech"]  # (N, T_window), CPU
+        anchor_masked = mask_enabled and mode in ("gt", "resynth")
+        if anchor_masked:
+            # gt copies it, resynth vocodes it, and the gt/ copies come from
+            # it too, so every anchor artefact is masked consistently;
+            # generate never masks (the model sees the real window).
+            window_speech = mask_to_turns(
+                window_speech, window_turns, record.t0, fs, mask_guard
+            )
 
         audio_path = dataset.dataset_root / record.audio_relpath
         blocks = [
@@ -703,6 +734,8 @@ def run_inference(
             # TestModeParity and TestTimestampGenerate respectively.
             **({"layout": {"turns": layout_meta}} if layout_meta is not None else {}),
             "rtf": rtf,
+            # Present in every mode (key parity); True only for masked anchors.
+            "anchor": {"masked": bool(anchor_masked), "guard_sec": mask_guard},
             "mix_wav": mix_rel,
             "prompt": {
                 "total_sec": round(prompt_samples / fs, 6),
