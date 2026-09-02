@@ -57,17 +57,20 @@ class TestStratify:
         assert [t.channel for t in out.turns] == [0, 2]
         assert out.num_active_speakers == 2 and out.num_rows == 2
 
-    def test_stratify_returns_none_below_two_speakers(self):
+    def test_stratify_keeps_single_speaker_as_pool_only(self):
         r = _rec(
             [
                 Turn(0, "a", "one two three", 0.5, 3.0),
+                Turn(1, "b", "hm", 3.5, 3.7),
                 Turn(0, "a", "four five six", 4.0, 6.0),
             ]
         )
-        assert stratify_window(r, min_words=3) is None
+        out = stratify_window(r, min_words=3)
+        assert out.channels == (0,) and out.num_rows == 1
+        assert [t.channel for t in out.turns] == [0, 0]  # the fragment is gone
 
-    def test_stratify_returns_none_without_exchange(self):
-        r = _rec([Turn(0, "a", "one two three", 0.5, 3.0), Turn(1, "b", "hm", 5.0, 5.2)])
+    def test_stratify_returns_none_without_lexical_speaker(self):
+        r = _rec([Turn(0, "a", "yeah", 0.5, 0.9), Turn(1, "b", "hm", 5.0, 5.2)])
         assert stratify_window(r, min_words=3) is None
 
 
@@ -169,7 +172,7 @@ class TestBuild:
         for w in windows:
             assert 5.0 <= w.duration <= 45.0 + 1e-6
             assert w.num_channels == 4 and w.channels is not None
-            assert w.num_rows == w.num_active_speakers >= 2
+            assert w.num_rows == w.num_active_speakers >= 1
             assert 3 not in w.channels  # D never has a 3-word turn
             assert w.sample_rate == 24000 and w.audio_relpath == "ami_flac/ES2004a.flac"
         assert any(w.num_rows == 3 for w in windows)  # the window around C's turn
@@ -184,9 +187,9 @@ class TestBuild:
         assert any(t["channel"] == 3 for t in sessions[0]["turns"])  # full annotation kept
         report = json.loads((recipe / "exp/ami/window_report.json").read_text())
         assert report["meetings"] == ["ES2004a"]
-        assert set(report["per_k"]) <= {"2", "3", "4"}
+        assert set(report["per_k"]) <= {"1", "2", "3", "4"}
         assert sum(v["windows"] for v in report["per_k"].values()) == len(windows)
-        assert report["dropped"]["below_two_speakers"] >= 0
+        assert report["dropped"]["no_lexical_speaker"] >= 0
 
     def test_build_is_deterministic(self, tmp_path, base_vocab_file, short_windows):
         root = _make_corpus(tmp_path)

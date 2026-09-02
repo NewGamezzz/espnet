@@ -4,7 +4,8 @@ Output (relative to ``<recipe_dir>/data`` and ``<recipe_dir>``):
 
 * ``manifest/ami_test.jsonl``          window manifest; every record has
   ``num_channels = 4``, ``channels`` = the headset indices of its K lexically
-  active participants, and only THEIR turns (design note section 2).
+  active participants, and only THEIR turns (design note section 2).  K = 1
+  windows are kept as prompt-pool material (never scored).
 * ``manifest/ami_test_sessions.jsonl`` one line per meeting with the FULL
   merged turn list on all four channels - the prompt gate and the crosstalk
   table need the whole annotation, not the windowed subset.
@@ -68,17 +69,16 @@ def stratify_window(record: WindowRecord, min_words: int) -> WindowRecord | None
 
     Non-active participants' turns (backchannels, fragments) are dropped
     together with their channel: the K-channel ground truth is those K
-    headsets and nothing else.  Returns None when the window cannot enter
-    any stratum (K < 2, fewer than two turns, or no speaker exchange).
+    headsets and nothing else.  K = 1 windows (monologues) are KEPT as
+    prompt-pool material only - ``selection.num_active_speakers`` never
+    selects them for scoring, but their turns are the best solo prompts a
+    meeting has.  Returns None only when no participant is lexically active.
     """
     channels = lexical_active_channels(record.turns, min_words)
-    if len(channels) < 2:
+    if not channels:
         return None
     turns = tuple(t for t in record.turns if t.channel in channels)
-    if len(turns) < 2:
-        return None
-    ordered = sorted(turns, key=lambda t: (t.start, t.channel))
-    if not any(a.channel != b.channel for a, b in zip(ordered, ordered[1:])):
+    if len(channels) >= 2 and len(turns) < 2:
         return None
     return dataclasses.replace(record, turns=turns, channels=channels)
 
@@ -154,7 +154,7 @@ class AMIBuilder:
         )
         durations: list[float] = []
         # Both reasons always present in the report, zero or not.
-        dropped: Counter = Counter({"below_two_speakers": 0, "empty_after_normalize": 0})
+        dropped: Counter = Counter({"no_lexical_speaker": 0, "empty_after_normalize": 0})
         n_windows = 0
         with manifest_path.open("w", encoding="utf-8") as mf, sessions_path.open(
             "w", encoding="utf-8"
@@ -207,7 +207,7 @@ class AMIBuilder:
                 for r in records:
                     strat = stratify_window(r, int(cfg["min_words"]))
                     if strat is None:
-                        dropped["below_two_speakers"] += 1
+                        dropped["no_lexical_speaker"] += 1
                         continue
                     mf.write(json.dumps(to_json(strat), ensure_ascii=False) + "\n")
                     k = strat.num_rows
