@@ -1,0 +1,85 @@
+# AMI beyond-two-speakers measure config: conf/metrics.yaml with the AMI test
+# name and inference_dir (design note "Beyond Two Speakers Evaluation on AMI").
+##########################################################
+#           Conversational F5 - measure stage             #
+##########################################################
+# Quick usage (from the recipe dir):
+#   python run.py --stages measure --metrics_config conf/metrics.yaml
+#
+# Merged over egs3/TEMPLATE/tts/conf/metrics.yaml (recipe_dir, exp_tag,
+# exp_dir). `exp_tag`/`exp_dir` are normally inherited from training_config /
+# inference_config at run time
+# (espnet3.utils.run_utils.apply_training_experiment_context), which also
+# copies `inference_dir` from inference_config into this config so `measure`
+# scores whatever `infer` just wrote.
+#
+# How that copy actually behaves (espnet3.utils.run_utils
+# _copy_config_context): it reads values with OmegaConf `.get()`, which
+# eagerly RESOLVES interpolations in each config's own namespace. So the
+# value copied from inference_config is always a concrete resolved path
+# (never a raw `${...}` formula), and the comparison compares resolved
+# strings: equal values are skipped, but DIFFERING values are OVERWRITTEN
+# with inference_config's value, with only a logged warning
+# (overwrite-on-differ, not skip-on-conflict). Two consequences:
+#
+# 1. TARGET-side resolvability: if this file's own `inference_dir` formula
+#    referenced a key this file does not define (e.g. `${mode}` without a
+#    local `mode:`), the very first `.get()` on it -- inside the propagation
+#    compare, or at final resolve -- raises InterpolationKeyError. Hence
+#    `mode` is declared locally below, which also lets a standalone
+#    `--stages measure` run resolve `inference_dir` on its own.
+# 2. The anchor-run trap: because run.py ALWAYS loads an inference config
+#    (defaulting to conf/inference_conversational.yaml, mode: generate), a
+#    `--stages measure` run given only a mode-edited copy of THIS file gets
+#    its `inference_dir` silently overwritten back to `infer_generate` by
+#    the default inference config's differing value. Scoring a `gt`/`resynth`
+#    anchor therefore requires passing the MATCHING mode-edited
+#    `--inference_config` to the measure invocation as well (see README.md's
+#    "Running the battery" and tests/test_run.py::TestAnchorModePropagation).
+#
+# Keep `mode` in lockstep with conf/inference_conversational.yaml's default;
+# override both together (both flags, both files) to score the `gt`/`resynth`
+# anchor runs instead.
+mode: generate
+inference_dir: ${exp_dir}/infer_ami_${mode}
+
+dataset:
+  test:
+    - name: ami_k2
+
+# The four metric classes below (ConversationASRMetric,
+# SpeakerSimilarityMetric, QualityMetric, InteractionMetric; see README.md's
+# Evaluation section for the summary-key glossary) each iterate `meta.scp`
+# only (`inputs: {meta: meta}`). This is the lean battery from the
+# 2026-07-15 PR #10 review (PLAN-step4.md's Revision section) with the
+# quality leg revised after the first Delta run (2026-07-16) and the dGSLM
+# interaction battery added (core events + W1; backchannel proxy, laughter,
+# script-following, cross-turn speaker dynamics, and DNSMOS remain deferred
+# to a later PR). Every backend below is the real (lazy) default -- nothing here is a
+# fake/test double -- and none of it downloads or imports anything until the
+# first real `measure` call: ConversationASRMetric uses faster-whisper
+# large-v3 transcription (one call per file, `vad_filter: true`) and
+# whisper's EnglishTextNormalizer. SpeakerSimilarityMetric uses WavLM-SV
+# x-vector embedding (microsoft/wavlm-base-plus-sv - an accessible default,
+# not necessarily the checkpoint pinned for the first Delta run).
+# QualityMetric uses the UTMOS22-strong default (torch.hub-based, NOT the
+# PyPI `speechmos` package - see src/metrics/quality.py's module docstring
+# for the verified deviation from the plan's wording) and Silero VAD as
+# bundled with faster-whisper (no extra dependency) for IPU segmentation.
+metrics:
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.asr.ConversationASRMetric
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.speaker.SpeakerSimilarityMetric
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.quality.QualityMetric
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.interaction.InteractionMetric
+    inputs:
+      meta: meta

@@ -1,0 +1,54 @@
+##########################################################
+#   Conversational F5 - AMI beyond-two-speakers infer    #
+##########################################################
+# Design note: "Design - Beyond Two Speakers Evaluation on AMI" (vault).
+# SSSD-path single-call inference over the windows of ONE stratum
+# (K = selection.num_active_speakers), prompts pinned by the stratum's frozen
+# manifest, gt/resynth anchors masked to the annotated spans.
+#
+# Generators (local/make_ami_runs.py) override per arm: mode, test_name,
+# inference_dir, selection.manifest, text_format, ckpt.
+training_config: conf/training_poc.yaml
+exp_tag: ami_eval
+mode: generate
+device: cuda
+inference_dir: ${exp_dir}/infer_ami_${mode}
+test_name: ami_k2
+ckpt: null
+use_ema: true
+
+dataset:
+  split: ami_test
+  manifest_path: data/manifest/ami_test.jsonl
+  dataset_root: /work/hdd/bbjs/ttrachu/dataset/ami
+
+selection:
+  manifest: null            # data/eval/ami_test_k<K>_v1.jsonl once frozen
+  num_active_speakers: 2    # the stratum; only used while manifest is null
+  min_duration: null
+  max_duration: null
+  per_session_cap: 12       # no meeting dominates a stratum
+  num_windows: null
+  seed: 0
+
+prompt:
+  turn_min_sec: 2.0
+  turn_max_sec: 10.0
+  solo_guard_sec: 0.3       # forced-alignment jitter margin around "solo"
+  exclude_spans: exp/ami/gate/exclude_spans.json   # local/ami_prompt_gate.py
+  seed: 0
+
+anchor:
+  mask_to_turns:
+    enabled: true           # headset crosstalk: GT = annotated spans only
+    guard_sec: 0.15
+
+text_format: order          # timestamps = Mode T (generate only)
+
+# The SSSD-path campaign settings; the chunked path's sparse per-channel CFG
+# knob does not exist here and is not added.
+sampling:
+  steps: 32
+  cfg_strength: 3.0
+  sway_sampling_coef: -1.0
+  seed: 0

@@ -218,3 +218,27 @@ class TestAnchorModePropagation:
         )
         assert str(metrics_config.inference_dir).endswith("infer_generate")
         assert metrics_config.inference_dir == inference_config.inference_dir
+
+
+def test_ami_configs_load_and_agree():
+    """conf/inference_ami.yaml + conf/metrics_ami.yaml: the SSSD-path AMI
+    configs (design note 'Beyond Two Speakers Evaluation on AMI', section 5)."""
+    from omegaconf import OmegaConf
+
+    recipe = Path(__file__).resolve().parents[1]
+    inf = OmegaConf.load(recipe / "conf" / "inference_ami.yaml")
+    met = OmegaConf.load(recipe / "conf" / "metrics_ami.yaml")
+    assert inf.mode == met.mode == "generate"
+    assert inf.dataset.split == "ami_test"
+    assert inf.dataset.manifest_path.endswith("manifest/ami_test.jsonl")
+    assert inf.prompt.solo_guard_sec == 0.3
+    assert inf.prompt.exclude_spans.endswith("exclude_spans.json")
+    assert inf.anchor.mask_to_turns.enabled is True
+    assert inf.anchor.mask_to_turns.guard_sec == 0.15
+    assert (inf.sampling.steps, inf.sampling.cfg_strength, inf.sampling.sway_sampling_coef) == (
+        32, 3.0, -1.0,
+    )
+    assert inf.selection.manifest is None and inf.selection.num_active_speakers == 2
+    assert inf.selection.per_session_cap == 12
+    assert inf.text_format == "order"
+    assert met.dataset.test[0].name == inf.test_name == "ami_k2"
