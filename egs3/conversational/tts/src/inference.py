@@ -622,14 +622,15 @@ def run_inference(
         # Row-space window turns, captured before any Mode T / prompt mutation.
         window_turns = list(sample["turns"])
         window_speech = sample["speech"]  # (N, T_window), CPU
-        anchor_masked = mask_enabled and mode in ("gt", "resynth")
-        if anchor_masked:
-            # gt copies it, resynth vocodes it, and the gt/ copies come from
-            # it too, so every anchor artefact is masked consistently;
-            # generate never masks (the model sees the real window).
-            window_speech = mask_to_turns(
-                window_speech, window_turns, record.t0, fs, mask_guard
-            )
+        # Masked anchor audio: what `gt` emits, what `resynth` vocodes, and
+        # what EVERY mode writes as the gt/ copies (InteractionMetric reads
+        # channels[ch].gt_wav of the same run as its W1 reference).  The
+        # model input in `generate` stays the real, unmasked window.
+        gt_write = (
+            mask_to_turns(window_speech, window_turns, record.t0, fs, mask_guard)
+            if mask_enabled
+            else window_speech
+        )
 
         audio_path = dataset.dataset_root / record.audio_relpath
         blocks = [
@@ -657,9 +658,9 @@ def run_inference(
         effective_text_format = "order"
         layout_meta: list[dict[str, Any]] | None = None
         if mode == "gt":
-            gen_wavs = window_speech.cpu()
+            gen_wavs = gt_write.cpu()
         elif mode == "resynth":
-            gen_wavs = resynth_region(model, vocoder, window_speech.to(device))
+            gen_wavs = resynth_region(model, vocoder, gt_write.to(device))
         else:  # generate
             if text_format == "timestamps":
                 layout_turns = prompt_window_layout(
@@ -712,7 +713,7 @@ def run_inference(
             gt_rel = f"gt/{wid}_ch{ch}.wav"
             write_wav(test_dir / gen_rel, gen_wavs[ch], fs)
             write_wav(test_dir / prompt_rel, blocks[ch][ch], fs)
-            write_wav(test_dir / gt_rel, window_speech[ch].cpu(), fs)
+            write_wav(test_dir / gt_rel, gt_write[ch].cpu(), fs)
             channels.append(
                 {
                     "gen_wav": gen_rel,
@@ -748,8 +749,9 @@ def run_inference(
             # TestModeParity and TestTimestampGenerate respectively.
             **({"layout": {"turns": layout_meta}} if layout_meta is not None else {}),
             "rtf": rtf,
-            # Present in every mode (key parity); True only for masked anchors.
-            "anchor": {"masked": bool(anchor_masked), "guard_sec": mask_guard},
+            # Present in every mode (key parity): whether the gt/ copies (and
+            # the gt/resynth outputs) are masked to the annotated turns.
+            "anchor": {"masked": bool(mask_enabled), "guard_sec": mask_guard},
             "mix_wav": mix_rel,
             "prompt": {
                 "total_sec": round(prompt_samples / fs, 6),

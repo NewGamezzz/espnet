@@ -1273,14 +1273,22 @@ class TestMaskToTurns:
             outside = abs(float(wav[int(4.0 * FS)]))
             assert (outside == 0.0) == enabled
 
-    def test_generate_never_masks(self, fixture, ext_vocab_file):
+    def test_generate_masks_gt_copies_but_not_the_model_input(self, fixture, ext_vocab_file):
+        """InteractionMetric reads channels[ch].gt_wav of the SAME run as its
+        W1 reference, so the gt/ copies are masked in every mode; the model
+        still sees (and generates over) the real window."""
         inf_dir = fixture["tmp_path"] / "infer_gen"
         cfg = _infer_config(fixture, "generate", inf_dir)
         cfg.anchor = {"mask_to_turns": {"enabled": True, "guard_sec": 0.1}}
         model = build_tiny(ext_vocab_file).eval()
         run_inference(cfg, training_config=fixture["training_config"], model=model, vocoder=FakeVocoder())
         meta = json.loads((inf_dir / "valid" / "meta" / "sess_w00000.json").read_text())
-        assert meta["anchor"] == {"masked": False, "guard_sec": 0.1}
+        assert meta["anchor"] == {"masked": True, "guard_sec": 0.1}
+        gt, _ = _read_wav(inf_dir / "valid" / meta["channels"][0]["gt_wav"])
+        gen, _ = _read_wav(inf_dir / "valid" / meta["channels"][0]["gen_wav"])
+        outside = slice(int(3.5 * FS), int(4.5 * FS))  # ch0 turn is rel 0.5-3.0 s
+        assert float(abs(gt[outside]).max()) == 0.0
+        assert float(abs(gen[outside]).max()) > 0.0
 
 
 # --- selection.per_session_cap -----------------------------------------------

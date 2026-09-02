@@ -81,9 +81,11 @@ prompt:
   exclude_spans: null
   seed: 0
 
-# Anchor masking (gt/resynth only): zero every GT sample outside the row's
-# own annotated turns (+guard).  Off = bit-identical anchors.  On for corpora
-# with headset crosstalk (AMI); see the design note "Beyond Two Speakers
+# Anchor masking: zero every ground-truth sample outside the row's own
+# annotated turns (+guard).  Applies to the gt/resynth outputs AND to the
+# gt/ copies every mode writes (InteractionMetric's W1 reference); the model
+# input in generate mode is never masked.  Off = bit-identical.  On for
+# corpora with headset crosstalk (AMI); design note "Beyond Two Speakers
 # Evaluation on AMI", section 4.
 anchor:
   mask_to_turns:
