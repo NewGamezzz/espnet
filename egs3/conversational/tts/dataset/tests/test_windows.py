@@ -743,3 +743,49 @@ class TestSnapStart:
         )
         assert a == b
         assert sa == sb
+
+
+class TestChannelsField:
+    """``WindowRecord.channels``: a source-column subset (AMI K-strata)."""
+
+    def _rec(self, channels):
+        from egs3.conversational.tts.dataset.preprocessing.windows import WindowRecord
+
+        return WindowRecord(
+            window_id="s_w0",
+            session_id="s",
+            audio_relpath="ami_flac/s.flac",
+            num_channels=4,
+            sample_rate=24000,
+            t0=0.0,
+            t1=10.0,
+            turns=(
+                Turn(0, "a", "one two three", 0.5, 3.0),
+                Turn(3, "d", "four five six", 4.0, 7.0),
+            ),
+            channels=channels,
+        )
+
+    def test_default_is_identity(self):
+        r = self._rec(None)
+        assert r.channels is None
+        assert r.row_channels == (0, 1, 2, 3) and r.num_rows == 4
+        assert "channels" not in to_json(r)
+        assert from_json(to_json(r)).channels is None
+
+    def test_subset_round_trips_and_counts_rows(self):
+        r = self._rec((0, 3))
+        assert r.row_channels == (0, 3) and r.num_rows == 2
+        assert r.num_active_speakers == 2
+        d = to_json(r)
+        assert d["channels"] == [0, 3]
+        assert from_json(d).channels == (0, 3)
+
+    @pytest.mark.parametrize("bad", [(3, 0), (0, 0), (0, 4), ()])
+    def test_rejects_unsorted_duplicate_out_of_range_empty(self, bad):
+        with pytest.raises(ValueError):
+            self._rec(bad)
+
+    def test_rejects_turn_outside_subset(self):
+        with pytest.raises(ValueError, match="turn on channel 3"):
+            self._rec((0, 1))

@@ -352,3 +352,50 @@ class TestMinActiveSpeakersFilter:
                 permute_channels=False,
                 min_active_speakers=4,
             )
+
+
+def test_channel_subset_selects_columns_and_remaps_turns(corpus):
+    """A 4-column file with ``channels=(1, 3)`` yields a 2-row item whose
+    rows are source columns 1 and 3 and whose turns are remapped to rows."""
+    import numpy as np
+    import soundfile as sf
+
+    root = corpus["root"]
+    sr = 24000
+    n = sr * 4
+    t = np.arange(n) / sr
+    data = np.stack(
+        [0.2 * np.sin(2 * np.pi * 200 * (c + 1) * t) for c in range(4)], axis=1
+    ).astype("float32")
+    (root / "ami_flac").mkdir()
+    sf.write(str(root / "ami_flac" / "m.flac"), data, sr, subtype="PCM_16", format="FLAC")
+    rec = WindowRecord(
+        window_id="m_w0",
+        session_id="m",
+        audio_relpath="ami_flac/m.flac",
+        num_channels=4,
+        sample_rate=sr,
+        t0=0.0,
+        t1=4.0,
+        turns=(
+            Turn(1, "b", "one two three", 0.2, 1.5),
+            Turn(3, "d", "four five six", 2.0, 3.5),
+        ),
+        channels=(1, 3),
+    )
+    manifest = root / "ami.jsonl"
+    manifest.write_text(json.dumps(to_json(rec)) + "\n")
+    ds = ConversationDataset(
+        split="valid",
+        manifest_path=manifest,
+        dataset_root=root,
+        permute_channels=False,
+        inference=True,
+    )
+    item = ds[0]
+    assert item["num_channels"] == 2
+    assert item["speech"].shape[0] == 2
+    assert item["source_channels"] == [1, 3]
+    assert [tr.channel for tr in item["turns"]] == [0, 1]
+    assert abs(dominant_hz(item["speech"][0], FS) - 400) < 5  # column 1
+    assert abs(dominant_hz(item["speech"][1], FS) - 800) < 5  # column 3

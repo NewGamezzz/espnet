@@ -1064,3 +1064,23 @@ class TestManifestSlicing:
     def test_zero_slices_is_an_error(self):
         with pytest.raises(ValueError, match=">= 1"):
             self._slice(3, 0)
+
+
+class TestReadAudioSpanChannels:
+    def test_channels_selects_columns(self, tmp_path):
+        from egs3.conversational.tts.src.generation import read_audio_span
+
+        _write_flac(tmp_path / "four.flac", 4, 2.0, SRC_SR)
+        full = read_audio_span(tmp_path / "four.flac", SRC_SR, 0.0, 1.0, FS)
+        sub = read_audio_span(
+            tmp_path / "four.flac", SRC_SR, 0.0, 1.0, FS, channels=(0, 3)
+        )
+        assert sub.shape[0] == 2
+        assert torch.equal(sub[0], full[0]) and torch.equal(sub[1], full[3])
+
+    def test_channels_out_of_range_raises(self, tmp_path):
+        from egs3.conversational.tts.src.generation import read_audio_span
+
+        _write_flac(tmp_path / "two.flac", 2, 1.0, SRC_SR)
+        with pytest.raises(RuntimeError, match="columns"):
+            read_audio_span(tmp_path / "two.flac", SRC_SR, 0.0, 0.5, FS, channels=(0, 2))

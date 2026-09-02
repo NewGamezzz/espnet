@@ -63,6 +63,11 @@ class WindowRecord:
     t0: float
     t1: float
     turns: tuple[Turn, ...]
+    # Source columns this window uses, ascending; None = every column.  A
+    # 4-headset AMI meeting yields K-channel windows through this field: the
+    # loader selects these columns and remaps turn channels to rows 0..K-1.
+    # Absent from every pre-existing manifest, so those load bit-identically.
+    channels: tuple[int, ...] | None = None
     # Derived from turns/num_channels, never passed in: always consistent
     # with the stored (rounded) turn times, including after from_json.
     num_active_speakers: int = field(init=False)
@@ -70,10 +75,41 @@ class WindowRecord:
     exchange_count: int = field(init=False)
 
     def __post_init__(self) -> None:
+        if self.channels is not None:
+            chans = tuple(int(c) for c in self.channels)
+            if not chans:
+                raise ValueError(f"{self.window_id}: channels must not be empty")
+            if list(chans) != sorted(set(chans)):
+                raise ValueError(
+                    f"{self.window_id}: channels {chans} must be ascending and unique"
+                )
+            if chans[-1] >= self.num_channels:
+                raise ValueError(
+                    f"{self.window_id}: channel {chans[-1]} >= num_channels "
+                    f"{self.num_channels}"
+                )
+            for t in self.turns:
+                if t.channel not in chans:
+                    raise ValueError(
+                        f"{self.window_id}: turn on channel {t.channel} is outside "
+                        f"channels {chans}"
+                    )
+            object.__setattr__(self, "channels", chans)
         active, speech_sec, exchanges = speaker_activity(self.turns, self.num_channels)
         object.__setattr__(self, "num_active_speakers", active)
         object.__setattr__(self, "channel_speech_sec", speech_sec)
         object.__setattr__(self, "exchange_count", exchanges)
+
+    @property
+    def row_channels(self) -> tuple[int, ...]:
+        """Source column per output row (identity when ``channels`` is None)."""
+        if self.channels is not None:
+            return self.channels
+        return tuple(range(self.num_channels))
+
+    @property
+    def num_rows(self) -> int:
+        return len(self.row_channels)
 
     @property
     def duration(self) -> float:
@@ -408,6 +444,7 @@ def to_json(w: WindowRecord) -> dict:
         "num_active_speakers": w.num_active_speakers,
         "channel_speech_sec": list(w.channel_speech_sec),
         "exchange_count": w.exchange_count,
+        **({"channels": list(w.channels)} if w.channels is not None else {}),
         "turns": [
             {
                 "channel": t.channel,
@@ -430,6 +467,11 @@ def from_json(d: dict) -> WindowRecord:
         sample_rate=int(d["sample_rate"]),
         t0=float(d["t0"]),
         t1=float(d["t1"]),
+        channels=(
+            tuple(int(c) for c in d["channels"])
+            if d.get("channels") is not None
+            else None
+        ),
         turns=tuple(
             Turn(
                 channel=int(t["channel"]),

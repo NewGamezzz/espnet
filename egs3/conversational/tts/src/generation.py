@@ -18,7 +18,7 @@ import contextlib
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import torch
 import torch.nn.functional as F
@@ -94,6 +94,7 @@ def read_audio_span(
     t0: float,
     t1: float,
     target_fs: int,
+    channels: Sequence[int] | None = None,
 ) -> torch.Tensor:
     """Seek-read a multichannel ``[t0, t1)`` span of a session file and resample.
 
@@ -102,8 +103,10 @@ def read_audio_span(
     only if the target rate differs) so prompt-turn audio is processed
     identically to window audio.  Channel-count validation is NOT repeated
     here: the caller reads the same session file through the dataset loader
-    first, which already raises on a manifest mismatch.  Returns ``(N, T)``
-    at ``target_fs``.
+    first, which already raises on a manifest mismatch.  ``channels`` selects
+    source columns (in the given order) before resampling - the window
+    record's ``row_channels`` - and None keeps every column.  Returns
+    ``(N, T)`` at ``target_fs``.
     """
     start = round(t0 * source_sample_rate)
     stop = round(t1 * source_sample_rate)
@@ -114,6 +117,13 @@ def read_audio_span(
         raise RuntimeError(
             f"{audio_path}: sample rate {rate} != expected {source_sample_rate}"
         )
+    if channels is not None:
+        if max(channels) >= array.shape[1]:
+            raise RuntimeError(
+                f"{audio_path}: channels {tuple(channels)} but the file has "
+                f"{array.shape[1]} columns"
+            )
+        array = array[:, list(channels)]
     speech = torch.from_numpy(array.T.copy())  # (N, T_src)
     if target_fs != source_sample_rate:
         speech = torchaudio.functional.resample(

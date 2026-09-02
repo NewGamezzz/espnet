@@ -179,8 +179,12 @@ class ConversationDataset(TorchDataset):
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         record = self.records[idx]
-        n = record.num_channels
-        speech = self._load_speech(record)
+        rows = record.row_channels
+        n = len(rows)
+        speech = self._load_speech(record)  # (num_channels, T): every source column
+        if record.channels is not None:
+            speech = speech[list(rows)]
+        row_of = {c: i for i, c in enumerate(rows)}
         perm = self._draw_perm(n)
         inv = {orig: row for row, orig in enumerate(perm)}
         sample: dict[str, Any] = {
@@ -188,10 +192,12 @@ class ConversationDataset(TorchDataset):
             "num_channels": n,
             "speech": speech[perm],
             "turns": [
-                dataclasses.replace(t, channel=inv[t.channel])  # row index
+                dataclasses.replace(t, channel=inv[row_of[t.channel]])  # row index
                 for t in record.turns
             ],
             "perm": torch.tensor(perm, dtype=torch.long),
+            # Source column behind each output row (headset index for AMI).
+            "source_channels": [rows[p] for p in perm],
         }
         if self.inference:
             sample.update(
