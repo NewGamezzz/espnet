@@ -1,0 +1,72 @@
+##########################################################
+#  Conversational F5 - AMI long-form chunked infer arm    #
+##########################################################
+# One AMI meeting = one dialogue (downloads/ami-longform-v1, built by
+# local/build_ami_longform.py): all lexically active participants as
+# channels (K = 4 for nearly every meeting), each participant's first in-band
+# turn as their prompt, the whole meeting as the script, masked full-length
+# ground truth per channel.  Zero-shot on BOTH counts for a two-speaker-
+# trained model: speaker count and length.
+#
+# Recipe = the campaign's chunked Mode O settings (target_sec 25, room-tone
+# prompt fill, conditioning silence gate + loudness norm, cross-fade 0.1,
+# per-channel sparse CFG, rate-prior duration shrinkage); a meeting never
+# fits one call, so unchunked_max_sec is null.  Generators
+# (local/make_ami_longform_runs.py) set: mode, inference_dir, ckpt,
+# selection.dialogue_ids / shard_*, and the coverage variant
+# (chunk.cover_all_speakers vs chunk.cond_include_prompt).
+training_config: conf/training_poc.yaml
+exp_tag: ami_eval
+mode: generate_external_chunked
+device: cuda
+inference_dir: ${exp_dir}/ami_longform_cover
+test_name: valid
+ckpt: null
+use_ema: true
+prompt_fill: room_tone
+
+testset:
+  manifest: downloads/ami-longform-v1/manifest.jsonl
+  name: ami-longform-v1
+
+duration:
+  scale: 1.048
+  speed: 1.0
+  source: predicted
+  rate_prior_chars: 100.0
+
+selection:
+  dialogue_ids: null        # conf/generated/ami_longform_asessions.txt = the 6 a-sessions
+  min_duration: null
+  max_duration: null
+  num_dialogues: null
+  seed: 0
+  shard_index: 0
+  shard_count: 1
+
+# Row-second parity with the 2-channel 240 s envelope: 4 channels -> 120 s.
+batching:
+  max_batch_audio_sec: 120.0
+  max_batch_dialogues: 2
+
+sampling:
+  steps: 32
+  cfg_strength: 3.0
+  cfg_sparse_strength: 2.0
+  cfg_sparse_max_chars: 40
+  sway_sampling_coef: -1.0
+  seed: 0
+  autocast_dtype: bfloat16
+
+chunk:
+  unchunked_max_sec: null
+  turns: null
+  target_sec: 25.0
+  # Coverage variant A: hold every non-final chunk open until all K spoke.
+  cover_all_speakers: true
+  # Variant B (generator): cover_all_speakers false + cond_include_prompt true
+  # (every chunk is also conditioned on the K real prompts).
+  cross_fade_sec: 0.1
+  cond_silence_gate: true
+  cond_gate_fill: room_tone
+  cond_loudness_norm: true

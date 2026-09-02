@@ -242,3 +242,27 @@ def test_ami_configs_load_and_agree():
     assert inf.selection.per_session_cap == 12
     assert inf.text_format == "order"
     assert met.dataset.test[0].name == inf.test_name == "ami_k2"
+
+
+def test_ami_longform_configs_load_and_agree():
+    """conf/inference_ami_longform_chunked.yaml + conf/metrics_ami_longform.yaml:
+    the chunked external-path AMI long-form arm (one meeting per dialogue)."""
+    from omegaconf import OmegaConf
+
+    recipe = Path(__file__).resolve().parents[1]
+    inf = OmegaConf.load(recipe / "conf" / "inference_ami_longform_chunked.yaml")
+    met = OmegaConf.load(recipe / "conf" / "metrics_ami_longform.yaml")
+    assert inf.mode == met.mode == "generate_external_chunked"
+    assert inf.testset.manifest.endswith("ami-longform-v1/manifest.jsonl")
+    assert inf.prompt_fill == "room_tone"
+    assert inf.chunk.unchunked_max_sec is None and inf.chunk.turns is None
+    assert inf.chunk.target_sec == 25.0 and inf.chunk.cover_all_speakers is True
+    assert inf.chunk.cond_silence_gate is True and inf.chunk.cond_loudness_norm is True
+    assert inf.chunk.cross_fade_sec == 0.1
+    assert (inf.sampling.cfg_strength, inf.sampling.cfg_sparse_strength, inf.sampling.cfg_sparse_max_chars) == (3.0, 2.0, 40)
+    assert inf.duration.source == "predicted" and inf.duration.rate_prior_chars == 100.0
+    assert inf.batching.max_batch_audio_sec == 120.0
+    raw_inf = OmegaConf.to_container(inf, resolve=False)
+    raw_met = OmegaConf.to_container(met, resolve=False)
+    assert raw_met["inference_dir"] == raw_inf["inference_dir"] == "${exp_dir}/ami_longform_cover"
+    assert met.dataset.test[0].name == inf.test_name == "valid"
