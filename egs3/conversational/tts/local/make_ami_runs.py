@@ -22,8 +22,14 @@ ROOT = Path(
 )
 CONF = ROOT / "conf" / "generated"
 JOBS = ROOT / "jobs"
-# The nvme env (29-150x faster to import than /work/hdd); adjust on copy.
-PY = "/work/nvme/bbjs/ttrachu/envs/conv_f5/bin/python"
+# The known-good Delta recipe env (hdd pixi; slow import, hence 2 h arms).
+PY = (
+    "/work/hdd/bbjs/ttrachu/development/espnet3/recipe/f5_tts/"
+    "espnet_conversational_f5/tools/.pixi/envs/default/bin/python"
+)
+# Base-architecture eval training config (model/vocab/feats for the paper
+# checkpoint); run.py takes it on the command line, as the ZipVoice arms did.
+TRAIN = "conf/generated/training_covomix2_eval.yaml"
 ACCOUNT = "bbjs-delta-gpu"
 
 SBATCH = """#!/bin/bash
@@ -32,14 +38,16 @@ SBATCH = """#!/bin/bash
 #SBATCH --partition=gpuA100x4
 #SBATCH --gpus-per-node=1
 #SBATCH --cpus-per-task=8
-#SBATCH --mem=48g
+#SBATCH --mem=64g
 #SBATCH --time={walltime}
 #SBATCH --output={root}/exp/ami/logs/%x_%j.out
 set -euo pipefail
 cd {root}
 mkdir -p exp/ami/logs
 export PYTHONUNBUFFERED=1 PYTHONPATH={worktree}:{root}
-{py} run.py --stages infer,measure --inference_config {inf} --metrics_config {met}
+git log --oneline -1
+{py} run.py --stages infer measure --inference_config {inf} --metrics_config {met} \\
+    --training_config {train}
 """
 
 MODE_OF = {"gt": "gt", "resynth": "resynth", "O": "generate", "T": "generate",
@@ -79,7 +87,7 @@ def arm(base_inf: str, base_met: str, K: int, suffix: str, arm_name: str,
     (JOBS / f"run_{name}.sbatch").write_text(
         SBATCH.format(
             name=name, account=ACCOUNT, walltime=walltime, root=ROOT,
-            worktree=ROOT.parents[2], py=PY,
+            worktree=ROOT.parents[2], py=PY, train=TRAIN,
             inf=CONF / f"inference_{name}.yaml", met=CONF / f"metrics_{name}.yaml",
         )
     )
