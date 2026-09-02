@@ -105,7 +105,7 @@ def main(argv=None) -> int:
     base_met = (ROOT / "conf" / "metrics_ami.yaml").read_text()
     names = [
         arm(base_inf, base_met, K, suffix, arm_name, a.tag, a.ckpt,
-            "00:40:00" if a.subset else wt)
+            "01:00:00" if a.subset else wt)  # hdd-env import alone is ~10 min
         for K in (2, 3, 4)
         for arm_name, wt in ARMS
     ]
