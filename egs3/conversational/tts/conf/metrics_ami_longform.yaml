@@ -55,6 +55,8 @@ metrics:
   - metric:
       _target_: egs3.conversational.tts.src.metrics.quality.QualityMetric
       _convert_: all
+      # Whole-meeting mixdown: UTMOS in 30 s segments (single pass OOMs).
+      mix_max_sec: 30.0
       mos_backend:
         _target_: egs3.conversational.tts.src.metrics.quality.TorchHubUTMOSBackend
         device: cuda

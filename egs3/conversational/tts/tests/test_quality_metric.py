@@ -387,3 +387,34 @@ class TestMetricsConfigInstantiatesOffline:
         assert isinstance(metric, QualityMetric)
         assert metric.mos_backend._predictor is None
         assert metric.vad_backend._get_speech_timestamps is None
+
+
+
+class TestSegmentedMixScore:
+    """``mix_max_sec``: a long mixdown is scored in bounded segments."""
+
+    class CountingMOS:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, wav, sr):
+            self.calls.append(len(wav))
+            return 1.0 + 10.0 * float(np.mean(np.abs(wav)))  # level-dependent score
+
+    def test_short_mix_single_pass(self):
+        mos = self.CountingMOS()
+        m = QualityMetric(mos_backend=mos, vad_backend=KeyedFakeVADBackend(), mix_max_sec=30.0)
+        wav = np.full(16000 * 10, 0.1, dtype=np.float32)
+        assert m._mix_score(wav, 16000) == mos(wav, 16000)
+        assert mos.calls == [16000 * 10, 16000 * 10]
+
+    def test_long_mix_segmented_silence_skipped(self):
+        mos = self.CountingMOS()
+        m = QualityMetric(mos_backend=mos, vad_backend=KeyedFakeVADBackend(), mix_max_sec=30.0)
+        sr = 16000
+        loud = np.full(30 * sr, 0.2, dtype=np.float32)
+        quiet = np.zeros(30 * sr, dtype=np.float32)
+        tail = np.full(10 * sr, 0.05, dtype=np.float32)
+        score = m._mix_score(np.concatenate([loud, quiet, loud, tail]), sr)
+        assert mos.calls == [30 * sr, 30 * sr, 10 * sr]
+        assert abs(score - np.mean([mos(loud, sr), mos(loud, sr), mos(tail, sr)])) < 1e-9

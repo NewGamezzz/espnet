@@ -214,6 +214,8 @@ class QualityMetric(BaseMetric):
         vad_backend: Optional[VADBackend] = None,
         quality_sample_rate: int = 16000,
         min_ipu_sec: float = 1.0,
+        mix_max_sec: Optional[float] = None,
+        mix_silence_rms: float = 1e-3,
     ) -> None:
         self.mos_backend = (
             mos_backend if mos_backend is not None else TorchHubUTMOSBackend()
@@ -223,6 +225,33 @@ class QualityMetric(BaseMetric):
         )
         self.quality_sample_rate = quality_sample_rate
         self.min_ipu_sec = min_ipu_sec
+        # The whole-mixdown score cannot run UTMOS on a 35-min meeting in one
+        # pass (19.6 GB conv1d, measured).  With ``mix_max_sec`` set, a longer
+        # mixdown is scored in consecutive segments of at most that length,
+        # near-silent segments (RMS below ``mix_silence_rms``) are skipped,
+        # and the segment scores are averaged.  None = the single-pass score,
+        # bit-identical.  IPUs are scored whole either way.
+        self.mix_max_sec = mix_max_sec
+        self.mix_silence_rms = mix_silence_rms
+
+    def _mix_score(self, wav: np.ndarray, sr: int) -> float:
+        wav = np.asarray(wav)
+        if self.mix_max_sec is None or wav.shape[0] <= int(self.mix_max_sec * sr):
+            return float(self.mos_backend(wav, sr))
+        seg = int(self.mix_max_sec * sr)
+        min_len = int(self.min_ipu_sec * sr)
+        scores = []
+        for i in range(0, wav.shape[0], seg):
+            piece = wav[i : i + seg]
+            if piece.shape[0] < min_len:
+                continue
+            rms = float(np.sqrt(np.mean(np.square(piece.astype(np.float64)))))
+            if rms < self.mix_silence_rms:
+                continue
+            scores.append(float(self.mos_backend(piece, sr)))
+        if not scores:
+            return float(self.mos_backend(wav[:seg], sr))
+        return float(np.mean(scores))
 
     # -- BaseMetric entrypoint ------------------------------------------- #
     def __call__(
@@ -251,7 +280,7 @@ class QualityMetric(BaseMetric):
         sr = self.quality_sample_rate
 
         mix_wav, mix_sr = load_wav(test_dir / meta["mix_wav"], target_sr=sr)
-        mix_score = float(self.mos_backend(mix_wav, mix_sr))
+        mix_score = self._mix_score(mix_wav, mix_sr)
 
         ipus: List[Dict[str, Any]] = []
         n_skipped_short = 0
