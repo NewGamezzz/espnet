@@ -84,6 +84,14 @@ class TestMeetings:
         # validation unless required
         assert "ES2004a" in load_meetings(path)
 
+    def test_three_participant_meeting_is_accepted(self, tmp_path):
+        three = MEETINGS_XML.replace(
+            '<speaker nite:id="ES2004a_1" channel="0" nxt_agent="A" global_name="MEO015" role="UI"/>',
+            "",
+        )
+        parts = load_meetings(_write(tmp_path, "meetings.xml", three), require=["ES2004a"])
+        assert sorted(p.channel for p in parts["ES2004a"]) == [1, 2, 3]
+
     def test_load_meetings_requires_presence(self, tmp_path):
         path = _write(tmp_path, "meetings.xml", MEETINGS_XML)
         with pytest.raises(KeyError, match="IN1001"):

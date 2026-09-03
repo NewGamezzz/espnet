@@ -56,14 +56,23 @@ class Word:
 
 
 def validate_participants(mid: str, parts: Sequence[Participant]) -> None:
-    """A usable meeting has four distinct speakers on headset channels 0..3;
-    the window loader would otherwise mis-assign audio rows silently."""
+    """A usable meeting has 1 to 4 distinct speakers on distinct headset
+    channels within 0..3 (EN2002c, a test meeting, has three: channels
+    1-3); the window loader would otherwise mis-assign audio rows silently.
+    An absent headset channel carries no supervisions and never becomes an
+    active channel."""
     channels = sorted(p.channel for p in parts)
     names = {p.global_name for p in parts}
-    if channels != list(range(NUM_HEADSETS)) or len(names) != NUM_HEADSETS:
+    if (
+        not 1 <= len(parts) <= NUM_HEADSETS
+        or len(set(channels)) != len(parts)
+        or any(not 0 <= c < NUM_HEADSETS for c in channels)
+        or len(names) != len(parts)
+    ):
         raise ValueError(
-            f"{mid}: expected {NUM_HEADSETS} speakers on distinct channels "
-            f"0..{NUM_HEADSETS - 1}, got channels {channels} names {sorted(names)}"
+            f"{mid}: expected 1..{NUM_HEADSETS} distinct speakers on distinct "
+            f"channels within 0..{NUM_HEADSETS - 1}, got channels {channels} "
+            f"names {sorted(names)}"
         )
 
 
