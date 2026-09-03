@@ -239,6 +239,8 @@ def test_ami_configs_load_and_agree():
         64, 3.0, -1.0,
     )
     assert inf.duration.source == "predicted" and inf.duration.rate_prior_chars == 100.0
+    assert (inf.sampling.cfg_sparse_strength, inf.sampling.cfg_sparse_max_chars,
+            inf.sampling.cfg_sparse_max_chars_per_sec) == (2.0, 40, 6.0)
     assert inf.duration.scale == 1.048
     assert inf.selection.manifest is None and inf.selection.num_active_speakers == 2
     assert inf.selection.per_session_cap == 12

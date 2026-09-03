@@ -621,6 +621,11 @@ def run_inference(
         if prompt_cfg.get("exclude_spans")
         else {}
     )
+    anchor_cfg = cfg.get("anchor", {}) or {}
+    mask_cfg = anchor_cfg.get("mask_to_turns", {}) or {}
+    mask_enabled = bool(mask_cfg.get("enabled", False))
+    mask_guard = float(mask_cfg.get("guard_sec", 0.15))
+    samp = cfg.sampling
     # Sparse-channel guidance (the chunked path's rule, ported): a channel
     # whose window text is short in absolute terms (<= cfg_sparse_max_chars
     # utf-8 bytes) OR thin for the generated length (<= cfg_sparse_max_chars_
@@ -632,11 +637,6 @@ def run_inference(
     cfg_sparse_max_chars = int(samp.get("cfg_sparse_max_chars", 40) or 0)
     cps_raw = samp.get("cfg_sparse_max_chars_per_sec")
     cfg_sparse_max_cps = None if cps_raw is None else float(cps_raw)
-    anchor_cfg = cfg.get("anchor", {}) or {}
-    mask_cfg = anchor_cfg.get("mask_to_turns", {}) or {}
-    mask_enabled = bool(mask_cfg.get("enabled", False))
-    mask_guard = float(mask_cfg.get("guard_sec", 0.15))
-    samp = cfg.sampling
     # tqdm renders a live bar on a tty; under a non-tty Slurm log it prints
     # one plain line per refresh (rate + ETA), so long infer runs are
     # observable either way.
