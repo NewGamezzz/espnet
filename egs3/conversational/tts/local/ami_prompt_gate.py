@@ -142,6 +142,7 @@ def gate_session(
         excluded: list[dict] = []
         n_cand = n_acc = 0
         excess_log: list[float] = []
+        solo_worst: list[float] = []  # every solo candidate, before the margin
         for t in turns:
             if t.end - t.start < min_candidate_sec:
                 continue
@@ -158,6 +159,7 @@ def gate_session(
             excess = turn_excess_db(audio, t, sr, floors)
             others = [(k, x) for k, x in enumerate(excess) if k != t.channel]
             worst_k, worst = max(others, key=lambda kx: kx[1])
+            solo_worst.append(round(worst, 3))
             if worst > max_excess_db:
                 excluded.append({**entry, "reason": f"energy:ch{worst_k}"})
                 continue
@@ -169,8 +171,11 @@ def gate_session(
         "band": [turn_min, turn_max],
         "excluded": excluded,
         "n_candidates": n_cand,
+        "n_not_solo": sum(1 for e in excluded if e["reason"] == "not_solo"),
+        "n_energy": sum(1 for e in excluded if e["reason"].startswith("energy")),
         "n_accepted": n_acc,
         "accepted_worst_excess_db": excess_log,
+        "solo_worst_excess_db": solo_worst,
     }
 
 
@@ -256,12 +261,20 @@ def main(argv=None) -> int:
         spans.extend(res["excluded"])
         floors[s["session_id"]] = res["floor_db"]
         worst.extend(res["accepted_worst_excess_db"])
+        sw = sorted(res["solo_worst_excess_db"])
+        q = (lambda p: sw[min(len(sw) - 1, int(round(p * (len(sw) - 1))))]) if sw else (lambda p: None)
         per_session[s["session_id"]] = {
-            "n_candidates": res["n_candidates"], "n_accepted": res["n_accepted"],
+            "n_candidates": res["n_candidates"], "n_not_solo": res["n_not_solo"],
+            "n_energy": res["n_energy"], "n_accepted": res["n_accepted"],
+            "solo_worst_excess_p50": q(0.5), "solo_worst_excess_p90": q(0.9),
+            "accept_at_margin": {str(m): sum(1 for x in sw if x <= m) for m in (6, 8, 10, 12, 15)},
         }
         table.extend(bleed_rows(s["session_id"], path, turns))
         print(
-            f"{s['session_id']}: {res['n_accepted']}/{res['n_candidates']} candidates accepted, "
+            f"{s['session_id']}: {res['n_accepted']}/{res['n_candidates']} accepted "
+            f"(not_solo {res['n_not_solo']}, energy {res['n_energy']}); solo candidates {len(sw)}, "
+            f"worst-excess p50 {q(0.5)} p90 {q(0.9)} dB; accept@6/8/10/12/15 dB = "
+            f"{[sum(1 for x in sw if x <= m) for m in (6, 8, 10, 12, 15)]}; "
             f"floor dB {[round(f, 1) for f in res['floor_db']]}",
             flush=True,
         )
