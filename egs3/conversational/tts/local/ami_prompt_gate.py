@@ -81,11 +81,18 @@ def _rms_db(x: np.ndarray) -> float:
 
 
 def _read(audio, s: float, e: float, sr: int) -> np.ndarray:
-    """``audio`` is an in-memory ``(T, C)`` array or an open ``SoundFile``."""
+    """``audio`` is an in-memory ``(T, C)`` array or an open ``SoundFile``.
+    Bounds are clamped to the file: annotation times can round a hair past
+    the last frame (TS3007c), and libsndfile refuses to seek there."""
+    total = audio.shape[0] if isinstance(audio, np.ndarray) else audio.frames
+    a = min(max(0, int(round(s * sr))), total)
+    b = min(max(a, int(round(e * sr))), total)
     if isinstance(audio, np.ndarray):
-        return audio[int(round(s * sr)) : int(round(e * sr))]
-    audio.seek(int(round(s * sr)))
-    return audio.read(int(round((e - s) * sr)), dtype="float32", always_2d=True)
+        return audio[a:b]
+    if b <= a:
+        return np.zeros((0, audio.channels), dtype="float32")
+    audio.seek(a)
+    return audio.read(b - a, dtype="float32", always_2d=True)
 
 
 def channel_floor_db(audio, regions: Sequence[Interval], sr: int) -> list[float]:

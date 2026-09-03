@@ -98,3 +98,15 @@ class TestGate:
         assert set(by) == {(k, j) for j in (1, 2) for k in range(4) if k != j}
         assert by[(3, 1)][4] > by[(0, 1)][4] + 15  # bleed on ch3 while ch1 speaks
         assert by[(0, 2)][4] < -30  # clean channel while ch2 speaks
+
+
+class TestReadBounds:
+    def test_region_past_end_of_file_is_clamped(self, tmp_path):
+        x = _audio(seconds=5.0)
+        path = tmp_path / "m.flac"
+        sf.write(str(path), x, SR, subtype="PCM_16", format="FLAC")
+        turns = [Turn(1, "b", "one two three", 1.0, 2.0)]
+        # duration claims 5.2 s: the last silence region ends past the file
+        result = gate_session("m", path, turns, duration=5.2, turn_min=2.0, turn_max=10.0,
+                              solo_guard=0.3, max_excess_db=6.0, silence_guard=0.5)
+        assert len(result["floor_db"]) == 4
