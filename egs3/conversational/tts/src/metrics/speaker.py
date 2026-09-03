@@ -132,10 +132,21 @@ class SpeakerSimilarityMetric(BaseMetric):
         embedder: Optional[Embedder] = None,
         embed_sample_rate: int = 16000,
         embed_min_sec: float = 0.3,
+        embed_max_sec: Optional[float] = None,
+        embed_silence_rms: float = 1e-3,
     ) -> None:
         self.embedder = embedder if embedder is not None else WavLMSVEmbedder()
         self.embed_sample_rate = embed_sample_rate
         self.embed_min_sec = embed_min_sec
+        # Long-form channels (an AMI meeting is ~35 min) cannot go through
+        # WavLM in one pass (19.6 GB conv1d, measured).  With ``embed_max_sec``
+        # set, audio longer than that is embedded in consecutive segments of
+        # at most that length, near-silent segments (RMS below
+        # ``embed_silence_rms``, i.e. masked ground truth or an idle channel)
+        # are skipped, and the L2-normalized segment embeddings are averaged
+        # and re-normalized.  None keeps the single-pass path bit-identical.
+        self.embed_max_sec = embed_max_sec
+        self.embed_silence_rms = embed_silence_rms
 
     # -- BaseMetric entrypoint ------------------------------------------- #
     def __call__(
@@ -206,4 +217,28 @@ class SpeakerSimilarityMetric(BaseMetric):
 
     # -- embedding ----------------------------------------------------------- #
     def _embed(self, wav: np.ndarray, sr: int) -> np.ndarray:
-        return np.asarray(self.embedder(wav, sr), dtype=np.float64)
+        wav = np.asarray(wav)
+        if self.embed_max_sec is None or wav.shape[0] <= int(self.embed_max_sec * sr):
+            return np.asarray(self.embedder(wav, sr), dtype=np.float64)
+        seg = int(self.embed_max_sec * sr)
+        pieces = [wav[i : i + seg] for i in range(0, wav.shape[0], seg)]
+        min_len = int(self.embed_min_sec * sr)
+        embeddings = []
+        for piece in pieces:
+            if piece.shape[0] < min_len:
+                continue
+            rms = float(np.sqrt(np.mean(np.square(piece.astype(np.float64)))))
+            if rms < self.embed_silence_rms:
+                continue
+            e = np.asarray(self.embedder(piece, sr), dtype=np.float64)
+            norm = float(np.linalg.norm(e))
+            embeddings.append(e / norm if norm > 1e-12 else e)
+        if not embeddings:
+            # Nothing audible anywhere: embed the loudest piece so the metric
+            # still returns a vector (cosine will be near-meaningless, as it
+            # should be for a silent channel).
+            loudest = max(pieces, key=lambda x: float(np.mean(np.square(x.astype(np.float64)))))
+            return np.asarray(self.embedder(loudest, sr), dtype=np.float64)
+        mean = np.mean(np.stack(embeddings), axis=0)
+        norm = float(np.linalg.norm(mean))
+        return mean / norm if norm > 1e-12 else mean

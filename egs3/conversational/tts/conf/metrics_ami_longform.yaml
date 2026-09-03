@@ -44,6 +44,9 @@ metrics:
   - metric:
       _target_: egs3.conversational.tts.src.metrics.speaker.SpeakerSimilarityMetric
       _convert_: all
+      # A whole-meeting channel cannot go through WavLM in one pass: embed in
+      # 30 s segments, skip near-silent ones, average normalized embeddings.
+      embed_max_sec: 30.0
       embedder:
         _target_: egs3.conversational.tts.src.metrics.speaker.WavLMSVEmbedder
         device: cuda

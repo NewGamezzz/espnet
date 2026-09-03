@@ -378,3 +378,55 @@ class TestRealBackendSmoke:
             pytest.skip("wavlm-base-plus-sv weights not available offline")
         assert emb.ndim == 1
         assert emb.shape[0] > 0
+
+
+
+class TestSegmentedEmbedding:
+    """``embed_max_sec``: long channels are embedded in bounded segments,
+    near-silent segments skipped, normalized embeddings averaged."""
+
+    class CountingEmbedder:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, wav, sr):
+            self.calls.append(len(wav))
+            # a vector that depends on the segment's mean level, unit norm
+            level = float(np.mean(np.abs(wav)))
+            v = np.array([1.0, level, 0.0])
+            return v / np.linalg.norm(v)
+
+    def test_short_audio_is_single_pass_bit_identical(self):
+        from egs3.conversational.tts.src.metrics.speaker import SpeakerSimilarityMetric
+
+        emb = self.CountingEmbedder()
+        metric = SpeakerSimilarityMetric(embedder=emb, embed_max_sec=30.0)
+        wav = np.full(16000 * 10, 0.1, dtype=np.float32)
+        out = metric._embed(wav, 16000)
+        assert emb.calls == [16000 * 10]
+        np.testing.assert_allclose(out, emb(wav, 16000))
+
+    def test_long_audio_is_segmented_and_silent_segments_skipped(self):
+        from egs3.conversational.tts.src.metrics.speaker import SpeakerSimilarityMetric
+
+        emb = self.CountingEmbedder()
+        metric = SpeakerSimilarityMetric(embedder=emb, embed_max_sec=30.0)
+        sr = 16000
+        loud = np.full(30 * sr, 0.2, dtype=np.float32)
+        quiet = np.zeros(30 * sr, dtype=np.float32)
+        tail = np.full(10 * sr, 0.05, dtype=np.float32)
+        wav = np.concatenate([loud, quiet, loud, tail])  # 100 s
+        out = metric._embed(wav, sr)
+        assert emb.calls == [30 * sr, 30 * sr, 10 * sr]  # the silent block is skipped
+        expected = np.mean([emb(loud, sr), emb(loud, sr), emb(tail, sr)], axis=0)
+        expected /= np.linalg.norm(expected)
+        np.testing.assert_allclose(out, expected, atol=1e-12)
+        assert abs(np.linalg.norm(out) - 1.0) < 1e-9
+
+    def test_all_silent_long_audio_still_returns_a_vector(self):
+        from egs3.conversational.tts.src.metrics.speaker import SpeakerSimilarityMetric
+
+        emb = self.CountingEmbedder()
+        metric = SpeakerSimilarityMetric(embedder=emb, embed_max_sec=30.0)
+        out = metric._embed(np.zeros(16000 * 70, dtype=np.float32), 16000)
+        assert out.shape == (3,) and len(emb.calls) == 1
