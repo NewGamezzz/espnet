@@ -44,15 +44,23 @@ def _turns():
 class TestPickPrompt:
     def test_first_lexical_in_band_solo_turn(self):
         turns = _turns()
-        assert pick_prompt_turn(turns, 0, min_words=3, band=(2.0, 10.0), solo_guard=0.3) == turns[1]
-        assert pick_prompt_turn(turns, 1, min_words=3, band=(2.0, 10.0), solo_guard=0.3) == turns[3]
-        assert pick_prompt_turn(turns, 2, min_words=3, band=(2.0, 10.0), solo_guard=0.3) == turns[7]
-        assert pick_prompt_turn(turns, 3, min_words=3, band=(2.0, 10.0), solo_guard=0.3) is None  # D overlaps C
+        kw = dict(min_words=3, band=(2.0, 10.0), solo_guard=0.3)
+        assert pick_prompt_turn(turns, 0, **kw) == (turns[1], "gated_solo")
+        assert pick_prompt_turn(turns, 1, **kw) == (turns[3], "gated_solo")
+        assert pick_prompt_turn(turns, 2, **kw) == (turns[7], "gated_solo")
+        # D's only turn overlaps C: no solo tier, so the in-band tier keeps D
+        assert pick_prompt_turn(turns, 3, **kw) == (turns[6], "in_band")
 
-    def test_excluded_span_is_skipped(self):
+    def test_excluded_span_falls_to_the_next_gated_turn_then_to_solo(self):
         turns = _turns()
-        excluded = frozenset({(0, 2.0, 6.0)})
-        assert pick_prompt_turn(turns, 0, min_words=3, band=(2.0, 10.0), solo_guard=0.3, excluded=excluded) == turns[8]
+        kw = dict(min_words=3, band=(2.0, 10.0), solo_guard=0.3)
+        assert pick_prompt_turn(turns, 0, excluded=frozenset({(0, 2.0, 6.0)}), **kw) == (turns[8], "gated_solo")
+        both = frozenset({(0, 2.0, 6.0), (0, 37.0, 40.0)})
+        assert pick_prompt_turn(turns, 0, excluded=both, **kw) == (turns[1], "solo")
+
+    def test_no_lexical_in_band_turn_drops_the_participant(self):
+        turns = [Turn(0, "a", "yeah", 0.5, 0.9), Turn(0, "a", "a very long turn " * 6, 2.0, 20.0)]
+        assert pick_prompt_turn(turns, 0, min_words=3, band=(2.0, 10.0), solo_guard=0.3) is None
 
 
 def _corpus(tmp_path: Path, seconds: float = 50.0):
@@ -87,11 +95,12 @@ class TestBuild:
         rows = [json.loads(l) for l in (out / "manifest.jsonl").read_text().splitlines()]
         assert len(rows) == 1
         r = rows[0]
-        # D had a prompt candidate? No (overlapped by C) -> D dropped; K = 3
+        # D's only turn is its prompt (in_band tier) -> nothing left to say -> D dropped; K = 3
         assert r["window_id"] == "ES2004a" and r["num_channels"] == 3
         assert r["source_channels"] == [0, 1, 2]
         assert [c["prompt_text"] for c in r["channels"]] == [
             "one two three four", "five six seven", "fourteen fifteen sixteen"]
+        assert [c["prompt_tier"] for c in r["channels"]] == ["gated_solo"] * 3
         texts = [t["text"] for t in r["turns"]]
         assert "one two three four" not in texts and "five six seven" not in texts
         assert "fourteen fifteen sixteen" not in texts
@@ -111,6 +120,7 @@ class TestBuild:
         assert float(np.abs(gt[int(20.0 * SR):int(21.0 * SR)]).max()) == 0.0  # C speaking, A silent
         assert meta["n_meetings"] == 1 and meta["meetings"]["ES2004a"]["num_channels"] == 3
         assert meta["meetings"]["ES2004a"]["dropped_channels"] == [3]
+        assert meta["meetings"]["ES2004a"]["prompt_tiers"] == {"0": "gated_solo", "1": "gated_solo", "2": "gated_solo"}
         # loads through the real external-manifest loader
         recs = load_external_manifest(out / "manifest.jsonl", vocab)
         assert recs[0].num_channels == 3 and recs[0].gt_paths is not None

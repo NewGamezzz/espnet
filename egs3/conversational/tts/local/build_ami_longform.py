@@ -57,6 +57,9 @@ def _solo(turns: Sequence[Turn], turn: Turn, guard: float) -> bool:
     return not any(o.channel != turn.channel and o.start < e and s < o.end for o in turns)
 
 
+PROMPT_TIERS = ("gated_solo", "solo", "in_band")
+
+
 def pick_prompt_turn(
     turns: Sequence[Turn],
     channel: int,
@@ -65,21 +68,28 @@ def pick_prompt_turn(
     band: tuple[float, float],
     solo_guard: float,
     excluded: frozenset = frozenset(),
-) -> Turn | None:
-    """The participant's first turn that can serve as their prompt."""
-    for t in sorted(turns, key=lambda t: (t.start, t.channel)):
-        if t.channel != channel:
-            continue
-        if len(t.text.split()) < min_words:
-            continue
-        dur = t.end - t.start
-        if not (band[0] - 1e-6 <= dur <= band[1] + 1e-6):
-            continue
-        if (t.channel, round(t.start, 6), round(t.end, 6)) in excluded:
-            continue
-        if not _solo(turns, t, solo_guard):
-            continue
-        return t
+) -> tuple[Turn, str] | None:
+    """The participant's first turn that can serve as their prompt, with the
+    ladder tier it came from: ``gated_solo`` (not gate-excluded AND solo by
+    annotation), then ``solo`` (gate ignored), then ``in_band`` (any lexical
+    turn inside the duration band).  The band and the lexical rule are
+    never relaxed.  A participant is dropped only when even the last tier
+    is empty - a speaker with a worse prompt beats a missing speaker in a
+    whole-meeting generation."""
+    ordered = [
+        t for t in sorted(turns, key=lambda t: (t.start, t.channel))
+        if t.channel == channel
+        and len(t.text.split()) >= min_words
+        and band[0] - 1e-6 <= t.end - t.start <= band[1] + 1e-6
+    ]
+    for tier in PROMPT_TIERS:
+        for t in ordered:
+            gated = (t.channel, round(t.start, 6), round(t.end, 6)) in excluded
+            if tier == "gated_solo" and (gated or not _solo(turns, t, solo_guard)):
+                continue
+            if tier == "solo" and not _solo(turns, t, solo_guard):
+                continue
+            return t, tier
     return None
 
 
@@ -128,12 +138,13 @@ def build_longform(
         ]
         excluded = excluded_by_session.get(mid, frozenset())
         prompts: dict[int, Turn] = {}
+        tiers: dict[int, str] = {}
         for ch in range(int(s["num_channels"])):
-            p = pick_prompt_turn(
+            picked = pick_prompt_turn(
                 turns, ch, min_words=min_words, band=band, solo_guard=solo_guard, excluded=excluded
             )
-            if p is not None:
-                prompts[ch] = p
+            if picked is not None:
+                prompts[ch], tiers[ch] = picked
         prompt_keys = {(t.channel, t.start, t.end) for t in prompts.values()}
         script = [t for t in sorted(turns, key=lambda t: (t.start, t.channel))
                   if (t.channel, t.start, t.end) not in prompt_keys]
@@ -168,6 +179,7 @@ def build_longform(
                 "prompt_wav": prel, "prompt_text": p.text, "gt_wav": grel,
                 "speaker": p.speaker, "source_channel": ch,
                 "prompt_span": [round(p.start, 6), round(p.end, 6)],
+                "prompt_tier": tiers[ch],
             })
         rows.append({
             "window_id": mid, "session_id": mid, "num_channels": len(keep),
@@ -180,8 +192,13 @@ def build_longform(
             "num_channels": len(keep), "dropped_channels": dropped, "n_turns": len(script),
             "duration_sec": round(audio.shape[0] / sr, 3),
             "prompts": {str(row_of[ch]): [round(prompts[ch].start, 3), round(prompts[ch].end, 3)] for ch in keep},
+            "prompt_tiers": {str(row_of[ch]): tiers[ch] for ch in keep},
         }
-        print(f"{mid}: K={len(keep)} turns={len(script)} dropped={dropped}", flush=True)
+        print(
+            f"{mid}: K={len(keep)} turns={len(script)} dropped={dropped} "
+            f"tiers={[tiers[ch] for ch in keep]}",
+            flush=True,
+        )
     (out_dir / "manifest.jsonl").write_text(
         "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows), "utf-8"
     )
