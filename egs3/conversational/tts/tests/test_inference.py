@@ -416,6 +416,7 @@ class TestGtContract:
             # gt/generate meta key sets to match, and only Mode T adds the
             # sibling "layout" block.
             "text_format": "order",
+            "cfg_per_channel": None,
             "rtf": None,
             # Present in every mode; True only for masked gt/resynth anchors.
             "anchor": {"masked": False, "guard_sec": 0.15},
@@ -1411,3 +1412,32 @@ class TestPredictedDuration:
         cfg.duration = {"source": "predicted"}
         with pytest.raises(ValueError, match="predicted"):
             run_inference(cfg, training_config=fixture["training_config"])
+
+
+
+class TestSparseChannelCfg:
+    def test_rule_by_chars_and_density(self, fixture, ext_vocab_file):
+        """ch0 window text 'abc def' (7 chars), ch1 'bead cab' (8 chars) over
+        an 8 s window: max_chars 7 makes ch0 sparse; density 1.0 c/s makes
+        both sparse (7/8 and 8/8 <= 1.0)."""
+        model = build_tiny(ext_vocab_file).eval()
+        for name, extra, expected in (
+            ("chars", {"cfg_sparse_strength": 1.5, "cfg_sparse_max_chars": 7}, [1.5, 2.0]),
+            ("density", {"cfg_sparse_strength": 1.5, "cfg_sparse_max_chars": 0,
+                         "cfg_sparse_max_chars_per_sec": 1.0}, [1.5, 1.5]),
+            ("off", {}, None),
+        ):
+            inf_dir = fixture["tmp_path"] / f"infer_cfg_{name}"
+            cfg = _infer_config(fixture, "generate", inf_dir)
+            for k, v in extra.items():
+                cfg.sampling[k] = v
+            run_inference(cfg, training_config=fixture["training_config"], model=model, vocoder=FakeVocoder())
+            meta = json.loads((inf_dir / "valid" / "meta" / "sess_w00000.json").read_text())
+            assert meta["cfg_per_channel"] == expected, name
+
+    def test_generate_region_rejects_wrong_length(self):
+        from egs3.conversational.tts.src.generation import generate_region
+
+        with pytest.raises(ValueError, match="values for 2 channels"):
+            generate_region(None, None, torch.zeros(2, 2560), torch.zeros(2, 4, dtype=torch.long),
+                            2, 10, steps=1, cfg_strength=[1.0, 2.0, 3.0], sway_sampling_coef=-1.0, seed=0)

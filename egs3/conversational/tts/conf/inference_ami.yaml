@@ -59,5 +59,11 @@ duration:
 sampling:
   steps: 64
   cfg_strength: 3.0
+  # Sparse-channel rule (audit 2026-09-03): channels under 6 chars per
+  # generated second drone at CFG 3.0 (K=4: 0.789 vs 0.173 anchor); the
+  # ZipVoice per-channel rule (2.0 for <= 40 chars) plus a density variant.
+  cfg_sparse_strength: 2.0
+  cfg_sparse_max_chars: 40
+  cfg_sparse_max_chars_per_sec: 6.0
   sway_sampling_coef: -1.0
   seed: 0

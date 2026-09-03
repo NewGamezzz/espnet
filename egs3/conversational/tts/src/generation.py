@@ -162,7 +162,7 @@ def generate_region(
     total_frames: int,
     *,
     steps: int,
-    cfg_strength: float,
+    cfg_strength: float | Sequence[float],
     sway_sampling_coef: float,
     seed: int | None,
 ) -> tuple[torch.Tensor, float]:
@@ -170,12 +170,22 @@ def generate_region(
 
     ``speech`` are the raw per-channel prompt+target waves ``(N, T_wav)``; the
     first ``prompt_frames`` of every channel act as the acoustic prompt and the
-    ODE fills the remainder jointly (exchanges active, CFG as in F5).  Returns
+    ODE fills the remainder jointly (exchanges active, CFG as in F5).
+    ``cfg_strength`` is a scalar (bit-identical to every earlier run) or one
+    value per channel (the sparse-channel rule of the chunked path).  Returns
     the generated-region waves ``(N, T_gen)`` and the wall-clock seconds spent.
     """
     n = speech.shape[0]
     device = speech.device
     lens = torch.full((n,), prompt_frames, device=device, dtype=torch.long)
+    cfg: float | torch.Tensor
+    if isinstance(cfg_strength, (int, float)):
+        cfg = float(cfg_strength)
+    else:
+        values = [float(v) for v in cfg_strength]
+        if len(values) != n:
+            raise ValueError(f"cfg_strength has {len(values)} values for {n} channels")
+        cfg = torch.tensor(values, device=device, dtype=torch.float32)
     start = time.perf_counter()
     with torch.inference_mode():
         mel, _ = model.cfm.sample(
@@ -185,7 +195,7 @@ def generate_region(
             counts=[n],
             lens=lens,
             steps=steps,
-            cfg_strength=cfg_strength,
+            cfg_strength=cfg,
             sway_sampling_coef=sway_sampling_coef,
             seed=seed,
         )

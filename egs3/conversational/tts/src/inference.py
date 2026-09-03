@@ -621,6 +621,17 @@ def run_inference(
         if prompt_cfg.get("exclude_spans")
         else {}
     )
+    # Sparse-channel guidance (the chunked path's rule, ported): a channel
+    # whose window text is short in absolute terms (<= cfg_sparse_max_chars
+    # utf-8 bytes) OR thin for the generated length (<= cfg_sparse_max_chars_
+    # per_sec) gets cfg_sparse_strength instead of cfg_strength.  Measured
+    # on AMI: sparse channels forced to fill a long window drone (K=4 <3 c/s
+    # channels: 0.789 WER vs 0.173 anchor); dense ones sit below the floor.
+    cfg_sparse_raw = samp.get("cfg_sparse_strength")
+    cfg_sparse = None if cfg_sparse_raw is None else float(cfg_sparse_raw)
+    cfg_sparse_max_chars = int(samp.get("cfg_sparse_max_chars", 40) or 0)
+    cps_raw = samp.get("cfg_sparse_max_chars_per_sec")
+    cfg_sparse_max_cps = None if cps_raw is None else float(cps_raw)
     anchor_cfg = cfg.get("anchor", {}) or {}
     mask_cfg = anchor_cfg.get("mask_to_turns", {}) or {}
     mask_enabled = bool(mask_cfg.get("enabled", False))
@@ -725,6 +736,17 @@ def run_inference(
             region = window_speech
         speech = torch.cat([prompt_trimmed, region], dim=1).to(device)
         total_frames = speech.shape[1] // hop
+        gen_sec = (total_frames - prompt_frames) * hop / fs
+        cfg_per_channel = None
+        if cfg_sparse is not None:
+            chars = [len(t.encode("utf-8")) for t in _reference_texts(window_turns, n)]
+            cfg_per_channel = [
+                cfg_sparse
+                if c <= cfg_sparse_max_chars
+                or (cfg_sparse_max_cps is not None and c / max(gen_sec, 1e-6) <= cfg_sparse_max_cps)
+                else float(samp.cfg_strength)
+                for c in chars
+            ]
 
         wid = record.window_id
         rtf = None
@@ -771,7 +793,9 @@ def run_inference(
                 prompt_frames,
                 total_frames,
                 steps=int(samp.steps),
-                cfg_strength=float(samp.cfg_strength),
+                cfg_strength=(
+                    cfg_per_channel if cfg_per_channel is not None else float(samp.cfg_strength)
+                ),
                 sway_sampling_coef=float(samp.sway_sampling_coef),
                 seed=samp.get("seed"),
             )
@@ -824,6 +848,9 @@ def run_inference(
                 rate_prior_chars=rate_prior_chars,
             ),
             "text_format": effective_text_format,
+            # Per-row guidance actually applied (None = scalar cfg_strength);
+            # recorded in every mode so the key set stays mode-invariant.
+            "cfg_per_channel": cfg_per_channel,
             # `layout` is the ONE meta key that intentionally breaks
             # gt/generate key parity, and only under `text_format:
             # timestamps` - gt can never carry it, since timestamps is

@@ -107,5 +107,11 @@ anchor:
 sampling:
   steps: 32
   cfg_strength: 2.0
+  # Sparse-channel guidance (off = null, bit-identical): a channel with
+  # <= cfg_sparse_max_chars of window text, or <= cfg_sparse_max_chars_per_sec
+  # of generated second, samples at cfg_sparse_strength instead.
+  cfg_sparse_strength: null
+  cfg_sparse_max_chars: 40
+  cfg_sparse_max_chars_per_sec: null
   sway_sampling_coef: -1.0
   seed: 0
