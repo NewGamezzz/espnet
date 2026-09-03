@@ -363,6 +363,9 @@ class TestGtContract:
         return inf_dir / "valid", stats
 
     def test_meta_scp_and_golden_json(self, fixture):
+        # prompts: ch0 "cage jade" 2.5 s / 9 chars, ch1 "badge fig" 2.5 s / 9
+        # chars; window text ch0 "abc def" 7 chars, ch1 "bead cab" 8 chars.
+        PREDICTED_SEC = round((7 * 2.5 / 9 + 8 * 2.5 / 9) * 1.117, 6)
         test_dir, stats = self._run(fixture)
         assert stats["n_selected"] == 2
         assert stats["n_skipped"] == 0
@@ -391,6 +394,24 @@ class TestGtContract:
             # session; headset indices for AMI K-strata windows).
             "source_channels": [0, 1],
             "window_duration_sec": 8.0,
+            "gt_duration_sec": 8.0,
+            # F5's duration rule, recorded in every mode; ground_truth here.
+            "duration": {
+                "source": "ground_truth",
+                "predicted_sec": PREDICTED_SEC,
+                "gt_sec": 8.0,
+                "predicted_over_gt": PREDICTED_SEC / 8.0,
+                "duration_scale": 1.117,
+                "speed": 1.0,
+                "rule": "f5_prompt_ratio_per_speaker",
+                "rate_prior_chars": None,
+                "constants": {
+                    "sssd_speech_sec_per_char": 0.0735,
+                    "librispeech_sec_per_char": 0.0690,
+                    "sssd_speech_density": 0.954,
+                    "rate_prior_sec_per_char": 0.0735,
+                },
+            },
             # Always present, in every mode: `TestModeParity` requires the
             # gt/generate meta key sets to match, and only Mode T adds the
             # sibling "layout" block.
@@ -1343,3 +1364,50 @@ class TestPerSessionCap:
             recs, OmegaConf.create({"num_active_speakers": 2, "per_session_cap": None, "seed": 0})
         )
         assert a == b == list(range(10))
+
+
+
+# --- duration policy ---------------------------------------------------------
+from egs3.conversational.tts.src.inference import predict_generated_sec  # noqa: E402
+
+
+class TestPredictedDuration:
+    def test_rule_without_prior_is_the_prompt_rate(self):
+        sec = predict_generated_sec([2.5, 5.0], ["abcde", "abcdefghij"], ["a" * 10, "b" * 20],
+                                    duration_scale=1.0, speed=1.0, rate_prior_chars=None)
+        assert abs(sec - (10 * 0.5 + 20 * 0.5)) < 1e-9
+
+    def test_prior_shrinks_toward_the_constant(self):
+        raw = predict_generated_sec([1.0], ["ab"], ["a" * 100], duration_scale=1.0, rate_prior_chars=None)
+        shrunk = predict_generated_sec([1.0], ["ab"], ["a" * 100], duration_scale=1.0, rate_prior_chars=100.0,
+                                       rate_prior_sec_per_char=0.0735)
+        assert abs(raw - 50.0) < 1e-9  # 0.5 s/char from a 2-char prompt
+        assert 7.0 < shrunk < 9.0  # pulled most of the way to 0.0735 s/char
+
+    def test_scale_and_speed(self):
+        base = predict_generated_sec([2.0], ["abcd"], ["a" * 8], duration_scale=1.0)
+        assert abs(predict_generated_sec([2.0], ["abcd"], ["a" * 8], duration_scale=2.0) - 2 * base) < 1e-9
+        assert abs(predict_generated_sec([2.0], ["abcd"], ["a" * 8], duration_scale=1.0, speed=2.0) - base / 2) < 1e-9
+
+    def test_generate_with_predicted_duration(self, fixture, ext_vocab_file):
+        inf_dir = fixture["tmp_path"] / "infer_pred"
+        cfg = _infer_config(fixture, "generate", inf_dir)
+        cfg.duration = {"source": "predicted", "scale": 1.0, "speed": 1.0, "rate_prior_chars": None}
+        model = build_tiny(ext_vocab_file).eval()
+        run_inference(cfg, training_config=fixture["training_config"], model=model, vocoder=FakeVocoder())
+        meta = json.loads((inf_dir / "valid" / "meta" / "sess_w00000.json").read_text())
+        assert meta["duration"]["source"] == "predicted"
+        expected = (7 * 2.5 / 9 + 8 * 2.5 / 9)
+        assert abs(meta["duration"]["predicted_sec"] - expected) < 1e-3
+        assert abs(meta["window_duration_sec"] - expected) < HOP / FS + 1e-6
+        assert meta["gt_duration_sec"] == 8.0
+        gen, _ = _read_wav(inf_dir / "valid" / meta["channels"][0]["gen_wav"])
+        assert abs(len(gen) / FS - expected) < HOP / FS + 1e-6
+        gt, _ = _read_wav(inf_dir / "valid" / meta["channels"][0]["gt_wav"])
+        assert abs(len(gt) / FS - 8.0) < 1e-6  # the anchor copy keeps the window
+
+    def test_predicted_rejected_outside_generate_order(self, fixture):
+        cfg = _infer_config(fixture, "gt", fixture["tmp_path"] / "x")
+        cfg.duration = {"source": "predicted"}
+        with pytest.raises(ValueError, match="predicted"):
+            run_inference(cfg, training_config=fixture["training_config"])

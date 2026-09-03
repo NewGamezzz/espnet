@@ -45,10 +45,19 @@ anchor:
 
 text_format: order          # timestamps = Mode T (generate only)
 
-# The SSSD-path campaign settings; the chunked path's sparse per-channel CFG
-# knob does not exist here and is not added.
+# Duration (Thanapat 2026-09-03): the final ZipVoice recipe's predicted
+# length with the rate prior; generators switch gt/resynth/Mode T arms to
+# ground_truth (the rule's estimate is still recorded there).
+duration:
+  source: predicted
+  scale: 1.048
+  speed: 1.0
+  rate_prior_chars: 100.0
+
+# Steps 64 as in the final ZipVoice recipe (Thanapat 2026-09-03); CFG 3.0 -
+# the chunked path's sparse per-channel CFG knob does not exist here.
 sampling:
-  steps: 32
+  steps: 64
   cfg_strength: 3.0
   sway_sampling_coef: -1.0
   seed: 0

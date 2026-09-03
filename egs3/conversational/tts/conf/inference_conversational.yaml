@@ -81,6 +81,17 @@ prompt:
   exclude_spans: null
   seed: 0
 
+# Duration policy. ground_truth (default) generates exactly the window length
+# (bit-identical to every earlier run). predicted generates F5's per-speaker
+# rule (prompt seconds-per-char, shrunk toward the training prior over
+# rate_prior_chars characters, x scale / speed) - generate mode, order text
+# only; the rule's estimate is recorded in the meta in every mode.
+duration:
+  source: ground_truth
+  scale: 1.117
+  speed: 1.0
+  rate_prior_chars: null
+
 # Anchor masking: zero every ground-truth sample outside the row's own
 # annotated turns (+guard).  Applies to the gt/resynth outputs AND to the
 # gt/ copies every mode writes (InteractionMetric's W1 reference); the model

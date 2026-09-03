@@ -131,6 +131,11 @@ from egs3.conversational.tts.src.generation import (
     resynth_region,
     write_wav,
 )
+from egs3.conversational.tts.src.external_testset import (
+    DEFAULT_DURATION_SCALE,
+    SSSD_SPEECH_SEC_PER_CHAR,
+    duration_meta,
+)
 from egs3.conversational.tts.src.timestamp_layout import prompt_window_layout
 
 logger = logging.getLogger(__name__)
@@ -138,6 +143,39 @@ logger = logging.getLogger(__name__)
 _EPS = 1e-6
 _MODES = ("generate", "gt", "resynth")
 _TEXT_FORMATS = ("order", "timestamps")
+_DURATION_SOURCES = ("ground_truth", "predicted")
+
+
+def predict_generated_sec(
+    prompt_secs,
+    prompt_texts,
+    channel_texts,
+    *,
+    duration_scale: float = DEFAULT_DURATION_SCALE,
+    speed: float = 1.0,
+    rate_prior_chars=None,
+    rate_prior_sec_per_char: float = SSSD_SPEECH_SEC_PER_CHAR,
+) -> float:
+    """F5's duration rule per speaker, as in ``external_testset``
+    (``speaker_rates`` + ``estimate_duration_sec``) but on plain lists:
+    rate_k = (prompt_sec_k + k * prior) / (prompt_chars_k + k), generated
+    seconds = sum_k chars_k * rate_k * scale / speed.  Characters are utf-8
+    bytes (F5's own count).  ``rate_prior_chars`` None/0 = the raw prompt
+    rate; the prior is a training-set constant, never a test-set number.
+    """
+    if speed <= 0:
+        raise ValueError(f"speed must be > 0, got {speed}")
+    k = 0.0 if rate_prior_chars is None else float(rate_prior_chars)
+    if k < 0:
+        raise ValueError(f"rate_prior_chars must be >= 0 or null, got {k}")
+    total = 0.0
+    for ch, (psec, ptext, ctext) in enumerate(zip(prompt_secs, prompt_texts, channel_texts)):
+        pchars = len(ptext.encode("utf-8"))
+        if psec <= 0 or pchars <= 0:
+            raise ValueError(f"channel {ch} prompt is degenerate ({psec:.3f}s, {pchars} chars)")
+        rate = (float(psec) + k * float(rate_prior_sec_per_char)) / (pchars + k)
+        total += len(ctext.encode("utf-8")) * rate
+    return total * float(duration_scale) / float(speed)
 
 
 def _overlaps(a_start: float, a_end: float, b_start: float, b_end: float) -> bool:
@@ -476,6 +514,24 @@ def run_inference(
             f"text_format: timestamps requires mode: generate, got mode {mode!r} "
             "(gt/resynth never run the text preprocessor)"
         )
+    # Duration policy (default ground_truth = the window length, bit-identical
+    # to every run before the knob existed).  `predicted` generates the F5
+    # rule's length from the prompt rates instead - generate mode, order
+    # text only (a Mode T layout is anchored to the real window timeline).
+    dur_cfg = cfg.get("duration", {}) or {}
+    duration_source = str(dur_cfg.get("source", "ground_truth") or "ground_truth")
+    if duration_source not in _DURATION_SOURCES:
+        raise ValueError(
+            f"duration.source must be one of {_DURATION_SOURCES}, got {duration_source!r}"
+        )
+    duration_scale = float(dur_cfg.get("scale", DEFAULT_DURATION_SCALE))
+    duration_speed = float(dur_cfg.get("speed", 1.0))
+    rate_prior_chars = dur_cfg.get("rate_prior_chars")
+    if duration_source == "predicted" and (mode != "generate" or text_format != "order"):
+        raise ValueError(
+            "duration.source: predicted requires mode: generate and text_format: "
+            f"order (got mode {mode!r}, text_format {text_format!r})"
+        )
 
     if training_config is None:
         train_path = Path(cfg.training_config)
@@ -650,7 +706,24 @@ def run_inference(
         prompt_samples = prompt_frames * hop
         prompt_trimmed = prompt_raw[:, :prompt_samples]  # drop remainder from the end
 
-        speech = torch.cat([prompt_trimmed, window_speech], dim=1).to(device)
+        # The rule's estimate is recorded in every mode (so the anchor rows
+        # carry predicted_over_gt); it sets the generated length only under
+        # duration.source: predicted.
+        predicted_sec = predict_generated_sec(
+            [b.shape[1] / fs for b in blocks],
+            [t.text for t in selected],
+            _reference_texts(window_turns, n),
+            duration_scale=duration_scale,
+            speed=duration_speed,
+            rate_prior_chars=rate_prior_chars,
+        )
+        gt_sec = window_speech.shape[1] / fs
+        if duration_source == "predicted":
+            gen_frames = max(1, int(round(predicted_sec * fs / hop)))
+            region = torch.zeros(n, gen_frames * hop)  # masked anyway
+        else:
+            region = window_speech
+        speech = torch.cat([prompt_trimmed, region], dim=1).to(device)
         total_frames = speech.shape[1] // hop
 
         wid = record.window_id
@@ -738,7 +811,18 @@ def run_inference(
             "num_channels": n,
             # Source column (headset index for AMI) behind each row.
             "source_channels": list(rows),
-            "window_duration_sec": round(record.t1 - record.t0, 6),
+            # The scored region's length: the window, or the predicted length
+            # when duration.source is predicted (measured on the written wav).
+            "window_duration_sec": round(gen_wavs.shape[1] / fs, 6),
+            "gt_duration_sec": round(record.t1 - record.t0, 6),
+            "duration": duration_meta(
+                duration_scale,
+                duration_speed,
+                predicted_sec,
+                source=duration_source,
+                gt_sec=gt_sec,
+                rate_prior_chars=rate_prior_chars,
+            ),
             "text_format": effective_text_format,
             # `layout` is the ONE meta key that intentionally breaks
             # gt/generate key parity, and only under `text_format:

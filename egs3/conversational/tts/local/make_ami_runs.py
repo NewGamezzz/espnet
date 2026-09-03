@@ -75,6 +75,10 @@ def arm(base_inf: str, base_met: str, K: int, suffix: str, arm_name: str,
     inf = _set(inf, "num_active_speakers", str(K))
     inf = _set(inf, "text_format", "timestamps" if arm_name == "T" else "order")
     inf = _set(inf, "ckpt", "null" if arm_name in ("gt", "resynth", "concat") else ckpt)
+    if arm_name != "O":
+        # predicted duration is a generate + order-text policy; every other
+        # arm scores the ground-truth length (the rule's estimate is recorded)
+        inf = inf.replace("  source: predicted\n", "  source: ground_truth\n", 1)
     if arm_name == "concat":
         inf = inf.replace(f"mode: {mode}\n", f"mode: {mode}\nsource: sssd\n", 1)
     met = _set(base_met, "mode", mode)
@@ -105,7 +109,7 @@ def main(argv=None) -> int:
     base_met = (ROOT / "conf" / "metrics_ami.yaml").read_text()
     names = [
         arm(base_inf, base_met, K, suffix, arm_name, a.tag, a.ckpt,
-            "01:00:00" if a.subset else wt)  # hdd-env import alone is ~10 min
+            "02:00:00" if a.subset else wt)  # steps 64 K4 ~130 s/window + measure
         for K in (2, 3, 4)
         for arm_name, wt in ARMS
     ]

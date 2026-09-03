@@ -236,8 +236,10 @@ def test_ami_configs_load_and_agree():
     assert inf.anchor.mask_to_turns.enabled is True
     assert inf.anchor.mask_to_turns.guard_sec == 0.15
     assert (inf.sampling.steps, inf.sampling.cfg_strength, inf.sampling.sway_sampling_coef) == (
-        32, 3.0, -1.0,
+        64, 3.0, -1.0,
     )
+    assert inf.duration.source == "predicted" and inf.duration.rate_prior_chars == 100.0
+    assert inf.duration.scale == 1.048
     assert inf.selection.manifest is None and inf.selection.num_active_speakers == 2
     assert inf.selection.per_session_cap == 12
     assert inf.text_format == "order"
