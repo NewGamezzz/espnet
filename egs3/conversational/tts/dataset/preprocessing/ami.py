@@ -217,6 +217,40 @@ def words_to_supervisions(
     return sups
 
 
+def complete_participants(
+    mid: str, parts: Sequence[Participant], words_dir: str | Path
+) -> tuple[list[Participant], list[Participant]]:
+    """Add agents that have a timed words file but no roster entry.
+
+    ``meetings.xml`` is incomplete for EN2002c: agent A has 3,716 timed
+    words on headset 0 but no ``<speaker>`` row.  A speaker who talks for
+    the whole meeting cannot be dropped (their speech would sit unannotated
+    on a headset), so such agents are synthesized on the conventional
+    channel (A-D -> 0-3, the corpus rule verified on every rostered meeting)
+    with a meeting-local speaker id.  Returns ``(all, synthesized)``.
+    """
+    present = {p.agent for p in parts}
+    used_channels = {p.channel for p in parts}
+    added: list[Participant] = []
+    for ch, agent in enumerate(AGENTS):
+        if agent in present:
+            continue
+        words_path = Path(words_dir) / f"{mid}.{agent}.words.xml"
+        if not words_path.is_file():
+            continue
+        if not any(w.text and not w.punc for w in load_words(words_path)):
+            continue
+        if ch in used_channels:
+            raise ValueError(
+                f"{mid}: agent {agent} has words but channel {ch} is already "
+                "taken by a rostered participant"
+            )
+        added.append(Participant(agent=agent, channel=ch, global_name=f"{mid}.{agent}"))
+    full = sorted([*parts, *added], key=lambda p: p.channel)
+    validate_participants(mid, full)
+    return full, added
+
+
 # --- headset audio -----------------------------------------------------------
 
 

@@ -92,6 +92,24 @@ class TestMeetings:
         parts = load_meetings(_write(tmp_path, "meetings.xml", three), require=["ES2004a"])
         assert sorted(p.channel for p in parts["ES2004a"]) == [1, 2, 3]
 
+    def test_complete_participants_synthesizes_agent_with_words(self, tmp_path):
+        from egs3.conversational.tts.dataset.preprocessing.ami import complete_participants
+
+        three = MEETINGS_XML.replace(
+            '<speaker nite:id="ES2004a_1" channel="0" nxt_agent="A" global_name="MEO015" role="UI"/>',
+            "",
+        )
+        parts = load_meetings(_write(tmp_path, "meetings.xml", three), require=["ES2004a"])["ES2004a"]
+        words_dir = tmp_path / "words"
+        words_dir.mkdir()
+        (words_dir / "ES2004a.A.words.xml").write_text(WORDS_XML, encoding="ISO-8859-1")
+        full, added = complete_participants("ES2004a", parts, words_dir)
+        assert [p.channel for p in full] == [0, 1, 2, 3]
+        assert added == [Participant("A", 0, "ES2004a.A")]
+        # no words file -> nothing synthesized
+        full2, added2 = complete_participants("ES2004a", parts, tmp_path / "nowords")
+        assert added2 == [] and [p.channel for p in full2] == [1, 2, 3]
+
     def test_load_meetings_requires_presence(self, tmp_path):
         path = _write(tmp_path, "meetings.xml", MEETINGS_XML)
         with pytest.raises(KeyError, match="IN1001"):

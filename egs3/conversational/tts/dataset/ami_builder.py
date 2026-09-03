@@ -32,6 +32,7 @@ from espnet3.utils.config_utils import load_config_with_defaults
 
 from .preprocessing.ami import (
     TEST_MEETINGS,
+    complete_participants,
     load_ami_recordings,
     load_meetings,
     load_words,
@@ -158,12 +159,20 @@ class AMIBuilder:
         # Both reasons always present in the report, zero or not.
         dropped: Counter = Counter({"no_lexical_speaker": 0, "empty_after_normalize": 0})
         n_windows = 0
+        synthesized_participants: dict[str, list[dict]] = {}
         with manifest_path.open("w", encoding="utf-8") as mf, sessions_path.open(
             "w", encoding="utf-8"
         ) as sfh:
             for mid in meetings:
                 rec = recordings[mid]
-                parts = participants[mid]
+                parts, synthesized = complete_participants(
+                    mid, participants[mid], ann / "words"
+                )
+                if synthesized:
+                    synthesized_participants[mid] = [
+                        {"agent": p.agent, "channel": p.channel, "speaker": p.global_name}
+                        for p in synthesized
+                    ]
                 sups = []
                 speakers: dict[int, str] = {}
                 for p in sorted(parts, key=lambda p: p.channel):
@@ -249,6 +258,8 @@ class AMIBuilder:
             },
             "duration_quantiles": _quantiles(durations),
             "dropped": dict(dropped),
+            # Agents with a words file but no meetings.xml row (EN2002c agent A).
+            "synthesized_participants": synthesized_participants,
             "windowing": windowing,
         }
         report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
