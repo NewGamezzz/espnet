@@ -27,8 +27,10 @@ ROOT = Path(
     "/work/hdd/bbjs/ttrachu/development/espnet3/recipe/f5_tts/espnet_ami_eval/"
     "egs3/conversational/tts"
 )
-# NVMe pixi env: 29-150x faster imports than the HDD env (chorus-stage2-status).
-PY = "/work/nvme/bbjs/ttrachu/pixi_env/conversational_f5_stage2/.pixi/envs/default/bin/python"
+# x86 NVMe pixi env for Delta's A100 nodes (full recipe stack imports in ~55 s
+# vs 10+ min from the HDD env).  NOT pixi_env/conversational_f5_stage2: that
+# one is an aarch64 build for DeltaAI and fails with "Exec format error" here.
+PY = "/work/nvme/bbjs/ttrachu/pixi_x86/default/bin/python"
 TRAIN_CHORUS = "conf/generated/training_allon_eval.yaml"
 TRAIN_CONCAT = "conf/generated/training_covomix2_eval.yaml"
 ACCOUNT = "bbjs-delta-gpu"
