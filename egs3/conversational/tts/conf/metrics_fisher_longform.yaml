@@ -1,0 +1,69 @@
+# Fisher long-form measure config: conf/metrics_zipvoice_dialog.yaml with the
+# long-form inference_dir (generators override it per arm).
+###############################################################
+#  Conversational F5 - measure a ZipVoice-Dialog test-en run  #
+###############################################################
+# Same battery and backends as conf/metrics.yaml.  Unlike CoVoMix2, this
+# test set ships dual-track ground truth, and the manifest-driven infer
+# stage writes `channels[k].gt_wav` next to every generation - so the
+# SHARED InteractionMetric applies and its *_dur_w1 keys are real numbers
+# (Wasserstein-1 against the paired reference), exactly as on SSSD.
+#
+# The generated window and the reference have different lengths on the
+# predicted-duration arm.  That is safe: derive_events() uses the window
+# duration only to close the trailing silence, which is a window-edge
+# silence and is skipped (pinned by tests/test_interaction_metric.py).
+#
+# Pass BOTH configs (run_utils propagates inference_config's inference_dir
+# over this file's own, see conf/metrics.yaml):
+#
+#   python run.py --stages measure \
+#       --inference_config conf/inference_zipvoice_dialog_chunked.yaml \
+#       --metrics_config   conf/metrics_zipvoice_dialog.yaml
+mode: generate_external_chunked
+inference_dir: ${exp_dir}/fisher_longform_chorus
+
+dataset:
+  test:
+    - name: valid
+
+# Backends are pinned to the GPU here because the metric classes default to
+# CPU (FasterWhisperTranscriber device="cpu" / compute_type="float32"), and
+# whisper-large-v3 on CPU over ~2 h of audio does not fit a job walltime.
+# Drop the device lines to score on CPU.
+metrics:
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.asr.ConversationASRMetric
+      _convert_: all
+      transcriber:
+        _target_: egs3.conversational.tts.src.metrics.asr.FasterWhisperTranscriber
+        device: cuda
+        compute_type: float16
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.speaker.SpeakerSimilarityMetric
+      _convert_: all
+      # A whole-meeting channel cannot go through WavLM in one pass: embed in
+      # 30 s segments, skip near-silent ones, average normalized embeddings.
+      embed_max_sec: 30.0
+      embedder:
+        _target_: egs3.conversational.tts.src.metrics.speaker.WavLMSVEmbedder
+        device: cuda
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.quality.QualityMetric
+      _convert_: all
+      # Whole-meeting mixdown: UTMOS in 30 s segments (single pass OOMs).
+      mix_max_sec: 30.0
+      mos_backend:
+        _target_: egs3.conversational.tts.src.metrics.quality.TorchHubUTMOSBackend
+        device: cuda
+    inputs:
+      meta: meta
+  - metric:
+      _target_: egs3.conversational.tts.src.metrics.interaction.InteractionMetric
+      _convert_: all
+    inputs:
+      meta: meta

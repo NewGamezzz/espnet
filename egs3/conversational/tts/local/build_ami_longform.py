@@ -25,6 +25,16 @@ Design note: "Design - Beyond Two Speakers Evaluation on AMI" (long-form
 arm, 2026-09-02).  Runs on a CPU node (one 4-channel meeting is ~1 GB in
 memory); minutes per meeting.
 
+Any ``SessionRecord`` manifest works, not only AMI: the Fisher long-form arm
+("Design - Long-Form Two-Speaker Evaluation on Fisher", 2026-09-04) feeds
+``sessions_fisher_test.jsonl`` through the same rules.  A record's own
+``exclusion_spans`` (``[[start, end], ...]`` in seconds, no channel: time the
+transcript does not cover, e.g. Fisher's unintelligible utterances) are
+honoured on EVERY channel - a turn overlapping a span is never a prompt
+candidate and is dropped from the script, so the masked ground truth omits
+it too.  ``--ids-file`` pins a subset by session id (one per line, ``#``
+comments allowed), mutually exclusive with ``--meetings``.
+
 Usage:
     python local/build_ami_longform.py --sessions data/manifest/ami_test_sessions.jsonl \\
         --dataset-root /work/hdd/bbjs/ttrachu/dataset/ami --exclude-spans exp/ami/gate/exclude_spans.json \\
@@ -33,6 +43,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 from pathlib import Path
@@ -52,6 +63,10 @@ from egs3.conversational.tts.local.build_zipvoice_dialog_testset import (  # noq
 from egs3.conversational.tts.src.inference import load_excluded_spans  # noqa: E402
 
 
+def _overlaps_span(turn: Turn, spans: Sequence[tuple[float, float]]) -> bool:
+    return any(turn.start < e and s < turn.end for s, e in spans)
+
+
 def _solo(turns: Sequence[Turn], turn: Turn, guard: float) -> bool:
     s, e = turn.start - guard, turn.end + guard
     return not any(o.channel != turn.channel and o.start < e and s < o.end for o in turns)
@@ -68,19 +83,22 @@ def pick_prompt_turn(
     band: tuple[float, float],
     solo_guard: float,
     excluded: frozenset = frozenset(),
+    exclusion_spans: Sequence[tuple[float, float]] = (),
 ) -> tuple[Turn, str] | None:
     """The participant's first turn that can serve as their prompt, with the
     ladder tier it came from: ``gated_solo`` (not gate-excluded AND solo by
     annotation), then ``solo`` (gate ignored), then ``in_band`` (any lexical
     turn inside the duration band).  The band and the lexical rule are
-    never relaxed.  A participant is dropped only when even the last tier
-    is empty - a speaker with a worse prompt beats a missing speaker in a
-    whole-meeting generation."""
+    never relaxed, and neither is ``exclusion_spans`` (record-level time
+    spans the transcript does not cover).  A participant is dropped only
+    when even the last tier is empty - a speaker with a worse prompt beats
+    a missing speaker in a whole-meeting generation."""
     ordered = [
         t for t in sorted(turns, key=lambda t: (t.start, t.channel))
         if t.channel == channel
         and len(t.text.split()) >= min_words
         and band[0] - 1e-6 <= t.end - t.start <= band[1] + 1e-6
+        and not _overlaps_span(t, exclusion_spans)
     ]
     for tier in PROMPT_TIERS:
         for t in ordered:
@@ -116,8 +134,19 @@ def build_longform(
     mask_guard: float,
     normalize_db: float | None,
     meetings: Sequence[str] | None,
+    ids_file=None,
 ) -> dict:
     out_dir = Path(out_dir).resolve()
+    if ids_file is not None:
+        if meetings:
+            raise ValueError("ids_file and meetings are mutually exclusive")
+        meetings = [
+            ln.strip() for ln in Path(ids_file).read_text("utf-8").splitlines()
+            if ln.strip() and not ln.lstrip().startswith("#")
+        ]
+        if not meetings:
+            raise ValueError(f"{ids_file}: no session ids")
+    sessions_md5 = hashlib.md5(Path(sessions).read_bytes()).hexdigest()
     (out_dir / "prompt").mkdir(parents=True, exist_ok=True)
     (out_dir / "gt").mkdir(parents=True, exist_ok=True)
     excluded_by_session = load_excluded_spans(exclude_spans) if exclude_spans else {}
@@ -125,6 +154,8 @@ def build_longform(
     rows: list[dict] = []
     meta_meetings: dict[str, dict] = {}
     limited: list[str] = []
+    n_records_with_spans = 0
+    n_turns_excluded_total = 0
     for line in Path(sessions).read_text("utf-8").splitlines():
         if not line.strip():
             continue
@@ -137,17 +168,24 @@ def build_longform(
             for t in s["turns"]
         ]
         excluded = excluded_by_session.get(mid, frozenset())
+        spans = [(float(a), float(b)) for a, b in (s.get("exclusion_spans") or [])]
+        if spans:
+            n_records_with_spans += 1
         prompts: dict[int, Turn] = {}
         tiers: dict[int, str] = {}
         for ch in range(int(s["num_channels"])):
             picked = pick_prompt_turn(
-                turns, ch, min_words=min_words, band=band, solo_guard=solo_guard, excluded=excluded
+                turns, ch, min_words=min_words, band=band, solo_guard=solo_guard,
+                excluded=excluded, exclusion_spans=spans,
             )
             if picked is not None:
                 prompts[ch], tiers[ch] = picked
         prompt_keys = {(t.channel, t.start, t.end) for t in prompts.values()}
-        script = [t for t in sorted(turns, key=lambda t: (t.start, t.channel))
-                  if (t.channel, t.start, t.end) not in prompt_keys]
+        ordered_turns = sorted(turns, key=lambda t: (t.start, t.channel))
+        n_turns_excluded = sum(1 for t in ordered_turns if _overlaps_span(t, spans))
+        n_turns_excluded_total += n_turns_excluded
+        script = [t for t in ordered_turns
+                  if (t.channel, t.start, t.end) not in prompt_keys and not _overlaps_span(t, spans)]
         keep = sorted(ch for ch in prompts if any(t.channel == ch for t in script))
         dropped = sorted(set(range(int(s["num_channels"]))) - set(keep))
         if len(keep) < 1:
@@ -193,10 +231,12 @@ def build_longform(
             "duration_sec": round(audio.shape[0] / sr, 3),
             "prompts": {str(row_of[ch]): [round(prompts[ch].start, 3), round(prompts[ch].end, 3)] for ch in keep},
             "prompt_tiers": {str(row_of[ch]): tiers[ch] for ch in keep},
+            "n_turns_excluded": n_turns_excluded,
+            "exclusion_sec": round(sum(b - a for a, b in spans), 3),
         }
         print(
             f"{mid}: K={len(keep)} turns={len(script)} dropped={dropped} "
-            f"tiers={[tiers[ch] for ch in keep]}",
+            f"tiers={[tiers[ch] for ch in keep]} excluded_turns={n_turns_excluded}",
             flush=True,
         )
     (out_dir / "manifest.jsonl").write_text(
@@ -206,7 +246,10 @@ def build_longform(
         "params": {"min_words": min_words, "band": list(band), "solo_guard": solo_guard,
                    "mask_guard": mask_guard, "normalize_db": normalize_db,
                    "exclude_spans": str(exclude_spans) if exclude_spans else None,
-                   "sessions": str(sessions)},
+                   "sessions": str(sessions), "ids_file": str(ids_file) if ids_file else None},
+        "sessions_md5": sessions_md5,
+        "exclusion": {"n_records_with_spans": n_records_with_spans,
+                      "n_turns_excluded": n_turns_excluded_total},
         "n_meetings": len(rows), "meetings": meta_meetings, "peak_limited": limited,
     }
     (out_dir / "build_meta.json").write_text(json.dumps(meta, indent=2), "utf-8")
@@ -219,7 +262,10 @@ def main(argv=None) -> int:
     ap.add_argument("--dataset-root", type=Path, required=True)
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--exclude-spans", type=Path, default=None)
-    ap.add_argument("--meetings", nargs="*", default=None)
+    grp = ap.add_mutually_exclusive_group()
+    grp.add_argument("--meetings", nargs="*", default=None, help="session ids to build (default: all)")
+    grp.add_argument("--ids-file", type=Path, default=None,
+                     help="file of session ids, one per line (# comments allowed); pins a subset")
     ap.add_argument("--min-words", type=int, default=3)
     ap.add_argument("--band", type=float, nargs=2, default=(2.0, 10.0))
     ap.add_argument("--solo-guard", type=float, default=0.3)
@@ -229,7 +275,7 @@ def main(argv=None) -> int:
     meta = build_longform(
         sessions=a.sessions, dataset_root=a.dataset_root, out_dir=a.out, exclude_spans=a.exclude_spans,
         min_words=a.min_words, band=tuple(a.band), solo_guard=a.solo_guard, mask_guard=a.mask_guard,
-        normalize_db=a.normalize_db, meetings=a.meetings,
+        normalize_db=a.normalize_db, meetings=a.meetings, ids_file=a.ids_file,
     )
     print(json.dumps({"n_meetings": meta["n_meetings"], "peak_limited": meta["peak_limited"]}))
     return 0

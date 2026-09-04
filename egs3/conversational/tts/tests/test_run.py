@@ -270,3 +270,40 @@ def test_ami_longform_configs_load_and_agree():
     raw_met = OmegaConf.to_container(met, resolve=False)
     assert raw_met["inference_dir"] == raw_inf["inference_dir"] == "${exp_dir}/ami_longform_cover"
     assert met.dataset.test[0].name == inf.test_name == "valid"
+
+
+def test_fisher_longform_configs_load_and_agree():
+    """conf/inference_fisher_longform_chunked.yaml + conf/metrics_fisher_longform.yaml:
+    the whole-call Fisher long-form arm on the stage-2 special-token recipe
+    ("Design - Long-Form Two-Speaker Evaluation on Fisher"). The chunk block
+    must be the full-280 ZipVoice step14199 recipe key for key."""
+    from omegaconf import OmegaConf
+
+    recipe = Path(__file__).resolve().parents[1]
+    inf = OmegaConf.load(recipe / "conf" / "inference_fisher_longform_chunked.yaml")
+    met = OmegaConf.load(recipe / "conf" / "metrics_fisher_longform.yaml")
+    assert inf.mode == met.mode == "generate_external_chunked"
+    assert inf.training_config == "conf/generated/training_allon_eval.yaml"
+    assert inf.testset.manifest.endswith("fisher-longform-v1/manifest.jsonl")
+    assert "prompt_fill" not in inf  # the special-token P span has no off rows to fill
+    assert inf.chunk.cond_format == "special_tokens" and inf.chunk.text_format == "order"
+    assert (inf.chunk.cond_prompt_sec, inf.chunk.cond_prev_sec) == (1.5, 5.0)
+    assert inf.chunk.unchunked_max_sec is None and inf.chunk.turns is None
+    assert inf.chunk.target_sec == 45.0 and inf.chunk.cross_fade_sec == 0.1
+    assert inf.chunk.cond_silence_gate is True and inf.chunk.cond_loudness_norm is True
+    assert inf.chunk.cond_gate_fill == "room_tone"
+    assert "cover_all_speakers" not in inf.chunk and "cond_include_prompt" not in inf.chunk
+    assert (inf.sampling.steps, inf.sampling.cfg_strength) == (64, 3.5)
+    assert (inf.sampling.cfg_sparse_strength, inf.sampling.cfg_sparse_max_chars) == (2.0, 40)
+    assert inf.duration.source == "predicted" and inf.duration.rate_prior_chars == 100.0
+    assert inf.duration.scale == 1.048 and inf.duration.speed == 1.0
+    assert inf.batching.max_batch_audio_sec == 240.0 and inf.batching.max_batch_dialogues == 1
+    assert inf.selection.shard_count == 1 and inf.selection.dialogue_ids is None
+    raw_inf = OmegaConf.to_container(inf, resolve=False)
+    raw_met = OmegaConf.to_container(met, resolve=False)
+    assert raw_met["inference_dir"] == raw_inf["inference_dir"] == "${exp_dir}/fisher_longform_chorus"
+    assert met.dataset.test[0].name == inf.test_name == "valid"
+    by_target = {m.metric._target_.rsplit(".", 1)[1]: m.metric for m in met.metrics}
+    assert by_target["SpeakerSimilarityMetric"].embed_max_sec == 30.0
+    assert by_target["QualityMetric"].mix_max_sec == 30.0
+    assert "InteractionMetric" in by_target and "ConversationASRMetric" in by_target

@@ -1,0 +1,72 @@
+##########################################################
+#  Conversational F5 - Fisher long-form chunked infer arm #
+##########################################################
+# One Fisher test call = one dialogue (downloads/fisher-longform-v1, built by
+# local/build_ami_longform.py from the frozen sessions_fisher_test.jsonl):
+# both sides as channels, each side's first in-band solo turn as its prompt,
+# the whole ~10 min call as the script, masked full-length ground truth per
+# channel.  Design: "Design - Long-Form Two-Speaker Evaluation on Fisher"
+# (2026-09-04).  The curve is read per elapsed minute against the gt anchor.
+#
+# Recipe = the Chorus stage-2 step14199 full-280 ZipVoice recipe KEY FOR KEY
+# (native special-token conditioning, Mode O): target_sec 45, cond_prompt_sec
+# 1.5, cond_prev_sec 5, cfg 3.5, steps 64, rate-prior duration shrinkage,
+# per-channel sparse CFG 2.0 under 40 chars, gate + loudness norm, cross-fade
+# 0.1.  No top-level prompt_fill: the special-token P span has no off rows.
+# A call never fits one call, so unchunked_max_sec is null.  Generators
+# (local/make_fisher_longform_runs.py) set: mode, inference_dir, ckpt, and
+# selection.dialogue_ids / shard_*.
+training_config: conf/generated/training_allon_eval.yaml
+exp_tag: fisher_longform
+mode: generate_external_chunked
+device: cuda
+inference_dir: ${exp_dir}/fisher_longform_chorus
+test_name: valid
+ckpt: null
+use_ema: true
+
+testset:
+  manifest: downloads/fisher-longform-v1/manifest.jsonl
+  name: fisher-longform-v1
+
+duration:
+  scale: 1.048
+  speed: 1.0
+  source: predicted
+  rate_prior_chars: 100.0
+
+selection:
+  dialogue_ids: null        # pinned subset file (the 16 speaker-disjoint calls / the 2-call smoke)
+  min_duration: null
+  max_duration: null
+  num_dialogues: null
+  seed: 0
+  shard_index: 0
+  shard_count: 1
+
+# Batch 1 dialogue (Thanapat's subset rule); 2 channels x 240 s row-seconds.
+batching:
+  max_batch_audio_sec: 240.0
+  max_batch_dialogues: 1
+
+sampling:
+  steps: 64
+  cfg_strength: 3.5
+  cfg_sparse_strength: 2.0
+  cfg_sparse_max_chars: 40
+  sway_sampling_coef: -1.0
+  seed: 0
+  autocast_dtype: bfloat16
+
+chunk:
+  cond_format: special_tokens
+  cond_prompt_sec: 1.5
+  cond_prev_sec: 5.0
+  text_format: order
+  unchunked_max_sec: null
+  turns: null
+  target_sec: 45.0
+  cross_fade_sec: 0.1
+  cond_silence_gate: true
+  cond_gate_fill: room_tone
+  cond_loudness_norm: true
