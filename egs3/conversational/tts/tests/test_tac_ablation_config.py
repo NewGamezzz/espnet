@@ -72,3 +72,48 @@ def test_pairing_invariants_that_must_not_drift():
     )
     assert SEVERED["optim"]["lr_exchange"] == ALLON["optim"]["lr_exchange"]
     assert SEVERED["optim"]["lr_backbone"] == ALLON["optim"]["lr_backbone"]
+
+
+# --- row e: co-attention (BranchMHAExchange), the mechanism arm
+
+COATTN = load("training_mixed_allon_coattn_h100.yaml")
+
+
+def test_coattn_row_is_allon_with_the_exchange_swapped():
+    """Row e differs from the all-on run only in the tag and the exchange
+    module. `hidden` must be GONE: it is a TACExchange kwarg and the factory
+    forwards leftover keys straight to BranchMHAExchange, which would raise.
+    """
+    fa, fb = flatten(ALLON), flatten(COATTN)
+    changed = {k for k in fa.keys() | fb.keys() if fa.get(k, "<absent>") != fb.get(k, "<absent>")}
+    assert changed == {
+        "exp_tag",
+        "model.exchange.type",
+        "model.exchange.hidden",
+        "model.exchange.n_heads",
+    }
+    ex = COATTN["model"]["exchange"]
+    assert ex["type"] == "branch_mha"
+    assert "hidden" not in ex
+    assert ex["n_heads"] == 8
+    # d_c omitted so it defaults to the model width, which is what makes the
+    # block parameter-matched to TAC (4 d^2 either way).
+    assert "d_c" not in ex
+    assert ex["schedule"] == ALLON["model"]["exchange"]["schedule"]
+    assert COATTN["exp_tag"] == "train_mixed4_allon_coattn_h100"
+
+
+def test_coattn_shares_every_pairing_invariant_with_the_other_arms():
+    for key in ("seed", "num_device", "num_nodes"):
+        assert COATTN[key] == ALLON[key] == SEVERED[key], key
+    assert COATTN["model"]["pretrained_ckpt"] == ALLON["model"]["pretrained_ckpt"]
+    assert COATTN["dataloader"]["train"]["weights"] == ALLON["dataloader"]["train"]["weights"]
+    assert COATTN["dataloader"]["train"]["batch_bins"] == ALLON["dataloader"]["train"]["batch_bins"]
+    assert (
+        COATTN["trainer"]["accumulate_grad_batches"]
+        == ALLON["trainer"]["accumulate_grad_batches"]
+    )
+    assert COATTN["scheduler"]["total_steps"] == ALLON["scheduler"]["total_steps"] == 200000
+    assert "max_steps" not in COATTN["trainer"]
+    assert COATTN["optim"]["lr_exchange"] == ALLON["optim"]["lr_exchange"]
+    assert COATTN["optim"]["lr_backbone"] == ALLON["optim"]["lr_backbone"]

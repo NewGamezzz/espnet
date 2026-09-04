@@ -273,3 +273,48 @@ def test_severed_is_a_config_property_not_a_checkpoint_key(ext_vocab_file):
     assert all(
         m.exchange.severed for m in severed.modules() if isinstance(m, ExchangedBlock)
     )
+
+
+def test_coattention_is_parameter_matched_to_tac(ext_vocab_file):
+    """Row e must stay capacity-matched to rows c and d, since Table 4 prints
+    a parameter column and the whole ablation rests on matched capacity.
+
+    With `d_c` omitted the attention projections default to the model width,
+    so both blocks cost 4 d^2. The residual is exactly one LayerNorm (2 d)
+    plus one extra bias vector (d), less TAC's three PReLU scalars, i.e.
+    3 d - 3 per block for any width. Asserting that closed form rather than a
+    tolerance keeps the test meaningful at every dimension: the overhead is
+    linear in d while the block is quadratic, so the RELATIVE gap shrinks as
+    the model grows (0.18% at d=32, 0.073% at the real d=1024).
+
+    This fails if someone adds a bottleneck or otherwise resizes the block.
+    """
+    from egs3.conversational.tts.src.branch_exchange import (
+        BranchMHAExchange,
+        TACExchange,
+    )
+
+    for dim, heads in ((32, 8), (256, 8), (1024, 8), (1024, 16)):
+        n_tac = sum(p.numel() for p in TACExchange(dim).parameters())
+        n_co = sum(p.numel() for p in BranchMHAExchange(dim, n_heads=heads).parameters())
+        assert n_co - n_tac == 3 * dim - 3, (dim, heads, n_tac, n_co)
+        assert n_tac > 4 * dim * dim, (dim, n_tac)  # 4 d^2 is the dominant term
+
+    # At the real configuration the whole 22-block stack differs by 0.016% of
+    # the model, so both arms print the same parameter count.
+    depth, dim, model_params = 22, 1024, 429_441_750
+    excess = depth * (3 * dim - 3)
+    assert excess / model_params < 0.0002, excess
+
+    # And the swap really reaches every injected block.
+    coattn = build_tiny(
+        ext_vocab_file,
+        exchange={"type": "branch_mha", "schedule": BUILD_EXCHANGE["schedule"], "n_heads": 2},
+    )
+    tac = build_tiny(ext_vocab_file)
+    assert {type(m.exchange).__name__ for m in coattn.modules() if isinstance(m, ExchangedBlock)} == {
+        "BranchMHAExchange"
+    }
+    assert {type(m.exchange).__name__ for m in tac.modules() if isinstance(m, ExchangedBlock)} == {
+        "TACExchange"
+    }
