@@ -1,0 +1,24 @@
+builder:
+  mirror_root: /work/hdd/bbjs/ttrachu/dataset/LEMAS
+  manifest_dir: manifests_poc3k          # relative to mirror_root
+  audio_root: /work/hdd/bbjs/ttrachu/dataset/LEMAS/poc3k_flac16k
+  data_path: data
+  langs: [de, en, es, fr, id, it, pt, ru, vi, zh]
+  source_sample_rate: 16000
+  min_target_sec: 1.0
+  max_target_sec: 20.0
+  split_min_sec: 4.0
+  split_min_prompt_sec: 1.0
+  split_frac: [0.2, 0.4]
+  valid_rows_per_lang: 500
+  seed: 20260905
+  n_workers: 32
+  manifest_paths:
+    train: manifest/train.tsv
+    valid: manifest/valid.tsv
+  lang_stats_path: lang_stats.json
+
+dataset:
+  split_manifest_paths:
+    train: manifest/train.tsv
+    valid: manifest/valid.tsv
