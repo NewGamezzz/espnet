@@ -14,16 +14,16 @@
 #SBATCH --time=48:00:00
 #SBATCH --output=logs/train_%j.out
 set -euo pipefail
-cd "$(dirname "$0")/.."
-ROOT=$(cd ../../.. && pwd)
-export PYTHONPATH=$ROOT:$(pwd):${PYTHONPATH:-}
-export PYTHONUNBUFFERED=1 OMP_NUM_THREADS=4 NCCL_IB_DISABLE=1
-PY=/work/nvme/bbjs/ttrachu/pixi_x86/default/bin/python
+# $0 is Slurm's spool copy of this script; the recipe dir is where sbatch ran.
+cd "$SLURM_SUBMIT_DIR"
+source "$SLURM_SUBMIT_DIR/local/delta_env.sh"
+export OMP_NUM_THREADS=4 NCCL_IB_DISABLE=1
 CONF=${1:-conf/training_f5_base_dualprompt.yaml}
 TAG=$($PY -c "import yaml,sys;print(yaml.safe_load(open(sys.argv[1]))['exp_tag'])" "$CONF")
 mkdir -p logs
 if [ -z "${NO_CHAIN:-}" ]; then
-  sbatch --dependency=afterany:$SLURM_JOB_ID "$0" "$CONF" >> logs/chain.log
+  sbatch --dependency=afterany:$SLURM_JOB_ID \
+    "$SLURM_SUBMIT_DIR/local/submit_train.sbatch" "$CONF" >> logs/chain.log
 fi
 CKPT=exp/$TAG/last.ckpt
 EXTRA=""

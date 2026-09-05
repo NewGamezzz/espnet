@@ -8,12 +8,12 @@ import soundfile as sf
 from dataset.extract import extract_shard, read_shard_members
 
 
-def _tar_with(tmp_path, names):
+def _tar_with(tmp_path, names, sr=16000):
     tar = tmp_path / "de000.tar.gz"
     with tarfile.open(tar, "w:gz") as tf:
         for name in names:
             buf = io.BytesIO()
-            sf.write(buf, np.zeros(1600, dtype=np.float32), 16000, format="WAV")
+            sf.write(buf, np.zeros(sr // 10, dtype=np.float32), sr, format="WAV")
             data = buf.getvalue()
             info = tarfile.TarInfo(name)
             info.size = len(data)
@@ -29,10 +29,25 @@ def test_extracts_only_listed_members_and_writes_coverage(tmp_path):
     assert not (out / "de000" / "b.flac").exists()
     info = sf.info(str(out / "de000" / "c.flac"))
     assert info.samplerate == 16000 and info.channels == 1 and info.subtype == "PCM_16"
-    assert cov == {"manifest_rows": 2, "members_extracted": 2, "missing": []}
+    assert cov == {
+        "manifest_rows": 2,
+        "members_extracted": 2,
+        "resampled": 0,
+        "missing": [],
+    }
     assert (out / "de000.complete").is_file()
     cov_file = json.loads((out / "de000.coverage.json").read_text())
     assert cov_file["members_extracted"] == 2
+
+
+def test_other_rate_members_are_resampled_to_16k(tmp_path):
+    # the Emilia portions of en/zh ship at 24/32 kHz inside the LEMAS tars
+    tar = _tar_with(tmp_path, ["de000/a.mp3"], sr=32000)
+    out = tmp_path / "flac"
+    cov = extract_shard(tar, {"de000/a.mp3"}, out)
+    info = sf.info(str(out / "de000" / "a.flac"))
+    assert info.samplerate == 16000 and info.frames == 1600
+    assert cov["resampled"] == 1 and cov["members_extracted"] == 1
 
 
 def test_rerun_skips_completed_shard(tmp_path):

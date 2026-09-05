@@ -34,7 +34,9 @@ The model change is one subclass (`src/model.py`): `DualPromptCFM` masks
 ## 1. Data, token list, shapes
 
 ```bash
-# Delta: cpu node, 24 h. Extracts 48 tars to 16 kHz FLAC (2.23 TB, 30 M files),
+# Delta: cpu node, 24 h. Extracts 48 tars to 16 kHz FLAC (2.23 TB, 30 M files;
+# the Emilia members of en/zh ship at 24/32 kHz and are resampled with soxr,
+# counted as `resampled` in each shard's .coverage.json),
 # phonemizes 30 M rows, writes data/manifest/{train,valid}.tsv,
 # data/lang_stats.json, data/tokens/tokens.txt and exp/stats/*/feats_shape.
 sbatch local/submit_create_dataset.sbatch
@@ -93,6 +95,28 @@ speaker similarity to the speaker prompt, similarity to the language
 prompt's voice (the leakage probe, expected low and not rising from arm B
 to arm A), and UTMOS. The VERSA dependencies are those of the LibriTTS
 recipe (`versa`, `faster-whisper`, `openai-whisper`, `s3prl`).
+
+## Delta environment
+
+`local/delta_env.sh` is sourced by every sbatch script and works interactively
+(`source local/delta_env.sh` from the recipe dir). It sets:
+
+- `PY`: the x86 pixi env `/work/nvme/bbjs/ttrachu/pixi_x86/default` (torch 2.6, soundfile, soxr, vocos, lightning, pytest).
+- `PYLIBS`: `/work/nvme/bbjs/ttrachu/pylibs/lemas`, a `uv pip install --target` dir holding `phonemizer`
+  so the shared pixi env is not modified. Recreate with
+  `uv pip install --python $PY --target $PYLIBS "phonemizer>=3.2"`.
+- `PHONEMIZER_ESPEAK_LIBRARY` / `ESPEAK_DATA_PATH`: espeak-ng 1.52 installed under `/u/ttrachu/.local`.
+  It was rebuilt from `/work/nvme/bbjs/ttrachu/espeak-ng` with `CC=gcc CXX=g++` and the `cudatoolkit`
+  module unloaded: the Cray compiler wrappers otherwise inject `-lcupti -lcudart -lcuda` into the link,
+  and the library then fails to load once the CUDA module version changes.
+
+Under sbatch, `$0` is Slurm's spool copy of the script, so every script does `cd "$SLURM_SUBMIT_DIR"`;
+submit from the recipe dir.
+
+Repo trap: the top-level `.gitignore` rule `egs*/*/*/data*` also matches this recipe's `dataset/`
+directory. Stage new files there with `git add -f egs3/lemas/tts/dataset/<file>.py` (never the bare
+directory, which would pick up `__pycache__`), and run `black`/`isort` on explicit paths because they
+honour the same ignore.
 
 ## Tests
 

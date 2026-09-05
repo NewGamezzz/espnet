@@ -12,13 +12,10 @@
 #SBATCH --time=24:00:00
 #SBATCH --output=logs/create_dataset_%j.out
 set -euo pipefail
-cd "$(dirname "$0")/.."
-ROOT=$(cd ../../.. && pwd)
-export PYTHONPATH=$ROOT:$(pwd):${PYTHONPATH:-}
+# $0 is Slurm's spool copy of this script; the recipe dir is where sbatch ran.
+cd "$SLURM_SUBMIT_DIR"
+source "$SLURM_SUBMIT_DIR/local/delta_env.sh"
 export PYTHONUNBUFFERED=1
-PY=/work/nvme/bbjs/ttrachu/pixi_x86/default/bin/python
-export PATH=/work/nvme/bbjs/ttrachu/espeak-ng/bin:$PATH
-export LD_LIBRARY_PATH=/work/nvme/bbjs/ttrachu/espeak-ng/lib:${LD_LIBRARY_PATH:-}
 mkdir -p logs
 STAGES=${STAGES:-"create_dataset create_token_list create_shape"}
 $PY run.py --stages $STAGES --training_config conf/training_f5_base_dualprompt.yaml

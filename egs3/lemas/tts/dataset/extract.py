@@ -2,7 +2,9 @@
 
 Each ``train/<lang>/<shard>.tar.gz`` is read in tar stream mode (gzip is not
 seekable), members listed in the shard's poc3k tsv are decoded with soundfile
-and written as 16 kHz mono 16-bit FLAC under ``<out_root>/<shard>/``. A
+and written as 16 kHz mono 16-bit FLAC under ``<out_root>/<shard>/``.
+Members at another rate (the Emilia portions of en/zh are 24/32 kHz) are
+resampled with soxr and counted in the coverage. A
 per-shard ``.complete`` marker makes re-runs free and a ``.coverage.json``
 records manifest rows versus members found. A member absent from its tar is a
 hard failure, which is the audit the mirror runbook deferred to this pass.
@@ -19,6 +21,7 @@ from pathlib import Path
 from typing import Iterable, Set
 
 import soundfile as sf
+import soxr
 
 logger = logging.getLogger(__name__)
 
@@ -34,15 +37,21 @@ def read_shard_members(tsv_path) -> Set[str]:
     return members
 
 
-def _write_flac(data: bytes, out_path: Path, sample_rate: int) -> None:
+def _write_flac(data: bytes, out_path: Path, sample_rate: int) -> bool:
+    """Decode ``data``, downmix, resample to ``sample_rate`` if needed, write.
+
+    Returns True when the member had to be resampled.
+    """
     wav, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=True)
     wav = wav.mean(axis=1)
-    if sr != sample_rate:
-        raise RuntimeError(f"{out_path}: expected {sample_rate} Hz, got {sr}")
+    resampled = sr != sample_rate
+    if resampled:
+        wav = soxr.resample(wav, sr, sample_rate, quality="HQ")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     tmp = out_path.with_name(out_path.name + ".tmp")
     sf.write(tmp, wav, sample_rate, format="FLAC", subtype="PCM_16")
     tmp.replace(out_path)
+    return resampled
 
 
 def extract_shard(
@@ -55,19 +64,20 @@ def extract_shard(
         members: Tar member paths to extract (``<shard>/<file>.mp3``).
         out_root: Output directory; files land at
             ``<out_root>/<member with .flac suffix>``.
-        source_sample_rate: Expected sample rate of every member.
+        source_sample_rate: Output sample rate; members at another rate are
+            resampled to it.
 
     Returns:
-        Coverage dict ``{"manifest_rows", "members_extracted", "missing"}``.
+        Coverage dict ``{"manifest_rows", "members_extracted", "resampled",
+        "missing"}``.
 
     Raises:
         RuntimeError: If any member is absent from the tar (the
-            ``.complete`` marker is then NOT written), or on a sample-rate
-            mismatch.
+            ``.complete`` marker is then NOT written).
 
     Example:
         >>> extract_shard("de000.tar.gz", {"de000/x.mp3"}, "flac/de")
-        {'manifest_rows': 1, 'members_extracted': 1, 'missing': []}
+        {'manifest_rows': 1, 'members_extracted': 1, 'resampled': 0, 'missing': []}
 
     Note:
         A shard whose ``.complete`` marker exists returns its stored coverage
@@ -80,12 +90,13 @@ def extract_shard(
     if done_marker.is_file():
         return json.loads(coverage_path.read_text())
     remaining = set(members)
+    n_resampled = 0
     with tarfile.open(tar_path, "r|gz") as tf:
         for info in tf:
             if info.name not in remaining:
                 continue
             data = tf.extractfile(info).read()
-            _write_flac(
+            n_resampled += _write_flac(
                 data,
                 out_root / Path(info.name).with_suffix(".flac"),
                 source_sample_rate,
@@ -94,6 +105,7 @@ def extract_shard(
     coverage = {
         "manifest_rows": len(members),
         "members_extracted": len(members) - len(remaining),
+        "resampled": n_resampled,
         "missing": sorted(remaining),
     }
     out_root.mkdir(parents=True, exist_ok=True)
@@ -130,7 +142,7 @@ def extract_all(
         langs: Languages to process.
         out_root: FLAC root; files land at ``<out_root>/<lang>/<shard>/``.
         n_workers: Process pool size (one shard per process).
-        source_sample_rate: Expected sample rate.
+        source_sample_rate: Output sample rate.
 
     Returns:
         ``{tar path: coverage dict}``.
