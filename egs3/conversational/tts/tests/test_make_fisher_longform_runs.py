@@ -69,3 +69,28 @@ class TestArms:
     def test_unknown_arm_rejected(self, tmp_path):
         with pytest.raises(ValueError):
             _gen(tmp_path, arms=["reanchor"], ids_file=None, shards=1)
+
+
+class TestVariants:
+    def test_chorus_overrides_and_suffix(self, tmp_path):
+        ids = tmp_path / "ids.txt"
+        ids.write_text("fe_03_00330\n")
+        names = _gen(tmp_path, arms=["chorus"], ids_file=ids, shards=1,
+                     overrides={"source": "ground_truth", "scale": "1.6", "cond_prev_sec": "0.0",
+                                "cond_prompt_sec": "4.0"}, arm_suffix="_gtdur")
+        assert names == ["fisher_longform_sub_chorus_gtdur_s14199"]
+        c = OmegaConf.load(tmp_path / "conf" / f"inference_{names[0]}.yaml")
+        assert c.duration.source == "ground_truth" and c.duration.scale == 1.6
+        assert c.chunk.cond_prev_sec == 0.0 and c.chunk.cond_prompt_sec == 4.0
+        assert c.chunk.target_sec == 45.0 and c.sampling.cfg_strength == 3.5  # untouched
+        raw = OmegaConf.to_container(c, resolve=False)
+        assert raw["inference_dir"] == "${exp_dir}/fisher_longform_sub_chorus_gtdur_s14199"
+        assert (tmp_path / "jobs" / f"run_{names[0]}.sbatch").exists()
+
+    def test_overrides_rejected_on_other_arms_and_protected_keys(self, tmp_path):
+        with pytest.raises(ValueError):
+            _gen(tmp_path, arms=["gt"], ids_file=None, shards=1, overrides={"scale": "1.6"})
+        with pytest.raises(ValueError):
+            _gen(tmp_path, arms=["chorus"], ids_file=None, shards=1, overrides={"seed": "1"})
+        with pytest.raises(KeyError):
+            _gen(tmp_path, arms=["chorus"], ids_file=None, shards=1, overrides={"no_such_key": "1"})

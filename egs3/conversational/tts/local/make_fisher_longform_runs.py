@@ -129,10 +129,11 @@ def _set(text: str, key: str, value: str) -> str:
     return pat.sub(lambda m: f"{m.group(1)}{key}: {value}", text, count=1)
 
 
-def _names(arm_name: str, tag: str, *, subset: bool, shard_index: int, shard_count: int) -> tuple[str, str]:
+def _names(arm_name: str, tag: str, *, subset: bool, shard_index: int, shard_count: int,
+           arm_suffix: str = "") -> tuple[str, str]:
     suffix = "_sub" if subset else (f"_sh{shard_index}of{shard_count}" if shard_count > 1 else "")
-    name = f"fisher_longform{suffix}_{arm_name}_{tag}"
-    out_dir = f"fisher_longform{'_sub' if subset else ''}_{arm_name}_{tag}"
+    name = f"fisher_longform{suffix}_{arm_name}{arm_suffix}_{tag}"
+    out_dir = f"fisher_longform{'_sub' if subset else ''}_{arm_name}{arm_suffix}_{tag}"
     if shard_count > 1:
         out_dir += f"/shard{shard_index}"
     return name, out_dir
@@ -140,11 +141,19 @@ def _names(arm_name: str, tag: str, *, subset: bool, shard_index: int, shard_cou
 
 def arm(base_inf: str, base_met: str, arm_name: str, tag: str, ckpt: str, *,
         ids_file, shard_index: int, shard_count: int, walltime: str,
-        out_conf: Path, out_jobs: Path, root: Path) -> str:
+        out_conf: Path, out_jobs: Path, root: Path,
+        overrides: dict | None = None, arm_suffix: str = "") -> str:
+    """``overrides`` (chorus arm only) set UNIQUE leaf keys of the base inference
+    yaml by name, e.g. {"source": "ground_truth", "scale": "1.6",
+    "cond_prev_sec": "0.0", "cond_prompt_sec": "4.0"}; ``arm_suffix`` names
+    the variant (``_gtdur``, ``_sc16``, ...) in every file and directory."""
     if arm_name not in ARMS:
         raise ValueError(f"unknown arm {arm_name!r}; expected one of {ARMS}")
+    if overrides and arm_name != "chorus":
+        raise ValueError("overrides apply to the chorus arm only")
     subset = ids_file is not None
-    name, out_dir = _names(arm_name, tag, subset=subset, shard_index=shard_index, shard_count=shard_count)
+    name, out_dir = _names(arm_name, tag, subset=subset, shard_index=shard_index,
+                           shard_count=shard_count, arm_suffix=arm_suffix)
     ids = str(Path(ids_file).resolve()) if subset else "null"
     if arm_name == "concat":
         inf = CONCAT_TEMPLATE.format(train=TRAIN_CONCAT, out_dir=out_dir, ids=ids,
@@ -160,6 +169,10 @@ def arm(base_inf: str, base_met: str, arm_name: str, tag: str, ckpt: str, *,
         inf = _set(inf, "shard_index", str(shard_index))
         inf = _set(inf, "shard_count", str(shard_count))
         inf = _set(inf, "dialogue_ids", ids)
+        for key, value in (overrides or {}).items():
+            if key in ("seed", "device", "mode", "ckpt", "inference_dir"):
+                raise ValueError(f"override of {key!r} is not allowed")
+            inf = _set(inf, key, str(value))
     met = _set(base_met, "mode", mode)
     met = _set(met, "inference_dir", f"${{exp_dir}}/{out_dir}")
     if arm_name == "concat":
@@ -182,7 +195,7 @@ def arm(base_inf: str, base_met: str, arm_name: str, tag: str, ckpt: str, *,
 
 def generate(*, recipe: Path, out_conf: Path, out_jobs: Path, ckpt: str, tag: str,
              arms=ARMS, ids_file=None, shards: int = 1, walltime: str = "04:00:00",
-             root: Path = ROOT) -> list[str]:
+             root: Path = ROOT, overrides: dict | None = None, arm_suffix: str = "") -> list[str]:
     base_inf = (recipe / "conf" / "inference_fisher_longform_chunked.yaml").read_text()
     base_met = (recipe / "conf" / "metrics_fisher_longform.yaml").read_text()
     names = []
@@ -191,7 +204,8 @@ def generate(*, recipe: Path, out_conf: Path, out_jobs: Path, ckpt: str, tag: st
         for i in range(n_shards):
             names.append(arm(base_inf, base_met, arm_name, tag, ckpt, ids_file=ids_file,
                              shard_index=i, shard_count=n_shards, walltime=walltime,
-                             out_conf=out_conf, out_jobs=out_jobs, root=root))
+                             out_conf=out_conf, out_jobs=out_jobs, root=root,
+                             overrides=overrides, arm_suffix=arm_suffix))
     return names
 
 
@@ -203,10 +217,14 @@ def main(argv=None) -> int:
     ap.add_argument("--shards", type=int, default=1)
     ap.add_argument("--arms", nargs="*", default=list(ARMS))
     ap.add_argument("--walltime", default="04:00:00")
+    ap.add_argument("--override", action="append", default=[], metavar="KEY=VALUE",
+                    help="chorus arm only: set a unique leaf key of the base yaml (repeatable)")
+    ap.add_argument("--arm-suffix", default="", help="variant name appended to the arm, e.g. _gtdur")
     a = ap.parse_args(argv)
+    overrides = dict(kv.split("=", 1) for kv in a.override)
     names = generate(recipe=ROOT, out_conf=ROOT / "conf" / "generated", out_jobs=ROOT / "jobs",
                      ckpt=a.ckpt, tag=a.tag, arms=a.arms, ids_file=a.ids_file, shards=a.shards,
-                     walltime=a.walltime)
+                     walltime=a.walltime, overrides=overrides, arm_suffix=a.arm_suffix)
     print("\n".join(names))
     return 0
 
