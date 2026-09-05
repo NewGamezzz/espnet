@@ -1,0 +1,224 @@
+# F5-Base from scratch on the LEMAS poc3k subset (10 languages x 3,000 h) with
+# two transcript-free audio prompts: a speaker prompt (same speaker or
+# recording) and a language prompt (same language, different speaker).
+# Spec: vault note "Design - LEMAS Dual-Prompt F5 Recipe" (2026-09-05).
+#
+# Stages: create_dataset -> create_token_list -> create_shape -> train.
+# create_shape writes feats_shape analytically (upper bound at the longest
+# prompt layout), so collect_stats is not used.
+num_device: 4
+num_nodes: 1
+seed: 0
+
+recipe_dir: .
+data_dir: ${recipe_dir}/data
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+# feats_shape is a property of the corpus and the prompt caps, not of one
+# experiment, so it is shared across exp_tags.
+stats_dir: ${recipe_dir}/exp/stats
+inference_dir: ${exp_dir}/inference
+exp_tag: train_f5_base_lemas_dualprompt
+
+sample_rate: 24000
+n_mel_channels: 100
+hop_length: 256
+win_length: 1024
+n_fft: 1024
+mel_spec_type: vocos
+token_list: ${data_dir}/tokens/tokens.txt
+
+# Online prompt draws (dataset/dataset.py). Lengths in seconds, uniform
+# within the range; the speaker coin is heavier because the speaker prompt
+# also reveals the language (spec decision 9).
+prompt_config:
+  spk_prompt_sec: [1.0, 6.0]
+  lang_prompt_sec: [1.0, 6.0]
+  split_frac: [0.2, 0.4]
+  split_min_prompt_sec: 1.0
+  spk_neighbor_k: 8
+  p_drop_spk: 0.3
+  p_drop_lang: 0.1
+
+create_dataset:
+  recipe_dir: ${recipe_dir}
+
+# Stock espnet3 stage over manifest column 3 (space-separated phone tokens).
+create_token_list:
+  manifest_path: ${data_dir}/manifest/train.tsv
+  save_path: ${data_dir}/tokens
+  filename: tokens.txt
+  token_type: word
+  cleaner: null
+  g2p: null
+  non_linguistic_symbols: null
+  bpemodel: null
+  add_symbol:
+    - "<blank>:0"
+    - "<unk>:1"
+    - "<spk>:-1"
+    - "<lang>:-1"
+    - "<de>:-1"
+    - "<en>:-1"
+    - "<es>:-1"
+    - "<fr>:-1"
+    - "<id>:-1"
+    - "<it>:-1"
+    - "<pt>:-1"
+    - "<ru>:-1"
+    - "<vi>:-1"
+    - "<zh>:-1"
+    - "<sos/eos>:-1"
+  vocabulary_size: -1
+  cutoff: 0
+
+create_shape:
+  splits: [train, valid]
+  save_path: ${stats_dir}
+  hop_length: ${hop_length}
+  sample_rate: ${sample_rate}
+  n_mels: ${n_mel_channels}
+  manifest_paths:
+    train: ${data_dir}/manifest/train.tsv
+    valid: ${data_dir}/manifest/valid.tsv
+  prompt_config: ${prompt_config}
+
+dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  recipe_dir: ${recipe_dir}
+  train:
+    - data_src_args:
+        split: train
+        manifest_path: ${data_dir}/manifest/train.tsv
+        token_list: ${token_list}
+        prompt_config: ${prompt_config}
+        seed: ${seed}
+  valid:
+    - data_src_args:
+        split: valid
+        manifest_path: ${data_dir}/manifest/valid.tsv
+        token_list: ${token_list}
+        prompt_config: ${prompt_config}
+        seed: ${seed}
+  # The dataset emits token ids and the concatenated waveform itself.
+  preprocessor: null
+
+parallel:
+  env: local
+  n_workers: 1
+
+model:
+  _target_: src.model.DualPromptF5TTS
+  token_list: ${token_list}
+  feats_extract_config:
+    fs: ${sample_rate}
+    n_fft: ${n_fft}
+    hop_length: ${hop_length}
+    win_length: ${win_length}
+    n_mels: ${n_mel_channels}
+    mel_spec_type: ${mel_spec_type}
+  # F5TTS_Base (upstream F5TTS_Base.yaml / paper Table 3).
+  hidden_size: 1024                 # upstream `dim`
+  depth: 22
+  attention_heads: 16               # upstream `heads`
+  attention_head_size: 64           # upstream `dim_head`
+  feed_forward_multiplier: 2        # upstream `ff_mult`
+  text_embedding_size: 512          # upstream `text_dim`
+  text_mask_padding: true
+  convolution_layers: 4             # upstream `conv_layers`
+  sigma: 0.0
+  audio_drop_probability: 0.3       # upstream `audio_drop_prob`
+  condition_drop_probability: 0.2   # upstream `cond_drop_prob`
+  mask_fraction_range: [0.7, 1.0]   # used only by sentinel rows (tests)
+  ode_solver_method: euler
+
+optimizer:
+  _target_: torch.optim.AdamW
+  lr: 7.5e-5
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+
+scheduler:
+  _target_: espnet3.components.schedulers.linear_warmup_decay.LinearWarmupDecayLR
+  warmup_steps: 20000
+  total_steps: 300000
+scheduler_interval: step
+
+best_model_criterion:
+  - - valid/loss
+    - 1
+    - min
+
+dataloader:
+  collate_fn:
+    _target_: espnet2.train.collate_fn.CommonCollateFn
+    int_pad_value: 0
+    float_pad_value: 0.0
+    not_sequence: [cond_frames]
+  train:
+    num_shards: 1
+    num_workers: 4
+    iter_factory:
+      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+      shuffle: true
+      collate_fn: ${dataloader.collate_fn}
+      batches:
+        type: numel
+        batch_size: 1          # required by signature, unused for "numel"
+        min_batch_size: 1
+        shape_files:
+          - ${stats_dir}/train/feats_shape
+        # numel counts frames x n_mels; 1,000,000 = 10,000 frames per
+        # micro-batch. Re-measure on A100-40G in the smoke run.
+        batch_bins: 1000000
+  valid:
+    num_shards: 1
+    num_workers: 4
+    iter_factory:
+      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+      shuffle: false
+      collate_fn: ${dataloader.collate_fn}
+      batches:
+        type: numel
+        batch_size: 1
+        min_batch_size: 1
+        shape_files:
+          - ${stats_dir}/valid/feats_shape
+        batch_bins: ${dataloader.train.iter_factory.batches.batch_bins}
+
+trainer:
+  accelerator: auto
+  devices: ${num_device}
+  num_nodes: ${num_nodes}
+  # 4 GPUs x 10,000 frames x 8 = 320k frames per update (F5: 307,200).
+  accumulate_grad_batches: 8
+  max_steps: 300000
+  val_check_interval: 5000
+  limit_val_batches: 200
+  check_val_every_n_epoch: null
+  log_every_n_steps: 50
+  max_epochs: 1000
+  gradient_clip_val: 1.0
+  strategy: auto
+  plugins:
+    - _target_: src.checkpoint_io.MmapCheckpointIO
+  callbacks:
+    - _target_: espnet3.components.callbacks.ema.EMACallback
+      decay: 0.9999
+    # Step-based backups next to espnet3's own last.ckpt / best ckpts.
+    - _target_: lightning.pytorch.callbacks.ModelCheckpoint
+      dirpath: ${exp_dir}
+      filename: "backup_step{step}"
+      auto_insert_metric_name: false
+      every_n_train_steps: 5000
+      save_top_k: -1
+      save_last: false
+  logger:
+    _target_: lightning.pytorch.loggers.WandbLogger
+    project: espnet3-lemas-f5
+    name: ${exp_tag}
+    save_dir: ${exp_dir}
+    log_model: false
+    id: ${exp_tag}
+    resume: allow
+
+fit: {}
