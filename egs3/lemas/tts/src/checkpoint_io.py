@@ -39,6 +39,7 @@ class MmapCheckpointIO(TorchCheckpointIO):
         map_location: Optional[Any] = lambda storage, loc: storage,
         weights_only: Optional[bool] = None,
     ) -> dict:
+        """Load a checkpoint, memory-mapping local files."""
         if isinstance(path, (str, os.PathLike)) and os.path.isfile(path):
             return torch.load(
                 path,

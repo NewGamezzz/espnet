@@ -29,7 +29,9 @@ from espnet3.systems.tts.f5_tts.utils import (
 class DualPromptCFM(CFM):
     """CFM whose prediction span is the target region when ``cond_frames`` is set."""
 
-    def prediction_mask(self, lens: torch.Tensor, cond_frames: torch.Tensor) -> torch.Tensor:
+    def prediction_mask(
+        self, lens: torch.Tensor, cond_frames: torch.Tensor
+    ) -> torch.Tensor:
         """Deterministic span ``[cond_frames, lens)`` per row.
 
         Args:
@@ -50,7 +52,9 @@ class DualPromptCFM(CFM):
         pos = torch.arange(seq_len, device=lens.device)
         cf = cond_frames.to(lens.device).long()
         if bool((cf >= lens).any()):
-            raise ValueError("cond_frames leaves an empty target span for at least one row")
+            raise ValueError(
+                "cond_frames leaves an empty target span for at least one row"
+            )
         return (pos[None, :] >= cf[:, None]) & (pos[None, :] < lens[:, None])
 
     def forward(
@@ -91,7 +95,9 @@ class DualPromptCFM(CFM):
         mask = lens_to_mask(lens, length=seq_len)
         # Same RNG consumption as the parent so sentinel rows stay bit-identical.
         frac_lengths = (
-            torch.zeros((batch,), device=device).float().uniform_(*self.frac_lengths_mask)
+            torch.zeros((batch,), device=device)
+            .float()
+            .uniform_(*self.frac_lengths_mask)
         )
         rand_span_mask = mask_from_frac_lengths(lens, frac_lengths) & mask
         if cond_frames is not None:
@@ -187,5 +193,7 @@ class DualPromptF5TTS(F5TTS):
         feats, feats_lengths = self._extract_feats(speech, speech_lengths)
         text = self._remap_text_padding(text, text_lengths)
         cf = None if cond_frames is None else torch.as_tensor(cond_frames).view(-1)
-        loss, _cond, _pred = self.cfm(feats, text=text, lens=feats_lengths, cond_frames=cf)
+        loss, _cond, _pred = self.cfm(
+            feats, text=text, lens=feats_lengths, cond_frames=cf
+        )
         return loss, dict(loss=loss.detach()), None

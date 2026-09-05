@@ -44,7 +44,7 @@ def write_shape_file(
     Example:
         .. code-block:: python
 
-            >>> n = write_shape_file(dataset, "stats/train/feats_shape", 256, 24000, 100)
+            >>> n = write_shape_file(ds, "stats/train/feats_shape", 256, 24000, 100)
 
     Note:
         The row key is the dataset index as a string, which is what the numel

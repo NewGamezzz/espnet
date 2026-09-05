@@ -2,25 +2,52 @@ import random
 
 import pytest
 import torch
-
-from espnet3.systems.tts.f5_tts.f5tts import F5TTS
 from src.model import DualPromptCFM, DualPromptF5TTS
 
-TOKENS = ["<blank>", "<unk>", "a", "b", "<space>", "<spk>", "<lang>", "<de>", "<zh>", "<sos/eos>"]
+from espnet3.systems.tts.f5_tts.f5tts import F5TTS
+
+TOKENS = [
+    "<blank>",
+    "<unk>",
+    "a",
+    "b",
+    "<space>",
+    "<spk>",
+    "<lang>",
+    "<de>",
+    "<zh>",
+    "<sos/eos>",
+]
 TINY = dict(
-    hidden_size=32, depth=1, attention_heads=2, attention_head_size=16, text_embedding_size=16,
+    hidden_size=32,
+    depth=1,
+    attention_heads=2,
+    attention_head_size=16,
+    text_embedding_size=16,
     convolution_layers=1,
-    feats_extract_config=dict(fs=24000, n_fft=1024, hop_length=256, win_length=1024, n_mels=100,
-                              mel_spec_type="vocos"),
+    feats_extract_config=dict(
+        fs=24000,
+        n_fft=1024,
+        hop_length=256,
+        win_length=1024,
+        n_mels=100,
+        mel_spec_type="vocos",
+    ),
 )
 
 
 def _batch(seed=0):
     g = torch.Generator().manual_seed(seed)
     speech = torch.randn(2, 24000 * 2, generator=g) * 0.1
-    text = torch.tensor([[5, 5, 5, 6, 6, 7, 2, 3] + [0] * 10, [5, 5, 7, 3, 2] + [0] * 13])
-    return dict(text=text, text_lengths=torch.tensor([8, 5]), speech=speech,
-                speech_lengths=torch.tensor([48000, 40000]))
+    text = torch.tensor(
+        [[5, 5, 5, 6, 6, 7, 2, 3] + [0] * 10, [5, 5, 7, 3, 2] + [0] * 13]
+    )
+    return dict(
+        text=text,
+        text_lengths=torch.tensor([8, 5]),
+        speech=speech,
+        speech_lengths=torch.tensor([48000, 40000]),
+    )
 
 
 def test_dual_prompt_model_is_f5tts_with_subclassed_cfm():

@@ -1,5 +1,7 @@
-"""LEMAS recipe TTSSystem: the stock TTS system plus an analytic create_shape
-stage and a Lightning module that tells the dataset the epoch.
+"""LEMAS recipe TTSSystem.
+
+The stock TTS system plus an analytic create_shape stage and a Lightning
+module that tells the dataset the epoch.
 
 ``create_token_list`` and ``remove_long_short`` are inherited from the stock
 ``espnet3.systems.tts.system.TTSSystem`` (the recipe uses the first and skips
@@ -46,6 +48,7 @@ class TTSSystem(_StockTTSSystem):
         metrics_config=None,
         **kwargs,
     ) -> None:
+        """Build the stock system and register the create_shape log path."""
         super().__init__(
             training_config=training_config,
             inference_config=inference_config,

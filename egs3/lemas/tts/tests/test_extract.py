@@ -5,7 +5,6 @@ import tarfile
 import numpy as np
 import pytest
 import soundfile as sf
-
 from dataset.extract import extract_shard, read_shard_members
 
 

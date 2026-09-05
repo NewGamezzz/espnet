@@ -29,7 +29,11 @@ def test_training_config_instantiates_tiny_model(tmp_path):
 
 def test_base_config_geometry():
     cfg = OmegaConf.load("conf/training_f5_base_dualprompt.yaml")
-    assert (cfg.model.hidden_size, cfg.model.depth, cfg.model.attention_heads) == (1024, 22, 16)
+    assert (cfg.model.hidden_size, cfg.model.depth, cfg.model.attention_heads) == (
+        1024,
+        22,
+        16,
+    )
     assert "collect_stats" not in cfg
     assert cfg.trainer.plugins[0]._target_.endswith("MmapCheckpointIO")
 

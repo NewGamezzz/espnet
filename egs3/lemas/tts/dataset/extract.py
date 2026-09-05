@@ -109,7 +109,9 @@ def extract_shard(
 
 def _job(args):
     tar_path, tsv_path, out_root, sr = args
-    return str(tar_path), extract_shard(tar_path, read_shard_members(tsv_path), out_root, sr)
+    return str(tar_path), extract_shard(
+        tar_path, read_shard_members(tsv_path), out_root, sr
+    )
 
 
 def extract_all(

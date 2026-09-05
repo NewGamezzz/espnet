@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import Iterable, List, Tuple
 
 import numpy as np
-
 from dataset.keys import SOURCES, segment_index
 from src.text.lemas_phonemizer import LANGS
 
@@ -103,6 +102,7 @@ class ManifestColumns:
     """
 
     def __init__(self, **cols):
+        """Store the columns produced by :meth:`load`."""
         self.__dict__.update(cols)
 
     @classmethod

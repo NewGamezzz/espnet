@@ -21,7 +21,6 @@ from collections import defaultdict
 from pathlib import Path
 
 import soundfile as sf
-
 from dataset.keys import classify_key, group_id
 
 
@@ -106,7 +105,9 @@ def build_eval_manifest(
                 others = [o for o in es if o["group"] != e["group"]]
                 partner = rng.choice(others) if others else e
                 f.write(
-                    "\t".join([e["utt"], lang, e["text"], e["spk"], partner["spk"], e["gt"]])
+                    "\t".join(
+                        [e["utt"], lang, e["text"], e["spk"], partner["spk"], e["gt"]]
+                    )
                     + "\n"
                 )
     return out
@@ -121,4 +122,8 @@ if __name__ == "__main__":
     ap.add_argument("--min_prompt", type=float, default=1.0)
     ap.add_argument("--seed", type=int, default=0)
     a = ap.parse_args()
-    print(build_eval_manifest(a.metadata, a.audio_root, a.out_dir, a.split_frac, a.min_prompt, a.seed))
+    print(
+        build_eval_manifest(
+            a.metadata, a.audio_root, a.out_dir, a.split_frac, a.min_prompt, a.seed
+        )
+    )

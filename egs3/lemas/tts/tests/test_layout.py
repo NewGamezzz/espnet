@@ -1,7 +1,6 @@
 import numpy as np
 import pytest
 import torch
-
 from src.layout import (
     HOP,
     TokenTable,
@@ -12,7 +11,18 @@ from src.layout import (
     region_frames,
 )
 
-TOKENS = ["<blank>", "<unk>", "a", "b", "<space>", "<spk>", "<lang>", "<de>", "<zh>", "<sos/eos>"]
+TOKENS = [
+    "<blank>",
+    "<unk>",
+    "a",
+    "b",
+    "<space>",
+    "<spk>",
+    "<lang>",
+    "<de>",
+    "<zh>",
+    "<sos/eos>",
+]
 
 
 def _table(tmp_path):
@@ -25,7 +35,12 @@ def test_frame_rules_match_vocoder_mel():
     from espnet3.systems.tts.f5_tts.vocoder_mel import VocoderMelSpec
 
     mel = VocoderMelSpec(
-        fs=24000, n_fft=1024, hop_length=256, win_length=1024, n_mels=100, mel_spec_type="vocos"
+        fs=24000,
+        n_fft=1024,
+        hop_length=256,
+        win_length=1024,
+        n_mels=100,
+        mel_spec_type="vocos",
     )
     for n in (24000, 24000 + 255, 3 * 256 * 100):
         _, lens = mel(torch.zeros(1, n), torch.tensor([n]))

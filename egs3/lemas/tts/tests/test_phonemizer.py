@@ -1,5 +1,4 @@
 import pytest
-
 from src.text.lemas_phonemizer import (
     LANG_TOKEN,
     SPACE_TOKEN,

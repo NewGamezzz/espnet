@@ -1,7 +1,7 @@
 import numpy as np
-from espnet2.fileio.read_text import load_num_sequence_text
-
 from src.shape import write_shape_file
+
+from espnet2.fileio.read_text import load_num_sequence_text
 
 
 class FakeDataset:

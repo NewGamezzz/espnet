@@ -14,11 +14,11 @@ from typing import Optional
 import numpy as np
 import torch
 import torchaudio
-
-from espnet3.systems.tts.f5_tts.inference import F5TTSInference
 from src.layout import HOP, SR, TokenTable, build_text_ids
 from src.layout import cond_frames as _cond_frames
 from src.text.lemas_phonemizer import LEMASPhonemizer
+
+from espnet3.systems.tts.f5_tts.inference import F5TTSInference
 
 
 class DualPromptInference(F5TTSInference):
@@ -92,7 +92,7 @@ class DualPromptInference(F5TTSInference):
         )
 
     def _build_tokenizer(self, config: dict) -> None:
-        """The recipe owns tokenization (phonemizer + TokenTable)."""
+        """Skip the parent's tokenizer; the recipe owns tokenization."""
         return None
 
     # ---- layout --------------------------------------------------------------
@@ -152,7 +152,9 @@ class DualPromptInference(F5TTSInference):
         return cond, ids.to(self.device), cf, max(n_tgt, len(phones) + 1)
 
     @torch.no_grad()
-    def __call__(self, text, lang, spk_prompt_speech, lang_prompt_speech=None, **_unused):
+    def __call__(
+        self, text, lang, spk_prompt_speech, lang_prompt_speech=None, **_unused
+    ):
         """Synthesize one utterance.
 
         Args:
@@ -169,8 +171,12 @@ class DualPromptInference(F5TTSInference):
             >>> infer(text="Hallo Welt", lang="de", spk_prompt_speech=wav)["wav"].shape
             (52224,)
         """
-        cond, ids, cf, n_tgt = self.build_inputs(text, lang, spk_prompt_speech, lang_prompt_speech)
-        if cf == 0:  # no prompt at all: one silent frame keeps CFM.sample's shapes valid
+        cond, ids, cf, n_tgt = self.build_inputs(
+            text, lang, spk_prompt_speech, lang_prompt_speech
+        )
+        if (
+            cf == 0
+        ):  # no prompt at all: one silent frame keeps CFM.sample's shapes valid
             cond = torch.zeros(1, 1, self.cfm.num_channels, device=self.device)
         out, _ = self.cfm.sample(
             cond=cond,

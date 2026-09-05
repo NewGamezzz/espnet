@@ -22,6 +22,7 @@ from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 from dataset.extract import extract_all
 from dataset.keys import classify_key, group_id
 from dataset.manifest import ManifestRow
+
 from espnet3.components.data.dataset_builder import DatasetBuilder
 from espnet3.utils.config_utils import load_config_with_defaults
 
@@ -38,8 +39,11 @@ def load_builder_config() -> dict:
 
 
 def decide_spk_mode(group_size: int, dur: float, cfg: dict) -> str:
-    """Speaker-prompt mode: ``group`` if the group has 2+ rows, else ``split``
-    when the row is long enough, else ``none`` (spec 3.4)."""
+    """Return the speaker-prompt mode of a row.
+
+    ``group`` if the group has 2+ rows, else ``split`` when the row is long
+    enough to split at a word boundary, else ``none`` (spec 3.4).
+    """
     if group_size >= 2:
         return "group"
     if dur >= float(cfg["split_min_sec"]):
@@ -138,8 +142,18 @@ def build_rows(
             continue
         rows.append(
             ManifestRow(
-                key, audio, phones, lang, source, g, float(dur), jsonl_path,
-                int(byte_offset), mode, wb, pbw,
+                key,
+                audio,
+                phones,
+                lang,
+                source,
+                g,
+                float(dur),
+                jsonl_path,
+                int(byte_offset),
+                mode,
+                wb,
+                pbw,
             )
         )
     return rows
@@ -193,7 +207,7 @@ def _read_jsonl_rows(jsonl_abs: Path, offsets: Sequence[int]) -> List[dict]:
 def _chunk_job(args):
     """Phonemize one chunk of rows of one shard; returns manifest lines."""
     chunk, jsonl_abs, jsonl_rel, cfg, sizes = args
-    chunk = sorted(chunk, key=lambda r: r[4])                    # by byte_offset
+    chunk = sorted(chunk, key=lambda r: r[4])  # by byte_offset
     objs = _read_jsonl_rows(Path(jsonl_abs), [r[4] for r in chunk])
     pool: List[PoolItem] = []
     for (key, audio, dur, source, off), obj in zip(chunk, objs):
@@ -204,15 +218,38 @@ def _chunk_job(args):
             for w in (obj.get("align") or {}).get("words", [])
             if "start" in w and "end" in w
         ]
-        pool.append((key, audio, float(dur), source, jsonl_rel, int(off), obj.get("txt", ""), words))
+        pool.append(
+            (
+                key,
+                audio,
+                float(dur),
+                source,
+                jsonl_rel,
+                int(off),
+                obj.get("txt", ""),
+                words,
+            )
+        )
     rows = build_rows(pool, cfg, _get_phon(), Counter(sizes))
-    return [(r.utt_id, r.lang, r.group, r.spk_mode, len(r.phones.split(" ")), r.dur, r.to_line()) for r in rows]
+    return [
+        (
+            r.utt_id,
+            r.lang,
+            r.group,
+            r.spk_mode,
+            len(r.phones.split(" ")),
+            r.dur,
+            r.to_line(),
+        )
+        for r in rows
+    ]
 
 
 class LEMASBuilder(DatasetBuilder):
     """Prepare LEMAS poc3k audio and manifests for the dual-prompt recipe."""
 
     def __init__(self, cfg: Optional[dict] = None):
+        """Take an explicit builder config, or read ``dataset/config.yaml``."""
         self.cfg = dict(cfg) if cfg is not None else load_builder_config()
 
     # ---- paths ------------------------------------------------------------
@@ -227,7 +264,7 @@ class LEMASBuilder(DatasetBuilder):
 
     # ---- source -------------------------------------------------------------
     def is_source_prepared(self, recipe_dir=None, **_kwargs) -> bool:
-        """True when every shard of every language carries its .complete marker."""
+        """Return True when every shard of every language has its .complete marker."""
         audio_root = Path(self.cfg["audio_root"])
         for lang in self.cfg["langs"]:
             tsvs = self._manifest_tsvs(lang)
@@ -241,21 +278,28 @@ class LEMASBuilder(DatasetBuilder):
     def prepare_source(self, recipe_dir=None, **_kwargs) -> None:
         """Stream the shard tars to FLAC (idempotent per shard)."""
         extract_all(
-            self._mirror(), self.cfg["manifest_dir"], self.cfg["langs"],
-            self.cfg["audio_root"], int(self.cfg["n_workers"]),
+            self._mirror(),
+            self.cfg["manifest_dir"],
+            self.cfg["langs"],
+            self.cfg["audio_root"],
+            int(self.cfg["n_workers"]),
             int(self.cfg["source_sample_rate"]),
         )
 
     # ---- build --------------------------------------------------------------
     def is_built(self, recipe_dir=None, **_kwargs) -> bool:
+        """Return True when both manifests and ``lang_stats.json`` exist."""
         d = self._data_dir(recipe_dir)
         return all(
             (d / p).is_file()
-            for p in list(self.cfg["manifest_paths"].values()) + [self.cfg["lang_stats_path"]]
+            for p in list(self.cfg["manifest_paths"].values())
+            + [self.cfg["lang_stats_path"]]
         )
 
-    def _read_pool(self, lang: str) -> Dict[str, List[Tuple[str, str, float, str, int]]]:
-        """Shard -> rows ``(key, audio_rel_flac, dur, source, byte_offset)``."""
+    def _read_pool(
+        self, lang: str
+    ) -> Dict[str, List[Tuple[str, str, float, str, int]]]:
+        """Return shard -> rows ``(key, audio_rel_flac, dur, source, byte_offset)``."""
         by_shard: Dict[str, list] = defaultdict(list)
         for tsv in self._manifest_tsvs(lang):
             with tsv.open(encoding="utf-8") as f:
@@ -280,12 +324,19 @@ class LEMASBuilder(DatasetBuilder):
             n += sizes[(lang, g)]
         valid_keys = set()
         if n < target:
-            loose = [r[0] for rows in by_shard.values() for r in rows if not group_id(r[0], r[3])]
+            loose = [
+                r[0]
+                for rows in by_shard.values()
+                for r in rows
+                if not group_id(r[0], r[3])
+            ]
             rng.shuffle(loose)
             valid_keys.update(loose[: target - n])
         return valid_groups, valid_keys
 
-    def build(self, recipe_dir=None, phonemizer_factory: Optional[Callable] = None, **_kwargs) -> None:
+    def build(
+        self, recipe_dir=None, phonemizer_factory: Optional[Callable] = None, **_kwargs
+    ) -> None:
         """Write ``manifest/train.tsv``, ``manifest/valid.tsv`` and ``lang_stats.json``.
 
         Args:
@@ -305,16 +356,23 @@ class LEMASBuilder(DatasetBuilder):
         sec: Counter = Counter()
         mode_counts: Dict[str, Counter] = defaultdict(Counter)
         jsonl_root = self._mirror() / "LEMAS-train" / "train"
-        with train_path.open("w", encoding="utf-8") as ftrain, valid_path.open("w", encoding="utf-8") as fvalid:
+        with (
+            train_path.open("w", encoding="utf-8") as ftrain,
+            valid_path.open("w", encoding="utf-8") as fvalid,
+        ):
             for lang in cfg["langs"]:
                 by_shard = self._read_pool(lang)
                 if not by_shard:
                     logger.warning("build: no rows for %s", lang)
                     continue
                 sizes = group_sizes_of(
-                    (r[0], r[1], r[2], r[3], "", r[4], "", []) for rows in by_shard.values() for r in rows
+                    (r[0], r[1], r[2], r[3], "", r[4], "", [])
+                    for rows in by_shard.values()
+                    for r in rows
                 )
-                valid_groups, valid_keys = self._choose_valid(lang, by_shard, sizes, rng)
+                valid_groups, valid_keys = self._choose_valid(
+                    lang, by_shard, sizes, rng
+                )
                 jobs = []
                 for shard, rows in by_shard.items():
                     jsonl_rel = f"{lang}/{shard}.jsonl"
@@ -323,19 +381,31 @@ class LEMASBuilder(DatasetBuilder):
                         chunk = rows[i : i + chunk_size]
                         needed = {(lang, group_id(r[0], r[3])) for r in chunk}
                         sub = {k: sizes[k] for k in needed if k[1]}
-                        jobs.append((chunk, str(jsonl_root / jsonl_rel), jsonl_rel, dict(cfg), sub))
+                        jobs.append(
+                            (
+                                chunk,
+                                str(jsonl_root / jsonl_rel),
+                                jsonl_rel,
+                                dict(cfg),
+                                sub,
+                            )
+                        )
                 if n_workers <= 1:
                     _worker_init(phonemizer_factory)
                     results = map(_chunk_job, jobs)
                 else:
                     pool = ProcessPoolExecutor(
-                        max_workers=n_workers, initializer=_worker_init, initargs=(phonemizer_factory,)
+                        max_workers=n_workers,
+                        initializer=_worker_init,
+                        initargs=(phonemizer_factory,),
                     )
                     results = pool.map(_chunk_job, jobs, chunksize=1)
                 n_train = n_valid = 0
                 for lines in results:
                     for utt, lg, g, mode, n_tok, dur, line in lines:
-                        is_valid = (g and g in valid_groups) or (not g and utt in valid_keys)
+                        is_valid = (g and g in valid_groups) or (
+                            not g and utt in valid_keys
+                        )
                         if is_valid:
                             fvalid.write(line + "\n")
                             n_valid += 1
@@ -348,9 +418,17 @@ class LEMASBuilder(DatasetBuilder):
                 if n_workers > 1:
                     pool.shutdown()
                 logger.info(
-                    "build %s: train %d valid %d modes %s", lang, n_train, n_valid, dict(mode_counts[lang])
+                    "build %s: train %d valid %d modes %s",
+                    lang,
+                    n_train,
+                    n_valid,
+                    dict(mode_counts[lang]),
                 )
-        stats = {lang: {"tokens_per_sec": tok[lang] / sec[lang]} for lang in tok if sec[lang] > 0}
+        stats = {
+            lang: {"tokens_per_sec": tok[lang] / sec[lang]}
+            for lang in tok
+            if sec[lang] > 0
+        }
         (data_dir / cfg["lang_stats_path"]).write_text(json.dumps(stats, indent=1))
         (data_dir / "spk_mode_counts.json").write_text(
             json.dumps({k: dict(v) for k, v in mode_counts.items()}, indent=1)

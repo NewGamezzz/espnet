@@ -57,6 +57,7 @@ class LEMASEvalDataset(torch.utils.data.Dataset):
             raise RuntimeError(f"Empty eval manifest: {manifest_path} (lang={lang})")
 
     def __len__(self) -> int:
+        """Return the number of eval rows."""
         return len(self.rows)
 
     def _load(self, path: str) -> np.ndarray:
@@ -64,10 +65,13 @@ class LEMASEvalDataset(torch.utils.data.Dataset):
         if wav.ndim > 1:
             wav = wav.mean(axis=1)
         if sr != self.fs:
-            wav = torchaudio.functional.resample(torch.from_numpy(wav), sr, self.fs).numpy()
+            wav = torchaudio.functional.resample(
+                torch.from_numpy(wav), sr, self.fs
+            ).numpy()
         return np.asarray(wav, dtype=np.float32)
 
     def __getitem__(self, idx: int) -> dict:
+        """Return one eval row with its prompt waveforms and reference paths."""
         utt, lang, text, spk, lp, gt = self.rows[idx]
         sample = {
             "utt_id": utt,

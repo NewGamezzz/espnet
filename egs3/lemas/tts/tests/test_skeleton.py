@@ -2,7 +2,12 @@ import importlib
 
 
 def test_packages_import():
-    for name in ["egs3.lemas.tts.dataset", "egs3.lemas.tts.src", "src.system", "src.shape"]:
+    for name in [
+        "egs3.lemas.tts.dataset",
+        "egs3.lemas.tts.src",
+        "src.system",
+        "src.shape",
+    ]:
         importlib.import_module(name)
 
 

@@ -19,10 +19,8 @@ import numpy as np
 import soundfile as sf
 import torch
 import torchaudio
-
 from dataset.keys import SOURCES, is_recording_group
 from dataset.manifest import ManifestColumns
-from espnet3.utils.config_utils import load_config_with_defaults
 from src.layout import (
     HOP,
     SR,
@@ -34,6 +32,8 @@ from src.layout import (
     region_frames,
 )
 from src.text.lemas_phonemizer import LANGS
+
+from espnet3.utils.config_utils import load_config_with_defaults
 
 DEFAULT_PROMPT_CONFIG = dict(
     spk_prompt_sec=[1.0, 6.0],
@@ -149,6 +149,7 @@ class LEMASDataset(torch.utils.data.Dataset):
         self.epoch = int(epoch)
 
     def __len__(self) -> int:
+        """Return the number of manifest rows."""
         return self.cols.n_rows
 
     def _rng(self, idx: int) -> np.random.Generator:
@@ -182,7 +183,9 @@ class LEMASDataset(torch.utils.data.Dataset):
             members = members[max(0, pos - k) : pos + k + 1]
         cands = members[members != idx]
         row = int(rng.choice(cands))
-        start, length = self._window16(rng, float(c.dur[row]), self.cfg["spk_prompt_sec"])
+        start, length = self._window16(
+            rng, float(c.dur[row]), self.cfg["spk_prompt_sec"]
+        )
         return row, start, length, None
 
     def _draw_lang(self, rng, idx: int):
@@ -211,7 +214,9 @@ class LEMASDataset(torch.utils.data.Dataset):
         return Draw(spk_row, s0, sl, k, lang_row, l0, ll, drop_spk, drop_lang)
 
     # ---- audio -------------------------------------------------------------
-    def _read16(self, row: int, start: int = 0, stop: Optional[int] = None) -> np.ndarray:
+    def _read16(
+        self, row: int, start: int = 0, stop: Optional[int] = None
+    ) -> np.ndarray:
         path = self.audio_root / self.cols.audio(row)
         wav, sr = sf.read(str(path), start=start, stop=stop, dtype="float32")
         assert sr == SRC_SR, (path, sr)
@@ -225,6 +230,7 @@ class LEMASDataset(torch.utils.data.Dataset):
         return out.numpy().astype(np.float32)
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
+        """Return ``text``, ``cond_frames`` and (unless disabled) ``speech``."""
         idx = int(idx)
         c = self.cols
         d = self.draw(idx)
@@ -244,7 +250,9 @@ class LEMASDataset(torch.utils.data.Dataset):
         if self.load_speech:
             if target16 is None:
                 target16 = self._read16(idx)
-            lang16 = self._read16(d.lang_row, d.lang_start16, d.lang_start16 + d.lang_len16)
+            lang16 = self._read16(
+                d.lang_row, d.lang_start16, d.lang_start16 + d.lang_len16
+            )
         spk_present = d.spk_row is not None and not d.drop_spk
         lang_present = not d.drop_lang
         if self.load_speech:
@@ -253,28 +261,34 @@ class LEMASDataset(torch.utils.data.Dataset):
             sf_, lf_ = region_frames(len(spk24)), region_frames(len(lang24))
         else:  # frame counts from the draw alone (create_shape never reads audio)
             if d.split_k is not None:
-                n_spk16 = quantize_prompt_16k(int(c.word_bounds(idx)[d.split_k - 1][1] * SRC_SR))
+                n_spk16 = quantize_prompt_16k(
+                    int(c.word_bounds(idx)[d.split_k - 1][1] * SRC_SR)
+                )
             else:
                 n_spk16 = d.spk_len16
             sf_ = region_frames(n_spk16 * 3 // 2) if spk_present else 0
             lf_ = region_frames(d.lang_len16 * 3 // 2) if lang_present else 0
-        text = build_text_ids(sf_, lf_, lang, phones, self.table) if self.table else None
+        text = (
+            build_text_ids(sf_, lf_, lang, phones, self.table) if self.table else None
+        )
         sample: Dict[str, Any] = {
             "cond_frames": np.asarray([cond_frames(sf_, lf_)], dtype=np.int64)
         }
         if text is not None:
             sample["text"] = text
         if self.load_speech:
-            sample["speech"] = np.concatenate([spk24, lang24, self._to24(target16)]).astype(
-                np.float32
-            )
+            sample["speech"] = np.concatenate(
+                [spk24, lang24, self._to24(target16)]
+            ).astype(np.float32)
             if text is not None:
                 assert len(text) <= len(sample["speech"]) // HOP + 1, (idx, len(text))
         return sample
 
     def n_frames(self, hop_length: int, sample_rate: int) -> np.ndarray:
         """Upper-bound frame count per row at the longest prompt layout."""
-        extra = float(self.cfg["spk_prompt_sec"][1]) + float(self.cfg["lang_prompt_sec"][1])
+        extra = float(self.cfg["spk_prompt_sec"][1]) + float(
+            self.cfg["lang_prompt_sec"][1]
+        )
         n = ((self.cols.dur.astype(np.float64) + extra) * sample_rate).astype(np.int64)
         return (1 + n // hop_length).astype(np.int32)
 

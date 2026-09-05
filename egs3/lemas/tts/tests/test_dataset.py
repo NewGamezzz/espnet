@@ -1,12 +1,22 @@
 import numpy as np
 import pytest
 import soundfile as sf
-
 from dataset.dataset import LEMASDataset
 from dataset.manifest import ManifestRow, write_manifest
 from src.layout import n_frames_total
 
-TOKENS = ["<blank>", "<unk>", "a", "b", "<space>", "<spk>", "<lang>", "<de>", "<zh>", "<sos/eos>"]
+TOKENS = [
+    "<blank>",
+    "<unk>",
+    "a",
+    "b",
+    "<space>",
+    "<spk>",
+    "<lang>",
+    "<de>",
+    "<zh>",
+    "<sos/eos>",
+]
 
 
 @pytest.fixture
@@ -20,24 +30,80 @@ def corpus(tmp_path):
         wav = 0.1 * np.sin(np.arange(int(sec * 16000)) * 0.05).astype(np.float32)
         sf.write(p, wav, 16000, format="FLAC", subtype="PCM_16")
 
-    # de: one video group with 4 segments, one singleton video, one mls speaker with 2 rows
+    # de: one video group with 4 segments, one singleton video,
+    # one mls speaker with 2 rows
     for i in range(4):
         clip(f"de/d/v1_{i}.flac", 3.0)
-        rows.append(ManifestRow(f"de_vidAAAAAAAA-0000{i}-00000000-00000300", f"de/d/v1_{i}.flac",
-                                "a b <space> a", "de", "yodas", "vidAAAAAAAA", 3.0, "j", 0, "group", "", ""))
+        rows.append(
+            ManifestRow(
+                f"de_vidAAAAAAAA-0000{i}-00000000-00000300",
+                f"de/d/v1_{i}.flac",
+                "a b <space> a",
+                "de",
+                "yodas",
+                "vidAAAAAAAA",
+                3.0,
+                "j",
+                0,
+                "group",
+                "",
+                "",
+            )
+        )
     clip("de/d/v2_0.flac", 2.0)
-    rows.append(ManifestRow("de_vidBBBBBBBB-00000-00000000-00000200", "de/d/v2_0.flac", "b", "de", "yodas",
-                            "vidBBBBBBBB", 2.0, "j", 0, "none", "", ""))
+    rows.append(
+        ManifestRow(
+            "de_vidBBBBBBBB-00000-00000000-00000200",
+            "de/d/v2_0.flac",
+            "b",
+            "de",
+            "yodas",
+            "vidBBBBBBBB",
+            2.0,
+            "j",
+            0,
+            "none",
+            "",
+            "",
+        )
+    )
     for i in range(2):
         clip(f"de/d/m_{i}.flac", 8.0)
-        rows.append(ManifestRow(f"de_77_1_00000{i}", f"de/d/m_{i}.flac", "a a", "de", "mls", "77", 8.0,
-                                "j", 0, "group", "", ""))
+        rows.append(
+            ManifestRow(
+                f"de_77_1_00000{i}",
+                f"de/d/m_{i}.flac",
+                "a a",
+                "de",
+                "mls",
+                "77",
+                8.0,
+                "j",
+                0,
+                "group",
+                "",
+                "",
+            )
+        )
     # zh: split rows (no group)
     for i in range(2):
         clip(f"zh/z/s_{i}.flac", 6.0)
-        rows.append(ManifestRow(f"zh_emilia_zh_000000000{i}", f"zh/z/s_{i}.flac", "a b a b a b", "zh",
-                                "emilia", "", 6.0, "j", 0, "split",
-                                "0.1:1.0,1.1:2.0,2.1:3.0,3.1:4.0,4.1:5.0,5.1:5.9", "a|b|a|b|a|b"))
+        rows.append(
+            ManifestRow(
+                f"zh_emilia_zh_000000000{i}",
+                f"zh/z/s_{i}.flac",
+                "a b a b a b",
+                "zh",
+                "emilia",
+                "",
+                6.0,
+                "j",
+                0,
+                "split",
+                "0.1:1.0,1.1:2.0,2.1:3.0,3.1:4.0,4.1:5.0,5.1:5.9",
+                "a|b|a|b|a|b",
+            )
+        )
     m = tmp_path / "train.tsv"
     write_manifest(rows, m)
     tok = tmp_path / "tokens.txt"
@@ -46,11 +112,24 @@ def corpus(tmp_path):
 
 
 def _ds(corpus, split="train", **kw):
-    cfg = dict(spk_prompt_sec=[1.0, 2.0], lang_prompt_sec=[1.0, 2.0], split_frac=[0.2, 0.4],
-               split_min_prompt_sec=1.0, spk_neighbor_k=2, p_drop_spk=0.0, p_drop_lang=0.0)
+    cfg = dict(
+        spk_prompt_sec=[1.0, 2.0],
+        lang_prompt_sec=[1.0, 2.0],
+        split_frac=[0.2, 0.4],
+        split_min_prompt_sec=1.0,
+        spk_neighbor_k=2,
+        p_drop_spk=0.0,
+        p_drop_lang=0.0,
+    )
     cfg.update(kw)
-    return LEMASDataset(split=split, manifest_path=corpus["manifest"], token_list=corpus["tokens"],
-                        audio_root=corpus["audio"], prompt_config=cfg, seed=3)
+    return LEMASDataset(
+        split=split,
+        manifest_path=corpus["manifest"],
+        token_list=corpus["tokens"],
+        audio_root=corpus["audio"],
+        prompt_config=cfg,
+        seed=3,
+    )
 
 
 def test_draw_invariants(corpus):
@@ -59,10 +138,15 @@ def test_draw_invariants(corpus):
         d = ds.draw(idx)
         assert d.lang_row is not None and ds.cols.lang[d.lang_row] == ds.cols.lang[idx]
         assert d.lang_row != idx
-        assert ds.cols.group[idx] == -1 or ds.cols.group[d.lang_row] != ds.cols.group[idx]
+        assert (
+            ds.cols.group[idx] == -1 or ds.cols.group[d.lang_row] != ds.cols.group[idx]
+        )
         mode = int(ds.cols.spk_mode[idx])
         if mode == 1:
-            assert d.spk_row not in (None, idx) and ds.cols.group[d.spk_row] == ds.cols.group[idx]
+            assert (
+                d.spk_row not in (None, idx)
+                and ds.cols.group[d.spk_row] == ds.cols.group[idx]
+            )
             assert ds.cols.group[d.lang_row] != ds.cols.group[d.spk_row]
         if mode == 2:
             assert d.split_k is not None and d.spk_row == idx
@@ -86,7 +170,9 @@ def test_sample_layout_and_frame_alignment(corpus):
     assert s["speech"].dtype == np.float32 and s["cond_frames"].shape == (1,)
     assert cf * 256 <= n and len(s["text"]) <= n_frames_total(n)
     ids = s["text"].tolist()
-    assert ids[:cf].count(5) + ids[:cf].count(6) == cf  # role tokens cover every prompt frame
+    assert (
+        ids[:cf].count(5) + ids[:cf].count(6) == cf
+    )  # role tokens cover every prompt frame
     assert ids[cf] == 7 and ids[cf + 1 :] == [2, 3, 4, 2]
 
 
@@ -132,7 +218,11 @@ def test_epoch_changes_draws_and_valid_is_fixed(corpus):
     ds.set_epoch(1)
     b = ds.draw(1)
     assert (a.spk_row, a.spk_start16, a.lang_row, a.lang_start16) != (
-        b.spk_row, b.spk_start16, b.lang_row, b.lang_start16)
+        b.spk_row,
+        b.spk_start16,
+        b.lang_row,
+        b.lang_start16,
+    )
     v = _ds(corpus, split="valid")
     x = v.draw(1)
     v.set_epoch(5)
@@ -144,8 +234,13 @@ def test_prompt_lengths_within_config(corpus):
     for i in range(len(ds)):
         d = ds.draw(i)
         if d.spk_row is not None and d.split_k is None:
-            assert 1.0 * 16000 - 512 <= d.spk_len16 <= 1.5 * 16000 and d.spk_len16 % 512 == 0
-        assert 0.5 * 16000 - 512 <= d.lang_len16 <= 1.0 * 16000 and d.lang_len16 % 512 == 0
+            assert (
+                1.0 * 16000 - 512 <= d.spk_len16 <= 1.5 * 16000
+                and d.spk_len16 % 512 == 0
+            )
+        assert (
+            0.5 * 16000 - 512 <= d.lang_len16 <= 1.0 * 16000 and d.lang_len16 % 512 == 0
+        )
 
 
 def test_n_frames_upper_bound(corpus):
@@ -157,6 +252,11 @@ def test_n_frames_upper_bound(corpus):
 
 
 def test_load_speech_false_has_no_speech(corpus):
-    ds = LEMASDataset(split="train", manifest_path=corpus["manifest"], token_list=corpus["tokens"],
-                      audio_root=corpus["audio"], load_speech=False)
+    ds = LEMASDataset(
+        split="train",
+        manifest_path=corpus["manifest"],
+        token_list=corpus["tokens"],
+        audio_root=corpus["audio"],
+        load_speech=False,
+    )
     assert "speech" not in ds[0] and "text" in ds[0]

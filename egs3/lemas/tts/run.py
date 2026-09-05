@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""Stage runner for the LEMAS dual-prompt F5-TTS recipe."""
+
 
 import argparse
 from pathlib import Path
@@ -112,6 +114,7 @@ DEFAULT_METRICS_CONFIG = "metrics.yaml"
 
 
 def main(args) -> None:
+    """Load the three configs and run the requested stages."""
     stages_to_run = resolve_stages(args.stages, ALL_STAGES)
 
     # Each config is merged over the shared `egs3.TEMPLATE.tts` default (kept

@@ -13,7 +13,6 @@ from pathlib import Path
 from typing import Sequence
 
 import numpy as np
-
 from src.text.lemas_phonemizer import LANG_TOKEN, SPK_TOKEN, lang_tag
 
 HOP = 256
