@@ -40,6 +40,12 @@ class TestArms:
             assert c.testset.manifest.endswith("fisher-longform-v1/manifest.jsonl")
             assert Path(c.selection.dialogue_ids).read_text().split() == ["fe_03_00330", "fe_03_00349"]
             assert c.selection.shard_count == 1 and c.batching.max_batch_dialogues == 1
+        met_cc = OmegaConf.load(tmp_path / "conf" / f"metrics_{names[2]}.yaml")
+        met_ch = OmegaConf.load(tmp_path / "conf" / f"metrics_{names[1]}.yaml")
+        targets = lambda m: [x.metric._target_.rsplit(".", 1)[1] for x in m.metrics]
+        assert "InteractionMetric" in targets(met_ch)
+        assert "InteractionMetric" not in targets(met_cc)  # no gt_wav on the concat path
+        assert targets(met_cc) == [x for x in targets(met_ch) if x != "InteractionMetric"]
         for n in names:
             raw_i = OmegaConf.to_container(OmegaConf.load(tmp_path / "conf" / f"inference_{n}.yaml"), resolve=False)
             raw_m = OmegaConf.to_container(OmegaConf.load(tmp_path / "conf" / f"metrics_{n}.yaml"), resolve=False)

@@ -112,6 +112,16 @@ chunk:
 """
 
 
+def _drop_metric(text: str, target_suffix: str) -> str:
+    """Remove one ``- metric:`` list entry (the block up to the next ``  - metric:``
+    or end of file) whose ``_target_`` ends with ``target_suffix``."""
+    blocks = re.split(r"(?m)^(?=  - metric:)", text)
+    kept = [b for b in blocks if not (b.startswith("  - metric:") and target_suffix in b)]
+    if len(kept) == len(blocks):
+        raise KeyError(target_suffix)
+    return "".join(kept)
+
+
 def _set(text: str, key: str, value: str) -> str:
     pat = re.compile(rf"^(\s*){re.escape(key)}:.*$", re.M)
     if not pat.search(text):
@@ -152,6 +162,13 @@ def arm(base_inf: str, base_met: str, arm_name: str, tag: str, ckpt: str, *,
         inf = _set(inf, "dialogue_ids", ids)
     met = _set(base_met, "mode", mode)
     met = _set(met, "inference_dir", f"${{exp_dir}}/{out_dir}")
+    if arm_name == "concat":
+        # The concatenated baseline writes no aligned gt_wav (its timeline
+        # cannot express the reference's gaps and overlap; see
+        # src/concat_baseline.py "has_reference_audio"), so the reference-based
+        # InteractionMetric cannot score it - the earlier concat rows
+        # (CoVoMix2, LibriTTS) were measured without it too.
+        met = _drop_metric(met, "interaction.InteractionMetric")
     out_conf.mkdir(parents=True, exist_ok=True)
     out_jobs.mkdir(parents=True, exist_ok=True)
     (out_conf / f"inference_{name}.yaml").write_text(inf)
