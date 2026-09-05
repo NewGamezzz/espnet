@@ -1,0 +1,125 @@
+# LEMAS-eval inference, arm B: speaker prompt only (language prompt omitted, a trained shape).
+# The manifest is written by local/prepare_lemas_eval.py: each eval row is
+# split at a word boundary, its leading words are the speaker prompt and the
+# rest is the target with exact ground truth; the language prompt is the
+# leading part of a different-recording row of the same language.
+# One test set per language so the measure stage reports WER per language.
+#
+# exp_tag is intentionally empty so this config inherits experiment identity
+# from the training config; run.py must be given --training_config as well.
+recipe_dir: .
+
+exp_tag:
+exp_dir: ${recipe_dir}/exp/${exp_tag}
+data_dir: ${recipe_dir}/data
+inference_dir: ${exp_dir}/${self_name:}
+
+dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  recipe_dir: ${recipe_dir}
+  test:
+    - name: lemas_eval_spk_de
+      data_src: egs3.lemas.tts.dataset.lemas_eval
+      data_src_args:
+        manifest_path: ${data_dir}/lemas_eval/manifest.tsv
+        lang: de
+        use_lang_prompt: false
+        fs: 24000
+    - name: lemas_eval_spk_en
+      data_src: egs3.lemas.tts.dataset.lemas_eval
+      data_src_args:
+        manifest_path: ${data_dir}/lemas_eval/manifest.tsv
+        lang: en
+        use_lang_prompt: false
+        fs: 24000
+    - name: lemas_eval_spk_es
+      data_src: egs3.lemas.tts.dataset.lemas_eval
+      data_src_args:
+        manifest_path: ${data_dir}/lemas_eval/manifest.tsv
+        lang: es
+        use_lang_prompt: false
+        fs: 24000
+    - name: lemas_eval_spk_fr
+      data_src: egs3.lemas.tts.dataset.lemas_eval
+      data_src_args:
+        manifest_path: ${data_dir}/lemas_eval/manifest.tsv
+        lang: fr
+        use_lang_prompt: false
+        fs: 24000
+    - name: lemas_eval_spk_id
+      data_src: egs3.lemas.tts.dataset.lemas_eval
+      data_src_args:
+        manifest_path: ${data_dir}/lemas_eval/manifest.tsv
+        lang: id
+        use_lang_prompt: false
+        fs: 24000
+    - name: lemas_eval_spk_it
+      data_src: egs3.lemas.tts.dataset.lemas_eval
+      data_src_args:
+        manifest_path: ${data_dir}/lemas_eval/manifest.tsv
+        lang: it
+        use_lang_prompt: false
+        fs: 24000
+    - name: lemas_eval_spk_pt
+      data_src: egs3.lemas.tts.dataset.lemas_eval
+      data_src_args:
+        manifest_path: ${data_dir}/lemas_eval/manifest.tsv
+        lang: pt
+        use_lang_prompt: false
+        fs: 24000
+    - name: lemas_eval_spk_ru
+      data_src: egs3.lemas.tts.dataset.lemas_eval
+      data_src_args:
+        manifest_path: ${data_dir}/lemas_eval/manifest.tsv
+        lang: ru
+        use_lang_prompt: false
+        fs: 24000
+    - name: lemas_eval_spk_vi
+      data_src: egs3.lemas.tts.dataset.lemas_eval
+      data_src_args:
+        manifest_path: ${data_dir}/lemas_eval/manifest.tsv
+        lang: vi
+        use_lang_prompt: false
+        fs: 24000
+    - name: lemas_eval_spk_zh
+      data_src: egs3.lemas.tts.dataset.lemas_eval
+      data_src_args:
+        manifest_path: ${data_dir}/lemas_eval/manifest.tsv
+        lang: zh
+        use_lang_prompt: false
+        fs: 24000
+
+parallel:
+  env: local
+  n_workers: 1
+
+model:
+  _target_: src.inference.DualPromptInference
+  train_config: ${recipe_dir}/conf/training_f5_base_dualprompt.yaml
+  checkpoint_path: ${exp_dir}/last.ckpt
+  token_list: ${data_dir}/tokens/tokens.txt
+  lang_stats: ${data_dir}/lang_stats.json
+  device: cuda
+  use_ema: true
+  vocoder_name: vocos
+  vocoder_path: null
+  target_sample_rate: 24000
+  ode_solver_steps: 32
+  guidance_strength: 2.0
+  sway_sampling_coefficient: -1.0
+  speed: 1.0
+  lowpass_hz: 8000
+  seed: 0
+
+input_key: [text, lang, spk_prompt_speech]
+batch_size: null
+output_fn: src.inference.build_output
+output_artifacts:
+  wav:
+    type: wav
+    sample_rate: 24000
+
+provider:
+  _target_: espnet3.systems.base.inference_provider.InferenceProvider
+runner:
+  _target_: espnet3.systems.base.inference_runner.InferenceRunner
