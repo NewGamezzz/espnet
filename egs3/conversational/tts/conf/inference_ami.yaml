@@ -36,12 +36,19 @@ prompt:
   turn_max_sec: 10.0
   solo_guard_sec: 0.3       # forced-alignment jitter margin around "solo"
   exclude_spans: exp/ami/gate/exclude_spans.json   # local/ami_prompt_gate.py
+  # Loudness convention (2026-09-06): AMI headsets sit at a median -37 dBFS
+  # with a 35 dB spread; the baselines, the long-form set and ZipVoice v2
+  # all get -23 dBFS prompts, so the window arm does too.  Active threshold
+  # = the gate's channel floor (exclude_spans.json floor_db) + margin.
+  normalize_db: -23.0
+  normalize_floor_margin_db: 10.0
   seed: 0
 
 anchor:
   mask_to_turns:
     enabled: true           # headset crosstalk: GT = annotated spans only
     guard_sec: 0.15
+  normalize_db: -23.0       # gt/ copies at the same convention (after masking)
 
 text_format: order          # timestamps = Mode T (generate only)
 

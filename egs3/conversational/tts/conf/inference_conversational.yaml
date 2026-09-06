@@ -79,6 +79,12 @@ prompt:
   # Sidecar from local/ami_prompt_gate.py listing turns that may never be
   # prompts (bleed / not solo by annotation); null = no gate.
   exclude_spans: null
+  # Loudness convention (null = off, bit-identical): scale each prompt row so
+  # the own turn's active RMS hits normalize_db (-23 dBFS = the ZipVoice v2 /
+  # baseline convention).  Active threshold = the gate's channel floor
+  # (exclude_spans.json floor_db, when present) + normalize_floor_margin_db.
+  normalize_db: null
+  normalize_floor_margin_db: 10.0
   seed: 0
 
 # Duration policy. ground_truth (default) generates exactly the window length
@@ -102,6 +108,8 @@ anchor:
   mask_to_turns:
     enabled: false
     guard_sec: 0.15
+  # gt/ copies (after masking) at the same convention; null = off.
+  normalize_db: null
 
 # Multi-branch ODE sampling (as generate_dev.py / the F5 inference path).
 sampling:

@@ -136,6 +136,12 @@ from egs3.conversational.tts.src.external_testset import (
     SSSD_SPEECH_SEC_PER_CHAR,
     duration_meta,
 )
+from egs3.conversational.tts.src.loudness import (
+    gain_to_target,
+    load_channel_floors,
+    loudness_meta,
+    threshold_from_floor,
+)
 from egs3.conversational.tts.src.timestamp_layout import prompt_window_layout
 
 logger = logging.getLogger(__name__)
@@ -625,6 +631,26 @@ def run_inference(
     mask_cfg = anchor_cfg.get("mask_to_turns", {}) or {}
     mask_enabled = bool(mask_cfg.get("enabled", False))
     mask_guard = float(mask_cfg.get("guard_sec", 0.15))
+    # Loudness convention (AMI, 2026-09-06): headsets sit at a median -37
+    # dBFS with a 35 dB spread across participants, while the ZipVoice v2
+    # set, the long-form builder and the baseline exporter all hand out -23
+    # dBFS prompts.  `prompt.normalize_db` scales each prompt ROW (own turn
+    # AND its bleed under the other prompts) so the own turn's active RMS
+    # hits the target; `anchor.normalize_db` does the same to each gt/ copy
+    # (after masking).  The active threshold is the gate's measured channel
+    # floor + `normalize_floor_margin_db` (AMI floors sit above the -60 dBFS
+    # default, which would count noise as speech).  Both default off.
+    prompt_norm_raw = prompt_cfg.get("normalize_db")
+    prompt_norm_db = None if prompt_norm_raw is None else float(prompt_norm_raw)
+    norm_margin_db = float(prompt_cfg.get("normalize_floor_margin_db", 10.0) or 0.0)
+    anchor_norm_raw = anchor_cfg.get("normalize_db")
+    anchor_norm_db = None if anchor_norm_raw is None else float(anchor_norm_raw)
+    floors_by_session = (
+        load_channel_floors(prompt_cfg.exclude_spans)
+        if prompt_cfg.get("exclude_spans")
+        and (prompt_norm_db is not None or anchor_norm_db is not None)
+        else {}
+    )
     samp = cfg.sampling
     # Sparse-channel guidance (the chunked path's rule, ported): a channel
     # whose window text is short in absolute terms (<= cfg_sparse_max_chars
@@ -698,6 +724,24 @@ def run_inference(
             if mask_enabled
             else window_speech
         )
+        session_floors = floors_by_session.get(record.session_id, [])
+        thresholds = [
+            threshold_from_floor(
+                session_floors[src] if src < len(session_floors) else None, norm_margin_db
+            )
+            for src in rows
+        ]
+        anchor_loud = None
+        if anchor_norm_db is not None:
+            gt_write = gt_write.clone()
+            a_gains, a_lim, a_lev = [], [], []
+            for ch in range(n):
+                g, lim, lev = gain_to_target(
+                    gt_write[ch].numpy(), fs, anchor_norm_db, threshold=thresholds[ch]
+                )
+                gt_write[ch] *= g
+                a_gains.append(g); a_lim.append(lim); a_lev.append(lev)
+            anchor_loud = loudness_meta(anchor_norm_db, thresholds, a_gains, a_lim, a_lev)
 
         audio_path = dataset.dataset_root / record.audio_relpath
         blocks = [
@@ -706,6 +750,24 @@ def run_inference(
             )
             for t in selected
         ]
+        prompt_loud = None
+        if prompt_norm_db is not None:
+            # Gain from the OWN turn's own headset; applied to the whole row
+            # across every prompt block (the row's bleed under the other
+            # speakers' turns scales with it - a per-headset gain); the
+            # peak cap is taken over that whole row, not the own turn only.
+            blocks = [b.clone() for b in blocks]
+            p_gains, p_lim, p_lev = [], [], []
+            for ch in range(n):
+                row_peak = max(float(b[ch].abs().max()) for b in blocks) if blocks else 0.0
+                g, lim, lev = gain_to_target(
+                    blocks[ch][ch].numpy(), fs, prompt_norm_db,
+                    threshold=thresholds[ch], peak=row_peak,
+                )
+                for b in blocks:
+                    b[ch] *= g
+                p_gains.append(g); p_lim.append(lim); p_lev.append(lev)
+            prompt_loud = loudness_meta(prompt_norm_db, thresholds, p_gains, p_lim, p_lev)
         # `source_selected` stays in SOURCE-channel space (provenance);
         # `selected` becomes ROW space, like everything downstream.
         source_selected = list(selected)
@@ -862,11 +924,16 @@ def run_inference(
             "rtf": rtf,
             # Present in every mode (key parity): whether the gt/ copies (and
             # the gt/resynth outputs) are masked to the annotated turns.
-            "anchor": {"masked": bool(mask_enabled), "guard_sec": mask_guard},
+            "anchor": {
+                "masked": bool(mask_enabled),
+                "guard_sec": mask_guard,
+                "loudness": anchor_loud,
+            },
             "mix_wav": mix_rel,
             "prompt": {
                 "total_sec": round(prompt_samples / fs, 6),
                 "total_frames": prompt_frames,
+                "loudness": prompt_loud,
                 "turns": [
                     {**m, "source_channel": int(src.channel)}
                     for m, src in zip(_prompt_turn_meta(selected), source_selected)
