@@ -16,10 +16,10 @@ import argparse
 import re
 from pathlib import Path
 
-ROOT = Path(
-    "/work/hdd/bbjs/ttrachu/development/espnet3/recipe/f5_tts/espnet_ami_eval/"
-    "egs3/conversational/tts"
-)
+# The recipe dir this script lives in: configs, jobs and the sbatch `cd` all
+# follow the checkout the generator runs from (a hardcoded path once sent a
+# batch of arms into a sibling checkout on another branch).
+ROOT = Path(__file__).resolve().parents[1]
 CONF = ROOT / "conf" / "generated"
 JOBS = ROOT / "jobs"
 # The known-good Delta recipe env (hdd pixi; slow import, hence 2 h arms).
