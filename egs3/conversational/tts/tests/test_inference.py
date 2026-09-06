@@ -419,11 +419,14 @@ class TestGtContract:
             "cfg_per_channel": None,
             "rtf": None,
             # Present in every mode; True only for masked gt/resynth anchors.
-            "anchor": {"masked": False, "guard_sec": 0.15},
+            "anchor": {"masked": False, "guard_sec": 0.15, "loudness": None},
             "mix_wav": "mix/sess_w00000.wav",
             "prompt": {
                 "total_sec": prompt_sec,
                 "total_frames": prompt_frames,
+                # Loudness convention off (None) in this fixture; see
+                # TestLoudnessNormalization for the -23 dBFS record.
+                "loudness": None,
                 "turns": [
                     {
                         "channel": 0,
@@ -1289,7 +1292,7 @@ class TestMaskToTurns:
             cfg.anchor = {"mask_to_turns": {"enabled": enabled, "guard_sec": 0.1}}
             run_inference(cfg, training_config=fixture["training_config"])
             meta = json.loads((inf_dir / "valid" / "meta" / "sess_w00000.json").read_text())
-            assert meta["anchor"] == {"masked": enabled, "guard_sec": 0.1}
+            assert meta["anchor"] == {"masked": enabled, "guard_sec": 0.1, "loudness": None}
             wav, _ = _read_wav(inf_dir / "valid" / meta["channels"][0]["gen_wav"])
             # ch0 turn is rel 0.5-3.0 s; the sample at 4.0 s is outside every ch0 turn
             outside = abs(float(wav[int(4.0 * FS)]))
@@ -1305,7 +1308,7 @@ class TestMaskToTurns:
         model = build_tiny(ext_vocab_file).eval()
         run_inference(cfg, training_config=fixture["training_config"], model=model, vocoder=FakeVocoder())
         meta = json.loads((inf_dir / "valid" / "meta" / "sess_w00000.json").read_text())
-        assert meta["anchor"] == {"masked": True, "guard_sec": 0.1}
+        assert meta["anchor"] == {"masked": True, "guard_sec": 0.1, "loudness": None}
         gt, _ = _read_wav(inf_dir / "valid" / meta["channels"][0]["gt_wav"])
         gen, _ = _read_wav(inf_dir / "valid" / meta["channels"][0]["gen_wav"])
         outside = slice(int(3.5 * FS), int(4.5 * FS))  # ch0 turn is rel 0.5-3.0 s
@@ -1441,3 +1444,91 @@ class TestSparseChannelCfg:
         with pytest.raises(ValueError, match="values for 2 channels"):
             generate_region(None, None, torch.zeros(2, 2560), torch.zeros(2, 4, dtype=torch.long),
                             2, 10, steps=1, cfg_strength=[1.0, 2.0, 3.0], sway_sampling_coef=-1.0, seed=0)
+
+
+# --------------------------------------------------------------------------- #
+# loudness convention (prompt.normalize_db / anchor.normalize_db)
+# --------------------------------------------------------------------------- #
+class TestLoudnessNormalization:
+    """The fixture tones are 0.2 sines (-17.0 dBFS active RMS); with the
+    -23 dBFS convention every prompt row and every gt/ copy lands at -23
+    (gain -6.0 dB), the meta records it, and the model input is scaled too."""
+
+    def _run(self, fixture, mode, tmp_dir, prompt_db, anchor_db, floors=None):
+        cfg = _infer_config(fixture, mode, tmp_dir)
+        cfg.prompt.normalize_db = prompt_db
+        cfg.prompt.normalize_floor_margin_db = 10.0
+        cfg.anchor = {"mask_to_turns": {"enabled": False, "guard_sec": 0.15},
+                      "normalize_db": anchor_db}
+        if floors is not None:
+            side = fixture["tmp_path"] / "exclude_spans.json"
+            side.write_text(json.dumps({"version": 1, "spans": [], "floor_db": floors}))
+            cfg.prompt.exclude_spans = str(side)
+        run_inference(cfg, training_config=fixture["training_config"])
+        return tmp_dir / "valid"
+
+    def _level(self, path):
+        from egs3.conversational.tts.src.loudness import active_rms_db
+        x, sr = _read_wav(path)
+        return active_rms_db(x, sr)
+
+    def test_off_is_bit_identical(self, fixture):
+        a = self._run(fixture, "gt", fixture["tmp_path"] / "a", None, None)
+        b = self._run(fixture, "gt", fixture["tmp_path"] / "b", None, None)
+        for rel in ("prompt/sess_w00000_ch0.wav", "gt/sess_w00000_ch1.wav"):
+            assert (a / rel).read_bytes() == (b / rel).read_bytes()
+        meta = json.loads((a / "meta/sess_w00000.json").read_text())
+        assert meta["prompt"]["loudness"] is None and meta["anchor"]["loudness"] is None
+        assert self._level(a / "prompt/sess_w00000_ch0.wav") == pytest.approx(-17.0, abs=0.2)
+
+    def test_prompt_and_anchor_land_on_target(self, fixture):
+        d = self._run(fixture, "gt", fixture["tmp_path"] / "n", -23.0, -23.0,
+                      floors={"sess": [-70.0, -70.0]})
+        for ch in (0, 1):
+            assert self._level(d / f"prompt/sess_w00000_ch{ch}.wav") == pytest.approx(-23.0, abs=0.2)
+            assert self._level(d / f"gt/sess_w00000_ch{ch}.wav") == pytest.approx(-23.0, abs=0.2)
+            # gt mode emits the anchor: the generated copy is the normalized gt
+            assert self._level(d / f"wav/sess_w00000_ch{ch}.wav") == pytest.approx(-23.0, abs=0.2)
+        meta = json.loads((d / "meta/sess_w00000.json").read_text())
+        for block in (meta["prompt"]["loudness"], meta["anchor"]["loudness"]):
+            assert block["target_db"] == -23.0
+            assert block["threshold_db"] == [-60.0, -60.0]  # floor -70 + 10 -> default wins
+            assert block["gain_db"] == [pytest.approx(-6.0, abs=0.1)] * 2
+            assert block["peak_limited"] == [False, False]
+            assert block["level_db"] == [pytest.approx(-17.0, abs=0.1)] * 2
+
+    def test_floor_margin_sets_the_threshold(self, fixture):
+        d = self._run(fixture, "gt", fixture["tmp_path"] / "f", -23.0, None,
+                      floors={"sess": [-45.0, -50.0]})
+        meta = json.loads((d / "meta/sess_w00000.json").read_text())
+        assert meta["prompt"]["loudness"]["threshold_db"] == [-35.0, -40.0]
+        assert meta["anchor"]["loudness"] is None
+
+    def test_peak_limit_is_reported(self, fixture):
+        # +6 dB target from a 0.2-peak tone would need peak 0.4: fine.  A 0 dBFS
+        # target would need peak 1.41 -> capped at 0.99 and flagged.
+        d = self._run(fixture, "gt", fixture["tmp_path"] / "p", 0.0, None)
+        meta = json.loads((d / "meta/sess_w00000.json").read_text())
+        assert meta["prompt"]["loudness"]["peak_limited"] == [True, True]
+        x, _ = _read_wav(d / "prompt/sess_w00000_ch0.wav")
+        assert float(abs(x).max()) == pytest.approx(0.99, abs=0.01)
+
+    def test_generate_mode_scales_the_model_input(self, fixture, ext_vocab_file, monkeypatch):
+        """The gain reaches `speech` (the conditioning tensor), not just the
+        written prompt wav: capture generate_region's input."""
+        import egs3.conversational.tts.src.inference as inf_mod
+        seen = {}
+        real = inf_mod.generate_region
+
+        def spy(model, vocoder, speech, text, prompt_frames, total_frames, **kw):
+            seen["prompt_rms"] = float(speech[:, : prompt_frames * HOP].pow(2).mean().sqrt())
+            return real(model, vocoder, speech, text, prompt_frames, total_frames, **kw)
+
+        monkeypatch.setattr(inf_mod, "generate_region", spy)
+        model = build_tiny(ext_vocab_file).eval()
+        for name, db in (("g", -23.0), ("g0", None)):
+            cfg = _infer_config(fixture, "generate", fixture["tmp_path"] / name)
+            cfg.prompt.normalize_db = db
+            run_inference(cfg, training_config=fixture["training_config"], model=model, vocoder=FakeVocoder())
+            seen[name] = seen.pop("prompt_rms")
+        assert seen["g"] == pytest.approx(seen["g0"] * 10 ** (-6.0 / 20), rel=0.05)

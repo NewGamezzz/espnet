@@ -235,6 +235,8 @@ def test_ami_configs_load_and_agree():
     assert inf.prompt.exclude_spans.endswith("exclude_spans.json")
     assert inf.anchor.mask_to_turns.enabled is True
     assert inf.anchor.mask_to_turns.guard_sec == 0.15
+    assert inf.prompt.normalize_db == -23.0 and inf.prompt.normalize_floor_margin_db == 10.0
+    assert inf.anchor.normalize_db == -23.0
     assert (inf.sampling.steps, inf.sampling.cfg_strength, inf.sampling.sway_sampling_coef) == (
         64, 3.0, -1.0,
     )
