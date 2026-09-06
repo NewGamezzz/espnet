@@ -304,7 +304,12 @@ def run_external_system_ingest(
         "preprocessor"
     ]["token_list"]
     records, testset_name = load_records(cfg.testset, token_list)
-    gt_secs = [float(r.gt_duration_sec) for r in records]
+    # Sets without reference audio (CoVoMix2) have no gt duration; the value only
+    # feeds duration-band selection, so NaN keeps every record selectable.
+    gt_secs = [
+        float(r.gt_duration_sec) if r.gt_duration_sec is not None else float("nan")
+        for r in records
+    ]
     selection = cfg.get("selection", {}) or {}
     indices, exclusions = select_records(records, gt_secs, selection)
 
