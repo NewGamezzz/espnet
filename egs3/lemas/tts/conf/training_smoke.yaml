@@ -74,7 +74,9 @@ create_token_list:
     - "<zh>:-1"
     - "<sos/eos>:-1"
   vocabulary_size: -1
-  cutoff: 0
+  # tokens seen <= cutoff times over ~30 M rows are noise (stray symbols);
+  # they map to <unk>
+  cutoff: 20
 
 create_shape:
   splits: [train, valid]

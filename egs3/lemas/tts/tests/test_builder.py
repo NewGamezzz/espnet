@@ -230,3 +230,44 @@ def test_build_end_to_end_fake_mirror(tmp_path):
     assert set(stats) == {"de", "zh"} and stats["zh"]["tokens_per_sec"] > 0
     modes = _json.loads((recipe / "data/spk_mode_counts.json").read_text())
     assert modes["de"] == {"group": 10} and modes["zh"] == {"split": 4}
+
+
+def test_drop_text_regex_removes_matching_rows_before_phonemizing():
+    cfg = dict(CFG, drop_text_regex={"zh": "[A-Za-z]"})
+    pool = [
+        (
+            "zh_emilia_zh_0000000001",
+            "zh/a.flac",
+            3.0,
+            "emilia",
+            "zh/z.jsonl",
+            0,
+            "你好",
+            [],
+        ),
+        (
+            "zh_emilia_zh_0000000002",
+            "zh/b.flac",
+            3.0,
+            "emilia",
+            "zh/z.jsonl",
+            1,
+            "And he was raised in Nigeria",
+            [],
+        ),
+        (
+            "de_vidAAAAAAAA-00001-00000000-00000300",
+            "de/c.flac",
+            3.0,
+            "yodas",
+            "de/d.jsonl",
+            2,
+            "Hello there",
+            [],
+        ),
+    ]
+    rows = build_rows(pool, cfg, FakePhon())
+    assert [r.utt_id for r in rows] == [
+        "zh_emilia_zh_0000000001",
+        "de_vidAAAAAAAA-00001-00000000-00000300",
+    ]

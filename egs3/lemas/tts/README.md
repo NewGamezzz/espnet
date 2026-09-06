@@ -37,7 +37,9 @@ The model change is one subclass (`src/model.py`): `DualPromptCFM` masks
 # Delta: cpu node, 24 h. Extracts 48 tars to 16 kHz FLAC (2.23 TB, 30 M files;
 # the Emilia members of en/zh ship at 24/32 kHz and are resampled with soxr,
 # counted as `resampled` in each shard's .coverage.json),
-# phonemizes 30 M rows, writes data/manifest/{train,valid}.tsv,
+# phonemizes 30 M rows (zh rows whose text has Latin letters are dropped,
+# `drop_text_regex` in dataset/config.yaml; counts land in lang_stats.json),
+# writes data/manifest/{train,valid}.tsv,
 # data/lang_stats.json, data/tokens/tokens.txt and exp/stats/*/feats_shape.
 sbatch local/submit_create_dataset.sbatch
 # equivalent stages:

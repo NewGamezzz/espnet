@@ -3,12 +3,15 @@
 LEMAS scheme (arXiv 2601.04233): pinyin initial-final with tones for zh via
 ``espnet2.text.phoneme_tokenizer.pypinyin_g2p_phone``; eSpeak-NG IPA for the
 other languages via ``espnet2.text.phoneme_tokenizer.Phonemizer``. Tokens are
-per phone, stress stays attached to its phone, punctuation is kept, words are
-separated by ``<space>``.
+per phone, stress stays attached to its phone, punctuation (any Unicode
+punctuation category) is kept as its own tokens, words are separated by
+``<space>``. Non-IPA phone symbols espeak emits (``ə-``, ``e-``, ``ɪ^``) are
+kept verbatim.
 """
 
 from __future__ import annotations
 
+import unicodedata
 from typing import Dict, List, Sequence
 
 SPK_TOKEN = "<spk>"
@@ -28,7 +31,6 @@ ESPEAK_VOICES = {
 }
 _PHONE_SEP = "|"
 _WORD_SEP = " "
-_PUNCT = set(".,;:!?…\"'()[]")
 _DROP = {"-"}  # espeak liaison / hyphen marker, carries no phone
 
 
@@ -38,7 +40,7 @@ def lang_tag(lang: str) -> str:
 
 
 def special_tokens() -> List[str]:
-    """Role tokens first, then the ten language tags, in a fixed order.
+    """Return the role tokens followed by one language tag per language.
 
     Returns:
         ``["<spk>", "<lang>", "<de>", ..., "<zh>"]``.
@@ -50,19 +52,28 @@ def special_tokens() -> List[str]:
     return [SPK_TOKEN, LANG_TOKEN] + [lang_tag(lang) for lang in LANGS]
 
 
+def _is_punct(c: str) -> bool:
+    # Any Unicode punctuation (Po, Pd, Ps, Pe, Pi, Pf, Pc) splits off as its own
+    # token, so «», „“”, ¿¡, CJK 。，、 and an inner "." in "e.g." all separate.
+    # A plain hyphen stays inside a phone: espeak uses it in phone symbols such
+    # as the French elidable schwa "ə-" and the Vietnamese vowel "e-".
+    return c != "-" and unicodedata.category(c).startswith("P")
+
+
 def _split_punct(token: str) -> List[str]:
-    """Split leading/trailing punctuation characters off a phone token."""
-    if not token or all(c in _PUNCT for c in token):
-        return [c for c in token]
-    head: List[str] = []
-    tail: List[str] = []
-    while token and token[0] in _PUNCT:
-        head.append(token[0])
-        token = token[1:]
-    while token and token[-1] in _PUNCT:
-        tail.insert(0, token[-1])
-        token = token[:-1]
-    return head + ([token] if token else []) + tail
+    out: List[str] = []
+    cur = ""
+    for c in token:
+        if _is_punct(c):
+            if cur:
+                out.append(cur)
+                cur = ""
+            out.append(c)
+        else:
+            cur += c
+    if cur:
+        out.append(cur)
+    return out
 
 
 class LEMASPhonemizer:

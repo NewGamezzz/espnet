@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from importlib import resources
@@ -111,7 +112,10 @@ def build_rows(
             chunk of a language).
 
     Returns:
-        Rows that pass the duration filter and have non-empty phones.
+        Rows that pass the duration filter, whose text does not match the
+        language's ``drop_text_regex`` (e.g. Latin letters in zh, which the
+        pinyin front-end would pass through as raw words), and that have
+        non-empty phones.
 
     Example:
         >>> rows = build_rows(pool, cfg, LEMASPhonemizer(["de"]), sizes)
@@ -119,9 +123,15 @@ def build_rows(
     sizes = group_sizes if group_sizes is not None else group_sizes_of(pool)
     rows: List[ManifestRow] = []
     lo, hi = float(cfg["min_target_sec"]), float(cfg["max_target_sec"])
+    drop_re = {
+        lang: re.compile(pat)
+        for lang, pat in (cfg.get("drop_text_regex") or {}).items()
+    }
     for key, audio, dur, source, jsonl_path, byte_offset, txt, words in pool:
         lang = key[:2]
         if not (lo <= dur <= hi):
+            continue
+        if lang in drop_re and drop_re[lang].search(txt):
             continue
         g = group_id(key, source) or ""
         mode = decide_spk_mode(sizes[(lang, g)] if g else 0, dur, cfg)
@@ -355,6 +365,7 @@ class LEMASBuilder(DatasetBuilder):
         tok: Counter = Counter()
         sec: Counter = Counter()
         mode_counts: Dict[str, Counter] = defaultdict(Counter)
+        counts: Dict[str, Dict[str, int]] = {}
         jsonl_root = self._mirror() / "LEMAS-train" / "train"
         with (
             train_path.open("w", encoding="utf-8") as ftrain,
@@ -400,6 +411,7 @@ class LEMASBuilder(DatasetBuilder):
                         initargs=(phonemizer_factory,),
                     )
                     results = pool.map(_chunk_job, jobs, chunksize=1)
+                n_pool = sum(len(rows) for rows in by_shard.values())
                 n_train = n_valid = 0
                 for lines in results:
                     for utt, lg, g, mode, n_tok, dur, line in lines:
@@ -417,15 +429,23 @@ class LEMASBuilder(DatasetBuilder):
                         mode_counts[lg][mode] += 1
                 if n_workers > 1:
                     pool.shutdown()
+                counts[lang] = {
+                    "n_pool": n_pool,
+                    "n_train": n_train,
+                    "n_valid": n_valid,
+                    "n_dropped": n_pool - n_train - n_valid,
+                }
                 logger.info(
-                    "build %s: train %d valid %d modes %s",
+                    "build %s: pool %d train %d valid %d dropped %d modes %s",
                     lang,
+                    n_pool,
                     n_train,
                     n_valid,
+                    n_pool - n_train - n_valid,
                     dict(mode_counts[lang]),
                 )
         stats = {
-            lang: {"tokens_per_sec": tok[lang] / sec[lang]}
+            lang: {"tokens_per_sec": tok[lang] / sec[lang], **counts[lang]}
             for lang in tok
             if sec[lang] > 0
         }

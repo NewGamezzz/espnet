@@ -50,3 +50,30 @@ def test_phonemize_words_returns_one_list_per_word():
 def test_unknown_lang_raises():
     with pytest.raises(KeyError):
         LEMASPhonemizer(langs=["de"]).phonemize("x", "xx")
+
+
+def test_unicode_punctuation_splits_off_anywhere():
+    from src.text.lemas_phonemizer import _split_punct
+
+    assert _split_punct("¿k") == ["¿", "k"]
+    assert _split_punct("t»") == ["t", "»"]
+    assert _split_punct("oː“") == ["oː", "“"]
+    assert _split_punct("ˈiː.dʒ") == ["ˈiː", ".", "dʒ"]
+    assert _split_punct("，") == ["，"]
+    assert _split_punct("[]") == ["[", "]"]
+
+
+def test_espeak_phone_symbols_with_hyphen_or_caret_survive():
+    from src.text.lemas_phonemizer import _split_punct
+
+    # French elidable schwa, Vietnamese vowel with tone, Russian soft-sign vowel
+    assert _split_punct("ə-") == ["ə-"]
+    assert _split_punct("ˈe-2") == ["ˈe-2"]
+    assert _split_punct("ɪ^") == ["ɪ^"]
+
+
+def test_spanish_inverted_marks_become_tokens():
+    ph = LEMASPhonemizer(["es"])
+    out = ph.phonemize("¿Cómo estás? ¡Hola!", "es")
+    assert out[0] == "¿" and "¡" in out and "?" in out and "!" in out
+    assert all(not (len(t) > 1 and t[0] in "¿¡") for t in out)
