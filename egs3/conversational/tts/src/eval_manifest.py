@@ -90,6 +90,7 @@ def build_eval_manifest(inference_config, *, training_config=None):
         _select_prompt_turn,
         load_excluded_spans,
     )
+    from egs3.conversational.tts.src.prompt_pool import PromptPool, pool_entry
 
     cfg = inference_config
     if training_config is None:
@@ -118,11 +119,29 @@ def build_eval_manifest(inference_config, *, training_config=None):
         if prompt_cfg.get("exclude_spans")
         else {}
     )
+    # External pool prompts (prompt.pool): the same seeded draw the infer
+    # stage makes, recorded as file-backed entries (no span, no skip rule -
+    # every window has K clean speakers available).
+    prompt_pool = PromptPool.from_config(prompt_cfg.get("pool"))
 
     rows: list[dict[str, Any]] = []
     n_skipped = 0
     for idx in indices:
         record = dataset.records[idx]
+        if prompt_pool is not None:
+            drawn = prompt_pool.draw(record.window_id, record.row_channels, record.turns)
+            rows.append(
+                {
+                    "record_type": WINDOW_TYPE,
+                    "window_id": record.window_id,
+                    "session_id": record.session_id,
+                    "t0": round(float(record.t0), 6),
+                    "t1": round(float(record.t1), 6),
+                    "source_channels": list(record.row_channels),
+                    "prompts": [pool_entry(t) for t in drawn],
+                }
+            )
+            continue
         pool_turns = pools.get(record.session_id, [])
         selected = []
         excluded = excluded_by_session.get(record.session_id, frozenset())
@@ -179,6 +198,9 @@ def build_eval_manifest(inference_config, *, training_config=None):
         "num_eligible": len(indices),
         "selection": OmegaConf.to_container(cfg.selection, resolve=True),
         "prompt": OmegaConf.to_container(cfg.prompt, resolve=True),
+        # Pool provenance (None for corpus prompts): manifest + md5, the
+        # gender table, band, seed, pool size.
+        "prompt_pool": prompt_pool.provenance() if prompt_pool is not None else None,
         "sampling": OmegaConf.to_container(cfg.sampling, resolve=True),
     }
     # The manifest pins the selection, so carrying the draw knobs that are

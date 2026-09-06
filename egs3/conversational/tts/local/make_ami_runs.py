@@ -31,6 +31,8 @@ PY = (
 # checkpoint); run.py takes it on the command line, as the ZipVoice arms did.
 TRAIN = "conf/generated/training_covomix2_eval.yaml"
 ACCOUNT = "bbjs-delta-gpu"
+# Frozen-manifest tag: v1 = AMI corpus prompts, pool_v1 = LibriTTS pool prompts.
+MANIFEST_TAG = "v1"
 
 SBATCH = """#!/bin/bash
 #SBATCH --job-name={name}
@@ -71,7 +73,7 @@ def arm(base_inf: str, base_met: str, K: int, suffix: str, arm_name: str,
     inf = _set(base_inf, "mode", mode)
     inf = _set(inf, "test_name", f"ami_k{K}{suffix}")
     inf = _set(inf, "inference_dir", f"${{exp_dir}}/{name}")
-    inf = _set(inf, "manifest", f"data/eval/ami_test_k{K}{suffix}_v1.jsonl")
+    inf = _set(inf, "manifest", f"data/eval/ami_test_k{K}{suffix}_{MANIFEST_TAG}.jsonl")
     inf = _set(inf, "num_active_speakers", str(K))
     inf = _set(inf, "text_format", "timestamps" if arm_name == "T" else "order")
     inf = _set(inf, "ckpt", "null" if arm_name in ("gt", "resynth", "concat") else ckpt)
@@ -103,7 +105,10 @@ def main(argv=None) -> int:
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--tag", required=True)
     ap.add_argument("--subset", action="store_true")
+    ap.add_argument("--manifest-tag", default="v1", help="data/eval/ami_test_k<K>[_sub20]_<tag>.jsonl")
     a = ap.parse_args(argv)
+    global MANIFEST_TAG
+    MANIFEST_TAG = a.manifest_tag
     suffix = "_sub20" if a.subset else ""
     base_inf = (ROOT / "conf" / "inference_ami.yaml").read_text()
     base_met = (ROOT / "conf" / "metrics_ami.yaml").read_text()

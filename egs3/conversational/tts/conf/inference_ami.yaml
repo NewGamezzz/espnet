@@ -43,6 +43,19 @@ prompt:
   normalize_db: -23.0
   normalize_floor_margin_db: 10.0
   seed: 0
+  # PRIMARY prompt source (Thanapat 2026-09-06, the CoVoMix2 protocol): K
+  # distinct LibriTTS test-clean speakers per window, one 2.5-3.5 s
+  # utterance each, drawn per window id and gender-matched to the AMI
+  # participant (id letter vs SPEAKERS.txt).  Band: the K prompts are
+  # concatenated, and on the K=4 subset windows whose prompts total >= 18 s
+  # scored 1.5-2.0x the anchor while < 12 s scored 0.74x - so K x 3.5 s
+  # = 14 s keeps K=4 under the measured knee (605 utts / 35 speakers in
+  # band).  null = the AMI corpus ladder above (secondary row).
+  pool:
+    manifest: downloads/libritts-test-clean/manifest.jsonl
+    band: [2.5, 3.5]
+    seed: 0
+    speakers_txt: /work/hdd/bbjs/ttrachu/development/delta_ai/dataset/LibriTTS/SPEAKERS.txt
 
 anchor:
   mask_to_turns:

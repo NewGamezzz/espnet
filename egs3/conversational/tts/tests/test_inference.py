@@ -422,6 +422,9 @@ class TestGtContract:
             "anchor": {"masked": False, "guard_sec": 0.15, "loudness": None},
             "mix_wav": "mix/sess_w00000.wav",
             "prompt": {
+                # corpus = spans of the session; pool = external utterances
+                # (prompt.pool, TestPoolPrompts).
+                "source": "corpus",
                 "total_sec": prompt_sec,
                 "total_frames": prompt_frames,
                 # Loudness convention off (None) in this fixture; see
@@ -1532,3 +1535,144 @@ class TestLoudnessNormalization:
             run_inference(cfg, training_config=fixture["training_config"], model=model, vocoder=FakeVocoder())
             seen[name] = seen.pop("prompt_rms")
         assert seen["g"] == pytest.approx(seen["g0"] * 10 ** (-6.0 / 20), rel=0.05)
+
+
+# --------------------------------------------------------------------------- #
+# external prompt pool (prompt.pool, the CoVoMix2 protocol)
+# --------------------------------------------------------------------------- #
+def _write_pool(tmp_path, speakers=("11", "12", "13", "14"), utts=2, seconds=(3.5, 4.0), sr=FS):
+    """One-channel training-style manifest: `speakers` x `utts` tone files,
+    speaker 11/13 tagged F and 12/14 M in a SPEAKERS.txt."""
+    import numpy as np
+    import soundfile as sf
+
+    root = tmp_path / "pool"
+    root.mkdir(parents=True, exist_ok=True)
+    lines = []
+    for si, spk in enumerate(speakers):
+        for u in range(utts):
+            sec = seconds[u % len(seconds)]
+            n = int(sec * sr)
+            tt = np.arange(n) / sr
+            x = (0.1 * np.sin(2 * np.pi * (500 + 50 * si + 10 * u) * tt)).astype(np.float32)
+            name = f"pool_{spk}_{u}"
+            sf.write(str(root / f"{name}.wav"), x, sr, subtype="PCM_16")
+            lines.append(json.dumps({
+                "window_id": name, "session_id": f"pool_{spk}", "num_channels": 1,
+                # fixture-vocab letters only (a-j + space)
+                "turns": [{"channel": 0, "speaker": spk, "text": f"{['bad cab', 'fig jade', 'cage bead', 'deaf jab'][si]} {['ace', 'bed'][u]}"}],
+                "channels": [{"gt_wav": f"{name}.wav", "prompt_wav": f"{name}.wav",
+                              "prompt_text": "x", "speaker": spk}],
+            }))
+    (root / "manifest.jsonl").write_text("\n".join(lines) + "\n")
+    (root / "SPEAKERS.txt").write_text(
+        ";ID |SEX| SUBSET\n11 | F | test-clean\n12 | M | test-clean\n13 | F | test-clean\n14 | M | test-clean\n")
+    return root
+
+
+class TestPoolPrompts:
+    def _cfg(self, fixture, mode, inf_dir, pool_root, speakers_txt=True):
+        cfg = _infer_config(fixture, mode, inf_dir)
+        cfg.prompt.pool = {
+            "manifest": str(pool_root / "manifest.jsonl"), "band": [3.0, 4.5], "seed": 0,
+            "speakers_txt": str(pool_root / "SPEAKERS.txt") if speakers_txt else None,
+        }
+        return cfg
+
+    def test_seeded_run_uses_pool_prompts_with_silent_other_rows(self, fixture, ext_vocab_file):
+        import egs3.conversational.tts.src.inference as inf_mod
+        pool_root = _write_pool(fixture["tmp_path"])
+        seen = {}
+        real = inf_mod.generate_region
+
+        def spy(model, vocoder, speech, text, prompt_frames, total_frames, **kw):
+            # first call = sess_w00000, the window whose meta is checked below
+            seen.setdefault("speech", speech.clone()); seen.setdefault("prompt_frames", prompt_frames)
+            return real(model, vocoder, speech, text, prompt_frames, total_frames, **kw)
+
+        import pytest as _pt
+        mp = _pt.MonkeyPatch(); mp.setattr(inf_mod, "generate_region", spy)
+        try:
+            inf_dir = fixture["tmp_path"] / "pool_gen"
+            cfg = self._cfg(fixture, "generate", inf_dir, pool_root)
+            stats = run_inference(cfg, training_config=fixture["training_config"],
+                                  model=build_tiny(ext_vocab_file).eval(), vocoder=FakeVocoder())
+        finally:
+            mp.undo()
+        assert stats["n_selected"] == 2 and stats["n_skipped"] == 0
+        meta = json.loads((inf_dir / "valid/meta/sess_w00000.json").read_text())
+        assert meta["prompt"]["source"] == "pool"
+        turns = meta["prompt"]["turns"]
+        assert [t["channel"] for t in turns] == [0, 1]
+        assert len({t["speaker"] for t in turns}) == 2          # distinct speakers
+        assert all(t["start"] == 0.0 and t["wav"].endswith(".wav") for t in turns)
+        assert all(t["pool_id"].startswith("pool_") for t in turns)
+        # the written prompt wav IS the pool utterance (same length)
+        x, sr = _read_wav(inf_dir / "valid/prompt/sess_w00000_ch0.wav")
+        assert abs(len(x) / sr - turns[0]["duration_sec"]) < 0.01
+        # model input: during ch0's block, row 1 is exactly silent (and vice versa)
+        speech = seen["speech"]
+        n0 = int(round(turns[0]["duration_sec"] * FS))
+        assert float(speech[1, :n0].abs().max()) == 0.0
+        assert float(speech[0, :n0].abs().max()) > 0.0
+        assert float(speech[0, n0 : n0 + int(2.0 * FS)].abs().max()) == 0.0
+
+    def test_gender_matching_and_determinism(self, fixture):
+        from egs3.conversational.tts.src.prompt_pool import PromptPool
+        pool_root = _write_pool(fixture["tmp_path"])
+        pool = PromptPool(pool_root / "manifest.jsonl", (3.0, 4.5), seed=0,
+                          speakers_txt=pool_root / "SPEAKERS.txt")
+        turns = [Turn(0, "FEE013", "a", 0.0, 1.0), Turn(1, "MEO015", "b", 1.0, 2.0)]
+        a = pool.draw("w0", (0, 1), turns); b = pool.draw("w0", (0, 1), turns)
+        assert a == b
+        assert a[0].gender == "F" and a[1].gender == "M"
+        assert a[0].speaker != a[1].speaker
+        c = pool.draw("w1", (0, 1), turns)
+        assert (c[0].speaker, c[0].pool_id) != (a[0].speaker, a[0].pool_id) or c[1] != a[1]
+        # unknown speaker ids: no gender constraint, still distinct
+        d = pool.draw("w0", (0, 1), [Turn(0, "spk_a", "a", 0.0, 1.0), Turn(1, "spk_b", "b", 1.0, 2.0)])
+        assert d[0].speaker != d[1].speaker
+
+    def test_frozen_manifest_replays_pool_draw_byte_for_byte(self, fixture):
+        from egs3.conversational.tts.src.eval_manifest import (
+            build_eval_manifest, load_eval_manifest, write_eval_manifest,
+        )
+        pool_root = _write_pool(fixture["tmp_path"])
+        seeded_dir = fixture["tmp_path"] / "seeded"
+        cfg = self._cfg(fixture, "gt", seeded_dir, pool_root)
+        seeded = run_inference(cfg, training_config=fixture["training_config"])
+        header, rows = build_eval_manifest(self._cfg(fixture, "gt", seeded_dir, pool_root),
+                                           training_config=fixture["training_config"])
+        assert header["num_skipped"] == 0 and header["prompt_pool"]["num_speakers"] == 4
+        assert header["prompt_pool"]["band"] == [3.0, 4.5]
+        assert all("wav" in p and "start" not in p for r in rows for p in r["prompts"])
+        path = fixture["tmp_path"] / "frozen_pool.jsonl"
+        write_eval_manifest(path, header, rows)
+        load_eval_manifest(path)
+        replay_dir = fixture["tmp_path"] / "replay"
+        cfg2 = _infer_config(fixture, "gt", replay_dir)   # NO pool block: the manifest carries it
+        cfg2.selection.manifest = str(path)
+        replayed = run_inference(cfg2, training_config=fixture["training_config"])
+        assert replayed == seeded
+        for name in sorted(p.name for p in (seeded_dir / "valid/meta").glob("*.json")):
+            assert (seeded_dir / "valid/meta" / name).read_bytes() == (replay_dir / "valid/meta" / name).read_bytes(), name
+
+    def test_missing_pool_file_is_an_error(self, fixture):
+        from egs3.conversational.tts.src.prompt_pool import pool_turn_from_entry
+        with pytest.raises(FileNotFoundError):
+            pool_turn_from_entry({"wav": str(fixture["tmp_path"] / "nope.wav"), "text": "x"}, 0)
+
+    def test_pool_prompt_loudness_uses_default_threshold(self, fixture):
+        pool_root = _write_pool(fixture["tmp_path"])
+        inf_dir = fixture["tmp_path"] / "pool_loud"
+        cfg = self._cfg(fixture, "gt", inf_dir, pool_root)
+        cfg.prompt.normalize_db = -23.0
+        side = fixture["tmp_path"] / "ex.json"
+        side.write_text(json.dumps({"version": 1, "spans": [], "floor_db": {"sess": [-40.0, -40.0]}}))
+        cfg.prompt.exclude_spans = str(side)
+        run_inference(cfg, training_config=fixture["training_config"])
+        meta = json.loads((inf_dir / "valid/meta/sess_w00000.json").read_text())
+        assert meta["prompt"]["loudness"]["threshold_db"] == [-60.0, -60.0]  # not floor -40 + 10
+        from egs3.conversational.tts.src.loudness import active_rms_db
+        x, sr = _read_wav(inf_dir / "valid/prompt/sess_w00000_ch1.wav")
+        assert active_rms_db(x, sr) == pytest.approx(-23.0, abs=0.2)

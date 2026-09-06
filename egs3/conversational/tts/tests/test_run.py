@@ -237,6 +237,8 @@ def test_ami_configs_load_and_agree():
     assert inf.anchor.mask_to_turns.guard_sec == 0.15
     assert inf.prompt.normalize_db == -23.0 and inf.prompt.normalize_floor_margin_db == 10.0
     assert inf.anchor.normalize_db == -23.0
+    assert inf.prompt.pool.manifest.endswith("libritts-test-clean/manifest.jsonl")
+    assert list(inf.prompt.pool.band) == [2.5, 3.5] and inf.prompt.pool.seed == 0
     assert (inf.sampling.steps, inf.sampling.cfg_strength, inf.sampling.sway_sampling_coef) == (
         64, 3.0, -1.0,
     )

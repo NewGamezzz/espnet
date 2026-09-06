@@ -86,6 +86,11 @@ prompt:
   normalize_db: null
   normalize_floor_margin_db: 10.0
   seed: 0
+  # External prompt pool (null = corpus ladder): {manifest: <one-channel
+  # training-style manifest>, band: [min_sec, max_sec], seed, speakers_txt}.
+  # K distinct pool speakers per window, drawn per window id; see
+  # src/prompt_pool.py.
+  pool: null
 
 # Duration policy. ground_truth (default) generates exactly the window length
 # (bit-identical to every earlier run). predicted generates F5's per-speaker

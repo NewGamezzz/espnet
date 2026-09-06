@@ -137,10 +137,17 @@ from egs3.conversational.tts.src.external_testset import (
     duration_meta,
 )
 from egs3.conversational.tts.src.loudness import (
+    DEFAULT_ACTIVE_THRESHOLD,
     gain_to_target,
     load_channel_floors,
     loudness_meta,
     threshold_from_floor,
+)
+from egs3.conversational.tts.src.prompt_pool import (
+    PoolTurn,
+    PromptPool,
+    pool_turn_from_entry,
+    read_pool_prompt,
 )
 from egs3.conversational.tts.src.timestamp_layout import prompt_window_layout
 
@@ -387,6 +394,11 @@ def _resolve_pinned_turns(pool_turns, prompts, record) -> list[Any]:
     selected: list[Any] = []
     for ch in rows:
         entry = by_channel[ch]
+        if "wav" in entry:
+            # External pool prompt (CoVoMix2 protocol): a file, not a span of
+            # the session, so the leakage check does not apply.
+            selected.append(pool_turn_from_entry(entry, ch))
+            continue
         start, end = float(entry["start"]), float(entry["end"])
         if _overlaps(start, end, record.t0, record.t1):
             raise ValueError(
@@ -459,16 +471,19 @@ def _turn_spans(turns, t0: float) -> list[dict[str, Any]]:
 def _prompt_turn_meta(turns) -> list[dict[str, Any]]:
     """Meta entries for the concatenated prompt turns, session-absolute spans,
     in concatenation (channel-ascending) order."""
-    return [
-        {
+    out = []
+    for t in turns:
+        m = {
             "channel": int(t.channel),
             "text": t.text,
             "start": round(t.start, 6),
             "end": round(t.end, 6),
             "duration_sec": round(t.end - t.start, 6),
         }
-        for t in turns
-    ]
+        if isinstance(t, PoolTurn):
+            m.update(pool_id=t.pool_id, wav=t.wav, speaker=t.speaker, gender=t.gender)
+        out.append(m)
+    return out
 
 
 def _layout_turn_meta(turns) -> list[dict[str, Any]]:
@@ -627,6 +642,11 @@ def run_inference(
         if prompt_cfg.get("exclude_spans")
         else {}
     )
+    # External prompt pool (prompt.pool, the CoVoMix2 protocol): replaces the
+    # corpus ladder with a seeded per-window draw of K distinct clean
+    # speakers.  The SAME draw feeds the frozen-manifest writer, so a pinned
+    # manifest replays it byte-for-byte.
+    prompt_pool = PromptPool.from_config(prompt_cfg.get("pool"))
     anchor_cfg = cfg.get("anchor", {}) or {}
     mask_cfg = anchor_cfg.get("mask_to_turns", {}) or {}
     mask_enabled = bool(mask_cfg.get("enabled", False))
@@ -682,6 +702,8 @@ def run_inference(
             selected = _resolve_pinned_turns(
                 pool_turns, pinned_prompts[record.window_id], record
             )
+        elif prompt_pool is not None:
+            selected = prompt_pool.draw(record.window_id, rows, record.turns)
         else:
             for ch in rows:
                 turn = _select_prompt_turn(
@@ -726,10 +748,14 @@ def run_inference(
         )
         session_floors = floors_by_session.get(record.session_id, [])
         thresholds = [
-            threshold_from_floor(
+            # A pool prompt is clean external audio: the headset floor of
+            # the AMI channel it prompts says nothing about it.
+            DEFAULT_ACTIVE_THRESHOLD
+            if isinstance(sel, PoolTurn)
+            else threshold_from_floor(
                 session_floors[src] if src < len(session_floors) else None, norm_margin_db
             )
-            for src in rows
+            for src, sel in zip(rows, selected)
         ]
         anchor_loud = None
         if anchor_norm_db is not None:
@@ -744,12 +770,21 @@ def run_inference(
             anchor_loud = loudness_meta(anchor_norm_db, thresholds, a_gains, a_lim, a_lev)
 
         audio_path = dataset.dataset_root / record.audio_relpath
-        blocks = [
-            read_audio_span(
-                audio_path, record.sample_rate, t.start, t.end, fs, channels=rows
-            )
-            for t in selected
-        ]
+        blocks = []
+        for row_idx, t in enumerate(selected):
+            if isinstance(t, PoolTurn):
+                # External utterance on its own row, every other row silent
+                # (the ZipVoice external-prompt convention: one active track).
+                mono = read_pool_prompt(t.wav, fs)
+                block = torch.zeros(len(rows), mono.shape[0])
+                block[row_idx] = mono
+                blocks.append(block)
+            else:
+                blocks.append(
+                    read_audio_span(
+                        audio_path, record.sample_rate, t.start, t.end, fs, channels=rows
+                    )
+                )
         prompt_loud = None
         if prompt_norm_db is not None:
             # Gain from the OWN turn's own headset; applied to the whole row
@@ -931,6 +966,9 @@ def run_inference(
             },
             "mix_wav": mix_rel,
             "prompt": {
+                # corpus = spans of the session (the ladder / pinned spans);
+                # pool = external utterances (prompt.pool).
+                "source": "pool" if any(isinstance(t, PoolTurn) for t in selected) else "corpus",
                 "total_sec": round(prompt_samples / fs, 6),
                 "total_frames": prompt_frames,
                 "loudness": prompt_loud,

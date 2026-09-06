@@ -40,6 +40,7 @@ from egs3.conversational.tts.local.build_zipvoice_dialog_testset import (  # noq
     _normalized,
 )
 from egs3.conversational.tts.src.eval_manifest import load_eval_manifest  # noqa: E402
+from egs3.conversational.tts.src.prompt_pool import PoolTurn  # noqa: E402
 from egs3.conversational.tts.src.inference import (  # noqa: E402
     _build_turn_pools,
     _resolve_pinned_turns,
@@ -70,11 +71,17 @@ def export(
         with sf.SoundFile(str(path)) as audio:
             sr = audio.samplerate
             for i, turn in enumerate(selected):
-                audio.seek(int(round(turn.start * sr)))
-                block = audio.read(
-                    int(round((turn.end - turn.start) * sr)), dtype="float32", always_2d=True
-                )
-                mono = block[:, turn.channel]
+                if isinstance(turn, PoolTurn):
+                    # External pool prompt: the utterance file itself.
+                    block, sr = sf.read(turn.wav, dtype="float32", always_2d=True)
+                    mono = block[:, 0]
+                else:
+                    sr = audio.samplerate
+                    audio.seek(int(round(turn.start * sr)))
+                    block = audio.read(
+                        int(round((turn.end - turn.start) * sr)), dtype="float32", always_2d=True
+                    )
+                    mono = block[:, turn.channel]
                 if normalize_db is not None:
                     mono, _gain, lim = _normalized(mono, sr, normalize_db)
                     if lim:
