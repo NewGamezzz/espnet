@@ -12,7 +12,6 @@ for p in (str(WORKTREE), str(RECIPE_DIR)):
 
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402
-import soundfile as sf  # noqa: E402
 from dataset.manifest import ManifestRow, write_manifest  # noqa: E402
 
 TOKENS = [
@@ -31,23 +30,26 @@ TOKENS = [
 
 @pytest.fixture
 def corpus(tmp_path):
+    """A tiny packed corpus: two .pcm packs (de, zh) and a manifest over them."""
     audio = tmp_path / "audio"
+    packs: dict = {}
     rows = []
 
-    def clip(rel, sec):
-        p = audio / rel
-        p.parent.mkdir(parents=True, exist_ok=True)
-        wav = 0.1 * np.sin(np.arange(int(sec * 16000)) * 0.05).astype(np.float32)
-        sf.write(p, wav, 16000, format="FLAC", subtype="PCM_16")
+    def clip(pack, sec):
+        n = int(sec * 16000)
+        wav = 0.1 * np.sin(np.arange(n) * 0.05)
+        buf = packs.setdefault(pack, bytearray())
+        start = len(buf) // 2
+        buf += (wav * 32768).astype("<i2").tobytes()
+        return f"{pack}:{start}:{n}"
 
     # de: one video group with 4 segments, one singleton video,
     # one mls speaker with 2 rows
     for i in range(4):
-        clip(f"de/d/v1_{i}.flac", 3.0)
         rows.append(
             ManifestRow(
                 f"de_vidAAAAAAAA-0000{i}-00000000-00000300",
-                f"de/d/v1_{i}.flac",
+                clip("de/d.pcm", 3.0),
                 "a b <space> a",
                 "de",
                 "yodas",
@@ -60,11 +62,10 @@ def corpus(tmp_path):
                 "",
             )
         )
-    clip("de/d/v2_0.flac", 2.0)
     rows.append(
         ManifestRow(
             "de_vidBBBBBBBB-00000-00000000-00000200",
-            "de/d/v2_0.flac",
+            clip("de/d.pcm", 2.0),
             "b",
             "de",
             "yodas",
@@ -78,11 +79,10 @@ def corpus(tmp_path):
         )
     )
     for i in range(2):
-        clip(f"de/d/m_{i}.flac", 8.0)
         rows.append(
             ManifestRow(
                 f"de_77_1_00000{i}",
-                f"de/d/m_{i}.flac",
+                clip("de/d.pcm", 8.0),
                 "a a",
                 "de",
                 "mls",
@@ -97,11 +97,10 @@ def corpus(tmp_path):
         )
     # zh: split rows (no group)
     for i in range(2):
-        clip(f"zh/z/s_{i}.flac", 6.0)
         rows.append(
             ManifestRow(
                 f"zh_emilia_zh_000000000{i}",
-                f"zh/z/s_{i}.flac",
+                clip("zh/z.pcm", 6.0),
                 "a b a b a b",
                 "zh",
                 "emilia",
@@ -114,6 +113,10 @@ def corpus(tmp_path):
                 "a|b|a|b|a|b",
             )
         )
+    for pack, buf in packs.items():
+        path = audio / pack
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(bytes(buf))
     m = tmp_path / "train.tsv"
     write_manifest(rows, m)
     tok = tmp_path / "tokens.txt"

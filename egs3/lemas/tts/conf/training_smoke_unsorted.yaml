@@ -1,6 +1,10 @@
+# DIAGNOSTIC arm for loader locality (Thanapat, 2026-09-06): unsorted batches in
+# manifest order so consecutive items sit next to each other in the pack. Not
+# the production sampler (no length matching -> padding waste); batch_size 6
+# keeps the padded worst case (3 x 32 s) inside the A100.
 # 1-GPU variant of training_smoke.yaml (num_device 1, own exp_tag) so the smoke
 # can backfill on Delta while 4-GPU allocations wait a day. Regenerate with:
-#   sed -e "s/^num_device: 4$/num_device: 1/" -e "s/^exp_tag: .*/exp_tag: smoke_lemas_dualprompt_1gpu/" conf/training_smoke.yaml
+#   sed -e "s/^num_device: 4$/num_device: 1/" -e "s/^exp_tag: .*/exp_tag: smoke_lemas_dualprompt_unsorted/" conf/training_smoke.yaml
 # Smoke run of training_f5_base_dualprompt.yaml: identical model, data and
 # batching (the point is to measure production memory and throughput), with
 # exp_tag, max_steps 200, val_check_interval 100, limit_val_batches 5 and an
@@ -25,7 +29,7 @@ exp_dir: ${recipe_dir}/exp/${exp_tag}
 # experiment, so it is shared across exp_tags.
 stats_dir: ${recipe_dir}/exp/stats
 inference_dir: ${exp_dir}/inference
-exp_tag: smoke_lemas_dualprompt_1gpu
+exp_tag: smoke_lemas_dualprompt_unsorted
 
 sample_rate: 24000
 n_mel_channels: 100
@@ -172,14 +176,12 @@ dataloader:
       shuffle: true
       collate_fn: ${dataloader.collate_fn}
       batches:
-        type: numel
-        batch_size: 1          # required by signature, unused for "numel"
+        type: unsorted   # manifest order = pack order: near-sequential reads
+        batch_size: 6          # items per micro-batch; padded to the longest
         min_batch_size: 1
         shape_files:
-          - ${stats_dir}/train/feats_shape
-        # numel counts frames x n_mels; 1,000,000 = 10,000 frames per
-        # micro-batch. Re-measure on A100-40G in the smoke run.
-        batch_bins: 1000000
+          - ${stats_dir}/train/feats_shape   # key file: defines the order
+        batch_bins: 1000000   # unused by "unsorted"
   valid:
     num_shards: 1
     num_workers: 12  # latency-bound pack preads; 16 cpus per rank

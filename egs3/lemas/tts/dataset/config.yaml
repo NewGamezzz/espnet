@@ -1,7 +1,8 @@
 builder:
   mirror_root: /work/hdd/bbjs/ttrachu/dataset/LEMAS
   manifest_dir: manifests_poc3k          # relative to mirror_root
-  audio_root: /work/hdd/bbjs/ttrachu/dataset/LEMAS/poc3k_flac16k
+  # int16 packs, one per shard (see dataset/extract.py); dir striped -c 4 -S 4M
+  audio_root: /work/hdd/bbjs/ttrachu/dataset/LEMAS/poc3k_pcm16k
   data_path: data
   langs: [de, en, es, fr, id, it, pt, ru, vi, zh]
   source_sample_rate: 16000

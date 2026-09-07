@@ -4,7 +4,7 @@ from dataset.manifest import COLUMNS, ManifestColumns, ManifestRow, write_manife
 def _row(i, **kw):
     base = dict(
         utt_id=f"de_vidAAAAAAAA-0000{i}-00000000-00000300",
-        audio=f"de/de000/u{i}.flac",
+        audio=f"de/de000.pcm:{i * 16000}:16000",
         phones="a b <space> c",
         lang="de",
         source="yodas",
@@ -40,7 +40,10 @@ def test_roundtrip(tmp_path):
     assert p.read_text().splitlines()[0].count("\t") == len(COLUMNS) - 1
     cols = ManifestColumns.load(p)
     assert cols.n_rows == 2
-    assert cols.audio(1) == "de/de000/u1.flac" and cols.phones(0) == "a b <space> c"
+    assert cols.audio(1) == "de/de000.pcm:16000:16000"
+    assert cols.phones(0) == "a b <space> c"
+    assert cols.pack_names == ["de/de000.pcm"] and cols.pack.tolist() == [0, 0]
+    assert cols.a_start.tolist() == [0, 16000] and cols.a_len.tolist() == [16000] * 2
     assert cols.group[0] >= 0 and cols.group[1] == -1
     assert cols.spk_mode.tolist() == [1, 2]
     assert cols.seg.tolist() == [0, -1]

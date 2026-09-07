@@ -20,7 +20,7 @@ from importlib import resources
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from dataset.extract import extract_all
+from dataset.extract import extract_all, read_pack_index
 from dataset.keys import classify_key, group_id
 from dataset.manifest import ManifestRow
 
@@ -309,16 +309,31 @@ class LEMASBuilder(DatasetBuilder):
     def _read_pool(
         self, lang: str
     ) -> Dict[str, List[Tuple[str, str, float, str, int]]]:
-        """Return shard -> rows ``(key, audio_rel_flac, dur, source, byte_offset)``."""
+        """Return shard -> rows ``(key, audio_spec, dur, source, byte_offset)``.
+
+        ``audio_spec`` is ``<lang>/<shard>.pcm:<start>:<n>`` (samples at 16 kHz)
+        from the shard's pack index, and ``dur`` is ``n / sample_rate``: the
+        packed length, not the jsonl duration (which overstates the audio by up
+        to 64 samples).
+        """
         by_shard: Dict[str, list] = defaultdict(list)
+        audio_root = Path(self.cfg["audio_root"])
+        sr = int(self.cfg["source_sample_rate"])
         for tsv in self._manifest_tsvs(lang):
+            index_path = audio_root / lang / f"{tsv.stem}.index.tsv"
+            index = read_pack_index(index_path)
+            pack_rel = f"{lang}/{tsv.stem}.pcm"
             with tsv.open(encoding="utf-8") as f:
                 for line in f:
-                    key, audio, dur, source, off = line.rstrip("\n").split("\t")
+                    key, audio, _dur, source, off = line.rstrip("\n").split("\t")
                     if source == "unknown":
                         source = classify_key(key)
-                    flac = f"{lang}/{Path(audio).with_suffix('.flac')}"
-                    by_shard[tsv.stem].append((key, flac, float(dur), source, int(off)))
+                    if audio not in index:
+                        raise RuntimeError(f"{audio} is not in {index_path}")
+                    start, n = index[audio]
+                    by_shard[tsv.stem].append(
+                        (key, f"{pack_rel}:{start}:{n}", n / sr, source, int(off))
+                    )
         return by_shard
 
     def _choose_valid(self, lang: str, by_shard, sizes: Counter, rng: random.Random):

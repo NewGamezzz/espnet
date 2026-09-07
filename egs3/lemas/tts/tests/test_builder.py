@@ -116,7 +116,7 @@ def test_builder_is_a_dataset_builder():
 
 
 def _fake_mirror(tmp_path):
-    """A two-language mirror with jsonl + poc3k tsv (no audio needed for build)."""
+    """A two-language mirror: shard tars, jsonl and poc3k tsv."""
     import json as _json
 
     mirror = tmp_path / "mirror"
@@ -167,6 +167,27 @@ def _fake_mirror(tmp_path):
         jl.parent.mkdir(parents=True, exist_ok=True)
         tsv = mirror / "manifests_poc3k" / lang / f"{lang}000.tsv"
         tsv.parent.mkdir(parents=True, exist_ok=True)
+        # the shard tar: WAV members of the stated duration (48 samples short,
+        # like the real jsonl durations)
+        import io as _io
+        import tarfile as _tarfile
+
+        import numpy as _np
+        import soundfile as _sf
+
+        with _tarfile.open(jl.with_suffix(".tar.gz"), "w:gz") as tf:
+            for key, audio, dur, source, txt, words in rs:
+                buf = _io.BytesIO()
+                _sf.write(
+                    buf,
+                    _np.zeros(int(dur * 16000) - 48, _np.float32),
+                    16000,
+                    format="WAV",
+                )
+                data = buf.getvalue()
+                info = _tarfile.TarInfo(audio)
+                info.size = len(data)
+                tf.addfile(info, _io.BytesIO(data))
         off = 0
         with jl.open("wb") as fj, tsv.open("w") as ft:
             for key, audio, dur, source, txt, words in rs:
@@ -197,7 +218,7 @@ def test_build_end_to_end_fake_mirror(tmp_path):
         CFG,
         mirror_root=str(mirror),
         manifest_dir="manifests_poc3k",
-        audio_root=str(tmp_path / "flac"),
+        audio_root=str(tmp_path / "pcm"),
         data_path="data",
         langs=["de", "zh"],
         source_sample_rate=16000,
@@ -209,6 +230,10 @@ def test_build_end_to_end_fake_mirror(tmp_path):
     )
     b = LEMASBuilder(cfg)
     recipe = tmp_path / "recipe"
+    assert not b.is_source_prepared()
+    b.prepare_source()
+    assert b.is_source_prepared()
+    assert (tmp_path / "pcm" / "de" / "de000.pcm").is_file()
     assert not b.is_built(recipe_dir=recipe)
     b.build(recipe_dir=recipe, phonemizer_factory=FakePhon)
     assert b.is_built(recipe_dir=recipe)
@@ -220,12 +245,10 @@ def test_build_end_to_end_fake_mirror(tmp_path):
     assert len(de_valid_groups) == 1 and not any(
         ln.split("\t")[5] in de_valid_groups for ln in train
     )
-    assert all(
-        ln.split("\t")[1].startswith("de/de000/")
-        and ln.split("\t")[1].endswith(".flac")
-        for ln in train
-        if ln.startswith("de_")
-    )
+    de_train = [ln.split("\t") for ln in train if ln.startswith("de_")]
+    assert all(p[1].startswith("de/de000.pcm:") for p in de_train)
+    # dur comes from the packed length (48 samples short of the jsonl's 3.0 s)
+    assert all(abs(float(p[6]) - (48000 - 48) / 16000) < 1e-6 for p in de_train)
     stats = _json.loads((recipe / "data/lang_stats.json").read_text())
     assert set(stats) == {"de", "zh"} and stats["zh"]["tokens_per_sec"] > 0
     modes = _json.loads((recipe / "data/spk_mode_counts.json").read_text())

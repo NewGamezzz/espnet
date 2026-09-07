@@ -1,13 +1,21 @@
-"""Stream LEMAS shard tars once and write the manifest's members as FLAC.
+"""Stream LEMAS shard tars once and pack the manifest's members as raw PCM.
 
 Each ``train/<lang>/<shard>.tar.gz`` is read in tar stream mode (gzip is not
-seekable), members listed in the shard's poc3k tsv are decoded with soundfile
-and written as 16 kHz mono 16-bit FLAC under ``<out_root>/<shard>/``.
-Members at another rate (the Emilia portions of en/zh are 24/32 kHz) are
-resampled with soxr and counted in the coverage. A
-per-shard ``.complete`` marker makes re-runs free and a ``.coverage.json``
-records manifest rows versus members found. A member absent from its tar is a
-hard failure, which is the audit the mirror runbook deferred to this pass.
+seekable); members listed in the shard's poc3k tsv are decoded with soundfile,
+downmixed, resampled with soxr when they are not at 16 kHz (the Emilia portions
+of en/zh ship at 24/32 kHz; counted in the coverage) and appended in tar order
+to ONE file per shard::
+
+    <out_root>/<shard>.pcm        int16 little-endian mono 16 kHz, concatenated
+    <out_root>/<shard>.index.tsv  <member> <start_sample> <n_samples>
+
+One file per shard rather than one per member because random access to 30 M
+small files on Lustre costs ~160 ms per open (metadata) while a ``pread`` of a
+region inside a large file costs ~40 ms (measured on Delta /work/hdd), and the
+dataset reads three regions per training item. A per-shard ``.complete``
+marker makes re-runs free and ``.coverage.json`` records manifest rows versus
+members found. A member absent from its tar is a hard failure, which is the
+audit the mirror runbook deferred to this pass.
 """
 
 from __future__ import annotations
@@ -18,12 +26,15 @@ import logging
 import tarfile
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
-from typing import Iterable, Set
+from typing import Dict, Iterable, Set, Tuple
 
+import numpy as np
 import soundfile as sf
 import soxr
 
 logger = logging.getLogger(__name__)
+
+PCM_DTYPE = "<i2"  # int16 little-endian, 2 bytes per sample
 
 
 def read_shard_members(tsv_path) -> Set[str]:
@@ -37,51 +48,70 @@ def read_shard_members(tsv_path) -> Set[str]:
     return members
 
 
-def _write_flac(data: bytes, out_path: Path, sample_rate: int) -> bool:
-    """Decode ``data``, downmix, resample to ``sample_rate`` if needed, write.
+def read_pack_index(index_path) -> Dict[str, Tuple[int, int]]:
+    """Return ``member -> (start_sample, n_samples)`` from a ``.index.tsv``.
 
-    Returns True when the member had to be resampled.
+    Args:
+        index_path: ``<shard>.index.tsv`` written by :func:`extract_shard`.
+
+    Returns:
+        Mapping from tar member path to its region in ``<shard>.pcm``.
+
+    Example:
+        >>> read_pack_index("pcm/de/de000.index.tsv")["de000/x.mp3"]
+        (0, 38400)
+    """
+    index: Dict[str, Tuple[int, int]] = {}
+    with Path(index_path).open(encoding="utf-8") as f:
+        for line in f:
+            member, start, n = line.rstrip("\n").split("\t")
+            index[member] = (int(start), int(n))
+    return index
+
+
+def _decode(data: bytes, sample_rate: int) -> Tuple[np.ndarray, bool]:
+    """Decode, downmix, resample to ``sample_rate`` if needed, quantise to int16.
+
+    Returns the int16 samples and whether the member had to be resampled.
     """
     wav, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=True)
     wav = wav.mean(axis=1)
     resampled = sr != sample_rate
     if resampled:
         wav = soxr.resample(wav, sr, sample_rate, quality="HQ")
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out_path.with_name(out_path.name + ".tmp")
-    sf.write(tmp, wav, sample_rate, format="FLAC", subtype="PCM_16")
-    tmp.replace(out_path)
-    return resampled
+    pcm = np.clip(np.round(wav * 32768.0), -32768, 32767).astype(PCM_DTYPE)
+    return pcm, resampled
 
 
 def extract_shard(
     tar_path, members: Set[str], out_root, source_sample_rate: int = 16000
 ) -> dict:
-    """Extract ``members`` of one shard tar to FLAC under ``out_root``.
+    """Pack ``members`` of one shard tar into ``<out_root>/<shard>.pcm``.
 
     Args:
         tar_path: ``<shard>.tar.gz``.
-        members: Tar member paths to extract (``<shard>/<file>.mp3``).
-        out_root: Output directory; files land at
-            ``<out_root>/<member with .flac suffix>``.
+        members: Tar member paths to pack (``<shard>/<file>.mp3``).
+        out_root: Output directory for ``<shard>.pcm`` and ``<shard>.index.tsv``.
         source_sample_rate: Output sample rate; members at another rate are
             resampled to it.
 
     Returns:
         Coverage dict ``{"manifest_rows", "members_extracted", "resampled",
-        "missing"}``.
+        "samples", "missing"}``.
 
     Raises:
         RuntimeError: If any member is absent from the tar (the
             ``.complete`` marker is then NOT written).
 
     Example:
-        >>> extract_shard("de000.tar.gz", {"de000/x.mp3"}, "flac/de")
-        {'manifest_rows': 1, 'members_extracted': 1, 'resampled': 0, 'missing': []}
+        >>> extract_shard("de000.tar.gz", {"de000/x.mp3"}, "pcm/de")
+        {'manifest_rows': 1, 'members_extracted': 1, 'resampled': 0, ...}
 
     Note:
         A shard whose ``.complete`` marker exists returns its stored coverage
-        without touching the tar, so re-running the stage is free.
+        without touching the tar, so re-running the stage is free. A partial
+        ``.pcm.tmp`` from an interrupted run is overwritten: a gzip stream
+        cannot be resumed mid-way.
     """
     tar_path, out_root = Path(tar_path), Path(out_root)
     shard = tar_path.name.split(".")[0]
@@ -89,26 +119,33 @@ def extract_shard(
     coverage_path = out_root / f"{shard}.coverage.json"
     if done_marker.is_file():
         return json.loads(coverage_path.read_text())
+    out_root.mkdir(parents=True, exist_ok=True)
+    pack = out_root / f"{shard}.pcm"
+    tmp = out_root / f"{shard}.pcm.tmp"
     remaining = set(members)
-    n_resampled = 0
-    with tarfile.open(tar_path, "r|gz") as tf:
+    n_resampled = pos = 0
+    index = []
+    with tarfile.open(tar_path, "r|gz") as tf, tmp.open("wb") as fpcm:
         for info in tf:
             if info.name not in remaining:
                 continue
-            data = tf.extractfile(info).read()
-            n_resampled += _write_flac(
-                data,
-                out_root / Path(info.name).with_suffix(".flac"),
-                source_sample_rate,
-            )
+            pcm, resampled = _decode(tf.extractfile(info).read(), source_sample_rate)
+            fpcm.write(pcm.tobytes())
+            index.append((info.name, pos, len(pcm)))
+            pos += len(pcm)
+            n_resampled += resampled
             remaining.discard(info.name)
+    (out_root / f"{shard}.index.tsv").write_text(
+        "".join(f"{m}\t{s}\t{n}\n" for m, s, n in index), encoding="utf-8"
+    )
+    tmp.replace(pack)
     coverage = {
         "manifest_rows": len(members),
         "members_extracted": len(members) - len(remaining),
         "resampled": n_resampled,
+        "samples": pos,
         "missing": sorted(remaining),
     }
-    out_root.mkdir(parents=True, exist_ok=True)
     coverage_path.write_text(json.dumps(coverage, indent=1))
     if remaining:
         raise RuntimeError(
@@ -134,13 +171,13 @@ def extract_all(
     n_workers: int = 32,
     source_sample_rate: int = 16000,
 ) -> dict:
-    """Extract every shard listed under ``<mirror_root>/<manifest_dir>/<lang>``.
+    """Pack every shard listed under ``<mirror_root>/<manifest_dir>/<lang>``.
 
     Args:
         mirror_root: LEMAS mirror root (holds ``LEMAS-train/train/<lang>``).
         manifest_dir: poc3k manifest dir, relative to ``mirror_root``.
         langs: Languages to process.
-        out_root: FLAC root; files land at ``<out_root>/<lang>/<shard>/``.
+        out_root: Pack root; files land at ``<out_root>/<lang>/<shard>.pcm``.
         n_workers: Process pool size (one shard per process).
         source_sample_rate: Output sample rate.
 
@@ -148,7 +185,7 @@ def extract_all(
         ``{tar path: coverage dict}``.
 
     Example:
-        >>> extract_all(mirror, "manifests_poc3k", ["de"], flac_root, 8)
+        >>> extract_all(mirror, "manifests_poc3k", ["de"], pcm_root, 8)
     """
     mirror_root, out_root = Path(mirror_root), Path(out_root)
     jobs = []

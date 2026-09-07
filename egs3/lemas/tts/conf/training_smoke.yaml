@@ -163,7 +163,7 @@ dataloader:
     not_sequence: [cond_frames]
   train:
     num_shards: 1
-    num_workers: 4
+    num_workers: 12  # latency-bound pack preads; 16 cpus per rank
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
       shuffle: true
@@ -179,7 +179,7 @@ dataloader:
         batch_bins: 1000000
   valid:
     num_shards: 1
-    num_workers: 4
+    num_workers: 12  # latency-bound pack preads; 16 cpus per rank
     iter_factory:
       _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
       shuffle: false

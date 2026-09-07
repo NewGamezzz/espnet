@@ -10,13 +10,13 @@ shrinks with the row and reaches 0 when both prompts are dropped.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from importlib import resources
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
-import soundfile as sf
 import torch
 import torchaudio
 from dataset.keys import SOURCES, is_recording_group
@@ -84,7 +84,8 @@ class LEMASDataset(torch.utils.data.Dataset):
             recipe_dir: Recipe root for the default manifest path.
             manifest_path: Explicit manifest tsv (overrides the default).
             token_list: Token list file; required when samples need ``text``.
-            audio_root: FLAC root (default from ``dataset/config.yaml``).
+            audio_root: Pack root holding ``<lang>/<shard>.pcm`` (default from
+                ``dataset/config.yaml``).
             load_speech: Skip audio when False (``create_shape``).
             prompt_config: Overrides of ``DEFAULT_PROMPT_CONFIG``.
             seed: Base seed of every draw.
@@ -214,13 +215,37 @@ class LEMASDataset(torch.utils.data.Dataset):
         return Draw(spk_row, s0, sl, k, lang_row, l0, ll, drop_spk, drop_lang)
 
     # ---- audio -------------------------------------------------------------
+    def _pack_fd(self, pack: int) -> int:
+        # One descriptor per pack per process, opened on first use so each
+        # dataloader worker (forked every epoch) opens its own; pread carries
+        # no file offset, so a descriptor inherited across fork is safe too.
+        fds = self.__dict__.setdefault("_fds", {})
+        fd = fds.get(pack)
+        if fd is None:
+            fd = os.open(str(self.audio_root / self.cols.pack_names[pack]), os.O_RDONLY)
+            fds[pack] = fd
+        return fd
+
+    def __getstate__(self):
+        """Drop the per-process descriptor cache when pickled (spawn workers)."""
+        state = dict(self.__dict__)
+        state.pop("_fds", None)
+        return state
+
     def _read16(
         self, row: int, start: int = 0, stop: Optional[int] = None
     ) -> np.ndarray:
-        path = self.audio_root / self.cols.audio(row)
-        wav, sr = sf.read(str(path), start=start, stop=stop, dtype="float32")
-        assert sr == SRC_SR, (path, sr)
-        return wav if wav.ndim == 1 else wav.mean(axis=1)
+        """Read ``[start, stop)`` samples (16 kHz) of ``row`` from its pack."""
+        c = self.cols
+        a_len = int(c.a_len[row])
+        stop = a_len if stop is None else min(int(stop), a_len)
+        n = max(0, stop - int(start))
+        buf = os.pread(
+            self._pack_fd(int(c.pack[row])),
+            2 * n,
+            2 * (int(c.a_start[row]) + int(start)),
+        )
+        return np.frombuffer(buf, dtype="<i2").astype(np.float32) / 32768.0
 
     @staticmethod
     def _quantize16(wav16: np.ndarray) -> np.ndarray:

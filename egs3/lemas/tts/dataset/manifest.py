@@ -97,8 +97,10 @@ class ManifestColumns:
     ``lang`` / ``source`` / ``spk_mode`` (int8 indexes into ``LANGS`` /
     ``SOURCES`` / ``SPK_MODES``), ``group`` (int32 index into
     ``group_names``, -1 for none), ``dur`` (float32), ``seg`` (int32, -1 when
-    the source has no segment index); accessors ``audio(i)``, ``phones(i)``,
-    ``word_bounds(i)``, ``phones_by_word(i)``.
+    the source has no segment index), ``pack`` (int32 index into
+    ``pack_names``) with ``a_start`` / ``a_len`` (int64 samples at 16 kHz, the
+    row's region inside its ``.pcm`` pack); accessors ``audio(i)``,
+    ``phones(i)``, ``word_bounds(i)``, ``phones_by_word(i)``.
     """
 
     def __init__(self, **cols):
@@ -122,12 +124,14 @@ class ManifestColumns:
         Example:
             >>> cols = ManifestColumns.load("data/manifest/valid.tsv")
             >>> cols.audio(0)
-            'de/de000/....flac'
+            'de/de000.pcm:0:38400'
         """
-        utt, audio, phones, lang, source, group, dur, seg, mode, wb, pbw = (
-            [] for _ in range(11)
+        utt, phones, lang, source, group, dur, seg, mode, wb, pbw = (
+            [] for _ in range(10)
         )
+        pack, a_start, a_len = [], [], []
         group_index: dict = {}
+        pack_index: dict = {}
         with Path(path).open("rb") as f:
             for line in f:
                 parts = line.rstrip(b"\n").split(b"\t")
@@ -136,7 +140,10 @@ class ManifestColumns:
                 key = parts[0].decode()
                 src = parts[4].decode()
                 utt.append(parts[0])
-                audio.append(parts[1])
+                pack_rel, start, n = parts[1].rsplit(b":", 2)
+                pack.append(pack_index.setdefault(pack_rel.decode(), len(pack_index)))
+                a_start.append(int(start))
+                a_len.append(int(n))
                 phones.append(parts[2])
                 lang.append(LANGS.index(parts[3].decode()))
                 source.append(SOURCES.index(src))
@@ -153,7 +160,10 @@ class ManifestColumns:
         return cls(
             n_rows=len(utt),
             utt_id=np.array(utt, dtype="S64"),
-            audio=_StrColumn(audio),
+            pack=np.array(pack, dtype=np.int32),
+            a_start=np.array(a_start, dtype=np.int64),
+            a_len=np.array(a_len, dtype=np.int64),
+            pack_names=list(pack_index),
             phones=_StrColumn(phones),
             lang=np.array(lang, dtype=np.int8),
             source=np.array(source, dtype=np.int8),
@@ -165,6 +175,10 @@ class ManifestColumns:
             _pbw=_StrColumn(pbw),
             group_names=list(group_index),
         )
+
+    def audio(self, i: int) -> str:
+        """Audio spec ``<pack path>:<start>:<n>`` of row ``i`` (samples at 16 kHz)."""
+        return f"{self.pack_names[self.pack[i]]}:{self.a_start[i]}:{self.a_len[i]}"
 
     def word_bounds(self, i: int) -> List[Tuple[float, float]]:
         """Per-word ``(start, end)`` seconds for split rows, else ``[]``."""
