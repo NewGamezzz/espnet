@@ -114,14 +114,16 @@ def arm(base_inf: str, base_met: str, K: int, suffix: str, arm_name: str,
 
 
 def main(argv=None) -> int:
+    global MANIFEST_TAG, TRAIN
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--tag", required=True)
     ap.add_argument("--subset", action="store_true")
     ap.add_argument("--manifest-tag", default="v1", help="data/eval/ami_test_k<K>[_sub20]_<tag>.jsonl")
+    ap.add_argument("--training-config", default=TRAIN, help="eval-side training config (model/vocab) for the checkpoint")
     a = ap.parse_args(argv)
-    global MANIFEST_TAG
     MANIFEST_TAG = a.manifest_tag
+    TRAIN = a.training_config
     suffix = "_sub20" if a.subset else ""
     base_inf = (ROOT / "conf" / "inference_ami.yaml").read_text()
     base_met = (ROOT / "conf" / "metrics_ami.yaml").read_text()
