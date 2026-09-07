@@ -42,6 +42,7 @@ to the language pack.
 
 from __future__ import annotations
 
+import gc
 import io
 import json
 import logging
@@ -289,10 +290,24 @@ class _SeqReader:
         self.f.close()
 
 
+def _freeze_inherited_heap() -> None:
+    """Take the parent's objects out of the collector's view in a forked worker.
+
+    The pool workers fork from a parent holding ~30 M small objects (the
+    per-row chunk maps of every language). Every full collection in a worker
+    walked all of them: one bucket merged in 30 s in a fresh process but in
+    2.7 min inside the pool (measured 2026-09-07). ``gc.freeze`` moves the
+    inherited heap to the permanent generation.
+    """
+    gc.collect()
+    gc.freeze()
+
+
 def _bucket_shard(args):
     """Pass 1 for one shard pack: append its rows to per-shard bucket parts."""
     pack, index_path, parts_dir, rows, n_buckets = args
     # rows: member -> (bucket, chunk) computed by the caller from the keys
+    _freeze_inherited_heap()
     parts_dir = Path(parts_dir)
     parts_dir.mkdir(parents=True, exist_ok=True)
     index = read_pack_index(index_path)
@@ -328,6 +343,7 @@ def _bucket_shard(args):
 def _merge_language(args):
     """Pass 2 for one language: buckets -> chunks -> shuffled language pack."""
     lang, parts_dirs, out_root, n_buckets, seed, chunk_rows = args
+    _freeze_inherited_heap()
     out_root = Path(out_root)
     lang_dir = out_root / lang
     lang_dir.mkdir(parents=True, exist_ok=True)

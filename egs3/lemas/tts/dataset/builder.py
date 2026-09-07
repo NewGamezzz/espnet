@@ -193,6 +193,10 @@ _WORKER_FACTORY: Optional[Callable] = None
 
 
 def _worker_init(factory):
+    import gc
+
+    gc.collect()
+    gc.freeze()  # the parent's pool dicts are not this worker's garbage
     global _WORKER_PHON, _WORKER_FACTORY
     _WORKER_FACTORY = factory
     _WORKER_PHON = None
