@@ -19,7 +19,6 @@ from typing import Any, Dict, Optional, Tuple
 import numpy as np
 import torch
 import torchaudio
-from dataset.keys import SOURCES, is_recording_group
 from dataset.manifest import ManifestColumns
 from src.layout import (
     HOP,
@@ -43,6 +42,10 @@ DEFAULT_PROMPT_CONFIG = dict(
     spk_neighbor_k=8,
     p_drop_spk=0.3,
     p_drop_lang=0.1,
+    # pack blocks: the read/cache unit (4 MB) and how many neighbouring blocks
+    # the language prompt may come from (see src/sampler.py)
+    block_samples=2_097_152,
+    lang_block_span=1,
 )
 
 
@@ -133,8 +136,19 @@ class LEMASDataset(torch.utils.data.Dataset):
     # ---- indexes -----------------------------------------------------------
     def _index_groups(self) -> None:
         c = self.cols
-        order = np.lexsort((c.seg, c.group))  # rows sorted by (group, seg)
-        self._group_rows = order[c.group[order] >= 0]
+        # position of every row in pack order (pack, a_start): after the
+        # chunk-contiguous regroup, a speaker's neighbours in pack order are
+        # its chunk mates, so partner draws stay inside the cached blocks
+        order = np.lexsort((c.a_start, c.pack))
+        self._pack_order = order
+        self._pos = np.empty(c.n_rows, dtype=np.int64)
+        self._pos[order] = np.arange(c.n_rows)
+        self._pack_start = np.searchsorted(
+            c.pack[order], np.arange(len(c.pack_names) + 1)
+        )
+        # rows of each group sorted by pack position (CSR)
+        g_order = np.lexsort((self._pos, c.group))
+        self._group_rows = g_order[c.group[g_order] >= 0]
         g_sorted = c.group[self._group_rows]
         n_groups = len(c.group_names)
         self._group_start = np.searchsorted(g_sorted, np.arange(n_groups + 1))
@@ -144,6 +158,11 @@ class LEMASDataset(torch.utils.data.Dataset):
         self._lang_start = np.searchsorted(
             c.lang[self._lang_rows], np.arange(len(LANGS) + 1)
         )
+        self.n_lang_fallback = 0  # language prompts that left the block window
+
+    def block_of(self, idx: int) -> int:
+        """Index of the pack block holding the start of row ``idx``."""
+        return int(self.cols.a_start[idx]) // int(self.cfg["block_samples"])
 
     def set_epoch(self, epoch: int) -> None:
         """Advance the draw seed; a no-op for fixed (validation) datasets."""
@@ -180,10 +199,12 @@ class LEMASDataset(torch.utils.data.Dataset):
         g = int(c.group[idx])
         lo, hi = self._group_start[g], self._group_start[g + 1]
         members = self._group_rows[lo:hi]
-        if is_recording_group(SOURCES[int(c.source[idx])]):
-            pos = int(self._pos_in_group[idx]) - int(lo)
-            k = int(self.cfg["spk_neighbor_k"])
-            members = members[max(0, pos - k) : pos + k + 1]
+        # the k nearest group mates in pack order: for recordings these are
+        # the neighbouring segments, for speakers the chunk mates; either way
+        # they sit in the same 4 MB block as the target
+        pos = int(self._pos_in_group[idx]) - int(lo)
+        k = int(self.cfg["spk_neighbor_k"])
+        members = members[max(0, pos - k) : pos + k + 1]
         cands = members[members != idx]
         row = int(rng.choice(cands))
         start, length = self._window16(
@@ -193,6 +214,27 @@ class LEMASDataset(torch.utils.data.Dataset):
 
     def _draw_lang(self, rng, idx: int):
         c = self.cols
+        block = int(self.cfg["block_samples"])
+        span = int(self.cfg["lang_block_span"])
+        pack = int(c.pack[idx])
+        b = self.block_of(idx)
+        # rows of the same pack whose start lies in blocks [b - span, b + span]
+        p0, p1 = int(self._pack_start[pack]), int(self._pack_start[pack + 1])
+        starts = c.a_start[self._pack_order[p0:p1]]
+        lo = p0 + int(np.searchsorted(starts, max(0, b - span) * block))
+        hi = p0 + int(np.searchsorted(starts, (b + span + 1) * block))
+        for _ in range(20):
+            if hi - lo <= 1:
+                break
+            row = int(self._pack_order[int(rng.integers(lo, hi))])
+            if row == idx or (c.group[idx] >= 0 and c.group[row] == c.group[idx]):
+                continue
+            start, length = self._window16(
+                rng, float(c.dur[row]), self.cfg["lang_prompt_sec"]
+            )
+            return row, start, length
+        # the window is one speaker (a giant group): any row of the language
+        self.n_lang_fallback += 1
         lang = int(c.lang[idx])
         lo, hi = int(self._lang_start[lang]), int(self._lang_start[lang + 1])
         for _ in range(100):
@@ -217,37 +259,69 @@ class LEMASDataset(torch.utils.data.Dataset):
         return Draw(spk_row, s0, sl, k, lang_row, l0, ll, drop_spk, drop_lang)
 
     # ---- audio -------------------------------------------------------------
-    def _pack_fd(self, pack: int) -> int:
+    def _pack_fd(self, pack: int) -> Tuple[int, int]:
         # One descriptor per pack per process, opened on first use so each
         # dataloader worker (forked every epoch) opens its own; pread carries
         # no file offset, so a descriptor inherited across fork is safe too.
         fds = self.__dict__.setdefault("_fds", {})
-        fd = fds.get(pack)
-        if fd is None:
+        ent = fds.get(pack)
+        if ent is None:
             fd = os.open(str(self.audio_root / self.cols.pack_names[pack]), os.O_RDONLY)
-            fds[pack] = fd
-        return fd
+            ent = fds[pack] = (fd, os.fstat(fd).st_size // 2)
+        return ent
+
+    def _block(self, pack: int, b: int) -> np.ndarray:
+        """Return block ``b`` of ``pack`` (int16), from a small per-process cache.
+
+        One aligned 4 MB read costs ~100 ms on Delta /work/hdd against ~70 ms
+        (p90 300 ms) for a random 64 KB one, so the loader reads whole blocks
+        and serves every row of a batch, its speaker-prompt partner and its
+        language prompt from the few blocks it has cached.
+        """
+        cache = self.__dict__.setdefault("_blocks", {})
+        key = (pack, b)
+        hit = cache.get(key)
+        if hit is not None:
+            return hit
+        block = int(self.cfg["block_samples"])
+        fd, n_samples = self._pack_fd(pack)
+        n = max(0, min(block, n_samples - b * block))
+        buf = os.pread(fd, 2 * n, 2 * b * block)
+        arr = np.frombuffer(buf, dtype="<i2")
+        if len(cache) >= int(self.cfg.get("block_cache", 6)):
+            cache.pop(next(iter(cache)))  # oldest
+        cache[key] = arr
+        self.n_block_reads = getattr(self, "n_block_reads", 0) + 1
+        return arr
 
     def __getstate__(self):
-        """Drop the per-process descriptor cache when pickled (spawn workers)."""
+        """Drop the per-process descriptor and block caches when pickled."""
         state = dict(self.__dict__)
         state.pop("_fds", None)
+        state.pop("_blocks", None)
         return state
 
     def _read16(
         self, row: int, start: int = 0, stop: Optional[int] = None
     ) -> np.ndarray:
-        """Read ``[start, stop)`` samples (16 kHz) of ``row`` from its pack."""
+        """Read ``[start, stop)`` samples (16 kHz) of ``row`` via the block cache."""
         c = self.cols
         a_len = int(c.a_len[row])
         stop = a_len if stop is None else min(int(stop), a_len)
         n = max(0, stop - int(start))
-        buf = os.pread(
-            self._pack_fd(int(c.pack[row])),
-            2 * n,
-            2 * (int(c.a_start[row]) + int(start)),
-        )
-        return np.frombuffer(buf, dtype="<i2").astype(np.float32) / 32768.0
+        block = int(self.cfg["block_samples"])
+        pack = int(c.pack[row])
+        s0 = int(c.a_start[row]) + int(start)
+        pieces = []
+        pos = s0
+        while pos < s0 + n:
+            b, off = divmod(pos, block)
+            arr = self._block(pack, b)
+            take = min(s0 + n - pos, block - off)
+            pieces.append(arr[off : off + take])
+            pos += take
+        out = np.concatenate(pieces) if len(pieces) != 1 else pieces[0]
+        return out.astype(np.float32) / 32768.0
 
     @staticmethod
     def _quantize16(wav16: np.ndarray) -> np.ndarray:
@@ -324,6 +398,20 @@ class LEMASDataset(torch.utils.data.Dataset):
             if text is not None:
                 assert len(text) <= len(sample["speech"]) // HOP + 1, (idx, len(text))
         return sample
+
+    def frames_bound(self, hop_length: int = HOP, sample_rate: int = SR) -> np.ndarray:
+        """Per-row upper bound on frames for batching, aware of the prompt mode.
+
+        ``none``/``split`` rows never get a separate speaker-prompt region
+        (the split prompt lies inside the row), so only the language prompt is
+        added; ``group`` rows add both.
+        """
+        c = self.cols
+        lang_hi = float(self.cfg["lang_prompt_sec"][1])
+        spk_hi = float(self.cfg["spk_prompt_sec"][1])
+        extra = np.where(c.spk_mode == 1, spk_hi + lang_hi, lang_hi)
+        n = ((c.dur.astype(np.float64) + extra) * sample_rate).astype(np.int64)
+        return (1 + n // hop_length).astype(np.int64)
 
     def n_frames(self, hop_length: int, sample_rate: int) -> np.ndarray:
         """Upper-bound frame count per row at the longest prompt layout."""

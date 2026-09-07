@@ -16,7 +16,6 @@ def test_run_stages():
     assert run.DEFAULT_STAGES == [
         "create_dataset",
         "create_token_list",
-        "create_shape",
         "train",
         "infer",
         "measure",

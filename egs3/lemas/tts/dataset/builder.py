@@ -20,8 +20,14 @@ from importlib import resources
 from pathlib import Path
 from typing import Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
-from dataset.extract import extract_all, read_pack_index
-from dataset.keys import classify_key, group_id
+from dataset.extract import (
+    bucket_of,
+    chunk_key,
+    extract_all,
+    read_pack_index,
+    regroup_all,
+)
+from dataset.keys import classify_key, group_id, segment_index
 from dataset.manifest import ManifestRow
 
 from espnet3.components.data.dataset_builder import DatasetBuilder
@@ -276,19 +282,53 @@ class LEMASBuilder(DatasetBuilder):
 
     # ---- source -------------------------------------------------------------
     def is_source_prepared(self, recipe_dir=None, **_kwargs) -> bool:
-        """Return True when every shard of every language has its .complete marker."""
+        """Return True when every language has its chunk-contiguous pack."""
         audio_root = Path(self.cfg["audio_root"])
         for lang in self.cfg["langs"]:
-            tsvs = self._manifest_tsvs(lang)
-            if not tsvs:
+            if not self._manifest_tsvs(lang):
                 return False
-            for tsv in tsvs:
-                if not (audio_root / lang / f"{tsv.stem}.complete").is_file():
-                    return False
+            if not (audio_root / lang / f"{lang}.regrouped").is_file():
+                return False
         return True
 
+    def _shard_rows(self, lang: str):
+        """Per shard: ``(pack, index, member -> (bucket, chunk))`` for the regroup."""
+        chunk_rows = int(self.cfg.get("chunk_rows", 32))
+        n_buckets = int(self.cfg.get("n_buckets", 128))
+        audio_root = Path(self.cfg["audio_root"])
+        per_shard: List[Tuple[str, str, str, Optional[int], str]] = []
+        sizes: Counter = Counter()
+        for tsv in self._manifest_tsvs(lang):
+            with tsv.open(encoding="utf-8") as f:
+                for line in f:
+                    key, member, _dur, source, _off = line.rstrip("\n").split("\t")
+                    if source == "unknown":
+                        source = classify_key(key)
+                    g = group_id(key, source) or ""
+                    per_shard.append(
+                        (tsv.stem, key, member, segment_index(key, source), g)
+                    )
+                    if g:
+                        sizes[g] += 1
+        shards = []
+        for tsv in self._manifest_tsvs(lang):
+            rows = {}
+            for shard, key, member, seg, g in per_shard:
+                if shard != tsv.stem:
+                    continue
+                ck = chunk_key(g, key, seg, sizes[g] if g else 1, chunk_rows)
+                rows[member] = (bucket_of(ck, n_buckets), ck)
+            shards.append(
+                (
+                    str(audio_root / lang / f"{tsv.stem}.pcm"),
+                    str(audio_root / lang / f"{tsv.stem}.index.tsv"),
+                    rows,
+                )
+            )
+        return shards
+
     def prepare_source(self, recipe_dir=None, **_kwargs) -> None:
-        """Stream the shard tars to FLAC (idempotent per shard)."""
+        """Pass 1: shard packs from the tars; pass 2: chunk-contiguous packs."""
         extract_all(
             self._mirror(),
             self.cfg["manifest_dir"],
@@ -296,6 +336,14 @@ class LEMASBuilder(DatasetBuilder):
             self.cfg["audio_root"],
             int(self.cfg["n_workers"]),
             int(self.cfg["source_sample_rate"]),
+        )
+        regroup_all(
+            {lang: self._shard_rows(lang) for lang in self.cfg["langs"]},
+            self.cfg["audio_root"],
+            seed=int(self.cfg["seed"]),
+            chunk_rows=int(self.cfg.get("chunk_rows", 32)),
+            n_buckets=int(self.cfg.get("n_buckets", 128)),
+            n_workers=int(self.cfg["n_workers"]),
         )
 
     # ---- build --------------------------------------------------------------
@@ -313,18 +361,18 @@ class LEMASBuilder(DatasetBuilder):
     ) -> Dict[str, List[Tuple[str, str, float, str, int]]]:
         """Return shard -> rows ``(key, audio_spec, dur, source, byte_offset)``.
 
-        ``audio_spec`` is ``<lang>/<shard>.pcm:<start>:<n>`` (samples at 16 kHz)
-        from the shard's pack index, and ``dur`` is ``n / sample_rate``: the
-        packed length, not the jsonl duration (which overstates the audio by up
-        to 64 samples).
+        ``audio_spec`` is ``<lang>/<lang>.pcm:<start>:<n>`` (samples at 16 kHz)
+        from the language's chunk-contiguous pack index, and ``dur`` is
+        ``n / sample_rate``: the packed length, not the jsonl duration (which
+        overstates the audio by up to 64 samples).
         """
         by_shard: Dict[str, list] = defaultdict(list)
         audio_root = Path(self.cfg["audio_root"])
         sr = int(self.cfg["source_sample_rate"])
+        index_path = audio_root / lang / f"{lang}.index.tsv"
+        index = read_pack_index(index_path)
+        pack_rel = f"{lang}/{lang}.pcm"
         for tsv in self._manifest_tsvs(lang):
-            index_path = audio_root / lang / f"{tsv.stem}.index.tsv"
-            index = read_pack_index(index_path)
-            pack_rel = f"{lang}/{tsv.stem}.pcm"
             with tsv.open(encoding="utf-8") as f:
                 for line in f:
                     key, audio, _dur, source, off = line.rstrip("\n").split("\t")

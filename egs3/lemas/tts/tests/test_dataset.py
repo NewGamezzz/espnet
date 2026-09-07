@@ -181,3 +181,52 @@ def test_split_row_without_candidates_falls_back_to_no_speaker_prompt(corpus):
         assert d.spk_row is None and d.split_k is None
         s = ds[i]
         assert int(s["cond_frames"][0]) > 0  # language prompt only
+
+
+def test_block_cache_reads_match_the_pack_bytes_across_block_edges(corpus):
+    ds = _ds(corpus, block_samples=4096)  # tiny blocks: rows span many
+    c = ds.cols
+    for i in range(len(ds)):
+        pack = corpus["audio"] / c.pack_names[int(c.pack[i])]
+        raw = np.fromfile(pack, dtype="<i2")[
+            int(c.a_start[i]) : int(c.a_start[i] + c.a_len[i])
+        ]
+        full = ds._read16(i)
+        assert np.array_equal(full, raw.astype(np.float32) / 32768.0)
+        part = ds._read16(i, 1000, 9000)
+        assert np.array_equal(part, raw[1000:9000].astype(np.float32) / 32768.0)
+    assert ds.n_block_reads > 0 and len(ds._blocks) <= 6
+
+
+def test_language_prompt_comes_from_neighbouring_blocks(corpus):
+    ds = _ds(corpus, block_samples=32000, lang_block_span=1)
+    c = ds.cols
+    fallbacks = 0
+    for epoch in range(5):
+        ds.set_epoch(epoch)
+        for i in range(len(ds)):
+            d = ds.draw(i)
+            assert int(c.pack[d.lang_row]) == int(c.pack[i])
+            window = [
+                j
+                for j in range(len(ds))
+                if int(c.pack[j]) == int(c.pack[i])
+                and abs(ds.block_of(j) - ds.block_of(i)) <= 1
+                and j != i
+                and not (c.group[i] >= 0 and c.group[j] == c.group[i])
+            ]
+            if window:  # a different speaker is nearby: it must be used
+                assert d.lang_row in window
+            else:
+                fallbacks += 1
+    assert ds.n_lang_fallback == fallbacks and 0 < fallbacks < 5 * len(ds)
+
+
+def test_speaker_partner_is_a_pack_neighbour(corpus):
+    ds = _ds(corpus, spk_neighbor_k=1)
+    ds.set_epoch(0)
+    for i in range(len(ds)):
+        d = ds.draw(i)
+        if d.spk_row is not None and d.split_k is None:
+            assert abs(int(ds._pos[d.spk_row]) - int(ds._pos[i])) <= 1
+            assert int(ds.cols.group[d.spk_row]) == int(ds.cols.group[i])

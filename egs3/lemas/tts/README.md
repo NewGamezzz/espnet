@@ -34,13 +34,19 @@ The model change is one subclass (`src/model.py`): `DualPromptCFM` masks
 ## 1. Data, token list, shapes
 
 ```bash
-# Delta: cpu node. Packs the 48 tars into one int16 16 kHz .pcm per shard
-# (3.5 TB) plus <shard>.index.tsv (member, start, n samples); ~650 members/s
-# per worker, ~1 h wall for the 30 M members. The Emilia members of en/zh ship
-# at 24/32 kHz and are resampled with soxr (counted in .coverage.json).
-# Why packs: random access to 30 M small FLAC files on /work/hdd cost ~160 ms
-# per open (Lustre metadata) against ~40 ms per pread inside a large file, and
-# the loader reads three regions per item. Stripe the root first:
+# Delta: cpu node. Pass 1 packs the 48 tars into one int16 16 kHz .pcm per
+# shard (3.2 TB; ~650 members/s per worker, ~1 h). Pass 2 re-lays each
+# language out into ONE chunk-contiguous pack (<lang>/<lang>.pcm + .index.tsv):
+# rows of one speaker/recording sit together in chunks of <= 32 (segment
+# order), chunks shuffled. Both passes are sequential I/O (hash buckets).
+# The Emilia members of en/zh ship at 24/32 kHz and are resampled with soxr
+# (counted in .coverage.json).
+# Why: random access to 30 M small FLAC files on /work/hdd cost ~160 ms per
+# open, random 64 KB preads inside a pack 60-75 ms (p90 200-360 ms under
+# load), while a 4 MB aligned read costs ~100 ms. The loader therefore reads
+# 4 MB blocks and serves a whole batch plus both prompts from one or two of
+# them, which needs a speaker's rows and its language-prompt partners to be
+# neighbours in the pack. Stripe the root first:
 #   lfs setstripe -c 4 -S 4M /work/hdd/bbjs/ttrachu/dataset/LEMAS/poc3k_pcm16k
 # phonemizes 30 M rows (zh rows whose text has Latin letters are dropped,
 # `drop_text_regex` in dataset/config.yaml; counts land in lang_stats.json),
@@ -105,14 +111,24 @@ recipe (`versa`, `faster-whisper`, `openai-whisper`, `s3prl`).
 
 ## Loader throughput
 
-The first smoke on the FLAC-per-file store measured 0.32 s of compute per micro-batch
-(batch_bins 1,000,000, 26.6 GB of a 40 GB A100) against 3.1 s of loader wait with 4 workers:
-decode and resampling cost under 6 ms per item, the rest was three cold file opens.
-The packed store plus 12 workers per rank is the fix; the acceptance check is `iter_time`
-at or below `train_time` in the 4-GPU smoke. `conf/training_smoke_unsorted.yaml` is a
-diagnostic arm with `type: unsorted` batches (key-file order = manifest order = pack order,
-so target and speaker-prompt reads become near-sequential) at the cost of length-unmatched
-padding; it is not the production sampler.
+The first smoke (FLAC per file, 4 workers) measured 0.32 s of compute per micro-batch
+(batch_bins 1,000,000, 26.6 GB of a 40 GB A100) against 3.1 s of loader wait; shard packs with
+12 workers still waited 1.6 s. Decode and resampling cost under 6 ms per item; the rest was
+latency-bound random I/O on Lustre, which no worker count fixes. The loader is therefore built
+around 4 MB pack blocks:
+
+- `dataset/extract.py` lays each language out chunk-contiguously (speaker chunks of <= 32 rows,
+  shuffled), so a row's speaker-prompt partners are its pack neighbours.
+- `LEMASDataset` reads whole blocks through a small per-worker cache (`block_samples`,
+  `block_cache`) and draws the language prompt from a different speaker in blocks
+  b-1..b+1 (`lang_block_span`), falling back to a language-wide draw only inside a giant
+  speaker (`n_lang_fallback` counts these).
+- `src/sampler.py` (`BlockBatchSampler`, the top-level `batch_sampler`) cuts numel batches
+  inside each block, shuffles and shards them per epoch; the plain torch DataLoader path is
+  used (`iter_factory: null`, `trainer.use_distributed_sampler: false`,
+  `reload_dataloaders_every_n_epochs: 1`). `create_shape` is no longer needed.
+
+Acceptance is `iter_time` at or below `train_time` in the 4-GPU smoke.
 
 ## Delta environment
 

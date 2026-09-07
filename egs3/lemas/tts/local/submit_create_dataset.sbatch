@@ -17,5 +17,5 @@ cd "$SLURM_SUBMIT_DIR"
 source "$SLURM_SUBMIT_DIR/local/delta_env.sh"
 export PYTHONUNBUFFERED=1
 mkdir -p logs
-STAGES=${STAGES:-"create_dataset create_token_list create_shape"}
+STAGES=${STAGES:-"create_dataset create_token_list"}
 $PY run.py --stages $STAGES --training_config conf/training_f5_base_dualprompt.yaml

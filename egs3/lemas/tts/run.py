@@ -86,7 +86,6 @@ def build_parser(stages: Sequence[str]) -> argparse.ArgumentParser:
 DEFAULT_STAGES = [
     "create_dataset",
     "create_token_list",
-    "create_shape",
     "train",
     "infer",
     "measure",

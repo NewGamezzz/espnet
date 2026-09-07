@@ -35,6 +35,8 @@ token_list: ${data_dir}/tokens/tokens.txt
 # Online prompt draws (dataset/dataset.py). Lengths in seconds, uniform
 # within the range; the speaker coin is heavier because the speaker prompt
 # also reveals the language (spec decision 9).
+block_samples: 2097152   # 4 MB pack block = read/cache unit (see dataset/extract.py)
+
 prompt_config:
   spk_prompt_sec: [1.0, 6.0]
   lang_prompt_sec: [1.0, 6.0]
@@ -43,6 +45,8 @@ prompt_config:
   spk_neighbor_k: 8
   p_drop_spk: 0.3
   p_drop_lang: 0.1
+  block_samples: ${block_samples}
+  lang_block_span: 1       # language prompt from blocks b-1..b+1
 
 create_dataset:
   recipe_dir: ${recipe_dir}
@@ -161,39 +165,36 @@ dataloader:
     int_pad_value: 0
     float_pad_value: 0.0
     not_sequence: [cond_frames]
+  # Plain torch DataLoader (no iter_factory): batches come from the top-level
+  # batch_sampler, which keeps every batch inside one 4 MB pack block so the
+  # latency-bound Lustre reads amortise (see src/sampler.py).
   train:
-    num_shards: 1
-    num_workers: 12  # latency-bound pack preads; 16 cpus per rank
-    iter_factory:
-      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
-      shuffle: true
-      collate_fn: ${dataloader.collate_fn}
-      batches:
-        type: numel
-        batch_size: 1          # required by signature, unused for "numel"
-        min_batch_size: 1
-        shape_files:
-          - ${stats_dir}/train/feats_shape
-        # numel counts frames x n_mels; 1,000,000 = 10,000 frames per
-        # micro-batch. Re-measure on A100-40G in the smoke run.
-        batch_bins: 1000000
+    iter_factory: null
+    num_workers: 12
+    prefetch_factor: 4
+    pin_memory: false
   valid:
-    num_shards: 1
-    num_workers: 12  # latency-bound pack preads; 16 cpus per rank
-    iter_factory:
-      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
-      shuffle: false
-      collate_fn: ${dataloader.collate_fn}
-      batches:
-        type: numel
-        batch_size: 1
-        min_batch_size: 1
-        shape_files:
-          - ${stats_dir}/valid/feats_shape
-        batch_bins: ${dataloader.train.iter_factory.batches.batch_bins}
+    iter_factory: null
+    num_workers: 4
+    prefetch_factor: 2
+    pin_memory: false
+
+# One instance per split (instantiated with the split's dataset). numel counts
+# frames x n_mels; 1,000,000 = 10,000 frames per micro-batch, measured at
+# 26.6 GB of an A100-40G in the smoke run.
+batch_sampler:
+  _target_: src.sampler.BlockBatchSampler
+  batch_bins: 1000000
+  n_mels: ${n_mel_channels}
+  min_batch_size: 1
+  seed: ${seed}
 
 trainer:
   accelerator: auto
+  # required by the plain-DataLoader path: the sampler shards by rank and
+  # the dataset must learn the epoch before its workers fork
+  use_distributed_sampler: false
+  reload_dataloaders_every_n_epochs: 1
   devices: ${num_device}
   num_nodes: ${num_nodes}
   # 4 GPUs x 10,000 frames x 8 = 320k frames per update (F5: 307,200).

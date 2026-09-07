@@ -234,6 +234,8 @@ def test_build_end_to_end_fake_mirror(tmp_path):
     b.prepare_source()
     assert b.is_source_prepared()
     assert (tmp_path / "pcm" / "de" / "de000.pcm").is_file()
+    assert (tmp_path / "pcm" / "de" / "de.pcm").is_file()
+    assert not (tmp_path / "pcm" / "de" / "_parts").exists()
     assert not b.is_built(recipe_dir=recipe)
     b.build(recipe_dir=recipe, phonemizer_factory=FakePhon)
     assert b.is_built(recipe_dir=recipe)
@@ -246,7 +248,7 @@ def test_build_end_to_end_fake_mirror(tmp_path):
         ln.split("\t")[5] in de_valid_groups for ln in train
     )
     de_train = [ln.split("\t") for ln in train if ln.startswith("de_")]
-    assert all(p[1].startswith("de/de000.pcm:") for p in de_train)
+    assert all(p[1].startswith("de/de.pcm:") for p in de_train)
     # dur comes from the packed length (48 samples short of the jsonl's 3.0 s)
     assert all(abs(float(p[6]) - (48000 - 48) / 16000) < 1e-6 for p in de_train)
     stats = _json.loads((recipe / "data/lang_stats.json").read_text())
