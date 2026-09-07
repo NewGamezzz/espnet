@@ -54,8 +54,21 @@ git log --oneline -1
 
 MODE_OF = {"gt": "gt", "resynth": "resynth", "O": "generate", "T": "generate",
            "concat": "generate_concat_baseline"}
+# Full-stratum walltimes (placeholders until the strata are sliced: a full
+# stratum is 7-14x the subset and must run as slices, never one job).
 ARMS = (("gt", "01:00:00"), ("resynth", "01:30:00"), ("O", "02:00:00"),
         ("T", "02:00:00"), ("concat", "02:00:00"))
+# Subset (20 windows) walltimes = measured need + margin (Thanapat 2026-09-06:
+# short enough to backfill, long enough to finish).  Measured infer+measure
+# at steps 64: gt K2/K3/K4 39/52/55 min; Mode O K2 53-90, K3 64-108, K4
+# 94-111 min (a 2 h K4 timed out twice); the spread is Lustre import time.
+SUBSET_WALLTIME = {
+    "gt": {2: "01:20:00", 3: "01:20:00", 4: "01:20:00"},
+    "resynth": {2: "01:30:00", 3: "01:30:00", 4: "01:45:00"},
+    "O": {2: "01:45:00", 3: "02:15:00", 4: "02:30:00"},
+    "T": {2: "01:45:00", 3: "02:15:00", 4: "02:30:00"},
+    "concat": {2: "01:45:00", 3: "02:15:00", 4: "02:30:00"},
+}
 
 
 def _set(text: str, key: str, value: str) -> str:
@@ -114,7 +127,7 @@ def main(argv=None) -> int:
     base_met = (ROOT / "conf" / "metrics_ami.yaml").read_text()
     names = [
         arm(base_inf, base_met, K, suffix, arm_name, a.tag, a.ckpt,
-            "02:00:00" if a.subset else wt)  # steps 64 K4 ~130 s/window + measure
+            SUBSET_WALLTIME[arm_name][K] if a.subset else wt)
         for K in (2, 3, 4)
         for arm_name, wt in ARMS
     ]
