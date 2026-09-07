@@ -174,6 +174,8 @@ class LEMASDataset(torch.utils.data.Dataset):
             from dataset.builder import split_candidates
 
             ks = split_candidates(c.word_bounds(idx), float(c.dur[idx]), self.cfg)
+            if not ks:  # cannot happen after the ms rounding at build; be safe
+                return None, 0, 0, None
             return idx, 0, 0, int(rng.choice(ks))
         g = int(c.group[idx])
         lo, hi = self._group_start[g], self._group_start[g + 1]

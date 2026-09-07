@@ -96,7 +96,7 @@ class ManifestColumns:
     Attributes (after :meth:`load`): ``n_rows``, ``utt_id`` (S64 array),
     ``lang`` / ``source`` / ``spk_mode`` (int8 indexes into ``LANGS`` /
     ``SOURCES`` / ``SPK_MODES``), ``group`` (int32 index into
-    ``group_names``, -1 for none), ``dur`` (float32), ``seg`` (int32, -1 when
+    ``group_names``, -1 for none), ``dur`` (float64), ``seg`` (int32, -1 when
     the source has no segment index), ``pack`` (int32 index into
     ``pack_names``) with ``a_start`` / ``a_len`` (int64 samples at 16 kHz, the
     row's region inside its ``.pcm`` pack); accessors ``audio(i)``,
@@ -168,7 +168,7 @@ class ManifestColumns:
             lang=np.array(lang, dtype=np.int8),
             source=np.array(source, dtype=np.int8),
             group=np.array(group, dtype=np.int32),
-            dur=np.array(dur, dtype=np.float32),
+            dur=np.array(dur, dtype=np.float64),  # exact: split checks compare to it
             seg=np.array(seg, dtype=np.int32),
             spk_mode=np.array(mode, dtype=np.int8),
             _wb=_StrColumn(wb),

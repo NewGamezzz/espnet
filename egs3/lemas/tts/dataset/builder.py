@@ -223,8 +223,10 @@ def _chunk_job(args):
     for (key, audio, dur, source, off), obj in zip(chunk, objs):
         if obj.get("key") != key:
             raise RuntimeError(f"byte_offset mismatch for {key}: got {obj.get('key')}")
+        # ms precision so that the split-candidate check made here and the one
+        # the dataset repeats from the manifest string see identical numbers
         words = [
-            (w["word"], float(w["start"]), float(w["end"]))
+            (w["word"], round(float(w["start"]), 3), round(float(w["end"]), 3))
             for w in (obj.get("align") or {}).get("words", [])
             if "start" in w and "end" in w
         ]

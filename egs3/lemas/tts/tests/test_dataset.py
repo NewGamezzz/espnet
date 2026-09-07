@@ -170,3 +170,14 @@ def test_prompt_windows_survive_short_reads(corpus, monkeypatch):
         for i in range(len(ds)):
             s = ds[i]  # must not trip region_frames' hop-alignment assertion
             assert int(s["cond_frames"][0]) * 256 <= len(s["speech"])
+
+
+def test_split_row_without_candidates_falls_back_to_no_speaker_prompt(corpus):
+    ds = _ds(corpus, split_frac=[0.99, 0.999])  # no word boundary can qualify
+    zh = [i for i in range(len(ds)) if int(ds.cols.spk_mode[i]) == 2]
+    assert zh
+    for i in zh:
+        d = ds.draw(i)
+        assert d.spk_row is None and d.split_k is None
+        s = ds[i]
+        assert int(s["cond_frames"][0]) > 0  # language prompt only

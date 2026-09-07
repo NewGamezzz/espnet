@@ -294,3 +294,33 @@ def test_drop_text_regex_removes_matching_rows_before_phonemizing():
         "zh_emilia_zh_0000000001",
         "de_vidAAAAAAAA-00001-00000000-00000300",
     ]
+
+
+def test_word_bounds_are_ms_rounded_so_manifest_and_build_agree(tmp_path):
+    # a boundary exactly at 40% of the duration: {:g} formatting of the raw
+    # float would round it past the window and the dataset would find no split
+    import json as _json
+
+    from dataset.builder import _chunk_job, split_candidates
+
+    dur = 12.3456888  # 0.4 * dur = 4.93827552; {:g} of the raw end gives 4.93828
+    words = [("a", 0.0, 0.4 * dur - 0.0000001), ("b", 0.4 * dur, dur)]
+    jl = tmp_path / "zh000.jsonl"
+    obj = {
+        "key": "zh_emilia_zh_0000000001",
+        "audio": "zh000/x.mp3",
+        "dur": dur,
+        "txt": "a b",
+        "align": {"words": [{"word": w, "start": s, "end": e} for w, s, e in words]},
+    }
+    jl.write_bytes((_json.dumps(obj) + "\n").encode())
+    chunk = [("zh_emilia_zh_0000000001", "zh/zh000.pcm:0:197531", dur, "emilia", 0)]
+    cfg = dict(CFG, n_workers=1)
+    from dataset import builder as _b
+
+    _b._worker_init(FakePhon)
+    (line,) = _chunk_job((chunk, str(jl), "zh/zh000.jsonl", cfg, {}))
+    parts = line[-1].split("\t")
+    assert parts[9] == "split"
+    wb = [tuple(float(v) for v in x.split(":")) for x in parts[10].split(",")]
+    assert split_candidates(wb, float(parts[6]), cfg) == [1]
