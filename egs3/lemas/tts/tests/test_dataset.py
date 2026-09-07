@@ -1,4 +1,5 @@
 import numpy as np
+import soundfile as sf
 from dataset.dataset import LEMASDataset
 from src.layout import n_frames_total
 
@@ -152,3 +153,19 @@ def test_load_speech_false_has_no_speech(corpus):
         load_speech=False,
     )
     assert "speech" not in ds[0] and "text" in ds[0]
+
+
+def test_prompt_windows_survive_files_shorter_than_manifest_dur(corpus):
+    # LEMAS jsonl durations overstate the FLAC by up to 64 samples (measured);
+    # a window drawn up to the nominal end then reads short of a 512 multiple.
+    for rel in ("de/d/v1_1.flac", "de/d/m_1.flac", "zh/z/s_1.flac"):
+        p = corpus["audio"] / rel
+        wav, sr = sf.read(p, dtype="float32")
+        sf.write(p, wav[:-64], sr, format="FLAC", subtype="PCM_16")
+    ds = _ds(corpus, spk_prompt_sec=[2.9, 3.0], lang_prompt_sec=[2.9, 3.0])
+    for epoch in range(4):
+        ds.set_epoch(epoch)
+        for i in range(len(ds)):
+            s = ds[i]  # must not raise on the frame-alignment assertion
+            cf = int(s["cond_frames"][0])
+            assert cf * 256 <= len(s["speech"])

@@ -223,6 +223,17 @@ class LEMASDataset(torch.utils.data.Dataset):
         return wav if wav.ndim == 1 else wav.mean(axis=1)
 
     @staticmethod
+    def _quantize16(wav16: np.ndarray) -> np.ndarray:
+        """Trim a prompt window to a multiple of 512 samples (3 hops at 24 kHz).
+
+        The manifest duration comes from the LEMAS jsonl and can overstate the
+        FLAC by up to 64 samples (measured), so a window drawn up to the
+        nominal end reads a few samples short and would break the frame
+        alignment.
+        """
+        return wav16[: quantize_prompt_16k(len(wav16))]
+
+    @staticmethod
     def _to24(wav16: np.ndarray) -> np.ndarray:
         if len(wav16) == 0:
             return np.zeros(0, dtype=np.float32)
@@ -244,14 +255,17 @@ class LEMASDataset(torch.utils.data.Dataset):
             phones = [p for w in c.phones_by_word(idx)[d.split_k :] for p in w]
             if self.load_speech:
                 full = self._read16(idx)
-                spk16, target16 = full[:p_end16], full[t_start16:]
+                spk16 = self._quantize16(full[:p_end16])
+                target16 = full[t_start16:]
         elif d.spk_row is not None and self.load_speech:
-            spk16 = self._read16(d.spk_row, d.spk_start16, d.spk_start16 + d.spk_len16)
+            spk16 = self._quantize16(
+                self._read16(d.spk_row, d.spk_start16, d.spk_start16 + d.spk_len16)
+            )
         if self.load_speech:
             if target16 is None:
                 target16 = self._read16(idx)
-            lang16 = self._read16(
-                d.lang_row, d.lang_start16, d.lang_start16 + d.lang_len16
+            lang16 = self._quantize16(
+                self._read16(d.lang_row, d.lang_start16, d.lang_start16 + d.lang_len16)
             )
         spk_present = d.spk_row is not None and not d.drop_spk
         lang_present = not d.drop_lang
