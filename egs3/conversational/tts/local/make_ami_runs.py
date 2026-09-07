@@ -90,6 +90,10 @@ def arm(base_inf: str, base_met: str, K: int, suffix: str, arm_name: str,
     inf = _set(inf, "num_active_speakers", str(K))
     inf = _set(inf, "text_format", "timestamps" if arm_name == "T" else "order")
     inf = _set(inf, "ckpt", "null" if arm_name in ("gt", "resynth", "concat") else ckpt)
+    # run_inference builds the model from the INFERENCE yaml's training_config
+    # (the CLI --training_config only reaches the system object), so the
+    # eval-side training config must be written here too.
+    inf = _set(inf, "training_config", TRAIN)
     if arm_name != "O":
         # predicted duration is a generate + order-text policy; every other
         # arm scores the ground-truth length (the rule's estimate is recorded)
