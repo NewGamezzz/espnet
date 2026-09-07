@@ -16,6 +16,7 @@ import torch
 import torchaudio
 from src.layout import HOP, SR, TokenTable, build_text_ids
 from src.layout import cond_frames as _cond_frames
+from src.layout import quantize_prompt
 from src.text.lemas_phonemizer import LEMASPhonemizer
 
 from espnet3.systems.tts.f5_tts.inference import F5TTSInference
@@ -97,7 +98,7 @@ class DualPromptInference(F5TTSInference):
 
     # ---- layout --------------------------------------------------------------
     def _prep_prompt(self, wav) -> Optional[torch.Tensor]:
-        """Mono, optional low-pass, cut to the 768-sample prompt quantum."""
+        """Mono, optional low-pass, cut to whole 256-sample hops."""
         if wav is None or len(wav) == 0:
             return None
         x = torch.as_tensor(np.asarray(wav), dtype=torch.float32)
@@ -105,7 +106,7 @@ class DualPromptInference(F5TTSInference):
             x = x.mean(dim=-1)
         if self.lowpass_hz:
             x = torchaudio.functional.lowpass_biquad(x, SR, float(self.lowpass_hz))
-        n = (len(x) // (3 * HOP)) * (3 * HOP)
+        n = quantize_prompt(len(x))
         if n == 0:
             return None
         return x[:n].unsqueeze(0)

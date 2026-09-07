@@ -7,7 +7,7 @@ from src.layout import (
     build_text_ids,
     cond_frames,
     n_frames_total,
-    quantize_prompt_16k,
+    quantize_prompt,
     region_frames,
 )
 
@@ -51,8 +51,8 @@ def test_frame_rules_match_vocoder_mel():
 
 
 def test_quantized_prompt_resamples_to_hop_multiple():
-    n16 = quantize_prompt_16k(16000 + 300)
-    assert n16 % 512 == 0 and (n16 * 3 // 2) % HOP == 0
+    n = quantize_prompt(24000 + 300)
+    assert n % HOP == 0 and n == 24064
 
 
 def test_text_ids_golden(tmp_path):

@@ -35,29 +35,37 @@ def test_packs_only_listed_members_in_tar_order(tmp_path):
     cov = extract_shard(tar, {"de000/c.mp3", "de000/a.mp3"}, out)
     index = read_pack_index(out / "de000.index.tsv")
     assert list(index) == ["de000/a.mp3", "de000/c.mp3"]
-    assert index == {"de000/a.mp3": (0, 1600), "de000/c.mp3": (1600, 1600)}
+    # 16 kHz members are upsampled to the 24 kHz pack rate: 1600 -> 2400
+    assert index == {"de000/a.mp3": (0, 2400), "de000/c.mp3": (2400, 2400)}
     pcm = np.frombuffer((out / "de000.pcm").read_bytes(), dtype="<i2")
-    assert len(pcm) == 3200
-    assert abs(pcm[0] / 32768 - 0.01) < 1e-3 and abs(pcm[1600] / 32768 - 0.03) < 1e-3
+    assert len(pcm) == 4800
+    assert abs(pcm[100] / 32768 - 0.01) < 1e-3 and abs(pcm[2500] / 32768 - 0.03) < 1e-3
     assert cov == {
         "manifest_rows": 2,
         "members_extracted": 2,
-        "resampled": 0,
-        "samples": 3200,
+        "resampled": 2,
+        "samples": 4800,
         "missing": [],
     }
     assert (out / "de000.complete").is_file()
     assert not (out / "de000.pcm.tmp").exists()
-    assert json.loads((out / "de000.coverage.json").read_text())["samples"] == 3200
+    assert json.loads((out / "de000.coverage.json").read_text())["samples"] == 4800
 
 
-def test_other_rate_members_are_resampled_to_16k(tmp_path):
+def test_emilia_rates_land_at_24k_without_touching_native_24k(tmp_path):
     # the Emilia portions of en/zh ship at 24/32 kHz inside the LEMAS tars
-    tar = _tar_with(tmp_path, ["de000/a.mp3"], sr=32000)
+    tar = _tar_with(tmp_path, ["de000/a.mp3", "de000/b.mp3"], sr=32000)
     out = tmp_path / "pcm"
     cov = extract_shard(tar, {"de000/a.mp3"}, out)
-    assert read_pack_index(out / "de000.index.tsv")["de000/a.mp3"] == (0, 1600)
+    assert read_pack_index(out / "de000.index.tsv")["de000/a.mp3"] == (0, 2400)
     assert cov["resampled"] == 1 and cov["members_extracted"] == 1
+    tar = (
+        _tar_with(tmp_path / "n", ["de000/a.mp3"], sr=24000)
+        if (tmp_path / "n").mkdir() is None
+        else None
+    )
+    cov = extract_shard(tar, {"de000/a.mp3"}, tmp_path / "n" / "pcm")
+    assert cov["resampled"] == 0 and cov["samples"] == 2400
 
 
 def test_rerun_skips_completed_shard(tmp_path):
@@ -145,14 +153,14 @@ def test_regroup_language_makes_chunks_contiguous_and_shuffled(tmp_path):
     stats = regroup_language(
         "de", shards, out, seed=1, chunk_rows=3, n_buckets=4, n_workers=1
     )
-    assert stats == {"rows": 12, "chunks": 6, "samples": 12 * 1600}
+    assert stats == {"rows": 12, "chunks": 6, "samples": 12 * 2400}
     index = read_pack_index(out / "de" / "de.index.tsv")
     assert set(index) == set(members)
     pcm = np.frombuffer((out / "de" / "de.pcm").read_bytes(), dtype="<i2")
-    assert len(pcm) == 12 * 1600
+    assert len(pcm) == 12 * 2400
     for m in members:  # content survives the two passes
         s0, n = index[m]
-        assert abs(pcm[s0] / 32768 - amp[m]) < 1e-3 and n == 1600
+        assert abs(pcm[s0] / 32768 - amp[m]) < 1e-3 and n == 2400
     # chunks of vidA are contiguous and in segment order: seg 0-2, 3-5, 6-7
     by_start = sorted(index.items(), key=lambda kv: kv[1][0])
     order = [m for m, _ in by_start]

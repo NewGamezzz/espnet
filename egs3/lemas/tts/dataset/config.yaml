@@ -3,12 +3,12 @@ builder:
   manifest_dir: manifests_poc3k          # relative to mirror_root
   # int16 packs (see dataset/extract.py): shard packs from the tars, then one
   # chunk-contiguous pack per language; dir striped -c 4 -S 4M
-  audio_root: /work/hdd/bbjs/ttrachu/dataset/LEMAS/poc3k_pcm16k
+  audio_root: /work/hdd/bbjs/ttrachu/dataset/LEMAS/poc3k_pcm24k
   chunk_rows: 32     # rows of one speaker/recording laid out contiguously
   n_buckets: 128     # regroup hash buckets per language (RAM ~ pack / n_buckets)
   data_path: data
   langs: [de, en, es, fr, id, it, pt, ru, vi, zh]
-  source_sample_rate: 16000
+  sample_rate: 24000     # pack rate = model rate; Emilia en/zh keep their bandwidth
   min_target_sec: 1.0
   max_target_sec: 20.0
   # Rows whose raw text matches are dropped before phonemization. Emilia-ZH

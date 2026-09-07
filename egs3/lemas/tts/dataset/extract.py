@@ -2,11 +2,15 @@
 
 Each ``train/<lang>/<shard>.tar.gz`` is read in tar stream mode (gzip is not
 seekable); members listed in the shard's poc3k tsv are decoded with soundfile,
-downmixed, resampled with soxr when they are not at 16 kHz (the Emilia portions
-of en/zh ship at 24/32 kHz; counted in the coverage) and appended in tar order
-to ONE file per shard::
+downmixed, brought to the model rate (24 kHz) with soxr and appended in tar
+order to ONE file per shard. LEMAS is 16 kHz except the Emilia portions of
+en/zh (24/32 kHz): 16 kHz rows are upsampled once here instead of per item in
+the loader, 24 kHz rows are stored as they are, 32 kHz rows come down to the
+model's Nyquist; nothing above 8 kHz is invented for the 16 kHz sources and
+nothing the model could use is lost for Emilia. ``resampled`` in the coverage
+counts members whose rate was not 24 kHz::
 
-    <out_root>/<shard>.pcm        int16 little-endian mono 16 kHz, concatenated
+    <out_root>/<shard>.pcm        int16 little-endian mono 24 kHz, concatenated
     <out_root>/<shard>.index.tsv  <member> <start_sample> <n_samples>
 
 One file per shard rather than one per member because random access to 30 M
@@ -26,7 +30,7 @@ rows are grouped into chunks of at most ``chunk_rows`` rows of one speaker /
 recording (in segment order) and the chunks are shuffled, so that the dataset
 can serve a whole batch plus its prompts from one or two 4 MB blocks::
 
-    <out_root>/<lang>/<lang>.pcm        int16 mono 16 kHz, chunk-contiguous
+    <out_root>/<lang>/<lang>.pcm        int16 mono 24 kHz, chunk-contiguous
     <out_root>/<lang>/<lang>.index.tsv  <member> <start_sample> <n_samples>
     <out_root>/<lang>/<lang>.regrouped  marker (+ .regroup.json stats)
 
@@ -54,6 +58,7 @@ from typing import Dict, Iterable, List, Optional, Set, Tuple
 import numpy as np
 import soundfile as sf
 import soxr
+from src.layout import PACK_SR
 
 logger = logging.getLogger(__name__)
 
@@ -95,7 +100,7 @@ def read_pack_index(index_path) -> Dict[str, Tuple[int, int]]:
 def _decode(data: bytes, sample_rate: int) -> Tuple[np.ndarray, bool]:
     """Decode, downmix, resample to ``sample_rate`` if needed, quantise to int16.
 
-    Returns the int16 samples and whether the member had to be resampled.
+    Returns the int16 samples and whether the member's rate was not ``sample_rate``.
     """
     wav, sr = sf.read(io.BytesIO(data), dtype="float32", always_2d=True)
     wav = wav.mean(axis=1)
@@ -107,7 +112,7 @@ def _decode(data: bytes, sample_rate: int) -> Tuple[np.ndarray, bool]:
 
 
 def extract_shard(
-    tar_path, members: Set[str], out_root, source_sample_rate: int = 16000
+    tar_path, members: Set[str], out_root, sample_rate: int = PACK_SR
 ) -> dict:
     """Pack ``members`` of one shard tar into ``<out_root>/<shard>.pcm``.
 
@@ -115,7 +120,7 @@ def extract_shard(
         tar_path: ``<shard>.tar.gz``.
         members: Tar member paths to pack (``<shard>/<file>.mp3``).
         out_root: Output directory for ``<shard>.pcm`` and ``<shard>.index.tsv``.
-        source_sample_rate: Output sample rate; members at another rate are
+        sample_rate: Output sample rate; members at another rate are
             resampled to it.
 
     Returns:
@@ -152,7 +157,7 @@ def extract_shard(
         for info in tf:
             if info.name not in remaining:
                 continue
-            pcm, resampled = _decode(tf.extractfile(info).read(), source_sample_rate)
+            pcm, resampled = _decode(tf.extractfile(info).read(), sample_rate)
             fpcm.write(pcm.tobytes())
             index.append((info.name, pos, len(pcm)))
             pos += len(pcm)
@@ -192,7 +197,7 @@ def extract_all(
     langs: Iterable[str],
     out_root,
     n_workers: int = 32,
-    source_sample_rate: int = 16000,
+    sample_rate: int = PACK_SR,
 ) -> dict:
     """Pack every shard listed under ``<mirror_root>/<manifest_dir>/<lang>``.
 
@@ -202,7 +207,7 @@ def extract_all(
         langs: Languages to process.
         out_root: Pack root; files land at ``<out_root>/<lang>/<shard>.pcm``.
         n_workers: Process pool size (one shard per process).
-        source_sample_rate: Output sample rate.
+        sample_rate: Output sample rate.
 
     Returns:
         ``{tar path: coverage dict}``.
@@ -216,7 +221,7 @@ def extract_all(
         for tsv in sorted((mirror_root / manifest_dir / lang).glob("*.tsv")):
             shard = tsv.stem
             tar = mirror_root / "LEMAS-train" / "train" / lang / f"{shard}.tar.gz"
-            jobs.append((tar, tsv, out_root / lang, source_sample_rate))
+            jobs.append((tar, tsv, out_root / lang, sample_rate))
     results = {}
     with ProcessPoolExecutor(max_workers=n_workers) as pool:
         for tar, cov in pool.map(_job, jobs):

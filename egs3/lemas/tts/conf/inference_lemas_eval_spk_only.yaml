@@ -108,7 +108,7 @@ model:
   guidance_strength: 2.0
   sway_sampling_coefficient: -1.0
   speed: 1.0
-  lowpass_hz: 8000
+  lowpass_hz: null   # training audio is mixed-band (Emilia native); keep prompts as they are
   seed: 0
 
 input_key: [text, lang, spk_prompt_speech]

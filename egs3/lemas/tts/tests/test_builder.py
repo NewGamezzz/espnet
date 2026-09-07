@@ -221,7 +221,7 @@ def test_build_end_to_end_fake_mirror(tmp_path):
         audio_root=str(tmp_path / "pcm"),
         data_path="data",
         langs=["de", "zh"],
-        source_sample_rate=16000,
+        sample_rate=24000,
         valid_rows_per_lang=2,
         n_workers=1,
         manifest_paths={"train": "manifest/train.tsv", "valid": "manifest/valid.tsv"},
@@ -250,7 +250,8 @@ def test_build_end_to_end_fake_mirror(tmp_path):
     de_train = [ln.split("\t") for ln in train if ln.startswith("de_")]
     assert all(p[1].startswith("de/de.pcm:") for p in de_train)
     # dur comes from the packed length (48 samples short of the jsonl's 3.0 s)
-    assert all(abs(float(p[6]) - (48000 - 48) / 16000) < 1e-6 for p in de_train)
+    # dur from the packed length: 16 kHz members (48 short) upsampled to 24 kHz
+    assert all(abs(float(p[6]) - (48000 - 48) * 1.5 / 24000) < 1e-6 for p in de_train)
     stats = _json.loads((recipe / "data/lang_stats.json").read_text())
     assert set(stats) == {"de", "zh"} and stats["zh"]["tokens_per_sec"] > 0
     modes = _json.loads((recipe / "data/spk_mode_counts.json").read_text())

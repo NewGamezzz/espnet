@@ -36,7 +36,7 @@ def corpus(tmp_path):
     rows = []
 
     def clip(pack, sec):
-        n = int(sec * 16000)
+        n = int(sec * 24000)
         wav = 0.1 * np.sin(np.arange(n) * 0.05)
         buf = packs.setdefault(pack, bytearray())
         start = len(buf) // 2

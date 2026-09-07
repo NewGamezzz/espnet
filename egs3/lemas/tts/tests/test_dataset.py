@@ -109,11 +109,11 @@ def test_epoch_changes_draws_and_valid_is_fixed(corpus):
     a = ds.draw(1)
     ds.set_epoch(1)
     b = ds.draw(1)
-    assert (a.spk_row, a.spk_start16, a.lang_row, a.lang_start16) != (
+    assert (a.spk_row, a.spk_start, a.lang_row, a.lang_start) != (
         b.spk_row,
-        b.spk_start16,
+        b.spk_start,
         b.lang_row,
-        b.lang_start16,
+        b.lang_start,
     )
     v = _ds(corpus, split="valid")
     x = v.draw(1)
@@ -127,12 +127,9 @@ def test_prompt_lengths_within_config(corpus):
         d = ds.draw(i)
         if d.spk_row is not None and d.split_k is None:
             assert (
-                1.0 * 16000 - 512 <= d.spk_len16 <= 1.5 * 16000
-                and d.spk_len16 % 512 == 0
+                1.0 * 24000 - 256 <= d.spk_len <= 1.5 * 24000 and d.spk_len % 256 == 0
             )
-        assert (
-            0.5 * 16000 - 512 <= d.lang_len16 <= 1.0 * 16000 and d.lang_len16 % 512 == 0
-        )
+        assert 0.5 * 24000 - 256 <= d.lang_len <= 1.0 * 24000 and d.lang_len % 256 == 0
 
 
 def test_n_frames_upper_bound(corpus):
@@ -156,14 +153,14 @@ def test_load_speech_false_has_no_speech(corpus):
 
 def test_prompt_windows_survive_short_reads(corpus, monkeypatch):
     # LEMAS jsonl durations overstate the FLAC by up to 64 samples (measured),
-    # so a window drawn up to the nominal end reads short of a 512 multiple.
+    # so a window drawn up to the nominal end reads short of a whole hop.
     # Model that deterministically: every read returns 64 samples fewer.
-    orig = LEMASDataset._read16
+    orig = LEMASDataset._read_pcm
 
     def short_read(self, row, start=0, stop=None):
         return orig(self, row, start, stop)[:-64]
 
-    monkeypatch.setattr(LEMASDataset, "_read16", short_read)
+    monkeypatch.setattr(LEMASDataset, "_read_pcm", short_read)
     ds = _ds(corpus)
     for epoch in range(3):
         ds.set_epoch(epoch)
@@ -191,9 +188,9 @@ def test_block_cache_reads_match_the_pack_bytes_across_block_edges(corpus):
         raw = np.fromfile(pack, dtype="<i2")[
             int(c.a_start[i]) : int(c.a_start[i] + c.a_len[i])
         ]
-        full = ds._read16(i)
+        full = ds._read_pcm(i)
         assert np.array_equal(full, raw.astype(np.float32) / 32768.0)
-        part = ds._read16(i, 1000, 9000)
+        part = ds._read_pcm(i, 1000, 9000)
         assert np.array_equal(part, raw[1000:9000].astype(np.float32) / 32768.0)
     assert ds.n_block_reads > 0 and len(ds._blocks) <= 6
 

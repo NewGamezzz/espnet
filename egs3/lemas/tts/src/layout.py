@@ -1,10 +1,13 @@
 """Layout arithmetic shared by the training dataset and inference (spec 5).
 
-Prompts are cut at 16 kHz in multiples of ``PROMPT_QUANTUM_16K`` samples, so
-after 16 to 24 kHz resampling every prompt is a multiple of the 256-sample
-hop and region boundaries fall exactly on mel frames. The whole concatenated
-waveform gets ``n // HOP + 1`` frames (vocos, centre-padded); a region of
-``n`` samples covers ``n // HOP`` frames.
+The packs hold audio at the model rate (24 kHz, ``SR``): sources at 16 kHz
+are upsampled once at pack time (the same operation the loader used to apply
+per item), Emilia's 24 kHz rows are stored as they are and its 32 kHz rows
+come down to 24 kHz, the model's Nyquist. Prompts are cut in multiples of
+``PROMPT_QUANTUM`` samples (one 256-sample hop) so region boundaries fall
+exactly on mel frames. The whole concatenated waveform gets ``n // HOP + 1``
+frames (vocos, centre-padded); a region of ``n`` samples covers ``n // HOP``
+frames.
 """
 
 from __future__ import annotations
@@ -17,8 +20,8 @@ from src.text.lemas_phonemizer import LANG_TOKEN, SPK_TOKEN, lang_tag
 
 HOP = 256
 SR = 24000
-SRC_SR = 16000
-PROMPT_QUANTUM_16K = 512  # 512 samples at 16 kHz = 768 at 24 kHz = 3 hops
+PACK_SR = SR  # sample rate of the packed store
+PROMPT_QUANTUM = HOP  # prompt lengths are whole hops
 
 
 def n_frames_total(n_samples: int) -> int:
@@ -32,9 +35,9 @@ def region_frames(n_samples: int) -> int:
     return n_samples // HOP
 
 
-def quantize_prompt_16k(n_samples_16k: int) -> int:
-    """Round a 16 kHz prompt length down to the prompt quantum."""
-    return n_samples_16k - n_samples_16k % PROMPT_QUANTUM_16K
+def quantize_prompt(n_samples: int) -> int:
+    """Round a prompt length (pack samples) down to a whole number of hops."""
+    return n_samples - n_samples % PROMPT_QUANTUM
 
 
 def cond_frames(spk_frames: int, lang_frames: int) -> int:

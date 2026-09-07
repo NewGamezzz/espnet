@@ -1,6 +1,6 @@
 """LEMAS poc3k dataset builder: extraction, phonemization, groups, manifests.
 
-``prepare_source`` streams the shard tars to 16 kHz FLAC (``extract.py``).
+``prepare_source`` packs the shard tars at 24 kHz (``extract.py``).
 ``build`` reads the poc3k row lists, seeks each row's transcript and word
 alignments in the mirrored jsonl by ``byte_offset``, phonemizes on a process
 pool, derives the group id and the speaker-prompt mode per row, holds out
@@ -335,7 +335,7 @@ class LEMASBuilder(DatasetBuilder):
             self.cfg["langs"],
             self.cfg["audio_root"],
             int(self.cfg["n_workers"]),
-            int(self.cfg["source_sample_rate"]),
+            int(self.cfg["sample_rate"]),
         )
         regroup_all(
             {lang: self._shard_rows(lang) for lang in self.cfg["langs"]},
@@ -361,14 +361,14 @@ class LEMASBuilder(DatasetBuilder):
     ) -> Dict[str, List[Tuple[str, str, float, str, int]]]:
         """Return shard -> rows ``(key, audio_spec, dur, source, byte_offset)``.
 
-        ``audio_spec`` is ``<lang>/<lang>.pcm:<start>:<n>`` (samples at 16 kHz)
+        ``audio_spec`` is ``<lang>/<lang>.pcm:<start>:<n>`` (samples at 24 kHz)
         from the language's chunk-contiguous pack index, and ``dur`` is
         ``n / sample_rate``: the packed length, not the jsonl duration (which
         overstates the audio by up to 64 samples).
         """
         by_shard: Dict[str, list] = defaultdict(list)
         audio_root = Path(self.cfg["audio_root"])
-        sr = int(self.cfg["source_sample_rate"])
+        sr = int(self.cfg["sample_rate"])
         index_path = audio_root / lang / f"{lang}.index.tsv"
         index = read_pack_index(index_path)
         pack_rel = f"{lang}/{lang}.pcm"

@@ -98,7 +98,7 @@ class ManifestColumns:
     ``SOURCES`` / ``SPK_MODES``), ``group`` (int32 index into
     ``group_names``, -1 for none), ``dur`` (float64), ``seg`` (int32, -1 when
     the source has no segment index), ``pack`` (int32 index into
-    ``pack_names``) with ``a_start`` / ``a_len`` (int64 samples at 16 kHz, the
+    ``pack_names``) with ``a_start`` / ``a_len`` (int64 samples at 24 kHz, the
     row's region inside its ``.pcm`` pack); accessors ``audio(i)``,
     ``phones(i)``, ``word_bounds(i)``, ``phones_by_word(i)``.
     """
@@ -177,7 +177,7 @@ class ManifestColumns:
         )
 
     def audio(self, i: int) -> str:
-        """Audio spec ``<pack path>:<start>:<n>`` of row ``i`` (samples at 16 kHz)."""
+        """Audio spec ``<pack path>:<start>:<n>`` of row ``i`` (samples at 24 kHz)."""
         return f"{self.pack_names[self.pack[i]]}:{self.a_start[i]}:{self.a_len[i]}"
 
     def word_bounds(self, i: int) -> List[Tuple[float, float]]:

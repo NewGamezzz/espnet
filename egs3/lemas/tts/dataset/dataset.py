@@ -18,16 +18,15 @@ from typing import Any, Dict, Optional, Tuple
 
 import numpy as np
 import torch
-import torchaudio
 from dataset.manifest import ManifestColumns
 from src.layout import (
     HOP,
+    PACK_SR,
     SR,
-    SRC_SR,
     TokenTable,
     build_text_ids,
     cond_frames,
-    quantize_prompt_16k,
+    quantize_prompt,
     region_frames,
 )
 from src.text.lemas_phonemizer import LANGS
@@ -51,15 +50,15 @@ DEFAULT_PROMPT_CONFIG = dict(
 
 @dataclass(frozen=True)
 class Draw:
-    """One row's prompt decision for one epoch (all lengths in 16 kHz samples)."""
+    """One row's prompt decision for one epoch (all lengths in pack samples)."""
 
     spk_row: Optional[int]  # None = no speaker prompt
-    spk_start16: int
-    spk_len16: int  # 0 for split and none modes
+    spk_start: int
+    spk_len: int  # 0 for split and none modes
     split_k: Optional[int]  # split mode: prompt = words[:k]
     lang_row: Optional[int]
-    lang_start16: int
-    lang_len16: int
+    lang_start: int
+    lang_len: int
     drop_spk: bool
     drop_lang: bool
 
@@ -177,10 +176,10 @@ class LEMASDataset(torch.utils.data.Dataset):
         return np.random.default_rng([self.seed, epoch, int(idx)])
 
     # ---- draws -------------------------------------------------------------
-    def _window16(self, rng, dur: float, sec_range) -> Tuple[int, int]:
-        n_avail = int(dur * SRC_SR)
-        want = quantize_prompt_16k(int(rng.uniform(*sec_range) * SRC_SR))
-        length = max(min(want, quantize_prompt_16k(n_avail)), 512)
+    def _window(self, rng, dur: float, sec_range) -> Tuple[int, int]:
+        n_avail = int(dur * PACK_SR)
+        want = quantize_prompt(int(rng.uniform(*sec_range) * PACK_SR))
+        length = max(min(want, quantize_prompt(n_avail)), HOP)
         start = int(rng.integers(0, n_avail - length + 1)) if n_avail > length else 0
         return start, length
 
@@ -207,9 +206,7 @@ class LEMASDataset(torch.utils.data.Dataset):
         members = members[max(0, pos - k) : pos + k + 1]
         cands = members[members != idx]
         row = int(rng.choice(cands))
-        start, length = self._window16(
-            rng, float(c.dur[row]), self.cfg["spk_prompt_sec"]
-        )
+        start, length = self._window(rng, float(c.dur[row]), self.cfg["spk_prompt_sec"])
         return row, start, length, None
 
     def _draw_lang(self, rng, idx: int):
@@ -229,7 +226,7 @@ class LEMASDataset(torch.utils.data.Dataset):
             row = int(self._pack_order[int(rng.integers(lo, hi))])
             if row == idx or (c.group[idx] >= 0 and c.group[row] == c.group[idx]):
                 continue
-            start, length = self._window16(
+            start, length = self._window(
                 rng, float(c.dur[row]), self.cfg["lang_prompt_sec"]
             )
             return row, start, length
@@ -243,7 +240,7 @@ class LEMASDataset(torch.utils.data.Dataset):
                 continue
             if c.group[idx] >= 0 and c.group[row] == c.group[idx]:
                 continue
-            start, length = self._window16(
+            start, length = self._window(
                 rng, float(c.dur[row]), self.cfg["lang_prompt_sec"]
             )
             return row, start, length
@@ -301,10 +298,10 @@ class LEMASDataset(torch.utils.data.Dataset):
         state.pop("_blocks", None)
         return state
 
-    def _read16(
+    def _read_pcm(
         self, row: int, start: int = 0, stop: Optional[int] = None
     ) -> np.ndarray:
-        """Read ``[start, stop)`` samples (16 kHz) of ``row`` via the block cache."""
+        """Read ``[start, stop)`` pack samples of ``row`` via the block cache."""
         c = self.cols
         a_len = int(c.a_len[row])
         stop = a_len if stop is None else min(int(stop), a_len)
@@ -324,22 +321,14 @@ class LEMASDataset(torch.utils.data.Dataset):
         return out.astype(np.float32) / 32768.0
 
     @staticmethod
-    def _quantize16(wav16: np.ndarray) -> np.ndarray:
-        """Trim a prompt window to a multiple of 512 samples (3 hops at 24 kHz).
+    def _quantize(wav: np.ndarray) -> np.ndarray:
+        """Trim a prompt window to whole hops.
 
-        The manifest duration comes from the LEMAS jsonl and can overstate the
-        FLAC by up to 64 samples (measured), so a window drawn up to the
-        nominal end reads a few samples short and would break the frame
-        alignment.
+        A window drawn up to a row's nominal end can read a few samples short
+        when the index and the audio disagree; trimming keeps the frame
+        alignment exact.
         """
-        return wav16[: quantize_prompt_16k(len(wav16))]
-
-    @staticmethod
-    def _to24(wav16: np.ndarray) -> np.ndarray:
-        if len(wav16) == 0:
-            return np.zeros(0, dtype=np.float32)
-        out = torchaudio.functional.resample(torch.from_numpy(wav16), SRC_SR, SR)
-        return out.numpy().astype(np.float32)
+        return wav[: quantize_prompt(len(wav))]
 
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         """Return ``text``, ``cond_frames`` and (unless disabled) ``speech``."""
@@ -348,41 +337,41 @@ class LEMASDataset(torch.utils.data.Dataset):
         d = self.draw(idx)
         lang = LANGS[int(c.lang[idx])]
         phones = c.phones(idx).split(" ")
-        spk16 = lang16 = target16 = None
+        spk_w = lang_w = target_w = None
         if d.split_k is not None:
             wb = c.word_bounds(idx)
-            p_end16 = quantize_prompt_16k(int(wb[d.split_k - 1][1] * SRC_SR))
-            t_start16 = int(wb[d.split_k][0] * SRC_SR)
+            p_end = quantize_prompt(int(wb[d.split_k - 1][1] * PACK_SR))
+            t_start = int(wb[d.split_k][0] * PACK_SR)
             phones = [p for w in c.phones_by_word(idx)[d.split_k :] for p in w]
             if self.load_speech:
-                full = self._read16(idx)
-                spk16 = self._quantize16(full[:p_end16])
-                target16 = full[t_start16:]
+                full = self._read_pcm(idx)
+                spk_w = self._quantize(full[:p_end])
+                target_w = full[t_start:]
         elif d.spk_row is not None and self.load_speech:
-            spk16 = self._quantize16(
-                self._read16(d.spk_row, d.spk_start16, d.spk_start16 + d.spk_len16)
+            spk_w = self._quantize(
+                self._read_pcm(d.spk_row, d.spk_start, d.spk_start + d.spk_len)
             )
         if self.load_speech:
-            if target16 is None:
-                target16 = self._read16(idx)
-            lang16 = self._quantize16(
-                self._read16(d.lang_row, d.lang_start16, d.lang_start16 + d.lang_len16)
+            if target_w is None:
+                target_w = self._read_pcm(idx)
+            lang_w = self._quantize(
+                self._read_pcm(d.lang_row, d.lang_start, d.lang_start + d.lang_len)
             )
         spk_present = d.spk_row is not None and not d.drop_spk
         lang_present = not d.drop_lang
         if self.load_speech:
-            spk24 = self._to24(spk16) if spk_present else np.zeros(0, np.float32)
-            lang24 = self._to24(lang16) if lang_present else np.zeros(0, np.float32)
+            spk24 = spk_w if spk_present else np.zeros(0, np.float32)
+            lang24 = lang_w if lang_present else np.zeros(0, np.float32)
             sf_, lf_ = region_frames(len(spk24)), region_frames(len(lang24))
         else:  # frame counts from the draw alone (create_shape never reads audio)
             if d.split_k is not None:
-                n_spk16 = quantize_prompt_16k(
-                    int(c.word_bounds(idx)[d.split_k - 1][1] * SRC_SR)
+                n_spk_w = quantize_prompt(
+                    int(c.word_bounds(idx)[d.split_k - 1][1] * PACK_SR)
                 )
             else:
-                n_spk16 = d.spk_len16
-            sf_ = region_frames(n_spk16 * 3 // 2) if spk_present else 0
-            lf_ = region_frames(d.lang_len16 * 3 // 2) if lang_present else 0
+                n_spk_w = d.spk_len
+            sf_ = region_frames(n_spk_w) if spk_present else 0
+            lf_ = region_frames(d.lang_len) if lang_present else 0
         text = (
             build_text_ids(sf_, lf_, lang, phones, self.table) if self.table else None
         )
@@ -392,9 +381,9 @@ class LEMASDataset(torch.utils.data.Dataset):
         if text is not None:
             sample["text"] = text
         if self.load_speech:
-            sample["speech"] = np.concatenate(
-                [spk24, lang24, self._to24(target16)]
-            ).astype(np.float32)
+            sample["speech"] = np.concatenate([spk24, lang24, target_w]).astype(
+                np.float32
+            )
             if text is not None:
                 assert len(text) <= len(sample["speech"]) // HOP + 1, (idx, len(text))
         return sample

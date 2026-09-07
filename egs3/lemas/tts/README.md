@@ -34,20 +34,20 @@ The model change is one subclass (`src/model.py`): `DualPromptCFM` masks
 ## 1. Data, token list, shapes
 
 ```bash
-# Delta: cpu node. Pass 1 packs the 48 tars into one int16 16 kHz .pcm per
-# shard (3.2 TB; ~650 members/s per worker, ~1 h). Pass 2 re-lays each
+# Delta: cpu node. Pass 1 packs the 48 tars into one int16 24 kHz .pcm per
+# shard (4.8 TB; ~650 members/s per worker, ~1 h). 24 kHz = the model rate:
+# 16 kHz sources are upsampled once here (what the loader used to do per
+# item), Emilia en/zh keep their bandwidth (24 kHz as is, 32 kHz -> 24 kHz). Pass 2 re-lays each
 # language out into ONE chunk-contiguous pack (<lang>/<lang>.pcm + .index.tsv):
 # rows of one speaker/recording sit together in chunks of <= 32 (segment
 # order), chunks shuffled. Both passes are sequential I/O (hash buckets).
-# The Emilia members of en/zh ship at 24/32 kHz and are resampled with soxr
-# (counted in .coverage.json).
 # Why: random access to 30 M small FLAC files on /work/hdd cost ~160 ms per
 # open, random 64 KB preads inside a pack 60-75 ms (p90 200-360 ms under
 # load), while a 4 MB aligned read costs ~100 ms. The loader therefore reads
 # 4 MB blocks and serves a whole batch plus both prompts from one or two of
 # them, which needs a speaker's rows and its language-prompt partners to be
 # neighbours in the pack. Stripe the root first:
-#   lfs setstripe -c 4 -S 4M /work/hdd/bbjs/ttrachu/dataset/LEMAS/poc3k_pcm16k
+#   lfs setstripe -c 4 -S 4M /work/hdd/bbjs/ttrachu/dataset/LEMAS/poc3k_pcm24k
 # phonemizes 30 M rows (zh rows whose text has Latin letters are dropped,
 # `drop_text_regex` in dataset/config.yaml; counts land in lang_stats.json),
 # writes data/manifest/{train,valid}.tsv,
@@ -98,9 +98,10 @@ sbatch local/run_arm_1gpu.sbatch conf/inference_lemas_eval_spk_only.yaml  # arm 
 ```
 
 Both configs use the training config for the model block; `exp_tag` comes
-from `--training_config`. Prompts are low-passed at 8 kHz before use
-(`lowpass_hz`): the training audio is 16 kHz-sourced, so a full-band prompt
-is out of distribution. Target duration comes from the per-language
+from `--training_config`. Prompts are used as they are (`lowpass_hz: null`):
+the training audio is mixed-band (16 kHz sources upsampled, Emilia en/zh at
+their native bandwidth), and LEMAS-eval prompts are 16 kHz anyway. The knob
+remains for full-band external prompts. Target duration comes from the per-language
 tokens-per-second prior in `data/lang_stats.json` times `speed`.
 
 `conf/metrics.yaml` reports, per language: WER (faster-whisper large-v3),

@@ -59,7 +59,7 @@ def test_build_inputs_matches_dataset_layout(tiny):
     )  # not hop aligned
     lp = (np.random.randn(24000) * 0.05).astype(np.float32)
     cond, ids, cf, n_tgt = tiny.build_inputs("ab ba", "de", spk, lp)
-    spk_frames, lang_frames = (len(spk) // 768) * 3, (len(lp) // 768) * 3
+    spk_frames, lang_frames = len(spk) // HOP, len(lp) // HOP  # whole hops
     assert cond.shape[1] == cf == spk_frames + lang_frames
     assert ids[0, :spk_frames].tolist() == [5] * spk_frames
     assert ids[0, spk_frames:cf].tolist() == [6] * lang_frames
