@@ -306,6 +306,8 @@ class LEMASDataset(torch.utils.data.Dataset):
         a_len = int(c.a_len[row])
         stop = a_len if stop is None else min(int(stop), a_len)
         n = max(0, stop - int(start))
+        if n == 0:  # window entirely past the row end (index/audio mismatch)
+            return np.zeros(0, dtype=np.float32)
         block = int(self.cfg["block_samples"])
         pack = int(c.pack[row])
         s0 = int(c.a_start[row]) + int(start)

@@ -227,3 +227,10 @@ def test_speaker_partner_is_a_pack_neighbour(corpus):
         if d.spk_row is not None and d.split_k is None:
             assert abs(int(ds._pos[d.spk_row]) - int(ds._pos[i])) <= 1
             assert int(ds.cols.group[d.spk_row]) == int(ds.cols.group[i])
+
+
+def test_read_past_the_row_end_returns_empty(corpus):
+    ds = _ds(corpus)
+    a_len = int(ds.cols.a_len[0])
+    assert len(ds._read_pcm(0, a_len + 100, a_len + 200)) == 0
+    assert len(ds._read_pcm(0, a_len - 10)) == 10
