@@ -42,6 +42,7 @@ to the language pack.
 
 from __future__ import annotations
 
+import ctypes
 import gc
 import io
 import json
@@ -50,6 +51,7 @@ import math
 import random
 import re
 import shutil
+import sys
 import tarfile
 import zlib
 from concurrent.futures import ProcessPoolExecutor
@@ -290,24 +292,49 @@ class _SeqReader:
         self.f.close()
 
 
-def _freeze_inherited_heap() -> None:
-    """Take the parent's objects out of the collector's view in a forked worker.
+def disable_transparent_hugepages() -> bool:
+    """Opt this process (and its future children) out of transparent huge pages.
 
-    The pool workers fork from a parent holding ~30 M small objects (the
-    per-row chunk maps of every language). Every full collection in a worker
-    walked all of them: one bucket merged in 30 s in a fresh process but in
-    2.7 min inside the pool (measured 2026-09-07). ``gc.freeze`` moves the
-    inherited heap to the permanent generation.
+    Delta's nodes run THP ``enabled=always``. After hours of use their memory
+    is fragmented, and every large numpy allocation (a bucket's 300 MB parts)
+    then stalls in direct compaction: a merge worker showed 3 s of user time
+    against 1,320 s of system time, with ``compact_stall`` climbing and
+    ``compact_fail`` matching it (measured 2026-09-07). ``prctl``'s
+    ``PR_SET_THP_DISABLE`` (41) needs no privilege and is inherited on fork.
+
+    Returns:
+        True when the flag was set, False on non-Linux platforms or failure.
+
+    Example:
+        >>> disable_transparent_hugepages()  # doctest: +SKIP
+        True
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    try:
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        return libc.prctl(41, 1, 0, 0, 0) == 0
+    except OSError:
+        return False
+
+
+def _tune_worker() -> None:
+    """Per-process setup for a forked pool worker.
+
+    ``gc.freeze`` takes the parent's ~30 M inherited objects (the per-row
+    chunk maps of every language) out of the collector's view, and THP is
+    disabled so large allocations do not stall in memory compaction.
     """
     gc.collect()
     gc.freeze()
+    disable_transparent_hugepages()
 
 
 def _bucket_shard(args):
     """Pass 1 for one shard pack: append its rows to per-shard bucket parts."""
     pack, index_path, parts_dir, rows, n_buckets = args
     # rows: member -> (bucket, chunk) computed by the caller from the keys
-    _freeze_inherited_heap()
+    _tune_worker()
     parts_dir = Path(parts_dir)
     parts_dir.mkdir(parents=True, exist_ok=True)
     index = read_pack_index(index_path)
@@ -343,7 +370,7 @@ def _bucket_shard(args):
 def _merge_language(args):
     """Pass 2 for one language: buckets -> chunks -> shuffled language pack."""
     lang, parts_dirs, out_root, n_buckets, seed, chunk_rows = args
-    _freeze_inherited_heap()
+    _tune_worker()
     out_root = Path(out_root)
     lang_dir = out_root / lang
     lang_dir.mkdir(parents=True, exist_ok=True)

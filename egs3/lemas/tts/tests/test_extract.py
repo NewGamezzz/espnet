@@ -8,6 +8,7 @@ import soundfile as sf
 from dataset.extract import (
     bucket_of,
     chunk_key,
+    disable_transparent_hugepages,
     extract_shard,
     read_pack_index,
     read_shard_members,
@@ -185,3 +186,13 @@ def test_regroup_language_makes_chunks_contiguous_and_shuffled(tmp_path):
     assert order2 != order1 and set(order2) == set(order1)
     # a completed language is not redone
     assert regroup_language("de", shards, out, seed=3)["rows"] == 12
+
+
+def test_disable_transparent_hugepages_is_safe_everywhere():
+    import sys
+
+    ok = disable_transparent_hugepages()
+    assert ok is sys.platform.startswith("linux")
+    if ok:
+        status = open("/proc/self/status").read()
+        assert "THP_enabled:\t0" in status or "THP_enabled" not in status
