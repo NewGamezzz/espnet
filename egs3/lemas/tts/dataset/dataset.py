@@ -205,6 +205,10 @@ class LEMASDataset(torch.utils.data.Dataset):
         k = int(self.cfg["spk_neighbor_k"])
         members = members[max(0, pos - k) : pos + k + 1]
         cands = members[members != idx]
+        if len(cands) == 0:
+            # the group's other rows fell to the duration/text filters or the
+            # validation split; this row trains without a speaker prompt
+            return None, 0, 0, None
         row = int(rng.choice(cands))
         start, length = self._window(rng, float(c.dur[row]), self.cfg["spk_prompt_sec"])
         return row, start, length, None

@@ -234,3 +234,24 @@ def test_read_past_the_row_end_returns_empty(corpus):
     a_len = int(ds.cols.a_len[0])
     assert len(ds._read_pcm(0, a_len + 100, a_len + 200)) == 0
     assert len(ds._read_pcm(0, a_len - 10)) == 10
+
+
+def test_group_row_without_surviving_mates_falls_back(corpus, tmp_path):
+    # keep only one row of the mls speaker group "77": mode says group, but
+    # every partner is gone (filtered or held out)
+    lines = corpus["manifest"].read_text().splitlines()
+    kept = [ln for ln in lines if not ln.startswith("de_77_1_000001")]
+    m = tmp_path / "one_mate.tsv"
+    m.write_text("\n".join(kept) + "\n")
+    ds = LEMASDataset(
+        split="train",
+        manifest_path=m,
+        token_list=corpus["tokens"],
+        audio_root=corpus["audio"],
+        prompt_config=dict(p_drop_spk=0.0, p_drop_lang=0.0),
+        seed=1,
+    )
+    i = [k for k in range(len(ds)) if ds.cols.utt_id[k].startswith(b"de_77_1_")][0]
+    d = ds.draw(i)
+    assert d.spk_row is None and d.split_k is None
+    assert int(ds[i]["cond_frames"][0]) > 0
