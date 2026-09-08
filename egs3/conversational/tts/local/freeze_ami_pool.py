@@ -39,8 +39,12 @@ def main() -> int:
     ap.add_argument("tag")
     ap.add_argument("--corpus", action="store_true", help="AMI headset prompts (prompt.pool=null)")
     ap.add_argument("--compare", default=None, help="tag whose window ids to compare against")
+    ap.add_argument("--pool-band", type=float, nargs=2, default=None,
+                    help="override prompt.pool.band, e.g. 4.0 5.5 for 4 s speaker prompts")
     a = ap.parse_args()
     base = OmegaConf.load("conf/inference_ami.yaml")
+    if a.pool_band is not None:
+        base = OmegaConf.merge(base, OmegaConf.create({"prompt": {"pool": {"band": list(a.pool_band)}}}))
     if a.corpus:
         base = OmegaConf.merge(base, OmegaConf.create({"prompt": {"pool": None}}))
     train = OmegaConf.load("conf/generated/training_covomix2_eval.yaml")

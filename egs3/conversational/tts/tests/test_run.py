@@ -285,11 +285,11 @@ def test_ami_windows_chunked_configs_load_and_agree():
     inf = OmegaConf.load(recipe / "conf" / "inference_ami_windows_chunked.yaml")
     met = OmegaConf.load(recipe / "conf" / "metrics_ami_windows_chunked.yaml")
     assert inf.mode == met.mode == "generate_external_chunked"
-    assert inf.chunk.cond_format == "special_tokens" and inf.chunk.cond_prompt_sec == 1.5
+    assert inf.chunk.cond_format == "special_tokens" and inf.chunk.cond_prompt_sec == 4.0
     assert inf.chunk.cond_prev_sec == 5.0 and inf.chunk.target_sec == 45.0
     assert inf.chunk.text_format == "order"
     assert (inf.sampling.steps, inf.sampling.cfg_strength, inf.sampling.cfg_sparse_strength,
-            inf.sampling.cfg_sparse_max_chars) == (64, 3.5, 2.0, 40)
+            inf.sampling.cfg_sparse_max_chars) == (64, 3.5, None, 40)
     assert inf.batching.max_batch_dialogues == 1
     assert inf.duration.source == "predicted" and inf.duration.rate_prior_chars == 100.0
     assert inf.testset.manifest.endswith("manifest.jsonl")

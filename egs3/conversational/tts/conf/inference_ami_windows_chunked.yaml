@@ -7,9 +7,11 @@
 # (prompt wavs = LibriTTS pool utterances, gt wavs = masked headset audio,
 # both -23 dBFS) and Chorus generates each window as ONE 45 s chunk through
 # src/chunked_inference.py with the special-token prompt
-# (<speaker_prompt> audio + <prev_chunk>), exactly the stage-2 final
-# ZipVoice recipe: cfg 3.5, steps 64, cond_prompt_sec 1.5, sparse CFG
-# 2.0/40, batch 1.  local/make_ami_chunked_runs.py overrides per arm: mode,
+# (<speaker_prompt> audio + <prev_chunk>): the stage-2 final ZipVoice recipe
+# (cfg 3.5, steps 64, batch 1) with Thanapat's 2026-09-08 changes: speaker
+# prompt 4 s (pool band 4-5.5 s, so every channel's prompt is exactly 4 s;
+# the path takes the SHORTEST prompt across channels, capped here) and
+# sparse CFG OFF.  local/make_ami_chunked_runs.py overrides per arm: mode,
 # ckpt, training_config, testset, inference_dir, and for the all-on
 # transcripts recipe cond_format/cfg (see there).
 training_config: conf/generated/training_chorus_eval.yaml
@@ -50,7 +52,7 @@ batching:
 sampling:
   steps: 64
   cfg_strength: 3.5
-  cfg_sparse_strength: 2.0
+  cfg_sparse_strength: null
   cfg_sparse_max_chars: 40
   sway_sampling_coef: -1.0
   seed: 0
@@ -58,7 +60,7 @@ sampling:
 
 chunk:
   cond_format: special_tokens
-  cond_prompt_sec: 1.5
+  cond_prompt_sec: 4.0
   cond_prev_sec: 5.0
   text_format: order
   unchunked_max_sec: null
