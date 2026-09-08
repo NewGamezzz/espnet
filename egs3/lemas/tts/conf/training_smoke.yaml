@@ -213,12 +213,13 @@ trainer:
   callbacks:
     - _target_: espnet3.components.callbacks.ema.EMACallback
       decay: 0.9999
-    # Step-based backups next to espnet3's own last.ckpt / best ckpts.
+    # Permanent step backups for evaluation, next to espnet3's own last.ckpt
+    # (refreshed every validation) and best ckpts; ~4 GB each.
     - _target_: lightning.pytorch.callbacks.ModelCheckpoint
       dirpath: ${exp_dir}
       filename: "backup_step{step}"
       auto_insert_metric_name: false
-      every_n_train_steps: 5000
+      every_n_train_steps: 25000
       save_top_k: -1
       save_last: false
   logger:
