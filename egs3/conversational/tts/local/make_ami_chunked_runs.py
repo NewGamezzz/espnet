@@ -74,10 +74,15 @@ def arm(base_inf: str, base_met: str, K: int, suffix: str, arm_name: str, tag: s
     inf = _set(inf, "manifest", f"exp/ami/external/{testset}/manifest.jsonl")
     inf = _set(inf, "name", f"ami_{testset}")
     if arm_name == "trd":
-        # the all-on transcripts recipe: wrapper knobs replace the sptok ones
-        inf = inf.replace("  cond_format: special_tokens\n  cond_prompt_sec: 1.5\n  cond_prev_sec: 5.0\n",
-                          "  cond_format: transcripts\n  cond_include_prompt: false\n  cond_history_chunks: 1\n")
+        # the all-on transcripts recipe: the wrapper knobs replace the sptok
+        # ones line by line (never a literal block match, which silently
+        # leaves the sptok format in place when a value changes).
+        inf = _set(inf, "cond_format", "transcripts")
+        inf = re.sub(r"^\s*cond_prompt_sec:[^\n]*\n", "  cond_include_prompt: false\n", inf, count=1, flags=re.M)
+        inf = re.sub(r"^\s*cond_prev_sec:[^\n]*\n", "  cond_history_chunks: 1\n", inf, count=1, flags=re.M)
         inf = _set(inf, "cfg_strength", "3.0")
+        if "cond_format: special_tokens" in inf or "cond_prompt_sec" in inf:
+            raise RuntimeError("trd arm still carries special-token knobs")
     met = _set(base_met, "mode", "generate_external_gt" if arm_name == "gt" else "generate_external_chunked")
     met = _set(met, "inference_dir", f"${{exp_dir}}/{out_dir}")
     (CONF / f"inference_{name}.yaml").write_text(inf)
