@@ -223,11 +223,9 @@ trainer:
     _target_: lightning.pytorch.loggers.WandbLogger
     project: espnet3-lemas-f5
     name: ${exp_tag}
-    id: ${exp_tag}       # one wandb run across the 1 h chain links
-    resume: allow
     save_dir: ${exp_dir}
     log_model: false
-    id: ${exp_tag}
+    id: ${exp_tag}       # one wandb run across the 1 h chain links
     resume: allow
 
 fit: {}
