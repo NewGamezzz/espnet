@@ -31,6 +31,8 @@ from typing import Sequence
 from espnet3.utils.config_utils import load_config_with_defaults
 
 from .preprocessing.ami import (
+    Word,
+    normalize_ami_text,
     TEST_MEETINGS,
     complete_participants,
     load_ami_recordings,
@@ -57,6 +59,39 @@ def _load_cfg() -> dict:
 
 
 _CFG = _load_cfg()
+
+
+def split_turn_by_words(
+    turn: Turn,
+    t0: float,
+    t1: float,
+    words: Sequence[Word],
+    charset,
+) -> Turn | None:
+    """The part of ``turn`` inside ``[t0, t1]`` under ``cut_mode: turn_edge``.
+
+    ``words`` are the channel's timed words (the same list the turn was built
+    from).  A word belongs to the window whose span holds its midpoint; the
+    kept words are re-normalized exactly like a whole turn (AMI cleanup, then
+    the vocab charset), so the two halves of a split turn read like two turns
+    and their text matches the ground-truth audio on each side.  ``None``
+    when no word of the turn falls inside, or the kept text normalizes away.
+    """
+    own = [w for w in words if w.start >= turn.start - 1e-6 and w.end <= turn.end + 1e-6]
+    kept = [w for w in own if t0 <= (w.start + w.end) / 2 < t1]
+    # Leading punctuation never opens an utterance (words_to_supervisions rule).
+    while kept and kept[0].punc:
+        kept = kept[1:]
+    if not kept:
+        return None
+    text = normalize_text(normalize_ami_text(" ".join(w.text for w in kept)), charset)
+    if not text:
+        return None
+    # A word that straddles the cut goes with its midpoint; the sliver of it
+    # on the other side is clamped away, so the piece never leaves the window.
+    start = max(turn.start, t0, min(w.start for w in kept))
+    end = min(turn.end, t1, max(w.end for w in kept))
+    return dataclasses.replace(turn, text=text, start=round(start, 6), end=round(end, 6))
 
 
 def lexical_active_channels(turns: Sequence[Turn], min_words: int) -> tuple[int, ...]:
@@ -175,8 +210,10 @@ class AMIBuilder:
                     ]
                 sups = []
                 speakers: dict[int, str] = {}
+                words_by_channel: dict[int, list[Word]] = {}
                 for p in sorted(parts, key=lambda p: p.channel):
                     words = load_words(ann / "words" / f"{mid}.{p.agent}.words.xml")
+                    words_by_channel[p.channel] = list(words)
                     sups.extend(
                         words_to_supervisions(
                             words,
@@ -213,6 +250,12 @@ class AMIBuilder:
                     trim_to_turns=bool(cfg["trim_to_turns"]),
                     min_coverage=float(cfg["min_coverage"]),
                     snap_start_to_turn=bool(cfg["snap_start_to_turn"]),
+                    cut_mode=str(cfg.get("cut_mode", "clear")),
+                    split_turn=(
+                        lambda t, a, b: split_turn_by_words(
+                            t, a, b, words_by_channel.get(t.channel, ()), charset
+                        )
+                    ),
                 )
                 stats.merge(session_stats)
                 for r in records:
@@ -239,6 +282,7 @@ class AMIBuilder:
                     "window_max",
                     "tail_min",
                     "boundary_guard",
+                    "cut_mode",
                     "trim_to_turns",
                     "snap_start_to_turn",
                     "merge_gap",

@@ -20,6 +20,7 @@ from egs3.conversational.tts.dataset.preprocessing.windows import (
     _gap_at,
     blocked_intervals,
     build_windows,
+    edge_blocked_intervals,
     first_eligible_boundary,
     from_json,
     is_eligible_boundary,
@@ -789,3 +790,82 @@ class TestChannelsField:
     def test_rejects_turn_outside_subset(self):
         with pytest.raises(ValueError, match="turn on channel 3"):
             self._rec((0, 1))
+
+
+
+def _split_by_time(t: Turn, t0: float, t1: float) -> Turn | None:
+    """Test splitter: keep the overlap span, share the words by time fraction."""
+    a, b = max(t.start, t0), min(t.end, t1)
+    if b - a <= 1e-9:
+        return None
+    words = t.text.split()
+    lo = round((a - t.start) / (t.end - t.start) * len(words))
+    hi = round((b - t.start) / (t.end - t.start) * len(words))
+    kept = words[lo:hi]
+    if not kept:
+        return None
+    return Turn(t.channel, t.speaker, " ".join(kept), a, b)
+
+
+class TestTurnEdgeCuts:
+    """cut_mode='turn_edge': any turn start/end is a legal cut; straddling
+    turns on other channels are split by the supplied callback."""
+
+    def test_edge_blocked_intervals_are_the_gaps_between_edges(self):
+        turns = [turn(0, 1.0, 4.0), turn(1, 3.0, 6.0)]
+        blocked = edge_blocked_intervals(turns, 10.0)
+        assert blocked == [(0.0, 1.0), (1.0, 3.0), (3.0, 4.0), (4.0, 6.0), (6.0, 10.0)]
+        for e in (0.0, 1.0, 3.0, 4.0, 6.0, 10.0):
+            assert is_eligible_boundary(blocked, e)
+        assert not is_eligible_boundary(blocked, 2.0) and not is_eligible_boundary(blocked, 5.0)
+
+    def test_chained_overlap_region_now_tiles_and_straddlers_are_split(self):
+        # The exact scenario `test_chained_overlap_region_dropped` drops under
+        # the clear rule: five 11 s turns overlapping in a chain over 0.5-49.5.
+        rec = make_recording(50.0)
+        starts = [0.5, 10.0, 19.5, 29.0, 38.5]
+        turns = [
+            Turn(i % 2, f"spk{i % 2}", " ".join(f"w{i}_{j}" for j in range(11)), start, start + 11.0)
+            for i, start in enumerate(starts)
+        ]
+        records, stats = build_windows(
+            "sess1", rec, turns, rng=random.Random("s"), cut_mode="turn_edge",
+            split_turn=_split_by_time, **WINDOW_KW
+        )
+        assert records, "turn-edge cuts must tile the chained region"
+        assert stats.dropped_span_sec == pytest.approx(0.0)
+        # every window edge is a turn edge (or a session edge)
+        edges = {0.0, 50.0, *(t.start for t in turns), *(t.end for t in turns)}
+        for w in records:
+            assert any(abs(w.t0 - e) < 1e-6 for e in edges) and any(abs(w.t1 - e) < 1e-6 for e in edges)
+            for t in w.turns:
+                assert w.t0 - 1e-6 <= t.start and t.end <= w.t1 + 1e-6
+        # windows tile without overlap
+        for a, b in zip(records, records[1:]):
+            assert a.t1 <= b.t0 + 1e-9
+        # a straddling turn appears in two consecutive windows with its words shared, none lost
+        all_words = [wd for w in records for t in w.turns for wd in t.text.split()]
+        assert sorted(all_words) == sorted(wd for t in turns for wd in t.text.split())
+        assert any(
+            t.text != next(o.text for o in turns if o.start <= t.start and o.end >= t.end and o.channel == t.channel)
+            for w in records for t in w.turns
+        ), "at least one turn should be a split fragment"
+
+    def test_clear_mode_is_unchanged(self):
+        rec = make_recording(120.0)
+        turns = dialogue_turns(120.0)
+        a, _ = build_windows("sess1", rec, turns, rng=random.Random("s"), **WINDOW_KW)
+        b, _ = build_windows("sess1", rec, turns, rng=random.Random("s"), cut_mode="clear", **WINDOW_KW)
+        assert a == b
+
+    def test_turn_edge_requires_a_splitter_and_rejects_bad_pieces(self):
+        rec = make_recording(50.0)
+        turns = dialogue_turns(50.0)
+        with pytest.raises(ValueError, match="split_turn"):
+            build_windows("sess1", rec, turns, rng=random.Random("s"), cut_mode="turn_edge", **WINDOW_KW)
+        with pytest.raises(ValueError, match="cut_mode"):
+            build_windows("sess1", rec, turns, rng=random.Random("s"), cut_mode="word", split_turn=_split_by_time, **WINDOW_KW)
+        bad = lambda t, a, b: Turn(t.channel, t.speaker, t.text, t.start, t.end)  # returns the whole turn
+        chained = [Turn(i % 2, "s", "a b c", st, st + 11.0) for i, st in enumerate([0.5, 10.0, 19.5, 29.0, 38.5])]
+        with pytest.raises(ValueError, match="outside the window"):
+            build_windows("sess1", rec, chained, rng=random.Random("s"), cut_mode="turn_edge", split_turn=bad, **WINDOW_KW)

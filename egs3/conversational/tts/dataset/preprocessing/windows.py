@@ -176,6 +176,21 @@ def blocked_intervals(
     return merged
 
 
+def edge_blocked_intervals(
+    turns: Sequence[Turn], duration: float
+) -> list[tuple[float, float]]:
+    """Blocked intervals for ``cut_mode="turn_edge"``: the eligible instants
+    are exactly the turn starts and ends (any channel) plus the session
+    edges, so the blocked set is the complement - the open intervals between
+    consecutive eligible instants.  A cut therefore always lands on a pause
+    of the headset being cut; whether OTHER headsets are talking is not a
+    constraint (their straddling turns are split by ``build_windows``).
+    """
+    edges = sorted({0.0, float(duration), *(t.start for t in turns), *(t.end for t in turns)})
+    edges = [e for e in edges if 0.0 <= e <= duration + _EPS]
+    return [(a, b) for a, b in zip(edges, edges[1:]) if b - a > _EPS]
+
+
 def is_eligible_boundary(blocked: Sequence[tuple[float, float]], t: float) -> bool:
     """True iff ``t`` falls inside no blocked open interval."""
     return not any(a < t < b for a, b in blocked)
@@ -221,6 +236,7 @@ def select_window_spans(
     rng: random.Random,
     turn_starts: Sequence[float] = (),
     snap_start_to_turn: bool = False,
+    turn_spans: Sequence[tuple[float, float]] = (),
 ) -> tuple[list[tuple[float, float]], WindowingStats]:
     """Greedy left-to-right span selection against the blocked-interval list.
 
@@ -261,9 +277,12 @@ def select_window_spans(
     spans: list[tuple[float, float]] = []
     cur = 0.0
     while cur < duration - _EPS:
-        if snap_start_to_turn:
+        if snap_start_to_turn and not any(a < cur < b for a, b in turn_spans):
             # Begin the next window on the next turn, skipping the intervening
             # silence/hole; strictly non-decreasing, so the loop still advances.
+            # Never when a turn is still running across `cur` (turn-edge cuts):
+            # that stretch is speech, not a hole, and skipping it would drop
+            # the straddling turn's words from every window.
             nxt = _next_turn_start(turn_starts, cur)
             if nxt is None or nxt >= duration - _EPS:
                 break
@@ -335,8 +354,21 @@ def build_windows(
     trim_to_turns: bool = False,
     min_coverage: float = 0.0,
     snap_start_to_turn: bool = False,
+    cut_mode: str = "clear",
+    split_turn=None,
 ) -> tuple[list[WindowRecord], WindowingStats]:
     """Window one session: boundary selection, turn assignment, empty-window drop.
+
+    ``cut_mode`` selects the eligibility rule.  ``"clear"`` (default, the
+    CoVoMix rule described in the module docstring): a boundary must be at
+    least ``boundary_guard`` clear of every turn on every channel.
+    ``"turn_edge"`` (AMI, Thanapat 2026-09-08): a boundary is any turn start
+    or end on any channel; a turn on another channel that straddles the cut
+    is split by ``split_turn(turn, t0, t1)``, which must return the part of
+    the turn inside ``[t0, t1]`` (a ``Turn`` with the words whose timing falls
+    inside, or ``None`` when nothing does).  Dense cross-talk, where no
+    all-channel-clear instant exists for longer than ``window_max``, then
+    tiles like any other stretch instead of being dropped.
 
     Three optional guards strip transcription holes - stretches of real audible
     speech that carry no turn (SSSD's Parakeet pseudo-labels have such gaps).
@@ -358,7 +390,15 @@ def build_windows(
     silent pause and drops both, which is why trimming is the primary fix and
     this is only a floor.
     """
-    blocked = blocked_intervals(turns, boundary_guard)
+    if cut_mode not in ("clear", "turn_edge"):
+        raise ValueError(f"cut_mode must be 'clear' or 'turn_edge', got {cut_mode!r}")
+    if cut_mode == "turn_edge" and split_turn is None:
+        raise ValueError("cut_mode='turn_edge' needs a split_turn callback")
+    blocked = (
+        blocked_intervals(turns, boundary_guard)
+        if cut_mode == "clear"
+        else edge_blocked_intervals(turns, rec.duration)
+    )
     turn_starts = sorted(t.start for t in turns)
     spans, stats = select_window_spans(
         blocked,
@@ -369,6 +409,7 @@ def build_windows(
         rng=rng,
         turn_starts=turn_starts,
         snap_start_to_turn=snap_start_to_turn,
+        turn_spans=[(t.start, t.end) for t in turns] if cut_mode == "turn_edge" else (),
     )
     records: list[WindowRecord] = []
     edges: set[float] = set()
@@ -377,7 +418,27 @@ def build_windows(
         # overlapping the span is fully contained in it (a turn touching t1
         # at its start belongs to the next window, touching t0 at its end to
         # the previous one).
-        inside = tuple(t for t in turns if t.start >= t0 - _EPS and t.end <= t1 + _EPS)
+        if cut_mode == "clear":
+            inside = tuple(t for t in turns if t.start >= t0 - _EPS and t.end <= t1 + _EPS)
+        else:
+            # A cut lies on a turn edge of ONE channel; turns on other channels
+            # may straddle it and contribute only their in-window words.
+            parts = []
+            for t in turns:
+                if t.end <= t0 + _EPS or t.start >= t1 - _EPS:
+                    continue
+                if t.start >= t0 - _EPS and t.end <= t1 + _EPS:
+                    parts.append(t)
+                    continue
+                piece = split_turn(t, t0, t1)
+                if piece is None:
+                    continue
+                if piece.start < t0 - 1e-6 or piece.end > t1 + 1e-6:
+                    raise ValueError(
+                        f"split_turn returned {piece} outside the window [{t0}, {t1}]"
+                    )
+                parts.append(piece)
+            inside = tuple(sorted(parts, key=lambda t: (t.start, t.channel)))
         if not inside:
             stats.n_windows -= 1
             stats.dropped_empty_windows += 1

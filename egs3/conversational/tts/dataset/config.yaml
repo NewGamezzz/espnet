@@ -96,6 +96,13 @@ ami_builder:
   tail_min: 10.0
   # Forced-alignment jitter; SSSD used 0.0 on human timestamps.
   boundary_guard: 0.1
+  # Cut rule (Thanapat 2026-09-08, "Option B"): turn_edge = a window edge is
+  # any turn start/end on any headset; turns on other headsets that straddle
+  # the cut are split by word timing (each word to the side its midpoint
+  # falls on) and re-normalized.  clear = the CoVoMix rule (edge clear of
+  # every turn on every headset), which left 137 cross-talk stretches
+  # totalling 3.9 h of the 14.3 h test partition uncut.
+  cut_mode: turn_edge
   trim_to_turns: true
   min_coverage: 0.0
   snap_start_to_turn: true

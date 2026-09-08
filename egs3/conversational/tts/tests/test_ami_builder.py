@@ -11,8 +11,11 @@ import soundfile as sf
 from egs3.conversational.tts.dataset.ami_builder import (
     AMIBuilder,
     lexical_active_channels,
+    split_turn_by_words,
     stratify_window,
 )
+from egs3.conversational.tts.dataset.preprocessing.ami import Word
+from egs3.conversational.tts.dataset.preprocessing.text import vocab_charset
 from egs3.conversational.tts.dataset.preprocessing.ami import transcode_meeting
 from egs3.conversational.tts.dataset.preprocessing.sssd import Turn
 from egs3.conversational.tts.dataset.preprocessing.windows import WindowRecord, from_json
@@ -201,3 +204,105 @@ class TestBuild:
         assert (a / "data/manifest/ami_test.jsonl").read_bytes() == (
             b / "data/manifest/ami_test.jsonl"
         ).read_bytes()
+
+
+
+class TestSplitTurnByWords:
+    CHARSET = vocab_charset(["<blank>", "<unk>", "<space>"] + list(string.ascii_lowercase) + [".", ",", "?", "'", "-", "<sos/eos>"])
+
+    def _words(self):
+        # "Okay , so the buttons were small ." at 10.0-14.0, 0.5 s per token
+        toks = ["Okay", ",", "so", "the", "buttons", "were", "small", "."]
+        return [Word(10.0 + 0.5 * i, 10.5 + 0.5 * i, t, punc=t in {",", "."}) for i, t in enumerate(toks)]
+
+    def test_split_shares_words_by_midpoint_and_renormalizes(self):
+        words = self._words()
+        turn = Turn(1, "FEE013", "Okay, so the buttons were small.", 10.0, 14.0)
+        left = split_turn_by_words(turn, 0.0, 12.0, words, self.CHARSET)   # cut at 12.0
+        right = split_turn_by_words(turn, 12.0, 30.0, words, self.CHARSET)
+        assert left.text == "okay, so the" and right.text == "buttons were small."
+        assert (left.start, left.end) == (10.0, 12.0) and (right.start, right.end) == (12.0, 14.0)
+        assert left.channel == right.channel == 1 and left.speaker == "FEE013"
+
+    def test_whole_turn_inside_is_unchanged_text(self):
+        words = self._words()
+        turn = Turn(1, "FEE013", "okay, so the buttons were small.", 10.0, 14.0)
+        assert split_turn_by_words(turn, 0.0, 20.0, words, self.CHARSET).text == turn.text
+
+    def test_nothing_inside_or_only_punctuation_is_none(self):
+        words = self._words()
+        turn = Turn(1, "FEE013", "x", 10.0, 14.0)
+        assert split_turn_by_words(turn, 20.0, 30.0, words, self.CHARSET) is None
+        # the window holds only the trailing "." (13.5-14.0)
+        assert split_turn_by_words(turn, 13.6, 14.0, words, self.CHARSET) is None
+
+    def test_words_outside_the_turn_are_ignored(self):
+        words = self._words() + [Word(20.0, 20.5, "later", False)]
+        turn = Turn(1, "FEE013", "x", 10.0, 14.0)
+        piece = split_turn_by_words(turn, 12.0, 30.0, words, self.CHARSET)
+        assert piece.text == "buttons were small." and piece.end == 14.0
+
+
+def _make_overlap_corpus(tmp_path: Path, seconds: float = 90.0) -> Path:
+    """A and B alternate 12 s turns that OVERLAP by 2 s in an unbroken chain
+    (no all-headset-clear instant anywhere); C and D silent."""
+    root = tmp_path / "ami_ov"
+    mid = "ES2004a"
+    ann = root / "annotations"
+    (ann / "words").mkdir(parents=True)
+    (ann / "corpusResources").mkdir(parents=True)
+    (ann / "corpusResources" / "meetings.xml").write_text(
+        f"""<?xml version="1.0"?>
+<nite:root {NITE}><meeting observation="{mid}">
+<speaker channel="0" nxt_agent="A" global_name="MEO015"/>
+<speaker channel="1" nxt_agent="B" global_name="FEE013"/>
+<speaker channel="2" nxt_agent="C" global_name="MEE014"/>
+<speaker channel="3" nxt_agent="D" global_name="FEE016"/>
+</meeting></nite:root>"""
+    )
+    turns = {0: [], 1: [], 2: [], 3: []}
+    t, ch = 1.0, 0
+    while t + 12.0 < seconds - 1:
+        turns[ch].append((t, t + 12.0, "one two three four five six seven eight"))
+        t += 10.0; ch = 1 - ch
+    for ch, agent in enumerate("ABCD"):
+        rows, i = [], 0
+        for start, end, text in turns[ch]:
+            toks = text.split(); step = (end - start) / len(toks)
+            for j, tok in enumerate(toks):
+                rows.append(f'<w nite:id="w{i}" starttime="{start + j * step:.2f}" endtime="{start + (j + 1) * step:.2f}">{tok}</w>'); i += 1
+        (ann / "words" / f"{mid}.{agent}.words.xml").write_text(f'<?xml version="1.0"?><nite:root {NITE}>' + "".join(rows) + "</nite:root>")
+    audio = root / "amicorpus" / mid / "audio"; audio.mkdir(parents=True)
+    sr = 16000; tt = np.arange(int(seconds * sr)) / sr
+    for ch in range(4):
+        sf.write(str(audio / f"{mid}.Headset-{ch}.wav"), (0.2 * np.sin(2 * np.pi * 200 * (ch + 1) * tt)).astype("float32"), sr)
+    transcode_meeting(root, mid, root / "ami_flac")
+    return root
+
+
+class TestBuildTurnEdge:
+    def test_chained_overlap_meeting_is_tiled_with_split_turns(self, tmp_path, base_vocab_file, short_windows, monkeypatch):
+        from egs3.conversational.tts.dataset import ami_builder
+        root = _make_overlap_corpus(tmp_path)
+        out = {}
+        for mode in ("clear", "turn_edge"):
+            monkeypatch.setitem(ami_builder._CFG, "cut_mode", mode)
+            recipe = tmp_path / f"recipe_{mode}"
+            AMIBuilder().build(recipe, dataset_root=root, base_vocab_path=base_vocab_file, meetings=["ES2004a"])
+            out[mode] = [from_json(json.loads(l)) for l in (recipe / "data/manifest/ami_test.jsonl").read_text().splitlines()]
+            report = json.loads((recipe / "exp/ami/window_report.json").read_text())
+            assert report["config"]["cut_mode"] == mode
+        assert out["clear"] == [], "the clear rule cannot cut an unbroken overlap chain"
+        wins = out["turn_edge"]
+        assert len(wins) >= 2
+        covered = sum(w.duration for w in wins)
+        assert covered > 60.0
+        # every window: K=2, edges on turn edges, some split fragments (< 8 words), no word lost overall
+        for w in wins:
+            assert w.num_rows == 2 and w.channels == (0, 1)
+            for t in w.turns:
+                assert w.t0 - 1e-6 <= t.start and t.end <= w.t1 + 1e-6
+        frags = [t for w in wins for t in w.turns if len(t.text.split()) < 8]
+        assert frags, "straddling turns should appear as word fragments"
+        n_words = sum(len(t.text.split()) for w in wins for t in w.turns)
+        assert n_words == 8 * sum(len(v) for v in [[1] * 8])  # 8 turns x 8 words in a 90 s chain
