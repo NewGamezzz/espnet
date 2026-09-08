@@ -18,6 +18,8 @@ set -euo pipefail
 cd "$SLURM_SUBMIT_DIR"
 source "$SLURM_SUBMIT_DIR/local/delta_env.sh"
 export OMP_NUM_THREADS=4 NCCL_IB_DISABLE=1
+# reclaim the allocator's fragmented reserve (5.5 GB seen at OOM on 4 GPUs)
+export PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True
 CONF=${1:-conf/training_f5_base_dualprompt.yaml}
 TAG=$($PY -c "import yaml,sys;print(yaml.safe_load(open(sys.argv[1]))['exp_tag'])" "$CONF")
 mkdir -p logs
