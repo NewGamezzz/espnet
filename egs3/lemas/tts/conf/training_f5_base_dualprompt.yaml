@@ -197,8 +197,8 @@ trainer:
   accumulate_grad_batches: 10
   max_steps: 300000
   # espnet3's last.ckpt is written at every validation: this is the resume
-  # granularity for the 12 h chain links (~1.5 h at 2.6 s per step)
-  val_check_interval: 2000
+  # granularity for the 1 h chain links (~17 min at 2.6 s per step)
+  val_check_interval: 400
   limit_val_batches: 200
   check_val_every_n_epoch: null
   log_every_n_steps: 50
@@ -223,6 +223,8 @@ trainer:
     _target_: lightning.pytorch.loggers.WandbLogger
     project: espnet3-lemas-f5
     name: ${exp_tag}
+    id: ${exp_tag}       # one wandb run across the 1 h chain links
+    resume: allow
     save_dir: ${exp_dir}
     log_model: false
     id: ${exp_tag}

@@ -42,3 +42,9 @@ def test_delta_env_sets_phonemizer_and_python_path():
         "PYLIBS=",
     ):
         assert key in s, key
+
+
+def test_train_chain_is_bounded_and_stoppable():
+    s = Path("local/submit_train.sbatch").read_text()
+    assert "#SBATCH --time=01:00:00" in s
+    assert "CHAIN_LEFT" in s and 'exp/$TAG/STOP' in s
