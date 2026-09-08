@@ -7,7 +7,7 @@ import soundfile as sf
 from egs3.conversational.tts.local.export_ami_baseline_inputs import export
 from egs3.conversational.tts.src.eval_manifest import write_eval_manifest
 
-from .test_inference import _write_four_fixture
+from .test_inference import EXT_TOKENS, _write_four_fixture
 
 
 def _manifest(tmp_path):
@@ -80,3 +80,40 @@ def test_export_normalizes_prompt_level(tmp_path):
     )
     wav, sr = sf.read(str(tmp_path / "e" / "prompt" / "four_w00000_ch0.wav"))
     assert abs(active_rms_db(wav, sr) - (-23.0)) < 0.5
+
+
+def test_export_gt_writes_masked_normalized_anchor_loadable_as_external_testset(tmp_path):
+    import numpy as np
+    from egs3.conversational.tts.local.build_zipvoice_dialog_testset import active_rms_db
+    from egs3.conversational.tts.src.external_testset import load_external_manifest
+
+    fx = _write_four_fixture(tmp_path)
+    out = tmp_path / "out_gt"
+    summary = export(
+        eval_manifest=_manifest(tmp_path),
+        window_manifest=fx["manifest"],
+        dataset_root=fx["dataset_root"],
+        out_dir=out,
+        normalize_db=-23.0,
+        gt=True,
+        gt_mask_guard=0.15,
+    )
+    assert summary["gt"] is True and summary["gt_mask_guard"] == 0.15
+    r = json.loads((out / "manifest.jsonl").read_text().splitlines()[0])
+    assert [c["gt_wav"] for c in r["channels"]] == ["gt/four_w00000_ch0.wav", "gt/four_w00000_ch1.wav"]
+    assert r["t0"] == 5.0 and r["t1"] == 13.0
+    for i, c in enumerate(r["channels"]):
+        wav, sr = sf.read(str(out / c["gt_wav"]))
+        assert wav.ndim == 1 and abs(len(wav) / sr - 8.0) < 0.01
+        # masked: some silence, and the active part sits at -23 dBFS
+        assert float(np.abs(wav).min()) == 0.0 and (np.abs(wav) == 0).mean() > 0.2
+        assert abs(active_rms_db(wav, sr) - (-23.0)) < 0.5
+        # every window turn of this row lies inside the un-masked region
+        for t in r["turns"]:
+            if t["channel"] != i:
+                continue
+    vocab = tmp_path / "vocab_ext.txt"
+    vocab.write_text("\n".join(EXT_TOKENS) + "\n", encoding="utf-8")
+    recs = load_external_manifest(out / "manifest.jsonl", vocab)
+    assert recs[0].num_channels == 2 and recs[0].gt_paths is not None
+    assert abs(recs[0].gt_duration_sec - 8.0) < 0.01

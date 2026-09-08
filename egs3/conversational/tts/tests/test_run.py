@@ -274,3 +274,25 @@ def test_ami_longform_configs_load_and_agree():
     raw_met = OmegaConf.to_container(met, resolve=False)
     assert raw_met["inference_dir"] == raw_inf["inference_dir"] == "${exp_dir}/ami_longform_cover"
     assert met.dataset.test[0].name == inf.test_name == "valid"
+
+
+def test_ami_windows_chunked_configs_load_and_agree():
+    """conf/inference_ami_windows_chunked.yaml + metrics: the ZipVoice-Dialog
+    special-token recipe on the exported AMI windows (2026-09-08)."""
+    from omegaconf import OmegaConf
+
+    recipe = Path(__file__).resolve().parents[1]
+    inf = OmegaConf.load(recipe / "conf" / "inference_ami_windows_chunked.yaml")
+    met = OmegaConf.load(recipe / "conf" / "metrics_ami_windows_chunked.yaml")
+    assert inf.mode == met.mode == "generate_external_chunked"
+    assert inf.chunk.cond_format == "special_tokens" and inf.chunk.cond_prompt_sec == 1.5
+    assert inf.chunk.cond_prev_sec == 5.0 and inf.chunk.target_sec == 45.0
+    assert inf.chunk.text_format == "order"
+    assert (inf.sampling.steps, inf.sampling.cfg_strength, inf.sampling.cfg_sparse_strength,
+            inf.sampling.cfg_sparse_max_chars) == (64, 3.5, 2.0, 40)
+    assert inf.batching.max_batch_dialogues == 1
+    assert inf.duration.source == "predicted" and inf.duration.rate_prior_chars == 100.0
+    assert inf.testset.manifest.endswith("manifest.jsonl")
+    assert [m.metric._target_.split(".")[-1] for m in met.metrics] == [
+        "ConversationASRMetric", "SpeakerSimilarityMetric", "QualityMetric", "InteractionMetric",
+    ]

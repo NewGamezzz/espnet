@@ -8,7 +8,13 @@ speaker tags S1..SK assigned by row order.  Three files:
 
 * ``manifest.jsonl`` - the built-set shape ``make_zipvoice_baseline_tsv.py``
   reads (``num_channels``, ``channels[i].prompt_wav/prompt_text``,
-  ``turns[j].speaker/text``);
+  ``turns[j].speaker/text``), which is ALSO the external-testset manifest
+  ``src/external_testset.load_external_manifest`` reads: with ``--gt`` each
+  channel carries ``gt_wav`` = the window's headset audio masked to that
+  channel's turns (+``--gt-mask-guard``, the anchor convention) and
+  normalized like the prompts, so Chorus itself runs the AMI windows through
+  the chunked external path with the ZipVoice-Dialog recipes (special-token
+  prompts) and the anchor comes from the same files;
 * ``moss.jsonl``     - MOSS-TTSD ``voice_clone_and_continuation`` rows
   (``text`` with ``[S<n>]`` tags, ``prompt_audio_speaker<n>`` /
   ``prompt_text_speaker<n>``, ``base_path``);
@@ -54,9 +60,13 @@ def export(
     dataset_root,
     out_dir,
     normalize_db: float | None,
+    gt: bool = False,
+    gt_mask_guard: float = 0.15,
 ) -> dict:
     out_dir = Path(out_dir).resolve()
     (out_dir / "prompt").mkdir(parents=True, exist_ok=True)
+    if gt:
+        (out_dir / "gt").mkdir(parents=True, exist_ok=True)
     records = {r.window_id: r for r in read_window_manifest(window_manifest)}
     pools = _build_turn_pools(list(records.values()))
     _header, rows = load_eval_manifest(eval_manifest)
@@ -89,6 +99,30 @@ def export(
                 rel = f"prompt/{rec.window_id}_ch{i}.wav"
                 sf.write(str(out_dir / rel), mono.astype(np.float32), sr, subtype="PCM_16")
                 chans.append({"prompt_wav": rel, "prompt_text": turn.text, "speaker": f"S{i + 1}"})
+            if gt:
+                # The window span of every source row, masked to the row's own
+                # turns (headset crosstalk removed), normalized, one file per row.
+                fs = audio.samplerate
+                audio.seek(int(round(rec.t0 * fs)))
+                block = audio.read(int(round((rec.t1 - rec.t0) * fs)), dtype="float32", always_2d=True)
+                for i, src in enumerate(src_rows):
+                    row = block[:, src]
+                    mask = np.zeros_like(row, dtype=bool)
+                    for t in rec.turns:
+                        if t.channel != src:
+                            continue
+                        a = max(0, int(round((t.start - rec.t0 - gt_mask_guard) * fs)))
+                        b = min(len(row), int(round((t.end - rec.t0 + gt_mask_guard) * fs)))
+                        if b > a:
+                            mask[a:b] = True
+                    g = np.where(mask, row, 0.0).astype(np.float32)
+                    if normalize_db is not None:
+                        g, _gain, lim = _normalized(g, fs, normalize_db)
+                        if lim:
+                            limited.append(f"{rec.window_id}_ch{i}_gt")
+                    grel = f"gt/{rec.window_id}_ch{i}.wav"
+                    sf.write(str(out_dir / grel), g.astype(np.float32), fs, subtype="PCM_16")
+                    chans[i]["gt_wav"] = grel
         turns = [
             {"speaker": f"S{row_of[t.channel] + 1}", "channel": row_of[t.channel], "text": t.text}
             for t in sorted(rec.turns, key=lambda t: (t.start, t.channel))
@@ -97,6 +131,8 @@ def export(
             {
                 "window_id": rec.window_id,
                 "session_id": rec.session_id,
+                "t0": round(rec.t0, 6),
+                "t1": round(rec.t1, 6),
                 "num_channels": rec.num_rows,
                 "source_channels": list(src_rows),
                 "duration_sec": round(rec.duration, 6),
@@ -125,6 +161,8 @@ def export(
     summary = {
         "n_windows": len(generic),
         "normalize_db": normalize_db,
+        "gt": gt,
+        "gt_mask_guard": gt_mask_guard if gt else None,
         "peak_limited": limited,
         "eval_manifest": str(eval_manifest),
         "window_manifest": str(window_manifest),
@@ -142,6 +180,8 @@ def main(argv=None) -> int:
     ap.add_argument("--dataset-root", type=Path, required=True)
     ap.add_argument("--out-dir", type=Path, required=True)
     ap.add_argument("--normalize-db", type=float, default=-23.0)
+    ap.add_argument("--gt", action="store_true", help="also write masked ground-truth wavs (external-testset anchor)")
+    ap.add_argument("--gt-mask-guard", type=float, default=0.15)
     a = ap.parse_args(argv)
     print(
         json.dumps(
@@ -151,6 +191,8 @@ def main(argv=None) -> int:
                 dataset_root=a.dataset_root,
                 out_dir=a.out_dir,
                 normalize_db=a.normalize_db,
+                gt=a.gt,
+                gt_mask_guard=a.gt_mask_guard,
             )
         )
     )
