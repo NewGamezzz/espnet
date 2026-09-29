@@ -29,6 +29,7 @@ from dataset.extract import (
 )
 from dataset.keys import classify_key, group_id, segment_index
 from dataset.manifest import ManifestRow
+from src.layout import PACK_SR, text_fits
 
 from espnet3.components.data.dataset_builder import DatasetBuilder
 from espnet3.utils.config_utils import load_config_with_defaults
@@ -59,7 +60,11 @@ def decide_spk_mode(group_size: int, dur: float, cfg: dict) -> str:
 
 
 def split_candidates(
-    word_bounds: Sequence[Tuple[float, float]], dur: float, cfg: dict
+    word_bounds: Sequence[Tuple[float, float]],
+    dur: float,
+    cfg: dict,
+    phones_by_word: Optional[Sequence[Sequence[str]]] = None,
+    n_samples: Optional[int] = None,
 ) -> List[int]:
     """Word indexes ``k`` such that ``words[:k]`` is a legal prompt.
 
@@ -67,6 +72,10 @@ def split_candidates(
         word_bounds: ``(start, end)`` seconds per word.
         dur: Row duration in seconds.
         cfg: Needs ``split_frac`` ``[lo, hi]`` and ``split_min_prompt_sec``.
+        phones_by_word: Phones per word. With ``n_samples``, a split point
+            is kept only when the phones of ``words[k:]`` fit the frames of
+            the target it leaves (``src.layout.text_fits``).
+        n_samples: Row length in samples at 24 kHz.
 
     Returns:
         Candidate ``k`` values (prompt ends at ``word_bounds[k-1][1]``).
@@ -82,7 +91,16 @@ def split_candidates(
         end = word_bounds[k - 1][1]
         if end >= floor and lo * dur <= end <= hi * dur:
             ks.append(k)
-    return ks
+    if phones_by_word is None or n_samples is None:
+        return ks
+    return [
+        k
+        for k in ks
+        if text_fits(
+            sum(len(w) for w in phones_by_word[k:]),
+            n_samples - int(word_bounds[k][0] * PACK_SR),
+        )
+    ]
 
 
 def _fmt_bounds(words) -> str:
@@ -120,8 +138,12 @@ def build_rows(
     Returns:
         Rows that pass the duration filter, whose text does not match the
         language's ``drop_text_regex`` (e.g. Latin letters in zh, which the
-        pinyin front-end would pass through as raw words), and that have
-        non-empty phones.
+        pinyin front-end would pass through as raw words), and whose phones
+        are non-empty and fit the row's frames. The last rule removes rows
+        whose transcript is not what the audio says: 71 of the 29.6 M poc3k
+        rows, e.g. a 2.8 s ru row with 485 phones because eSpeak-NG spells
+        out every character of a transcript in another script. A split row
+        with no split point whose remaining phones fit is kept as ``none``.
 
     Example:
         >>> rows = build_rows(pool, cfg, LEMASPhonemizer(["de"]), sizes)
@@ -141,20 +163,24 @@ def build_rows(
             continue
         g = group_id(key, source) or ""
         mode = decide_spk_mode(sizes[(lang, g)] if g else 0, dur, cfg)
+        n_samples = int(round(dur * PACK_SR))
         wb, pbw = "", ""
         if mode == "split":
             bounds = [(s, e) for _w, s, e in words]
             if not split_candidates(bounds, dur, cfg):
                 mode = "none"
             else:
-                wb = _fmt_bounds(words)
                 per_word = phonemizer.phonemize_words([w for w, _s, _e in words], lang)
-                if any(not p for p in per_word):
-                    mode, wb = "none", ""
+                if any(not p for p in per_word) or not split_candidates(
+                    bounds, dur, cfg, per_word, n_samples
+                ):
+                    mode = "none"
                 else:
+                    wb = _fmt_bounds(words)
                     pbw = "|".join(" ".join(p) for p in per_word)
         phones = " ".join(phonemizer.phonemize(txt, lang))
-        if not phones:
+        # counted as the dataset counts them: the space-separated column
+        if not phones or not text_fits(len(phones.split(" ")), n_samples):
             continue
         rows.append(
             ManifestRow(

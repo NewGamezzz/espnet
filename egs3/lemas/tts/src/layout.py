@@ -45,6 +45,28 @@ def cond_frames(spk_frames: int, lang_frames: int) -> int:
     return spk_frames + lang_frames
 
 
+def text_fits(n_phones: int, n_samples: int) -> bool:
+    """Whether a target's text fits its frames.
+
+    The text lane holds one id per prompt frame, then the language tag and
+    the phones, and must not be longer than the mel. Prompt regions cancel
+    on both sides, so a target of ``n_samples`` (``n_samples // HOP + 1``
+    frames) carries the tag and at most ``n_samples // HOP`` phones.
+
+    Args:
+        n_phones: Phone tokens of the target, the language tag not counted.
+        n_samples: Target length in samples at 24 kHz.
+
+    Returns:
+        ``True`` when the text lane is no longer than the mel.
+
+    Example:
+        >>> text_fits(187, 48000), text_fits(188, 48000)
+        (True, False)
+    """
+    return n_phones <= n_samples // HOP
+
+
 class TokenTable:
     """Token to id mapping read from an espnet token list file."""
 

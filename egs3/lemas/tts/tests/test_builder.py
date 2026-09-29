@@ -327,3 +327,45 @@ def test_word_bounds_are_ms_rounded_so_manifest_and_build_agree(tmp_path):
     assert parts[9] == "split"
     wb = [tuple(float(v) for v in x.split(":")) for x in parts[10].split(",")]
     assert split_candidates(wb, float(parts[6]), cfg) == [1]
+
+
+def test_split_candidates_drop_points_whose_target_text_exceeds_its_frames():
+    # 5 s row at 24 kHz; k=2 is the only split point legal by time. Its target
+    # starts at 1.5 s: (120000 - 36000) // 256 = 328 frames.
+    wb = [(0.0, 0.5), (0.6, 1.4), (1.5, 2.2), (2.3, 3.1), (3.2, 5.0)]
+    fits = [["a"], ["a"], ["a"] * 200, ["a"] * 100, ["a"] * 28]  # 328 after k=2
+    assert split_candidates(wb, 5.0, CFG, fits, 120000) == [2]
+    over = [["a"], ["a"], ["a"] * 200, ["a"] * 100, ["a"] * 29]  # 329 after k=2
+    assert split_candidates(wb, 5.0, CFG, over, 120000) == []
+
+
+def _row(key, dur, txt, words):
+    return (key, "de/de000/x.flac", dur, "yodas", "de/de000.jsonl", 0, txt, words)
+
+
+def test_build_rows_drops_rows_whose_phones_exceed_their_frames():
+    # 2 s = 48000 samples = 187 frames; FakePhon emits one phone per character.
+    # The production crash was this shape: a 2.82 s row carrying 485 phones.
+    pool = [
+        _row("de_vidAAAAAAAA-00001-00000000-00000200", 2.0, "a" * 187, []),
+        _row("de_vidAAAAAAAA-00002-00000200-00000400", 2.0, "a" * 188, []),
+    ]
+    rows = build_rows(pool, CFG, FakePhon())
+    assert [r.utt_id for r in rows] == ["de_vidAAAAAAAA-00001-00000000-00000200"]
+
+
+def test_build_rows_demotes_split_rows_without_a_fitting_split_point():
+    # 6 s row, k=2 is the only split point legal by time; its target starts at
+    # 1.8 s and holds (144000 - 43200) // 256 = 393 frames, fewer than its phones
+    words = [
+        ("a", 0.2, 0.9),
+        ("a", 1.0, 1.7),
+        ("a" * 400, 1.8, 2.5),
+        ("a", 2.6, 3.4),
+        ("a", 3.5, 4.6),
+        ("a", 4.7, 5.8),
+    ]
+    txt = " ".join(w for w, _s, _e in words)  # 410 phones fit the row's 562 frames
+    pool = [_row("de_vidCCCCCCCC-00001-00000000-00000600", 6.0, txt, words)]
+    (row,) = build_rows(pool, CFG, FakePhon())
+    assert (row.spk_mode, row.word_bounds, row.phones_by_word) == ("none", "", "")

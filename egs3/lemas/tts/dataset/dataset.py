@@ -191,8 +191,14 @@ class LEMASDataset(torch.utils.data.Dataset):
         if mode == 2:
             from dataset.builder import split_candidates
 
-            ks = split_candidates(c.word_bounds(idx), float(c.dur[idx]), self.cfg)
-            if not ks:  # cannot happen after the ms rounding at build; be safe
+            ks = split_candidates(
+                c.word_bounds(idx),
+                float(c.dur[idx]),
+                self.cfg,
+                c.phones_by_word(idx),
+                int(c.a_len[idx]),
+            )
+            if not ks:  # the build guarantees one for its own split config
                 return None, 0, 0, None
             return idx, 0, 0, int(rng.choice(ks))
         g = int(c.group[idx])

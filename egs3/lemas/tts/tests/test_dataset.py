@@ -255,3 +255,21 @@ def test_group_row_without_surviving_mates_falls_back(corpus, tmp_path):
     d = ds.draw(i)
     assert d.spk_row is None and d.split_k is None
     assert int(ds[i]["cond_frames"][0]) > 0
+
+
+def test_split_row_never_draws_a_split_point_its_text_cannot_fit(corpus, tmp_path):
+    # A manifest built before the frame rule existed: the row's only legal
+    # split point (k=2, target from 2.1 s = 365 frames) carries 403 phones.
+    lines = corpus["manifest"].read_text().splitlines()
+    i = next(n for n, line in enumerate(lines) if "\tsplit\t" in line)
+    parts = lines[i].split("\t")
+    parts[11] = "a|b|" + " ".join(["a"] * 400) + "|b|a|b"
+    lines[i] = "\t".join(parts)
+    m = tmp_path / "old_build.tsv"
+    m.write_text("\n".join(lines) + "\n")
+    ds = _ds(dict(corpus, manifest=m))
+    for epoch in range(5):
+        ds.set_epoch(epoch)
+        assert ds.draw(i).split_k is None
+        s = ds[i]
+        assert len(s["text"]) <= len(s["speech"]) // 256 + 1
