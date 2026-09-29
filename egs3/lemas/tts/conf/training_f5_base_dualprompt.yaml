@@ -205,9 +205,13 @@ trainer:
   accumulate_grad_batches: 10
   max_steps: 300000
   max_epochs: -1   # epochs are short (batch_sampler.batches_per_epoch); max_steps ends the run
-  # validation at the end of every 4th epoch = every 400 steps, about 22 min
-  check_val_every_n_epoch: 4
-  limit_val_batches: 200
+  # Validation at the end of EVERY epoch. Lightning 2.6.5 resumes an
+  # epoch-end checkpoint exactly only when a validation is due at that epoch
+  # end; otherwise it trains the first batch of the finished epoch once more
+  # and takes an optimizer step on it (tests/test_resume.py).
+  # 50 batches per rank = about a quarter of the validation set, 5 s.
+  check_val_every_n_epoch: 1
+  limit_val_batches: 50
   log_every_n_steps: 50
   gradient_clip_val: 1.0
   strategy: auto

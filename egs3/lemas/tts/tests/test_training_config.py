@@ -65,7 +65,8 @@ def test_epochs_are_minutes_long_and_end_on_an_optimizer_step(path):
     assert cfg.trainer.max_epochs == -1  # the run is bounded by max_steps
     # an integer val_check_interval counts micro-batches and validates mid-epoch
     assert "val_check_interval" not in cfg.trainer
-    assert cfg.trainer.check_val_every_n_epoch >= 1
+    # the resume is exact only with a validation at every epoch end
+    assert cfg.trainer.check_val_every_n_epoch == 1
 
 
 @pytest.mark.parametrize("path", SMOKES)

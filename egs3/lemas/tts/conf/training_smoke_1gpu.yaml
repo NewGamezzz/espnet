@@ -3,8 +3,8 @@
 #   sed -e "s/^num_device: 4$/num_device: 1/" -e "s/^exp_tag: .*/exp_tag: smoke_lemas_dualprompt_r2_1gpu/" conf/training_smoke.yaml
 # Smoke run of training_f5_base_dualprompt.yaml: identical model, data and
 # batching (the point is to measure production memory and throughput), with
-# exp_tag, max_steps 200, epochs of 10 steps (production: 100), validation
-# every 5th epoch, limit_val_batches 5 and an offline CSVLogger. Keep the two
+# exp_tag, max_steps 200, epochs of 10 steps (production: 100),
+# limit_val_batches 5 and an offline CSVLogger. Keep the two
 # files in sync; tests/test_training_config.py pins model, dataloader and
 # batch_sampler equality.
 # F5-Base from scratch on the LEMAS poc3k subset (10 languages x 3,000 h) with
@@ -215,8 +215,11 @@ trainer:
   accumulate_grad_batches: 10
   max_steps: 200
   max_epochs: -1   # epochs are short (batch_sampler.batches_per_epoch); max_steps ends the run
-  # validation at the end of every 5th epoch = every 50 steps
-  check_val_every_n_epoch: 5
+  # Validation at the end of EVERY epoch. Lightning 2.6.5 resumes an
+  # epoch-end checkpoint exactly only when a validation is due at that epoch
+  # end; otherwise it trains the first batch of the finished epoch once more
+  # and takes an optimizer step on it (tests/test_resume.py).
+  check_val_every_n_epoch: 1
   limit_val_batches: 5
   log_every_n_steps: 50
   gradient_clip_val: 1.0

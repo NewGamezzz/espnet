@@ -88,6 +88,10 @@ run is a chain of 1 h links, each killed by its walltime. Two facts shape it:
 - Lightning resumes exactly only from a checkpoint written at the end of an
   epoch: a mid-epoch resume restarts the loader at its first batch, trains
   the opening batches a second time and never reaches the rest.
+- Even then the resume is exact only when a validation is due at that epoch
+  end (`check_val_every_n_epoch: 1`); Lightning 2.6.5 otherwise trains the
+  first batch of the finished epoch once more and steps the optimizer on it.
+  `tests/test_resume.py` pins both against the installed Lightning.
 
 One pass over the data is 1,578,954 micro-batches per rank (about 154 h), so
 `batch_sampler.batches_per_epoch: 1000` serves a pass as consecutive epochs
@@ -99,7 +103,7 @@ Every batch is still visited once per pass (`src/sampler.py`).
 |---|---|---|
 | `last.ckpt` -> `step<N>.ckpt` | end of every epoch | full state: resume, evaluation |
 | `backup_step<N>.ckpt` | every 250 epochs = 25,000 steps | full state, kept for good |
-| `epoch<E>_step<N>_valid.loss.ckpt` | best validation (every 4th epoch) | weights only, NO EMA |
+| `epoch<E>_step<N>_valid.loss.ckpt` | best validation (run at every epoch end) | weights only, NO EMA |
 | `chain_state.json`, `STOP` | by `local/chain_guard.py` | see below |
 
 Evaluate full checkpoints only (`use_ema: true` needs the EMA weights). To
