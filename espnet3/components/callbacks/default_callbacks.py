@@ -123,6 +123,14 @@ class AverageCheckpointsCallback(Callback):
             reference_model_keys = set(pl_module.state_dict().keys())
             for ckpt_callback in self.best_ckpt_callbacks:
                 checkpoints = list(ckpt_callback.best_k_models.keys())
+                # A run resumed from a checkpoint written before a top-K
+                # eviction restores names of files that are gone; the count
+                # below is both the divisor and part of the file name, so it
+                # must cover the files that are read.
+                missing = [p for p in checkpoints if not Path(p).exists()]
+                if missing:
+                    logging.warning(f"Skipping missing best checkpoints: {missing}")
+                    checkpoints = [p for p in checkpoints if p not in missing]
                 if not checkpoints:
                     continue
 

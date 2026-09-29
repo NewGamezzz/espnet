@@ -54,6 +54,16 @@ def dummy_state_dict():
     }
 
 
+def _existing(*paths):
+    """Create empty files: the callback reads only checkpoints that exist.
+
+    The tests below mock ``torch.load``, so the content is never read.
+    """
+    for path in paths:
+        path.touch()
+    return list(paths)
+
+
 def _mock_pl_module(*keys):
     """Build a pl_module mock whose `state_dict()` exposes the given keys.
 
@@ -71,7 +81,7 @@ def test_average_checkpoints_callback_on_validation_end(tmp_path, dummy_state_di
 
     Ensure AverageCheckpointsCallback correctly averages and saves model.
     """
-    ckpt_paths = [tmp_path / f"ckpt_{i}.ckpt" for i in range(2)]
+    ckpt_paths = _existing(*[tmp_path / f"ckpt_{i}.ckpt" for i in range(2)])
 
     with (
         mock.patch("torch.load", return_value=dummy_state_dict),
@@ -129,8 +139,8 @@ def test_get_default_callbacks_structure():
 
 def test_average_checkpoints_with_multiple_metrics(tmp_path, dummy_state_dict):
     """Test averaging for multiple ModelCheckpoints with different monitor names."""
-    ckpt_paths_1 = [tmp_path / f"ckpt_loss_{i}.ckpt" for i in range(2)]
-    ckpt_paths_2 = [tmp_path / f"ckpt_acc_{i}.ckpt" for i in range(2)]
+    ckpt_paths_1 = _existing(*[tmp_path / f"ckpt_loss_{i}.ckpt" for i in range(2)])
+    ckpt_paths_2 = _existing(*[tmp_path / f"ckpt_acc_{i}.ckpt" for i in range(2)])
 
     with (
         mock.patch("torch.load", return_value=dummy_state_dict),
@@ -163,7 +173,7 @@ def test_average_checkpoints_with_multiple_metrics(tmp_path, dummy_state_dict):
 
 def test_output_filename_format(tmp_path, dummy_state_dict):
     """Ensure output filename is formatted properly."""
-    ckpt_paths = [tmp_path / f"ckpt_{i}.ckpt" for i in range(3)]
+    ckpt_paths = _existing(*[tmp_path / f"ckpt_{i}.ckpt" for i in range(3)])
 
     with (
         mock.patch("torch.load", return_value=dummy_state_dict),
@@ -210,6 +220,7 @@ def test_average_checkpoint_with_inconsistent_keys(tmp_path):
     """Raise error when checkpoints have inconsistent keys."""
     ckpt_path1 = tmp_path / "ckpt_1.ckpt"
     ckpt_path2 = tmp_path / "ckpt_2.ckpt"
+    _existing(ckpt_path1, ckpt_path2)
 
     inconsistent_state_dicts = [
         {"state_dict": {"model.layer.weight": torch.tensor([1.0])}},  # 1 key
@@ -246,6 +257,7 @@ def test_average_checkpoint_with_int_and_float_mix(tmp_path):
     """Ensure float params are averaged, int params are accumulated."""
     ckpt_path1 = tmp_path / "ckpt_1.ckpt"
     ckpt_path2 = tmp_path / "ckpt_2.ckpt"
+    _existing(ckpt_path1, ckpt_path2)
 
     mock_state_dicts = [
         {
@@ -299,6 +311,7 @@ def test_average_checkpoint_without_model_prefix(tmp_path):
     """
     ckpt_path1 = tmp_path / "ckpt_1.ckpt"
     ckpt_path2 = tmp_path / "ckpt_2.ckpt"
+    _existing(ckpt_path1, ckpt_path2)
 
     mock_state_dicts = [
         {
@@ -348,7 +361,7 @@ def test_average_checkpoint_keys_mismatch_current_model(tmp_path, dummy_state_di
     checkpoints saved for a different model architecture) rather than the
     ordinary `model.`-prefix ambiguity.
     """
-    ckpt_paths = [tmp_path / f"ckpt_{i}.ckpt" for i in range(2)]
+    ckpt_paths = _existing(*[tmp_path / f"ckpt_{i}.ckpt" for i in range(2)])
 
     with (
         mock.patch("torch.load", return_value=dummy_state_dict),
@@ -381,6 +394,34 @@ def test_average_checkpoint_with_no_checkpoints(tmp_path):
         callback.on_validation_end(trainer, pl_module=_mock_pl_module())
 
         mock_save.assert_not_called()
+
+
+def test_average_checkpoint_skips_missing_files(tmp_path):
+    """Average only the checkpoints that still exist on disk.
+
+    A run resumed from a `last.ckpt` written before a top-K eviction restores
+    a `best_k_models` naming a deleted file. Validation (the sanity check of
+    every restart included) must not crash on it, and the divisor and the
+    file name must count the files that were read.
+    """
+    kept = tmp_path / "kept.ckpt"
+    torch.save({"state_dict": {"model.w": torch.tensor([2.0, 4.0])}}, kept)
+    evicted = tmp_path / "evicted.ckpt"
+
+    callback = AverageCheckpointsCallback(
+        output_dir=str(tmp_path),
+        best_ckpt_callbacks=[
+            mock.Mock(
+                best_k_models={str(evicted): 0.1, str(kept): 0.2},
+                monitor="valid/loss",
+            )
+        ],
+    )
+    trainer = mock.Mock(is_global_zero=True)
+    callback.on_validation_end(trainer, pl_module=_mock_pl_module("w"))
+
+    saved = torch.load(tmp_path / "valid.loss.ave_1best.pth")
+    assert torch.equal(saved["w"], torch.tensor([2.0, 4.0]))
 
 
 def test_duplicate_learning_rate_monitor_from_config():
