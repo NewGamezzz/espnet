@@ -63,14 +63,57 @@ the longest prompt layout (an upper bound), so `collect_stats` is not used.
 `remove_long_short` is not used either: the 1 to 20 s target filter is
 applied in build.
 
+Build also drops rows whose phones cannot fit their frames (more phones than
+`samples // 256`, `src.layout.text_fits`). These are rows whose transcript is
+not what the audio says: 71 of the 29.6 M poc3k rows, all from YODAS, e.g. a
+2.8 s ru row with 485 phones because eSpeak-NG spells out every character of
+a transcript in another script. The same rule is applied to every split
+point of a `split` row, at build and again when the dataset draws one.
+
 Paths (mirror, FLAC root, languages, filters) live in `dataset/config.yaml`.
 
 ## 2. Train
 
 ```bash
 NO_CHAIN=1 sbatch --time=02:00:00 local/submit_train.sbatch conf/training_smoke.yaml   # measure memory/throughput first
-sbatch local/submit_train.sbatch                                                       # chained 48 h jobs
+sbatch local/submit_train.sbatch                                                       # chain of 1 h links
 ```
+
+### Chain links, epochs and checkpoints
+
+A 4-GPU job starts quickly on Delta only with a limit of 1 h or less, so the
+run is a chain of 1 h links, each killed by its walltime. Two facts shape it:
+
+- espnet3 writes `last.ckpt` at the end of an epoch and nowhere else.
+- Lightning resumes exactly only from a checkpoint written at the end of an
+  epoch: a mid-epoch resume restarts the loader at its first batch, trains
+  the opening batches a second time and never reaches the rest.
+
+One pass over the data is 1,578,954 micro-batches per rank (about 154 h), so
+`batch_sampler.batches_per_epoch: 1000` serves a pass as consecutive epochs
+of 1,000 micro-batches = 100 optimizer steps = about 5 min. A killed link
+loses the epoch it was in; the next link resumes at the last epoch end.
+Every batch is still visited once per pass (`src/sampler.py`).
+
+| file in `exp/<tag>/` | written | holds |
+|---|---|---|
+| `last.ckpt` -> `step<N>.ckpt` | end of every epoch | full state: resume, evaluation |
+| `backup_step<N>.ckpt` | every 250 epochs = 25,000 steps | full state, kept for good |
+| `epoch<E>_step<N>_valid.loss.ckpt` | best validation (every 4th epoch) | weights only, NO EMA |
+| `chain_state.json`, `STOP` | by `local/chain_guard.py` | see below |
+
+Evaluate full checkpoints only (`use_ema: true` needs the EMA weights). To
+evaluate between backups, copy the file `last.ckpt` points to under another
+name and give that path as `model.checkpoint_path`.
+
+The chain ends when `max_steps` is reached, after `CHAIN_LEFT` links
+(default 400), when `exp/<tag>/STOP` exists, or by itself after
+`CHAIN_MAX_STALLS` (default 2) consecutive links that did not advance
+`last.ckpt`. In the last case `STOP` holds the reason; read the newest
+`logs/train_<jobid>.out`, fix the cause, then remove `STOP` and
+`chain_state.json` and submit again. A healthy link's log has a
+`Restored all states from the checkpoint` line and its `step<N>.ckpt` is
+later than the previous link's.
 
 Prompt knobs (`prompt_config` in `conf/training_f5_base_dualprompt.yaml`):
 
