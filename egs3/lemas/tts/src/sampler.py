@@ -6,14 +6,21 @@ the neighbouring blocks (``LEMASDataset._draw_lang``). This sampler completes
 the picture on the batching side: rows are grouped by the 4 MB block holding
 their start, length-sorted inside each block and cut into numel batches
 (``sum(frames x n_mels) <= batch_bins``, at least ``min_batch_size`` rows).
-Batch order is shuffled per epoch and sharded by rank here, because the plain
+Batch order is shuffled per pass and sharded by rank here, because the plain
 torch DataLoader path is used (``iter_factory: null`` and
 ``trainer.use_distributed_sampler: false``).
+
+With ``batches_per_epoch`` one pass over the data is served as consecutive
+short epochs. Lightning can resume exactly only from a checkpoint written at
+the end of an epoch (a mid-epoch resume restarts the loader at its first
+batch), and a pass here lasts days while a Slurm job lasts an hour; short
+epochs put a resumable checkpoint every few minutes and still visit every
+batch once per pass.
 """
 
 from __future__ import annotations
 
-from typing import Iterator, List, Optional
+from typing import Iterator, List, Optional, Tuple
 
 import numpy as np
 import torch
@@ -54,8 +61,9 @@ class BlockBatchSampler(torch.utils.data.Sampler):
         respect_blocks: Optional[bool] = None,
         rank: Optional[int] = None,
         world_size: Optional[int] = None,
+        batches_per_epoch: Optional[int] = None,
     ):
-        """Build the per-row keys once; batches are cut lazily per epoch.
+        """Build the per-row keys; batches are cut once per dataset, lazily.
 
         Args:
             dataset: A ``LEMASDataset`` (needs ``cols``, ``cfg``, ``epoch``,
@@ -71,6 +79,10 @@ class BlockBatchSampler(torch.utils.data.Sampler):
             rank: Rank for sharding; defaults to ``torch.distributed`` when
                 initialised, else 0.
             world_size: World size for sharding; same default.
+            batches_per_epoch: Batches of this rank per epoch. Epoch ``e``
+                is slice ``e % n`` of pass ``e // n``, ``n`` being the
+                number of such slices in a pass; ``None`` makes an epoch a
+                whole pass. Training only: validation is one fixed pass.
         """
         dataset = self.dataset = _unwrap(dataset)
         self.batch_bins = int(batch_bins)
@@ -85,21 +97,28 @@ class BlockBatchSampler(torch.utils.data.Sampler):
             else:
                 rank, world_size = 0, 1
         self.rank, self.world_size = int(rank), int(world_size)
+        self.batches_per_epoch = (
+            int(batches_per_epoch) if batches_per_epoch and dataset.train else None
+        )
         cols = dataset.cols
         block = int(dataset.cfg["block_samples"])
         self.cost = dataset.frames_bound() * self.n_mels
         self.block_key = cols.pack.astype(np.int64) * (1 << 40) + cols.a_start // block
         self._epoch: Optional[int] = None
-        self._batches: List[np.ndarray] = []
+        self._order = self._bounds = self._ids = np.zeros(0, dtype=np.int64)
 
     # ---- batching ------------------------------------------------------------
-    def _cut(self) -> List[np.ndarray]:
+    def _cut(self) -> Tuple[np.ndarray, np.ndarray]:
+        """Return ``(order, bounds)``; batch ``i`` is ``order[bounds[i]:bounds[i+1]]``.
+
+        Batches are consecutive slices of the block-then-length sorted rows.
+        """
         key = self.block_key if self.respect else np.zeros_like(self.block_key)
         order = np.lexsort((self.cost, key))
         k, c = key[order], self.cost[order]
         starts = np.flatnonzero(np.r_[True, k[1:] != k[:-1]])
         ends = np.r_[starts[1:], len(k)]
-        batches: List[np.ndarray] = []
+        bounds: List[int] = [0]
         bins, m = self.batch_bins, self.min_batch_size
         for s, e in zip(starts.tolist(), ends.tolist()):
             cs = np.cumsum(c[s:e])
@@ -109,17 +128,34 @@ class BlockBatchSampler(torch.utils.data.Sampler):
                 base = int(cs[i - 1]) if i else 0
                 j = int(np.searchsorted(cs, base + bins, side="right"))
                 j = min(n, max(j, i + m))
-                batches.append(order[s + i : s + j])
+                bounds.append(s + j)
                 i = j
-        return batches
+        return order, np.asarray(bounds, dtype=np.int64)
+
+    def _cut_once(self) -> Tuple[np.ndarray, np.ndarray]:
+        # espnet3 builds a new sampler for every epoch while the dataset
+        # lives as long as the run, so the cut is kept on the dataset
+        cuts = self.dataset.__dict__.setdefault("_batch_cuts", {})
+        key = (self.batch_bins, self.n_mels, self.min_batch_size, self.respect)
+        if key not in cuts:
+            cuts[key] = self._cut()
+        return cuts[key]
 
     def _build(self, epoch: int) -> None:
-        batches = self._cut()
+        self._order, self._bounds = self._cut_once()
+        n = len(self._bounds) - 1
+        keep = n // self.world_size * self.world_size
+        per_rank = keep // self.world_size
+        per_epoch = min(self.batches_per_epoch or per_rank, per_rank)
+        n_slices = -(-per_rank // per_epoch) if per_epoch else 1
         if self.dataset.train:
-            rng = np.random.default_rng([self.seed, epoch])
-            batches = [batches[i] for i in rng.permutation(len(batches))]
-        keep = len(batches) // self.world_size * self.world_size
-        self._batches = batches[self.rank : keep : self.world_size]
+            rng = np.random.default_rng([self.seed, epoch // n_slices])
+            ids = rng.permutation(n)
+        else:
+            ids = np.arange(n)
+        ids = ids[self.rank : keep : self.world_size]
+        i = epoch % n_slices
+        self._ids = ids[i * per_epoch : (i + 1) * per_epoch]
         self._epoch = epoch
 
     def _current_epoch(self) -> int:
@@ -130,12 +166,13 @@ class BlockBatchSampler(torch.utils.data.Sampler):
         epoch = self._current_epoch()
         if self._epoch != epoch:
             self._build(epoch)
-        for b in self._batches:
-            yield b.tolist()
+        order, bounds = self._order, self._bounds
+        for i in self._ids.tolist():
+            yield order[bounds[i] : bounds[i + 1]].tolist()
 
     def __len__(self) -> int:
         """Return the number of batches for this rank."""
         epoch = self._current_epoch()
         if self._epoch != epoch:
             self._build(epoch)
-        return len(self._batches)
+        return len(self._ids)

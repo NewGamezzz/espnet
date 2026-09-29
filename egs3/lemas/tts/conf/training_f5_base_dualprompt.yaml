@@ -17,7 +17,7 @@ exp_dir: ${recipe_dir}/exp/${exp_tag}
 # experiment, so it is shared across exp_tags.
 stats_dir: ${recipe_dir}/exp/stats
 inference_dir: ${exp_dir}/inference
-exp_tag: train_f5_base_lemas_dualprompt
+exp_tag: train_f5_base_lemas_dualprompt_r2
 
 sample_rate: 24000
 n_mel_channels: 100
@@ -178,12 +178,20 @@ dataloader:
 # frames x n_mels; 800,000 = 8,000 frames per micro-batch. 1,000,000 peaked at
 # 38 GB on rank 0 of a 4-GPU A100-40G node (31 GB allocated + 5.5 GB fragmented
 # reserve + 3 x 416 MB sibling-rank contexts) and went OOM at batch ~300.
+#
+# batches_per_epoch cuts one pass over the data (1,578,954 micro-batches per
+# rank, about 154 h) into short epochs. espnet3 writes last.ckpt at the end of
+# an epoch and nowhere else, and Lightning resumes exactly only from such a
+# checkpoint (a mid-epoch resume restarts the loader at its first batch), so
+# the epoch is the resume granularity of the 1 h chain links. 1,000
+# micro-batches = 100 optimizer steps = about 5 min on 4 A100.
 batch_sampler:
   _target_: src.sampler.BlockBatchSampler
   batch_bins: 800000
   n_mels: ${n_mel_channels}
   min_batch_size: 1
   seed: ${seed}
+  batches_per_epoch: 1000
 
 trainer:
   accelerator: auto
@@ -196,13 +204,11 @@ trainer:
   # 4 GPUs x 8,000 frames x 10 = 320k frames per update (F5: 307,200).
   accumulate_grad_batches: 10
   max_steps: 300000
-  # espnet3's last.ckpt is written at every validation: this is the resume
-  # granularity for the 1 h chain links (~17 min at 2.6 s per step)
-  val_check_interval: 400
+  max_epochs: -1   # epochs are short (batch_sampler.batches_per_epoch); max_steps ends the run
+  # validation at the end of every 4th epoch = every 400 steps, about 22 min
+  check_val_every_n_epoch: 4
   limit_val_batches: 200
-  check_val_every_n_epoch: null
   log_every_n_steps: 50
-  max_epochs: 1000
   gradient_clip_val: 1.0
   strategy: auto
   plugins:
@@ -210,13 +216,17 @@ trainer:
   callbacks:
     - _target_: espnet3.components.callbacks.ema.EMACallback
       decay: 0.9999
-    # Permanent step backups for evaluation, next to espnet3's own last.ckpt
-    # (refreshed every validation) and best ckpts; ~4 GB each.
+    # Permanent backups every 250 epochs = 25,000 steps, next to espnet3's own
+    # last.ckpt (rewritten at the end of every epoch) and the best ckpts. Full
+    # checkpoints (5.4 GB, EMA inside) written at epoch ends, so each one can
+    # be evaluated and resumed from. To evaluate in between, copy the file
+    # last.ckpt points to; the best ckpts are weights-only and hold no EMA.
     - _target_: lightning.pytorch.callbacks.ModelCheckpoint
       dirpath: ${exp_dir}
       filename: "backup_step{step}"
       auto_insert_metric_name: false
-      every_n_train_steps: 25000
+      every_n_epochs: 250
+      save_on_train_epoch_end: true
       save_top_k: -1
       save_last: false
   logger:
