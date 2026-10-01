@@ -98,7 +98,7 @@ def test_submit_scripts_are_headers_plus_env_plus_the_shared_link(name, env, suf
 def test_dtai_script_and_env_follow_the_aarch64_rules():
     s = Path("local/submit_train_dtai.sbatch").read_text()
     assert "--partition=ghx4\n" in s and "--account=bbjs-dtai-gh" in s
-    assert "interactive" not in s
+    assert "#SBATCH --partition=ghx4-interactive" not in s  # 2x billing, 2 h cap
     assert "--gpus-per-node=2" in s and "--ntasks-per-node=2" in s
     assert "CONF_DEFAULT=conf/training_f5_base_dualprompt_gh200.yaml" in s
     env = Path("local/delta_ai_env.sh").read_text()
