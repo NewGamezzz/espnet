@@ -134,12 +134,17 @@ Prompt knobs (`prompt_config` in `conf/training_f5_base_dualprompt.yaml`):
 ### DeltaAI (GH200) run
 
 `conf/training_f5_base_dualprompt_gh200.yaml` is the second experiment
-(2026-10-01): learning rate 1.5e-4, `precision: bf16-mixed`, and
-`batch_bins 2M x accumulate 4` (the same 320k frames per update in fewer
-micro-batches). Submit it from `delta_ai`:
+(2026-10-01): 2 GPUs, learning rate 1.5e-4, `precision: bf16-mixed`, and
+`batch_bins 2M x accumulate 8` (the same 320k frames per update in fewer
+micro-batches). Its smoke is the first two links of the run itself, short
+and unchained, the first on the interactive partition (starts in seconds,
+one job per user there); the chain head then continues from their
+checkpoint. From `delta_ai`:
 
 ```bash
-sbatch local/submit_train_dtai.sbatch              # ghx4, 4 GH200, 12 h links
+NO_CHAIN=1 sbatch --partition=ghx4-interactive --time=00:20:00 local/submit_train_dtai.sbatch
+NO_CHAIN=1 sbatch --dependency=afterany:<id> --time=00:20:00 local/submit_train_dtai.sbatch
+sbatch local/submit_train_dtai.sbatch              # ghx4, 2 GH200, 12 h links
 ```
 
 Same chain (`local/train_link.sh`), separate logs (`logs/train_dtai_<id>.out`,

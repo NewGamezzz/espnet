@@ -99,7 +99,7 @@ def test_dtai_script_and_env_follow_the_aarch64_rules():
     s = Path("local/submit_train_dtai.sbatch").read_text()
     assert "--partition=ghx4\n" in s and "--account=bbjs-dtai-gh" in s
     assert "interactive" not in s
-    assert "--gpus-per-node=4" in s and "--ntasks-per-node=4" in s
+    assert "--gpus-per-node=2" in s and "--ntasks-per-node=2" in s
     assert "CONF_DEFAULT=conf/training_f5_base_dualprompt_gh200.yaml" in s
     env = Path("local/delta_ai_env.sh").read_text()
     assert "export OMP_NUM_THREADS=1" in env  # forked loader workers livelock otherwise

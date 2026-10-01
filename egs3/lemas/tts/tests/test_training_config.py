@@ -94,11 +94,12 @@ GH200 = "conf/training_f5_base_dualprompt_gh200.yaml"
 
 
 def test_gh200_config_differs_from_base_only_in_the_intended_knobs():
-    # DeltaAI run (Thanapat 2026-10-01): 2x learning rate, bf16, and the GH200's
-    # memory spent on bigger micro-batches at the same 320k frames per update
+    # DeltaAI run (Thanapat 2026-10-01): 2 GPUs, 2x learning rate, bf16, and the
+    # GH200's memory spent on bigger micro-batches at the same 320k frames per update
     base = OmegaConf.to_container(OmegaConf.load(BASE))
     gh = OmegaConf.to_container(OmegaConf.load(GH200))
     assert gh["exp_tag"] != base["exp_tag"]
+    assert gh["num_device"] == 2 and base["num_device"] == 4
     assert gh["optimizer"]["lr"] == 1.5e-4 and base["optimizer"]["lr"] == 7.5e-5
     assert (
         gh["trainer"]["precision"] == "bf16-mixed"
@@ -117,7 +118,7 @@ def test_gh200_config_differs_from_base_only_in_the_intended_knobs():
     )
     assert steps(gh) == steps(base) == 100
     for c in (base, gh):
-        c["exp_tag"] = c["optimizer"]["lr"] = None
+        c["exp_tag"] = c["optimizer"]["lr"] = c["num_device"] = None
         c["batch_sampler"]["batch_bins"] = c["batch_sampler"]["batches_per_epoch"] = (
             None
         )
@@ -125,18 +126,3 @@ def test_gh200_config_differs_from_base_only_in_the_intended_knobs():
         c["trainer"].pop("precision", None)
     assert gh == base
 
-
-def test_gh200_smoke_differs_from_the_gh200_run_only_in_size_and_logger():
-    # the 2-GPU smoke on ghx4-interactive checks the aarch64 env, that a 2M
-    # batch_bins micro-batch fits a GH200 in bf16, and the resume; it keeps
-    # its own exp_tag because a 2-GPU step sees half the frames
-    run = OmegaConf.to_container(OmegaConf.load(GH200))
-    smoke = OmegaConf.to_container(
-        OmegaConf.load("conf/training_smoke_gh200_2gpu.yaml")
-    )
-    assert smoke["num_device"] == 2 and run["num_device"] == 4
-    assert smoke["exp_tag"] != run["exp_tag"]
-    assert smoke["trainer"]["logger"]["_target_"].endswith("CSVLogger")
-    for c in (run, smoke):
-        c["num_device"] = c["exp_tag"] = c["trainer"]["logger"] = None
-    assert smoke == run

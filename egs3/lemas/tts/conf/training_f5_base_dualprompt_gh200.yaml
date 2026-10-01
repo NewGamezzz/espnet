@@ -1,16 +1,18 @@
 # DeltaAI (GH200) variant of training_f5_base_dualprompt.yaml, Thanapat's
-# second experiment (2026-10-01): learning rate 1.5e-4 (2x F5's 7.5e-5),
-# bf16 mixed precision, and the 96 GB GPU spent on 20,000-frame micro-batches
-# (batch_bins 2M x accumulate 4 = the same 320k frames per update as the
-# A100 run, in fewer micro-batches; so not a pure learning-rate comparison).
-# Epochs stay 100 optimizer steps. Everything else is byte-identical to the
-# base config; tests/test_training_config.py pins the difference.
-# Submit with local/submit_train_dtai.sbatch.
+# second experiment (2026-10-01): 2 GPUs, learning rate 1.5e-4 (2x F5's
+# 7.5e-5), bf16 mixed precision, and the 96 GB GPU spent on 20,000-frame
+# micro-batches (batch_bins 2M x accumulate 8 on 2 GPUs = the same 320k
+# frames per update as the 4-A100 run, in fewer micro-batches; so not a pure
+# learning-rate comparison). Epochs stay 100 optimizer steps = 800
+# micro-batches. Everything else is byte-identical to the base config;
+# tests/test_training_config.py pins the difference.
+# Submit with local/submit_train_dtai.sbatch; its smoke is the first two
+# links of the run itself (see the README).
 #
 # Stages: create_dataset -> create_token_list -> create_shape -> train.
 # create_shape writes feats_shape analytically (upper bound at the longest
 # prompt layout), so collect_stats is not used.
-num_device: 4
+num_device: 2
 num_nodes: 1
 seed: 0
 
@@ -195,7 +197,7 @@ batch_sampler:
   n_mels: ${n_mel_channels}
   min_batch_size: 1
   seed: ${seed}
-  batches_per_epoch: 400
+  batches_per_epoch: 800
 
 trainer:
   accelerator: auto
@@ -206,7 +208,7 @@ trainer:
   devices: ${num_device}
   num_nodes: ${num_nodes}
   # 4 GPUs x 8,000 frames x 10 = 320k frames per update (F5: 307,200).
-  accumulate_grad_batches: 4
+  accumulate_grad_batches: 8
   max_steps: 300000
   precision: bf16-mixed
   max_epochs: -1   # epochs are short (batch_sampler.batches_per_epoch); max_steps ends the run
