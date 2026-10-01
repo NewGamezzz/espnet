@@ -124,3 +124,19 @@ def test_gh200_config_differs_from_base_only_in_the_intended_knobs():
         c["trainer"]["accumulate_grad_batches"] = None
         c["trainer"].pop("precision", None)
     assert gh == base
+
+
+def test_gh200_smoke_differs_from_the_gh200_run_only_in_size_and_logger():
+    # the 2-GPU smoke on ghx4-interactive checks the aarch64 env, that a 2M
+    # batch_bins micro-batch fits a GH200 in bf16, and the resume; it keeps
+    # its own exp_tag because a 2-GPU step sees half the frames
+    run = OmegaConf.to_container(OmegaConf.load(GH200))
+    smoke = OmegaConf.to_container(
+        OmegaConf.load("conf/training_smoke_gh200_2gpu.yaml")
+    )
+    assert smoke["num_device"] == 2 and run["num_device"] == 4
+    assert smoke["exp_tag"] != run["exp_tag"]
+    assert smoke["trainer"]["logger"]["_target_"].endswith("CSVLogger")
+    for c in (run, smoke):
+        c["num_device"] = c["exp_tag"] = c["trainer"]["logger"] = None
+    assert smoke == run
