@@ -8,13 +8,12 @@ def test_sbatch_scripts_use_batch_partitions_and_pythonpath():
         assert 'source "$SLURM_SUBMIT_DIR/local/delta_env.sh"' in s
         assert "interactive" not in s
         # under sbatch $0 is the spool copy, so the cwd must come from Slurm
-        assert 'cd "$SLURM_SUBMIT_DIR"' in s and 'dirname "$0"' not in s
+        body = s if name != "submit_train" else Path("local/train_link.sh").read_text()
+        assert 'cd "$SLURM_SUBMIT_DIR"' in body and 'dirname "$0"' not in s
     assert "--partition=cpu" in Path("local/submit_create_dataset.sbatch").read_text()
     train = Path("local/submit_train.sbatch").read_text()
-    assert "--partition=gpuA100x4" in train
-    assert (
-        '"$SLURM_SUBMIT_DIR/local/submit_train.sbatch"' in train and '"$0"' not in train
-    )
+    assert "--partition=gpuA100x4" in train and '"$0"' not in train
+    assert '"$0"' not in Path("local/train_link.sh").read_text()
     assert "--time=01:00:00" in Path("local/run_arm_1gpu.sbatch").read_text()
 
 
@@ -45,6 +44,6 @@ def test_delta_env_sets_phonemizer_and_python_path():
 
 
 def test_train_chain_is_bounded_and_stoppable():
-    s = Path("local/submit_train.sbatch").read_text()
-    assert "#SBATCH --time=01:00:00" in s
+    assert "#SBATCH --time=01:00:00" in Path("local/submit_train.sbatch").read_text()
+    s = Path("local/train_link.sh").read_text()
     assert "CHAIN_LEFT" in s and "exp/$TAG/STOP" in s

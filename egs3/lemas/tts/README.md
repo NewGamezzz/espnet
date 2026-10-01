@@ -131,6 +131,22 @@ Prompt knobs (`prompt_config` in `conf/training_f5_base_dualprompt.yaml`):
 | `p_drop_spk` | `0.3` | drop the speaker prompt (heavier: it also reveals the language) |
 | `p_drop_lang` | `0.1` | drop the language prompt |
 
+### DeltaAI (GH200) run
+
+`conf/training_f5_base_dualprompt_gh200.yaml` is the second experiment
+(2026-10-01): learning rate 1.5e-4, `precision: bf16-mixed`, and
+`batch_bins 2M x accumulate 4` (the same 320k frames per update in fewer
+micro-batches). Submit it from `delta_ai`:
+
+```bash
+sbatch local/submit_train_dtai.sbatch              # ghx4, 4 GH200, 12 h links
+```
+
+Same chain (`local/train_link.sh`), separate logs (`logs/train_dtai_<id>.out`,
+`logs/chain_dtai.log`) because Delta and DeltaAI job ids collide. The aarch64
+env (`local/delta_ai_env.sh`) has no espeak-ng, so build and inference stay on
+Delta; both clusters see the same `/work` data and this worktree.
+
 ## 3. Synthesize and score on LEMAS-eval
 
 ```bash

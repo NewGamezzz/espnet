@@ -53,7 +53,9 @@ BASE = "conf/training_f5_base_dualprompt.yaml"
 SMOKES = ["conf/training_smoke.yaml", "conf/training_smoke_1gpu.yaml"]
 
 
-@pytest.mark.parametrize("path", [BASE] + SMOKES)
+@pytest.mark.parametrize(
+    "path", [BASE, "conf/training_f5_base_dualprompt_gh200.yaml"] + SMOKES
+)
 def test_epochs_are_minutes_long_and_end_on_an_optimizer_step(path):
     # espnet3 writes last.ckpt at the end of an epoch and nowhere else, and a
     # chain link is killed after 1 h: an epoch of one pass (154 h) left the
@@ -86,3 +88,39 @@ def test_backups_are_written_at_epoch_ends_every_25k_steps():
     steps = cfg.batch_sampler.batches_per_epoch // cfg.trainer.accumulate_grad_batches
     assert backup.save_on_train_epoch_end and "every_n_train_steps" not in backup
     assert backup.every_n_epochs * steps == 25000 and backup.save_top_k == -1
+
+
+GH200 = "conf/training_f5_base_dualprompt_gh200.yaml"
+
+
+def test_gh200_config_differs_from_base_only_in_the_intended_knobs():
+    # DeltaAI run (Thanapat 2026-10-01): 2x learning rate, bf16, and the GH200's
+    # memory spent on bigger micro-batches at the same 320k frames per update
+    base = OmegaConf.to_container(OmegaConf.load(BASE))
+    gh = OmegaConf.to_container(OmegaConf.load(GH200))
+    assert gh["exp_tag"] != base["exp_tag"]
+    assert gh["optimizer"]["lr"] == 1.5e-4 and base["optimizer"]["lr"] == 7.5e-5
+    assert (
+        gh["trainer"]["precision"] == "bf16-mixed"
+        and "precision" not in base["trainer"]
+    )
+    frames = lambda c: (  # noqa: E731
+        c["num_device"]
+        * c["batch_sampler"]["batch_bins"]
+        // c["n_mel_channels"]
+        * c["trainer"]["accumulate_grad_batches"]
+    )
+    assert frames(gh) == frames(base) == 320_000
+    steps = lambda c: (  # noqa: E731
+        c["batch_sampler"]["batches_per_epoch"]
+        // c["trainer"]["accumulate_grad_batches"]
+    )
+    assert steps(gh) == steps(base) == 100
+    for c in (base, gh):
+        c["exp_tag"] = c["optimizer"]["lr"] = None
+        c["batch_sampler"]["batch_bins"] = c["batch_sampler"]["batches_per_epoch"] = (
+            None
+        )
+        c["trainer"]["accumulate_grad_batches"] = None
+        c["trainer"].pop("precision", None)
+    assert gh == base
