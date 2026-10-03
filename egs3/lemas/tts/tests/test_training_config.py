@@ -125,4 +125,3 @@ def test_gh200_config_differs_from_base_only_in_the_intended_knobs():
         c["trainer"]["accumulate_grad_batches"] = None
         c["trainer"].pop("precision", None)
     assert gh == base
-
