@@ -1,0 +1,66 @@
+# Scoring of the speaker-prompt-only arm (inference_lemas_eval_spk_only_sub50.yaml):
+# the same metrics as metrics_sub50.yaml on the lemas_eval_sub50_spk_<lang> sets.
+#
+# The test-set names match conf/inference_lemas_eval.yaml (one set per
+# language), so every metric below is reported per language.
+#
+#   WER   VERSA fwhisper_wer (faster-whisper large-v3, beam 5), the engine
+#         the LibriTTS recipe uses; the language is auto-detected per
+#         utterance, which large-v3 does reliably on multi-second clips.
+#   SIM   speaker similarity of the output to the SPEAKER prompt (`ref`),
+#         ESPnet-SPK ECAPA on WavLM-large as in the LibriTTS recipe.
+#   leak  the same similarity to the LANGUAGE prompt's voice (`lang_ref`);
+#         the design's leakage probe, it should stay low and must not rise
+#         from arm B (speaker only) to arm A (both prompts).
+#   UTMOS as in the LibriTTS recipe.
+#
+dataset:
+  test:
+    - name: lemas_eval_sub50_spk_de
+    - name: lemas_eval_sub50_spk_en
+    - name: lemas_eval_sub50_spk_es
+    - name: lemas_eval_sub50_spk_fr
+    - name: lemas_eval_sub50_spk_id
+    - name: lemas_eval_sub50_spk_it
+    - name: lemas_eval_sub50_spk_pt
+    - name: lemas_eval_sub50_spk_ru
+    - name: lemas_eval_sub50_spk_vi
+    - name: lemas_eval_sub50_spk_zh
+
+metrics:
+  - metric:
+      _target_: src.metrics.versa.VersaMetric
+      score_config:
+        - name: fwhisper_wer
+          model_tag: large-v3
+          beam_size: 5
+          compute_type: float16
+          text_cleaner: whisper_basic
+        - name: speaker
+          model_tag: espnet/voxcelebs12_ecapa_wavlm_joint
+        - name: pseudo_mos
+          predictor_types: [utmos]
+          predictor_args:
+            utmos:
+              fs: 16000
+      wav_key: wav
+      ref_key: ref
+      text_key: text
+      use_gpu: true
+    inputs:
+      wav: wav
+      ref: ref
+      text: text
+  - metric:
+      _target_: src.metrics.versa.VersaMetric
+      score_config:
+        - name: speaker
+          model_tag: espnet/voxcelebs12_ecapa_wavlm_joint
+      wav_key: wav
+      ref_key: lang_ref
+      text_key: text
+      use_gpu: true
+    inputs:
+      wav: wav
+      lang_ref: lang_ref
+      text: text

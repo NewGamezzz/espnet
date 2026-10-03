@@ -54,3 +54,17 @@ def test_inference_configs_take_the_checkpoint_from_the_environment(monkeypatch)
     OmegaConf.resolve(cfg)
     assert cfg.model.checkpoint_path == "./exp/tag/last.ckpt"
     assert cfg.inference_dir == "./exp/tag/inference_lemas_eval_last"
+
+
+def test_spk_only_metrics_configs_name_the_spk_only_test_sets():
+    # arm B writes lemas_eval_spk_<lang>; the metrics must look there
+    for suffix in ("", "_sub50"):
+        met = OmegaConf.to_container(OmegaConf.load(f"conf/metrics{suffix}.yaml"))
+        spk = OmegaConf.to_container(
+            OmegaConf.load(f"conf/metrics_spk_only{suffix}.yaml")
+        )
+        inf = OmegaConf.load(f"conf/inference_lemas_eval_spk_only{suffix}.yaml")
+        assert [d["name"] for d in spk["dataset"]["test"]] == [
+            d.name for d in inf.dataset.test
+        ]
+        assert spk["metrics"] == met["metrics"]

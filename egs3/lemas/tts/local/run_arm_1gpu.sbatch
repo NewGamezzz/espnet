@@ -23,7 +23,8 @@ INF=${1:-conf/inference_lemas_eval.yaml}
 MET=${2:-conf/metrics.yaml}
 TRAIN=${3:-conf/training_f5_base_dualprompt.yaml}
 export LEMAS_CKPT=${LEMAS_CKPT:-last}
+STAGES=${STAGES:-"infer measure"}   # STAGES=measure rescores existing wavs
 mkdir -p logs
-echo "arm: train=$TRAIN ckpt=$LEMAS_CKPT infer=$INF metrics=$MET"
-$PY run.py --stages infer measure --training_config "$TRAIN" \
+echo "arm: train=$TRAIN ckpt=$LEMAS_CKPT infer=$INF metrics=$MET stages=$STAGES"
+$PY run.py --stages $STAGES --training_config "$TRAIN" \
   --inference_config "$INF" --metrics_config "$MET"

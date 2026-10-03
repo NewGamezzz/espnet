@@ -56,3 +56,10 @@ def test_arm_script_takes_the_training_config_and_passes_the_checkpoint():
     assert "TRAIN=${3:-conf/training_f5_base_dualprompt.yaml}" in s
     assert '--training_config "$TRAIN"' in s
     assert "LEMAS_CKPT" in s and "versa" in Path("local/delta_env.sh").read_text()
+
+
+def test_arm_script_can_rerun_only_the_measure_stage():
+    # scoring fails independently of synthesis (a missing scorer dependency,
+    # a wrong test-set name); the wavs are kept and only measure reruns
+    s = Path("local/run_arm_1gpu.sbatch").read_text()
+    assert 'STAGES=${STAGES:-"infer measure"}' in s and "--stages $STAGES" in s
