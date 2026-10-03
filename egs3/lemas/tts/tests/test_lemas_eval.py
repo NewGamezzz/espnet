@@ -88,3 +88,14 @@ def test_eval_dataset_keys(tmp_path):
     }
     assert "lang_prompt_speech" not in LEMASEvalDataset(out, use_lang_prompt=False)[0]
     assert len(LEMASEvalDataset(out, lang="zh")) == 3
+
+
+def test_eval_dataset_max_rows_keeps_the_first_rows_of_the_language(tmp_path):
+    # diagnostic arms run on a pinned subset: the first N rows per language
+    meta, root = _meta(tmp_path)
+    out = build_eval_manifest(meta, root, tmp_path / "out")
+    full = LEMASEvalDataset(out, lang="zh")
+    sub = LEMASEvalDataset(out, lang="zh", max_rows=2)
+    assert len(full) == 3 and len(sub) == 2
+    assert [sub[i]["utt_id"] for i in range(2)] == [full[i]["utt_id"] for i in range(2)]
+    assert len(LEMASEvalDataset(out, lang="zh", max_rows=0)) == 3  # 0 = all

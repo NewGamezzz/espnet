@@ -1,6 +1,9 @@
 #!/bin/bash
 # One evaluation arm (infer + measure) on one GPU within an hour.
-# Usage: sbatch local/run_arm_1gpu.sbatch [conf/inference_lemas_eval.yaml] [conf/metrics.yaml]
+# Usage: LEMAS_CKPT=backup_step75000 sbatch local/run_arm_1gpu.sbatch \
+#          [conf/inference_lemas_eval.yaml] [conf/metrics.yaml] [conf/training_....yaml]
+# The training config names the run (exp_tag); LEMAS_CKPT the frozen
+# checkpoint in it (default last). Subset arms: the *_sub50 configs.
 # Keep at most 3 arms importing at once (Delta Lustre import contention).
 #SBATCH --job-name=lemas_arm
 #SBATCH --account=bbjs-delta-gpu
@@ -18,6 +21,9 @@ source "$SLURM_SUBMIT_DIR/local/delta_env.sh"
 export PYTHONUNBUFFERED=1
 INF=${1:-conf/inference_lemas_eval.yaml}
 MET=${2:-conf/metrics.yaml}
+TRAIN=${3:-conf/training_f5_base_dualprompt.yaml}
+export LEMAS_CKPT=${LEMAS_CKPT:-last}
 mkdir -p logs
-$PY run.py --stages infer measure --training_config conf/training_f5_base_dualprompt.yaml \
+echo "arm: train=$TRAIN ckpt=$LEMAS_CKPT infer=$INF metrics=$MET"
+$PY run.py --stages infer measure --training_config "$TRAIN" \
   --inference_config "$INF" --metrics_config "$MET"

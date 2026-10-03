@@ -7,12 +7,16 @@
 #
 # exp_tag is intentionally empty so this config inherits experiment identity
 # from the training config; run.py must be given --training_config as well.
+# LEMAS_CKPT (environment, default "last") names the checkpoint to score,
+# e.g. LEMAS_CKPT=backup_step75000; last.ckpt moves while a chain runs, so
+# arms score frozen backups, and the outputs go under a directory named
+# after the checkpoint so two arms never collide.
 recipe_dir: .
 
 exp_tag:
 exp_dir: ${recipe_dir}/exp/${exp_tag}
 data_dir: ${recipe_dir}/data
-inference_dir: ${exp_dir}/${self_name:}
+inference_dir: ${exp_dir}/${self_name:}_${oc.env:LEMAS_CKPT,last}
 
 dataset:
   _target_: espnet3.components.data.data_organizer.DataOrganizer
@@ -96,7 +100,7 @@ parallel:
 model:
   _target_: src.inference.DualPromptInference
   train_config: ${recipe_dir}/conf/training_f5_base_dualprompt.yaml
-  checkpoint_path: ${exp_dir}/last.ckpt
+  checkpoint_path: ${exp_dir}/${oc.env:LEMAS_CKPT,last}.ckpt
   token_list: ${data_dir}/tokens/tokens.txt
   lang_stats: ${data_dir}/lang_stats.json
   device: cuda

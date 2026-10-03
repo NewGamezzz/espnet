@@ -25,6 +25,7 @@ class LEMASEvalDataset(torch.utils.data.Dataset):
         use_lang_prompt: bool = True,
         fs: int = 24000,
         lang: Optional[str] = None,
+        max_rows: int = 0,
     ):
         """Read the manifest.
 
@@ -33,6 +34,8 @@ class LEMASEvalDataset(torch.utils.data.Dataset):
             use_lang_prompt: Emit ``lang_prompt_speech`` (arm A) or not (arm B).
             fs: Sample rate the clips are resampled to.
             lang: Keep only rows of this language when given.
+            max_rows: Keep only the first rows (after the language filter);
+                ``0`` keeps all. Diagnostic arms run on this pinned subset.
 
         Raises:
             RuntimeError: If no row matches.
@@ -53,6 +56,8 @@ class LEMASEvalDataset(torch.utils.data.Dataset):
                     r = line.rstrip("\n").split("\t")
                     if lang is None or r[1] == lang:
                         self.rows.append(r)
+        if max_rows:
+            self.rows = self.rows[:max_rows]
         if not self.rows:
             raise RuntimeError(f"Empty eval manifest: {manifest_path} (lang={lang})")
 

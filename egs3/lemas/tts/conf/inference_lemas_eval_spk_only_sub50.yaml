@@ -1,4 +1,7 @@
 # LEMAS-eval inference, arm B: speaker prompt only (language prompt omitted, a trained shape).
+# Subset variant (the first 50 rows per language = 500 utterances) for
+# diagnostic arms; the full config is for final numbers. Generated from
+# the full config; tests/test_metrics_config.py pins them equal otherwise.
 # The manifest is written by local/prepare_lemas_eval.py: each eval row is
 # split at a word boundary, its leading words are the speaker prompt and the
 # rest is the target with exact ground truth; the language prompt is the
@@ -22,76 +25,86 @@ dataset:
   _target_: espnet3.components.data.data_organizer.DataOrganizer
   recipe_dir: ${recipe_dir}
   test:
-    - name: lemas_eval_spk_de
+    - name: lemas_eval_sub50_spk_de
       data_src: egs3.lemas.tts.dataset.lemas_eval
       data_src_args:
         manifest_path: ${data_dir}/lemas_eval/manifest.tsv
         lang: de
         use_lang_prompt: false
         fs: 24000
-    - name: lemas_eval_spk_en
+        max_rows: 50
+    - name: lemas_eval_sub50_spk_en
       data_src: egs3.lemas.tts.dataset.lemas_eval
       data_src_args:
         manifest_path: ${data_dir}/lemas_eval/manifest.tsv
         lang: en
         use_lang_prompt: false
         fs: 24000
-    - name: lemas_eval_spk_es
+        max_rows: 50
+    - name: lemas_eval_sub50_spk_es
       data_src: egs3.lemas.tts.dataset.lemas_eval
       data_src_args:
         manifest_path: ${data_dir}/lemas_eval/manifest.tsv
         lang: es
         use_lang_prompt: false
         fs: 24000
-    - name: lemas_eval_spk_fr
+        max_rows: 50
+    - name: lemas_eval_sub50_spk_fr
       data_src: egs3.lemas.tts.dataset.lemas_eval
       data_src_args:
         manifest_path: ${data_dir}/lemas_eval/manifest.tsv
         lang: fr
         use_lang_prompt: false
         fs: 24000
-    - name: lemas_eval_spk_id
+        max_rows: 50
+    - name: lemas_eval_sub50_spk_id
       data_src: egs3.lemas.tts.dataset.lemas_eval
       data_src_args:
         manifest_path: ${data_dir}/lemas_eval/manifest.tsv
         lang: id
         use_lang_prompt: false
         fs: 24000
-    - name: lemas_eval_spk_it
+        max_rows: 50
+    - name: lemas_eval_sub50_spk_it
       data_src: egs3.lemas.tts.dataset.lemas_eval
       data_src_args:
         manifest_path: ${data_dir}/lemas_eval/manifest.tsv
         lang: it
         use_lang_prompt: false
         fs: 24000
-    - name: lemas_eval_spk_pt
+        max_rows: 50
+    - name: lemas_eval_sub50_spk_pt
       data_src: egs3.lemas.tts.dataset.lemas_eval
       data_src_args:
         manifest_path: ${data_dir}/lemas_eval/manifest.tsv
         lang: pt
         use_lang_prompt: false
         fs: 24000
-    - name: lemas_eval_spk_ru
+        max_rows: 50
+    - name: lemas_eval_sub50_spk_ru
       data_src: egs3.lemas.tts.dataset.lemas_eval
       data_src_args:
         manifest_path: ${data_dir}/lemas_eval/manifest.tsv
         lang: ru
         use_lang_prompt: false
         fs: 24000
-    - name: lemas_eval_spk_vi
+        max_rows: 50
+    - name: lemas_eval_sub50_spk_vi
       data_src: egs3.lemas.tts.dataset.lemas_eval
       data_src_args:
         manifest_path: ${data_dir}/lemas_eval/manifest.tsv
         lang: vi
         use_lang_prompt: false
         fs: 24000
-    - name: lemas_eval_spk_zh
+        max_rows: 50
+    - name: lemas_eval_sub50_spk_zh
       data_src: egs3.lemas.tts.dataset.lemas_eval
       data_src_args:
         manifest_path: ${data_dir}/lemas_eval/manifest.tsv
         lang: zh
         use_lang_prompt: false
         fs: 24000
+        max_rows: 50
 
 parallel:
   env: local

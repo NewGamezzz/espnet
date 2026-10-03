@@ -161,9 +161,19 @@ python local/prepare_lemas_eval.py \
     --audio_root /work/hdd/bbjs/ttrachu/dataset/LEMAS/LEMAS-eval/eval \
     --out_dir data/lemas_eval
 
-sbatch local/run_arm_1gpu.sbatch conf/inference_lemas_eval.yaml           # arm A: both prompts
-sbatch local/run_arm_1gpu.sbatch conf/inference_lemas_eval_spk_only.yaml  # arm B: speaker prompt only
+# diagnostic arms: the first 50 rows per language, a frozen backup, one run
+LEMAS_CKPT=backup_step75000 sbatch local/run_arm_1gpu.sbatch \
+    conf/inference_lemas_eval_sub50.yaml conf/metrics_sub50.yaml conf/training_f5_base_dualprompt_gh200.yaml
+# final numbers: the full set
+LEMAS_CKPT=backup_step75000 sbatch local/run_arm_1gpu.sbatch conf/inference_lemas_eval.yaml           # arm A: both prompts
+LEMAS_CKPT=backup_step75000 sbatch local/run_arm_1gpu.sbatch conf/inference_lemas_eval_spk_only.yaml  # arm B: speaker prompt only
 ```
+
+`LEMAS_CKPT` names the checkpoint inside the run's `exp/<tag>/` (default
+`last`, which moves while a chain runs); outputs go to
+`exp/<tag>/<inference config>_<LEMAS_CKPT>/`. The third argument picks the
+run (its training config holds the `exp_tag`). VERSA is imported from a
+clone at `/work/nvme/bbjs/ttrachu/versa` (`local/delta_env.sh`).
 
 Both configs use the training config for the model block; `exp_tag` comes
 from `--training_config`. Prompts are used as they are (`lowpass_hz: null`):

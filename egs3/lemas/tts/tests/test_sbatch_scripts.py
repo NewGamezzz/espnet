@@ -47,3 +47,12 @@ def test_train_chain_is_bounded_and_stoppable():
     assert "#SBATCH --time=01:00:00" in Path("local/submit_train.sbatch").read_text()
     s = Path("local/train_link.sh").read_text()
     assert "CHAIN_LEFT" in s and "exp/$TAG/STOP" in s
+
+
+def test_arm_script_takes_the_training_config_and_passes_the_checkpoint():
+    # the GH200 run has its own training config (exp_tag); LEMAS_CKPT selects
+    # the frozen checkpoint through the environment sbatch exports
+    s = Path("local/run_arm_1gpu.sbatch").read_text()
+    assert "TRAIN=${3:-conf/training_f5_base_dualprompt.yaml}" in s
+    assert '--training_config "$TRAIN"' in s
+    assert "LEMAS_CKPT" in s and "versa" in Path("local/delta_env.sh").read_text()
