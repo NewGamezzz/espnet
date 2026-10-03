@@ -33,6 +33,7 @@ class VersaMetric(BaseMetric):
         text_key: str = "text",
         use_gpu: bool = True,
         io: str = "soundfile",
+        subdir: str = "versa_eval",
     ) -> None:
         self.score_config = score_config
         self.wav_key = wav_key
@@ -40,6 +41,13 @@ class VersaMetric(BaseMetric):
         self.text_key = text_key
         self.use_gpu = use_gpu
         self.io = io
+        # two blocks scoring one test set (e.g. the leakage probe against
+        # ``lang_ref``) must not share result.json / avg_result.json
+        self.subdir = subdir
+
+    def eval_dir(self, inference_dir, test_name: str) -> Path:
+        """Return the directory this block's VERSA files go to."""
+        return Path(inference_dir) / test_name / "scoring" / self.subdir
 
     def _resolve_score_config_path(self, eval_dir: Path) -> Path:
         """Return a YAML file path VERSA can `open()`.
@@ -83,7 +91,7 @@ class VersaMetric(BaseMetric):
                 f"Got: {list(data.keys())}"
             )
 
-        eval_dir = Path(inference_dir) / test_name / "scoring" / "versa_eval"
+        eval_dir = self.eval_dir(inference_dir, test_name)
         eval_dir.mkdir(parents=True, exist_ok=True)
 
         score_config_path = self._resolve_score_config_path(eval_dir)

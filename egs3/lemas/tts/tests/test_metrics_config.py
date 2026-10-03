@@ -68,3 +68,26 @@ def test_spk_only_metrics_configs_name_the_spk_only_test_sets():
             d.name for d in inf.dataset.test
         ]
         assert spk["metrics"] == met["metrics"]
+
+
+def test_the_two_versa_blocks_write_to_different_directories():
+    # the leakage probe (ref_key lang_ref) used to overwrite the main block's
+    # result.json and avg_result.json in the same scoring/versa_eval/
+    from src.metrics.versa import VersaMetric
+
+    for name in (
+        "metrics",
+        "metrics_sub50",
+        "metrics_spk_only",
+        "metrics_spk_only_sub50",
+    ):
+        cfg = OmegaConf.load(f"conf/{name}.yaml")
+        dirs = [
+            VersaMetric(
+                **{k: v for k, v in m.metric.items() if k != "_target_"}
+            ).eval_dir("inf", "set")
+            for m in cfg.metrics
+        ]
+        assert len(set(dirs)) == len(dirs) == 2
+        assert str(dirs[0]).endswith("set/scoring/versa_eval")
+        assert str(dirs[1]).endswith("set/scoring/versa_leak")

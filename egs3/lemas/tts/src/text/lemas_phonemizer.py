@@ -11,6 +11,7 @@ kept verbatim.
 
 from __future__ import annotations
 
+import re
 import unicodedata
 from typing import Dict, List, Sequence
 
@@ -32,6 +33,9 @@ ESPEAK_VOICES = {
 _PHONE_SEP = "|"
 _WORD_SEP = " "
 _DROP = {"-"}  # espeak liaison / hyphen marker, carries no phone
+# LEMAS-eval ships zh transcripts as tone-numbered pinyin syllables
+_PINYIN_SYLLABLE = re.compile(r"^[a-zü]+[1-5]?$")
+_ZH_PUNCT = {",": "，", ".": "。", "?": "？", "!": "！", ":": "：", ";": "；"}
 
 
 def lang_tag(lang: str) -> str:
@@ -50,6 +54,50 @@ def special_tokens() -> List[str]:
         ['<spk>', '<lang>', '<de>']
     """
     return [SPK_TOKEN, LANG_TOKEN] + [lang_tag(lang) for lang in LANGS]
+
+
+def _is_romanized_zh(text: str) -> bool:
+    """Whether a zh transcript is pinyin syllables rather than characters."""
+    return not any("\u4e00" <= c <= "\u9fff" for c in text) and any(
+        c.isascii() and c.isalpha() for c in text
+    )
+
+
+def _pinyin_to_tokens(text: str) -> List[str]:
+    """Initial/final tokens for tone-numbered pinyin, as the build makes them.
+
+    The build runs each character through pypinyin (``Style.TONE3``) and
+    splits the syllable with ``get_initials`` / ``get_finals`` (strict, so
+    ``you2`` is the lone final ``iou2``), and a neutral tone carries no
+    digit (``de`` -> ``d e``). Punctuation becomes the full-width form the
+    zh training text used.
+
+    Example:
+        >>> _pinyin_to_tokens("ni3 hao3, de5.")
+        ['n', 'i3', 'h', 'ao3', '，', 'd', 'e', '。']
+    """
+    from pypinyin.style._utils import get_finals, get_initials
+
+    out: List[str] = []
+    for chunk in text.split():
+        head, tail = chunk, []
+        while head and not _PINYIN_SYLLABLE.match(head.lower()):
+            tail.insert(0, _ZH_PUNCT.get(head[-1], head[-1]))
+            head = head[:-1]
+        if head:
+            syl = head.lower()
+            if syl[-1] == "5":
+                syl = syl[:-1]
+            tone = syl[-1] if syl[-1].isdigit() else ""
+            base = syl[:-1] if tone else syl
+            for p in (
+                get_initials(base, strict=True),
+                get_finals(base, strict=True) + tone,
+            ):
+                if p and not p.isdigit():
+                    out.append(p)
+        out.extend(t for t in tail if t.strip())
+    return out
 
 
 def _is_punct(c: str) -> bool:
@@ -137,6 +185,8 @@ class LEMASPhonemizer:
         """
         g2p = self._g2p[lang]
         if lang == "zh":
+            if _is_romanized_zh(text):
+                return _pinyin_to_tokens(text)
             return [t for t in g2p(text) if t.strip()]
         words = g2p(text)
         out: List[str] = []

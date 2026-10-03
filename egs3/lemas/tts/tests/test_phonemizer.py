@@ -31,6 +31,29 @@ def test_zh_pinyin_initial_final():
     assert ph == ["n", "i3", "h", "ao3"]
 
 
+def test_zh_romanized_text_gives_the_tokens_the_characters_would():
+    # LEMAS-eval ships zh transcripts as tone-numbered pinyin, while training
+    # used characters: the model saw "d e" for neutral-tone 的 (no digit),
+    # "iou2" for 由 (strict finals, no initial) and full-width punctuation
+    p = LEMASPhonemizer(langs=["zh"])
+    assert p.phonemize("ni3 hao3", "zh") == p.phonemize("你好", "zh")
+    assert p.phonemize("ai4, gei3 hai2 zi5 de5 you2.", "zh") == [
+        "ai4",
+        "，",
+        "g",
+        "ei3",
+        "h",
+        "ai2",
+        "z",
+        "i",
+        "d",
+        "e",
+        "iou2",
+        "。",
+    ]
+    assert p.phonemize("关心", "zh") == p.phonemize("guan1 xin1", "zh")
+
+
 @pytest.mark.skipif(not _has_espeak(), reason="espeak-ng not available")
 def test_de_per_phone_with_space_and_stress():
     ph = LEMASPhonemizer(langs=["de"]).phonemize("Guten Morgen, Welt.", "de")

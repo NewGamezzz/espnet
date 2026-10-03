@@ -61,6 +61,7 @@ metrics:
       ref_key: lang_ref
       text_key: text
       use_gpu: true
+      subdir: versa_leak
     inputs:
       wav: wav
       lang_ref: lang_ref
