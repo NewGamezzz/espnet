@@ -2,18 +2,55 @@
 #                   Inference SETTING                    #
 ##########################################################
 # Quick usage:
-#   python run.py --stages infer --inference_config conf/inference.yaml
+#   python run.py --stages infer \
+#       --training_config conf/training.yaml \
+#       --inference_config conf/inference.yaml
 #
-# Shared default merged under every F5-TTS recipe's inference config.
+# Outputs:
+# - `${inference_dir}/<test_name>/*.scp`
+# - `wav.scp` lists the synthesized audio, one file per utterance
 
+##########################################################
+#                    PATHS AND INPUTS                    #
+##########################################################
 recipe_dir: .
+# Common case:
+# - pass both `--training_config` and `--inference_config`
+# - `run.py` copies `training_config.exp_tag` / `training_config.exp_dir` here
+# - `${self_name:}` resolves to the stem of the config file passed to
+#   `--inference_config`, so `conf/<name>.yaml` writes to `${exp_dir}/<name>`
 exp_tag:
 exp_dir: ${recipe_dir}/exp/${exp_tag}
 data_dir: ${recipe_dir}/data
 inference_dir: ${exp_dir}/${self_name:}
 
+# Test split definitions are required for inference.
+# Each item in `dataset.test` is a dataset reference entry.
+# - `name` becomes the output subdirectory name under `${inference_dir}`
+# - `data_src_args` is forwarded to the recipe's `Dataset(...)`
+#
+# Each sample must provide the fields listed in `input_key`: the target
+# `text`, the `reference_speech` waveform to clone, and its transcript
+# `reference_text`. No preprocessor is set: the model tokenizes `text` itself,
+# the same way the training config does.
+#
+# Example:
+# dataset:
+#   test:
+#     - name: test
+#       data_src_args:
+#         split: test
+#         manifest_path: ${data_dir}/manifest/test.tsv
 dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  _recursive_: false
+  recipe_dir: ${recipe_dir}
+  test:
+  preprocessor:
 
+##########################################################
+#                  PARALLELIZATION SETTING               #
+##########################################################
 parallel:
   env: local
   n_workers: 1
@@ -21,13 +58,58 @@ parallel:
   # another run may still be writing to the same output directory.
   allow_overwrite_lock: false
 
+##########################################################
+#                    MODEL AND OUTPUT                    #
+##########################################################
+# `Inference` is the F5-TTS side of `espnet3.api.inference`. Its arguments are
+# those of `espnet3.systems.f5tts.inference.F5TTSInference`, which it builds.
+#
+# `train_config` is the training YAML the checkpoint was trained with: the
+# model and the tokenizer are rebuilt from it. Point it at the config you
+# passed to `--training_config`. That file is read on its own, so it must be
+# complete (a copy of the template's `training.yaml`, not a list of
+# overrides).
 model:
+  _target_: espnet3.systems.f5tts.inference.Inference
+  train_config: ${recipe_dir}/conf/training.yaml
+  checkpoint_path: ${exp_dir}/last.ckpt
+  # Load the EMA weights stored in the checkpoint by `EMACallback`.
+  use_ema: true
+  # Local Vocos directory (`config.yaml` + `pytorch_model.bin`). When unset,
+  # `charactr/vocos-mel-24khz` is fetched from the Hugging Face Hub.
+  vocoder_path:
+  target_sample_rate: 24000
+  ode_solver_steps: 32
+  guidance_strength: 2.0
+  sway_sampling_coefficient: -1.0
+  speed: 1.0
+  # Set an integer for reproducible sampling noise.
+  seed:
 
-input_key:
+# Dataset fields passed to the model as `model(text=..., reference_speech=...,
+# reference_text=...)`.
+input_key: [text, reference_speech, reference_text]
+
+# One utterance per model call. F5-TTS synthesizes a batch item by item, so a
+# larger value does not make inference faster.
 batch_size:
-output_fn:
-output_artifacts:
 
+# Recipe-provided formatter that turns one model output into the dict written
+# to SCP files. Copy `egs3/TEMPLATE/f5tts/src/inference.py` into the recipe's
+# `src/` and add the columns its metrics need (e.g. the reference wav path).
+output_fn: src.inference.build_output
+
+# The synthesized waveform is written as
+# `${inference_dir}/<test_name>/.../wav/<utt_id>.wav`, and that path is the
+# value stored in `wav.scp`.
+output_artifacts:
+  wav:
+    type: wav
+    sample_rate: ${model.target_sample_rate}
+
+##########################################################
+#               PROVIDER AND RUNNER SETTING              #
+##########################################################
 provider:
   _target_: espnet3.systems.base.inference_provider.InferenceProvider
 runner:

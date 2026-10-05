@@ -2,12 +2,23 @@
 #                    TRAINING SETTING                    #
 ##########################################################
 # Quick usage:
-#   python run.py --stages train --training_config conf/training.yaml
+#   python run.py --stages create_dataset --training_config conf/training.yaml
+#   python run.py --stages train          --training_config conf/training.yaml
 #
-# This is the shared default merged under every F5-TTS recipe's training
-# config (see `load_and_merge_config` in `run.py`). Only path/system
-# scaffolding lives here; the dataset, model, optimizer and dataloader blocks
-# are left null for the recipe config to fill in.
+# Main stages and what this config is used for:
+# - `create_dataset`: uses `create_dataset` and `dataset`
+# - `remove_long_short`: uses `remove_long_short` and `parallel`
+# - `create_token_list`: uses `create_token_list`
+# - `collect_stats`: uses `dataset`, `dataloader`, `model`, and `parallel`
+# - `train`: uses most fields in this file
+#
+# Copy this file into the recipe's `conf/` and edit it there, keeping it
+# complete: the infer stage and a packed model rebuild the model and the
+# tokenizer from the recipe's training config alone
+# (`inference_config.model.train_config`), without the defaults `run.py`
+# merges underneath it. The model and optimization values below are a
+# starting point, not a tuned setup: a recipe sets its own architecture size,
+# batch size and schedule length.
 
 ##########################################################
 #                  SYSTEM AND PATH SETTING               #
@@ -15,10 +26,11 @@
 num_device: 1
 num_nodes: 1
 
-# F5-TTS is an ESPnet3-native model: `model` is instantiated directly via
-# Hydra, so the ESPnet2 `task` bridge stays unset.
+# F5-TTS is an ESPnet3-native model: `model` below is instantiated directly
+# via Hydra, so the ESPnet2 `task` bridge stays unset.
 task:
 
+# Path scaffold relative to the recipe root.
 recipe_dir: .
 data_dir: ${recipe_dir}/data
 exp_tag: ${self_name:}
@@ -27,32 +39,144 @@ stats_dir: ${exp_dir}/stats
 inference_dir: ${exp_dir}/inference
 
 ##########################################################
+#                     AUDIO SETTING                      #
+##########################################################
+# Mel front-end settings shared by the dataset and the model. They must match
+# the vocoder used at inference (Vocos `charactr/vocos-mel-24khz`).
+sample_rate: 24000
+n_fft: 1024
+hop_length: 256
+win_length: 1024
+n_mel_channels: 100
+
+##########################################################
+#                 DATASET CREATION SETTING               #
+##########################################################
+# Keyword arguments `create_dataset` passes to the methods of the recipe's
+# `DatasetBuilder` (`dataset/builder.py`).
+create_dataset:
+  recipe_dir: ${recipe_dir}
+
+##########################################################
 #                    DATASET DEFINITION                  #
 ##########################################################
+# Dataset organizer used across collect_stats/train.
+# Fill `train` and `valid` with dataset reference entries that read the
+# filtered manifests written by `remove_long_short`.
+#
+# Example:
+# dataset:
+#   train:
+#     - data_src_args:
+#         split: train
+#         manifest_path: ${remove_long_short.save_path}/train.tsv
+#   valid:
+#     - data_src_args:
+#         split: valid
+#         manifest_path: ${remove_long_short.save_path}/valid.tsv
+#
+# The preprocessor tokenizes text with the token list written by
+# `create_token_list` and leaves speech as a raw waveform: the mel is computed
+# inside the model. `DataOrganizer` sets the preprocessor's `train` flag per
+# split, so it is not listed here.
 dataset:
+  _target_: espnet3.components.data.data_organizer.DataOrganizer
+  _recursive_: false
+  recipe_dir: ${recipe_dir}
+  train:
+  valid:
+  preprocessor:
+    _target_: espnet2.train.preprocessor.CommonPreprocessor
+    token_type: ${create_token_list.token_type}
+    token_list: ${token_list}
+    text_cleaner: ${create_token_list.cleaner}
+    g2p_type: ${create_token_list.g2p}
+
+##########################################################
+#               DURATION FILTERING SETTING               #
+##########################################################
+# `remove_long_short` reads each split's manifest written by `create_dataset`
+# (`utt_id<TAB>wav_path<TAB>text[<TAB>...]` per line), drops rows without text
+# and utterances whose duration is not strictly between the two bounds, and
+# writes the surviving rows to `save_path/<manifest file name>`.
+remove_long_short:
+  min_wav_duration: 1.0
+  max_wav_duration: 20.0
+  splits: [train, valid]
+  manifest_paths:
+    train: ${data_dir}/manifest/train.tsv
+    valid: ${data_dir}/manifest/valid.tsv
+  save_path: ${data_dir}/manifest_filtered
+
+##########################################################
+#                   TOKEN LIST SETTING                   #
+##########################################################
+# `create_token_list` writes `save_path/filename` from the transcripts of the
+# filtered training manifest. `token_type`, `cleaner` and `g2p` are reused by
+# the dataset preprocessor above, so text is tokenized the same way in both.
+#
+# For F5-TTS's zh+en pinyin vocabulary, set
+# `vocab_builder: espnet3.systems.f5tts.pinyin.build_pinyin_vocab` and use
+# `espnet3.systems.f5tts.preprocessor.F5PinyinPreprocessor` as the dataset
+# preprocessor.
+create_token_list:
+  manifest_path: ${remove_long_short.save_path}/train.tsv
+  save_path: ${data_dir}/token_list
+  filename: tokens.txt
+  token_type: char
+  cleaner:
+  g2p:
+  add_symbol:
+    - "<blank>:0"
+    - "<unk>:1"
+    - "<sos/eos>:-1"
+
+# Single source of truth for the token-list path used by the preprocessor,
+# the model, and (through the bundled training config) inference.
+token_list: ${create_token_list.save_path}/${create_token_list.filename}
 
 ##########################################################
 #                      MODEL SETTING                     #
 ##########################################################
+# `F5TTS` is the ESPnet3 model itself. Its backbone and flow-matching
+# arguments default to F5TTS_Base (see `F5TTS.__init__`, which also maps each
+# name to the upstream F5-TTS one); list here only what a recipe changes, e.g.
+# `hidden_size`, `depth` and `attention_heads` for a smaller model.
 model:
+  _target_: espnet3.systems.f5tts.f5tts.F5TTS
+  token_list: ${token_list}
+  feats_extract_config:
+    fs: ${sample_rate}
+    n_fft: ${n_fft}
+    hop_length: ${hop_length}
+    win_length: ${win_length}
+    n_mels: ${n_mel_channels}
 
 ##########################################################
 #            OPTIMIZER & SCHEDULER SETTING               #
 ##########################################################
-# Single optimizer path:
 optimizer:
-scheduler:
-scheduler_interval:
-scheduler_monitor:
+  _target_: torch.optim.AdamW
+  lr: 7.5e-5
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
 
-# Multiple-loss / multiple-optimizer path (e.g. GAN-based TTS):
-optimizers:
-schedulers:
+# Linear warmup then linear decay, stepped every optimizer update. Set
+# `total_steps` to the number of updates the run makes (`trainer.max_steps`).
+scheduler:
+  _target_: espnet3.components.schedulers.linear_warmup_decay.LinearWarmupDecayLR
+  warmup_steps: 20000
+  total_steps: ${trainer.max_steps}
+scheduler_interval: step
+scheduler_monitor:
 
 ##########################################################
 #                OTHER TRAINING SETTING                  #
 ##########################################################
 best_model_criterion:
+  - - valid/loss
+    - 1
+    - min
 
 # Optional random seed used by collect_stats/train.
 seed:
@@ -63,6 +187,7 @@ init:
 ##########################################################
 #                   PARALLELIZATION SETTING              #
 ##########################################################
+# Used by `remove_long_short` and `collect_stats`.
 parallel:
   env: local
   n_workers: 1
@@ -73,7 +198,40 @@ parallel:
 ##########################################################
 #                   DATALOADER SETTING                   #
 ##########################################################
+# Batches are built from the feature shapes written by `collect_stats`.
+# `numel` batching fills each batch up to `batch_bins` feature elements, i.e.
+# mel frames x mel channels: with the 100-channel mel above, 3840000 is 38400
+# frames per batch. `min_batch_size` is a floor on the number of utterances
+# per batch and overrides `batch_bins` when both apply.
 dataloader:
+  collate_fn:
+    _target_: espnet2.train.collate_fn.CommonCollateFn
+    int_pad_value: 0
+    float_pad_value: 0.0
+  train:
+    iter_factory:
+      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+      shuffle: true
+      collate_fn: ${dataloader.collate_fn}
+      batches:
+        type: numel
+        shape_files:
+          - ${stats_dir}/train/feats_shape
+        batch_size: 1          # required by the signature, unused for `numel`
+        min_batch_size: 1
+        batch_bins: 3840000
+  valid:
+    iter_factory:
+      _target_: espnet2.iterators.sequence_iter_factory.SequenceIterFactory
+      shuffle: false
+      collate_fn: ${dataloader.collate_fn}
+      batches:
+        type: ${dataloader.train.iter_factory.batches.type}
+        shape_files:
+          - ${stats_dir}/valid/feats_shape
+        batch_size: ${dataloader.train.iter_factory.batches.batch_size}
+        min_batch_size: ${dataloader.train.iter_factory.batches.min_batch_size}
+        batch_bins: ${dataloader.train.iter_factory.batches.batch_bins}
 
 ##########################################################
 #                    TRAINER SETTING                     #
@@ -84,8 +242,28 @@ trainer:
   devices: ${num_device}
   num_nodes: ${num_nodes}
   strategy: auto
+  accumulate_grad_batches: 1
+  check_val_every_n_epoch: 1
+  gradient_clip_val: 1.0
+  log_every_n_steps: 100
+  max_steps: 1000000
+
+  # F5-TTS is evaluated with exponential-moving-average weights. The callback
+  # stores them in every checkpoint (`ema_model_state_dict`) and validates
+  # with them; inference loads them when `use_ema: true`.
+  callbacks:
+    - _target_: espnet3.components.callbacks.ema.EMACallback
+      decay: 0.9999
+
+  logger:
+    - _target_: lightning.pytorch.loggers.TensorBoardLogger
+      save_dir: ${exp_dir}/tensorboard
+      name: tb_logger
 
 ##########################################################
 #                      FIT SETTING                       #
 ##########################################################
+# Keyword arguments of `trainer.fit(...)`. To resume an interrupted run:
+# fit:
+#   ckpt_path: ${exp_dir}/last.ckpt
 fit: {}

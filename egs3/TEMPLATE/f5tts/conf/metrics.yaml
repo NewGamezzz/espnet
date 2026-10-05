@@ -2,14 +2,42 @@
 #                 METRIC SCORING SETTING                 #
 ##########################################################
 # Quick usage:
-#   python run.py --stages measure --metrics_config conf/metrics.yaml
+#   python run.py --stages measure \
+#       --training_config conf/training.yaml \
+#       --inference_config conf/inference.yaml \
+#       --metrics_config conf/metrics.yaml
 #
-# Shared default merged under every F5-TTS recipe's metrics config.
+# Assumptions:
+# - `infer` has already produced `<test_name>/*.scp` files.
+# - Each metric reads the SCP files named by its inputs, e.g. `wav.scp` and
+#   `text.scp`.
+# - If `dataset.test` is omitted, test sets are discovered from
+#   `${inference_dir}` subdirectories.
 
+##########################################################
+#                    PATHS AND INPUTS                    #
+##########################################################
 recipe_dir: .
+# Common case:
+# - pass `--training_config`, `--inference_config`, and `--metrics_config`
+# - `run.py` copies `training_config.exp_tag` / `training_config.exp_dir` here
+# - `run.py` also copies `inference_config.inference_dir` here, so `measure`
+#   reads the same directory used by `infer`
 exp_tag:
 exp_dir: ${recipe_dir}/exp/${exp_tag}
 
-dataset:
-
-metrics:
+##########################################################
+#                    METRIC DEFINITION                   #
+##########################################################
+# No metric is enabled by default: which ones apply (intelligibility, speaker
+# similarity, naturalness) and which scorer computes them is a recipe choice.
+# Each entry instantiates a `BaseMetric` and names the SCP files it reads.
+#
+# Example:
+# metrics:
+#   - metric:
+#       _target_: src.metrics.MyMetric
+#     inputs:
+#       prediction: wav
+#       reference: text
+metrics: []

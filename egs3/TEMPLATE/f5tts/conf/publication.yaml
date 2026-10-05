@@ -1,0 +1,101 @@
+##########################################################
+#                  PUBLICATION SETTING                   #
+##########################################################
+# Quick usage:
+#   python run.py --stages pack_model \
+#       --training_config conf/training.yaml \
+#       --inference_config conf/inference.yaml \
+#       --publication_config conf/publication.yaml
+#   python run.py --stages upload_model \
+#       --training_config conf/training.yaml \
+#       --publication_config conf/publication.yaml
+#
+# Assumptions:
+# - Pass `--inference_config` to `pack_model`: the bundle is loaded back
+#   through the `conf/inference.yaml` written from it.
+# - Running `infer` and `measure` before `pack_model` is recommended.
+# - If `${inference_dir}` contains the `metrics.json` written by `measure`,
+#   `pack_model` bundles it and uses it when rendering the README.
+
+##########################################################
+#                    PATHS AND INPUTS                    #
+##########################################################
+recipe_dir: .
+# Common case:
+# - pass both `--training_config` and `--publication_config`
+# - `run.py` copies `training_config.exp_tag` / `training_config.exp_dir` here
+#
+# Override `inference_dir` only when publication should read results from a
+# different inference output directory.
+exp_tag: ${self_name:}
+exp_dir: exp/${exp_tag}
+inference_dir: ${exp_dir}/inference
+data_dir: ${recipe_dir}/data
+
+##########################################################
+#                   PACK MODEL SETTING                   #
+##########################################################
+# `pack_model` builds the bundle in this order:
+#
+#   1. Bulk copy: copy `${exp_dir}` into the bundle, then copy each path in
+#      `include`. `exclude` patterns are applied during this step.
+#   2. Named artifacts (`files`, `yaml_files`): copied individually and
+#      registered in `meta.yaml`. `exclude` does NOT apply to them.
+#   3. Configs: training / inference / metrics / publication configs are
+#      written into `conf/` with paths rewritten to the bundle.
+#   4. `meta.yaml` is written at the bundle root.
+#
+# What an F5-TTS bundle needs in order to load on another machine:
+# - the checkpoint named by `inference_config.model.checkpoint_path`
+#   (`${exp_dir}/last.ckpt` by default, copied with `${exp_dir}`);
+# - the training config named by `inference_config.model.train_config`, from
+#   which the model and tokenizer are rebuilt: `conf` below copies it;
+# - the token list that training config points at: `${data_dir}/token_list`.
+pack_model:
+  out_dir: ${exp_dir}/model_pack
+  allow_overwrite: false
+  inference_dir: ${inference_dir}
+  # Always include static model summary metrics in the README.
+  # Set this true to also include `repr(model)`.
+  include_model_detail: false
+  readme: ${config_path:../src/hf_model_readme.md}
+  include:
+    # Recipe code the packed inference config refers to (`output_fn`).
+    - src
+    # Recipe-local dataset modules for publication smoke checks.
+    - dataset
+    # The training config the model is rebuilt from at load time.
+    - conf
+    # The token list written by `create_token_list`.
+    - ${data_dir}/token_list
+  exclude:
+    # These patterns are applied only during the bulk copy (step 1 above).
+    # `last.ckpt` is kept: it is what the packed inference config loads.
+    - inference
+    - inference_*
+    - stats
+    - "**/step*.ckpt"
+    - "**/epoch*.ckpt"
+    - "**/*.log"
+    - "**/tensorboard/**"
+    - "**/wandb/**"
+
+##########################################################
+#                  UPLOAD MODEL SETTING                  #
+##########################################################
+# Upload uses `huggingface_hub` with your local Hugging Face login.
+# Run `hf auth login` first so the Python API can reuse the saved token.
+# `upload_model` uploads `${pack_model.out_dir}` to this repo, creating it if
+# needed.
+upload_model:
+  hf_repo: espnet/${set_corpus_and_system:}_${exp_tag}
+  private: false
+  # update: false (default) raises an error if the repo already exists,
+  # preventing accidental overwrites of a published model.
+  # Set to true to upload over an existing repo.
+  update: false
+  # Glob patterns of existing repo files to delete before uploading.
+  # Only used when update: true. Default ["*"] fully replaces the repo
+  # contents. Set to [] for an additive upload.
+  delete_patterns:
+    - "*"
