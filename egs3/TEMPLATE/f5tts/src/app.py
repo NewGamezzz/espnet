@@ -38,11 +38,11 @@ def resolve_sample_rate(model) -> int:
         TypeError: If the model exposes neither attribute, so the rate of its
             output cannot be told.
 
-    Examples:
-        ```python
-        session = load_demo_session(demo_dir, demo_dir / "demo.yaml")
-        resolve_sample_rate(session.model.model)  # -> 24000
-        ```
+    Example:
+        .. code-block:: python
+
+            session = load_demo_session(demo_dir, demo_dir / "demo.yaml")
+            resolve_sample_rate(session.model.model)  # -> 24000
     """
     for name in ("sample_rate", "target_sample_rate"):
         sample_rate = getattr(model, name, None)
@@ -65,11 +65,11 @@ def build_gradio_audio(wav, sample_rate: int):
     Returns:
         tuple[int, numpy.ndarray]: ``(sample_rate, float32 samples)``.
 
-    Examples:
-        ```python
-        build_gradio_audio(np.zeros(24000, dtype=np.float32), 24000)
-        # -> (24000, array([0., 0., ...], dtype=float32))
-        ```
+    Example:
+        .. code-block:: python
+
+            build_gradio_audio(np.zeros(24000, dtype=np.float32), 24000)
+            # -> (24000, array([0., 0., ...], dtype=float32))
     """
     samples = getattr(wav, "array", wav)
     rate = int(getattr(wav, "rate", sample_rate))
@@ -96,17 +96,17 @@ def build_demo(
         gradio.Blocks: App with one component per input/output spec, bound
         positionally to the session's inference function.
 
-    Notes:
+    Example:
+        .. code-block:: python
+
+            app = build_demo(Path("exp/training/demo"))
+            app.launch()
+
+    Note:
         Reference speech is passed to the model as Gradio delivers it, a
         ``(rate, samples)`` pair; ``Inference`` resamples it to the model's
         rate. A packed config that names the bare ``F5TTSInference`` engine
         instead does no such conversion and is not supported by this app.
-
-    Examples:
-        ```python
-        app = build_demo(Path("exp/training/demo"))
-        app.launch()
-        ```
     """
     # Resolve first: a relative config path is joined onto the demo directory
     # by `load_demo_session`, which would double a relative `demo_dir`.
@@ -132,6 +132,7 @@ def build_demo(
     is_audio_output = [spec["type"] == "audio" for spec in session.output_specs]
 
     def synthesize(*values):
+        """Run the packed model on the UI values and pair audio with its rate."""
         # An untouched Gradio text box holds "", which the model would take
         # as an empty transcript; None means "not given" instead.
         values = [None if value == "" else value for value in values]
@@ -191,10 +192,10 @@ def main() -> None:
     Returns:
         None. Blocks while the Gradio server is running.
 
-    Examples:
-        ```shell
-        python app.py --demo-dir exp/training/demo
-        ```
+    Example:
+        .. code-block:: bash
+
+            python app.py --demo-dir exp/training/demo
     """
     parser = argparse.ArgumentParser(description="Launch an ESPnet3 F5-TTS demo.")
     parser.add_argument(

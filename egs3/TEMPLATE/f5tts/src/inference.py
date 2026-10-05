@@ -38,16 +38,16 @@ def build_output(data, model_output, idx):
     Raises:
         RuntimeError: If *model_output* has no ``wav`` entry.
 
-    Examples:
-        ```python
-        import numpy as np
+    Example:
+        .. code-block:: python
 
-        build_output(
-            {"text": "hello"}, {"wav": np.zeros(2, dtype=np.float32)}, 7
-        )
-        # -> {'utt_id': '7', 'text': 'hello',
-        #     'wav': array([0., 0.], dtype=float32)}
-        ```
+            import numpy as np
+
+            build_output(
+                {"text": "hello"}, {"wav": np.zeros(2, dtype=np.float32)}, 7
+            )
+            # -> {'utt_id': '7', 'text': 'hello',
+            #     'wav': array([0., 0.], dtype=float32)}
     """
     if isinstance(data, list):
         if isinstance(model_output, list):

@@ -571,18 +571,21 @@ class Inference(BackendInference):
     transcript of the reference; when omitted the reference is treated as
     a recording of the target text itself.
 
-    Examples:
-        >>> model = Inference.from_pretrained("exp/train/model_pack")
-        >>> output = model("hello world", "prompt.wav", "the prompt transcript")
-        >>> output["wav"].rate, output["wav"].array.ndim
-        (24000, 1)
-        >>> model.batch(
-        ...     [
-        ...         {"text": "first", "reference_speech": "a.wav"},
-        ...         {"text": "second", "reference_speech": "b.wav"},
-        ...     ]
-        ... )
-        [{'wav': Audio(...)}, {'wav': Audio(...)}]
+    Example:
+        .. code-block:: python
+
+            >>> model = Inference.from_pretrained("exp/training/model_pack")
+            >>> output = model("hello world", "prompt.wav", "the prompt transcript")
+            >>> output["wav"].rate, output["wav"].array.ndim
+            (24000, 1)
+            >>> outputs = model.batch(
+            ...     [
+            ...         {"text": "first", "reference_speech": "a.wav"},
+            ...         {"text": "second", "reference_speech": "b.wav"},
+            ...     ]
+            ... )
+            >>> [output["wav"].rate for output in outputs]
+            [24000, 24000]
 
         In ``inference.yaml``, for the ``infer`` stage:
 
@@ -594,6 +597,11 @@ class Inference(BackendInference):
               checkpoint_path: ${exp_dir}/last.ckpt
               ode_solver_steps: 32
             input_key: [text, reference_speech, reference_text]
+
+    Note:
+        ``reference_text`` is optional. When it is omitted the reference is
+        treated as a recording of the target text itself, which is right
+        only when it is one.
     """
 
     backend_class = "espnet3.systems.f5tts.inference.F5TTSInference"
@@ -606,10 +614,14 @@ class Inference(BackendInference):
 
     @property
     def sample_rate(self) -> int:
-        """The vocoder's rate: the backend's ``target_sample_rate``.
+        """Return the rate of the reference the model takes and the audio it gives.
 
-        The reference is resampled to it before :meth:`run` sees it, and the
-        synthesized waveform comes back at it.
+        Returns:
+            The backend's ``target_sample_rate``, the vocoder's rate.
+
+        Note:
+            The reference is resampled to this rate before :meth:`run` sees
+            it, and the synthesized waveform comes back at it.
         """
         return int(self.backend.target_sample_rate)
 
@@ -632,6 +644,20 @@ class Inference(BackendInference):
         Returns:
             ``{"wav": samples}``: the synthesized mono ``float32`` waveform
             at :attr:`sample_rate`.
+
+        Example:
+            .. code-block:: python
+
+                >>> reference = Audio.read("prompt.wav", rate=model.sample_rate)
+                >>> output = model.run("hello world", reference, "a transcript")
+                >>> output["wav"].dtype, output["wav"].ndim
+                (dtype('float32'), 1)
+
+        Note:
+            This is the hook the contract calls after converting and checking
+            the inputs. Call the model itself, ``model(text, reference)``,
+            which also accepts a path or a ``(rate, samples)`` pair and wraps
+            the result in an :class:`~espnet3.api.inference.Audio`.
         """
         return {
             "wav": self.backend.infer_one(text, reference_speech.array, reference_text)

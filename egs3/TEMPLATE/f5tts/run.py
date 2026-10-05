@@ -57,12 +57,12 @@ def build_parser(
         ``--write_requirements``. Recipes may add their own arguments to it
         before parsing.
 
-    Examples:
-        ```python
-        parser = build_parser(stages=DEFAULT_STAGES)
-        parser.add_argument("--my_recipe_flag", default=None)
-        args, _ = parse_cli_and_stage_args(parser, stages=DEFAULT_STAGES)
-        ```
+    Example:
+        .. code-block:: python
+
+            parser = build_parser(stages=DEFAULT_STAGES)
+            parser.add_argument("--my_recipe_flag", default=None)
+            args, _ = parse_cli_and_stage_args(parser, stages=DEFAULT_STAGES)
     """
     parser = argparse.ArgumentParser()
 
@@ -148,12 +148,12 @@ def main(
         ValueError: If a requested stage has no config, e.g. ``--stages
             train`` without ``--training_config``.
 
-    Examples:
-        ```python
-        parser = build_parser(stages=DEFAULT_STAGES)
-        args, _ = parse_cli_and_stage_args(parser, stages=DEFAULT_STAGES)
-        main(args=args, system_cls=F5TTSSystem, stages=DEFAULT_STAGES)
-        ```
+    Example:
+        .. code-block:: python
+
+            parser = build_parser(stages=DEFAULT_STAGES)
+            args, _ = parse_cli_and_stage_args(parser, stages=DEFAULT_STAGES)
+            main(args=args, system_cls=F5TTSSystem, stages=DEFAULT_STAGES)
     """
     stages_to_run = resolve_stages(args.stages, stages)
 
