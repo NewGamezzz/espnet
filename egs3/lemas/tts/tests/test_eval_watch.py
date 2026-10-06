@@ -45,6 +45,15 @@ def test_submit_marks_each_checkpoint_and_never_resubmits(tmp_path):
     assert len(calls) == 2 and "LEMAS_CKPT=backup_step50000" in calls[1]
 
 
+def test_a_versioned_duplicate_backup_is_ignored(tmp_path):
+    # a resume re-fires the epoch end and Lightning writes backup_stepN-v1.ckpt
+    exp = _run(tmp_path, "tag", [25000])
+    (exp / "backup_step25000-v1.ckpt").write_bytes(b"x")
+    assert [a.ckpt for a in pending_arms(tmp_path, [("tag", "c.yaml")])] == [
+        "backup_step25000"
+    ]
+
+
 def test_a_run_without_backups_or_without_exp_dir_is_fine(tmp_path):
     assert pending_arms(tmp_path, [("missing", "conf/train.yaml")]) == []
 

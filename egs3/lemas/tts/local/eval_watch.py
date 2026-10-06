@@ -45,12 +45,14 @@ def pending_arms(recipe_dir, runs: Sequence[Tuple[str, str]]) -> List[Arm]:
     arms = []
     for tag, train_config in runs:
         exp = Path(recipe_dir) / "exp" / tag
-        for ckpt in sorted(
-            exp.glob("backup_step*.ckpt"),
-            key=lambda p: int(p.stem[len("backup_step") :]),
-        ):
-            if "-v" in ckpt.stem:  # a resume re-fired the epoch end; same weights
-                continue
+        backups = [
+            p
+            for p in exp.glob("backup_step*.ckpt")
+            if p.stem[
+                len("backup_step") :
+            ].isdigit()  # not the -v1 of a re-fired epoch end
+        ]
+        for ckpt in sorted(backups, key=lambda p: int(p.stem[len("backup_step") :])):
             if not (exp / "eval_submitted" / f"{ckpt.stem}.job").exists():
                 arms.append(Arm(tag, ckpt.stem, train_config))
     return arms
