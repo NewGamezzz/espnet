@@ -81,8 +81,9 @@ class BlockBatchSampler(torch.utils.data.Sampler):
             world_size: World size for sharding; same default.
             batches_per_epoch: Batches of this rank per epoch. Epoch ``e``
                 is slice ``e % n`` of pass ``e // n``, ``n`` being the
-                number of such slices in a pass; ``None`` makes an epoch a
-                whole pass. Training only: validation is one fixed pass.
+                number of whole slices in a pass (the remainder is dropped,
+                so epochs are equal); ``None`` makes an epoch a whole pass.
+                Training only: validation is one fixed pass.
         """
         dataset = self.dataset = _unwrap(dataset)
         self.batch_bins = int(batch_bins)
@@ -147,7 +148,9 @@ class BlockBatchSampler(torch.utils.data.Sampler):
         keep = n // self.world_size * self.world_size
         per_rank = keep // self.world_size
         per_epoch = min(self.batches_per_epoch or per_rank, per_rank)
-        n_slices = -(-per_rank // per_epoch) if per_epoch else 1
+        # whole epochs only: the remainder of a pass (under one epoch) is
+        # dropped, so every epoch is the same number of optimizer steps
+        n_slices = max(1, per_rank // per_epoch) if per_epoch else 1
         if self.dataset.train:
             rng = np.random.default_rng([self.seed, epoch // n_slices])
             ids = rng.permutation(n)

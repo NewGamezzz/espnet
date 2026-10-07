@@ -84,13 +84,19 @@ def test_virtual_epochs_partition_one_pass_then_reshuffle(corpus):
     # checkpoint, so one pass over the data is cut into short epochs.
     ds = _ds(corpus, block_samples=32000)
     full = _epoch(ds, 0)
-    n_chunks = -(-len(full) // 2)
-    assert n_chunks >= 3
+    assert len(full) >= 7  # so that a pass has a remainder to drop
+    # a pass is cut into whole epochs only: the remainder (fewer than
+    # batches_per_epoch batches, under 0.1% of a pass) is dropped rather than
+    # served as a tiny epoch, so every epoch is the same number of optimizer
+    # steps and checkpoints stay on the step grid (DeltaAI epoch 1721 of the
+    # GH200 run had 8 micro-batches and shifted every later backup by 99 steps)
+    n_chunks = len(full) // 2
     first = [_epoch(ds, e, batches_per_epoch=2) for e in range(n_chunks)]
-    assert all(len(chunk) == 2 for chunk in first[:-1]) and 1 <= len(first[-1]) <= 2
-    assert sorted(b for chunk in first for b in chunk) == sorted(full)
+    assert all(len(chunk) == 2 for chunk in first)
+    seen = sorted(b for chunk in first for b in chunk)
+    assert len(seen) == 2 * n_chunks and set(seen) <= set(full)
     second = [_epoch(ds, n_chunks + e, batches_per_epoch=2) for e in range(n_chunks)]
-    assert sorted(b for chunk in second for b in chunk) == sorted(full)
+    assert all(len(chunk) == 2 for chunk in second)
     assert first != second
 
 
