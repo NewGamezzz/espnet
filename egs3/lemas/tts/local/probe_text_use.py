@@ -37,6 +37,11 @@ def load_model(train_config: str, ckpt: str, device: str):
     cfg = OmegaConf.load(train_config)
     OmegaConf.resolve(cfg)
     model = instantiate(cfg.model)
+    if ckpt == "none":  # untrained: the sensitivity of the architecture itself
+        print("random init, no checkpoint")
+        model.cfm.audio_drop_prob = 0.0
+        model.cfm.cond_drop_prob = 0.0
+        return cfg, model.to(device).eval()
     state = torch.load(ckpt, map_location="cpu", weights_only=False, mmap=True)
     prefix = "ema_model."
     ema = {
