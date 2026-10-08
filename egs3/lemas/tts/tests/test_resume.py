@@ -10,6 +10,7 @@ with the validation cadence of the production config.
 """
 
 import lightning as L
+import numpy as np
 import pytest
 import torch
 from lightning.pytorch.callbacks import ModelCheckpoint
@@ -113,3 +114,27 @@ def test_a_killed_link_is_resumed_at_the_next_epoch_without_replay(corpus, tmp_p
     ]
     assert second.events == expected
     assert (exp / "last.ckpt").resolve().name == "step4.ckpt"
+
+
+def test_probe_ablations_change_only_the_target_phones(corpus):
+    from local.probe_text_use import CONDITIONS, ablate
+    from src.layout import TokenTable
+
+    ds = _ds(corpus)
+    ds.set_epoch(0)
+    table = TokenTable(corpus["tokens"])
+    rng = np.random.default_rng(0)
+    for i in range(len(ds)):
+        text = ds[i]["text"]
+        head = int(ds[i]["cond_frames"][0]) + 1  # role tokens + language tag
+        for c in CONDITIONS:
+            out = ablate(text, c, table, rng)
+            assert list(out[:head]) == list(text[:head])
+            if c == "none":
+                assert len(out) == head
+            else:
+                assert len(out) == len(text)
+        assert sorted(ablate(text, "shuffled", table, rng)[head:]) == sorted(
+            text[head:]
+        )
+        assert list(ablate(text, "true", table, rng)) == list(text)
