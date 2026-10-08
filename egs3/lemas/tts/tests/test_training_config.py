@@ -117,8 +117,10 @@ def test_gh200_config_differs_from_base_only_in_the_intended_knobs():
         // c["trainer"]["accumulate_grad_batches"]
     )
     assert steps(gh) == steps(base) == 100
+    assert gh["trainer"]["max_steps"] == gh["scheduler"]["total_steps"] == 600_000
     for c in (base, gh):
         c["exp_tag"] = c["optimizer"]["lr"] = c["num_device"] = None
+        c["trainer"]["max_steps"] = c["scheduler"]["total_steps"] = None
         c["batch_sampler"]["batch_bins"] = c["batch_sampler"]["batches_per_epoch"] = (
             None
         )

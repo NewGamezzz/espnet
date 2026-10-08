@@ -152,7 +152,10 @@ optimizer:
 scheduler:
   _target_: espnet3.components.schedulers.linear_warmup_decay.LinearWarmupDecayLR
   warmup_steps: 20000
-  total_steps: 300000
+  # 600k since 2026-10-08 (Thanapat): extended at step 201k with text
+  # conditioning not yet emerged; the schedule is multiplicative on the
+  # restored lr, so the decay continues from 5.4e-5 along the longer slope.
+  total_steps: 600000
 scheduler_interval: step
 
 best_model_criterion:
@@ -209,7 +212,7 @@ trainer:
   num_nodes: ${num_nodes}
   # 4 GPUs x 8,000 frames x 10 = 320k frames per update (F5: 307,200).
   accumulate_grad_batches: 8
-  max_steps: 300000
+  max_steps: 600000
   precision: bf16-mixed
   max_epochs: -1   # epochs are short (batch_sampler.batches_per_epoch); max_steps ends the run
   # Validation at the end of EVERY epoch. Lightning 2.6.5 resumes an

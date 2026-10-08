@@ -89,6 +89,34 @@ class LinearWarmupDecayLR(_LRScheduler, AbsBatchStepScheduler):
         # because step() is also invoked in __init__()
         super().__init__(optimizer, last_epoch)
 
+    def load_state_dict(self, state_dict):
+        """Restore the step counter; the horizon stays as configured.
+
+        ``_LRScheduler.state_dict`` carries ``warmup_steps``, ``total_steps``
+        and the factors, so restoring them verbatim would pin a resumed run
+        to the schedule it was launched with. A run is lengthened by editing
+        its config, so the configured values win over the checkpoint's.
+
+        Args:
+            state_dict: As returned by ``state_dict``.
+
+        Example:
+            >>> scheduler.load_state_dict(checkpoint["lr_schedulers"][0])
+        """
+        configured = {
+            k: getattr(self, k)
+            for k in (
+                "warmup_steps",
+                "total_steps",
+                "start_factor",
+                "end_factor",
+                "decay_steps",
+            )
+        }
+        super().load_state_dict(state_dict)
+        for k, v in configured.items():
+            setattr(self, k, v)
+
     def __repr__(self):
         """Return a readable summary of the schedule's parameters.
 

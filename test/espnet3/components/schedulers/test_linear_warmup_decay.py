@@ -118,3 +118,30 @@ def test_a_horizon_shorter_than_the_warmup_is_rejected(warmup_steps, total_steps
         LinearWarmupDecayLR(
             optimizer, warmup_steps=warmup_steps, total_steps=total_steps
         )
+
+
+def test_loading_a_state_keeps_the_configured_horizon():
+    """Extending a run: the config's horizon wins over the checkpoint's.
+
+    ``_LRScheduler.state_dict`` carries ``total_steps`` and the factors, so a
+    resume would otherwise silently keep the old schedule and a run could not
+    be lengthened by editing its config. The step counter is restored, and
+    since the schedule is multiplicative on the optimizer's restored lr, the
+    decay continues from the current lr along the new, gentler slope.
+    """
+    optimizer, old = _make(warmup=20, total=300)
+    for _ in range(200):
+        optimizer.step()
+        old.step()
+    lr_200 = optimizer.param_groups[0]["lr"]
+    assert lr_200 == pytest.approx(BASE_LR * (1 - 180 / 280))
+
+    new_optimizer, new = _make(warmup=20, total=600)
+    new_optimizer.load_state_dict(optimizer.state_dict())  # as a resume does
+    new.load_state_dict(old.state_dict())
+    assert new.last_epoch == old.last_epoch
+    assert new.total_steps == 600 and new.decay_steps == 580
+    new_optimizer.step()
+    new.step()
+    # one step along the 600-step horizon from the restored lr: x (600-201)/(600-200)
+    assert new_optimizer.param_groups[0]["lr"] == pytest.approx(lr_200 * 399 / 400)
