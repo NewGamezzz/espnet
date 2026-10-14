@@ -13,6 +13,8 @@ PY=/work/nvme/bbjs/ttrachu/pixi_x86/default/bin/python
 PYLIBS=/work/nvme/bbjs/ttrachu/pylibs/lemas
 VERSA=/work/nvme/bbjs/ttrachu/versa
 export PYTHONPATH=$ROOT:$RECIPE:$PYLIBS:$VERSA:${PYTHONPATH:-}
+# one model cache for every VERSA run (Whisper, the speaker model, UTMOS)
+export LEMAS_VERSA_CACHE=/work/nvme/bbjs/ttrachu/versa_cache
 export PHONEMIZER_ESPEAK_LIBRARY=/u/ttrachu/.local/lib/libespeak-ng.so
 export ESPEAK_DATA_PATH=/u/ttrachu/.local/share/espeak-ng-data
 export PATH=/u/ttrachu/.local/bin:$PATH

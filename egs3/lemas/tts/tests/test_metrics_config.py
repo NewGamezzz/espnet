@@ -91,3 +91,24 @@ def test_the_two_versa_blocks_write_to_different_directories():
         assert len(set(dirs)) == len(dirs) == 2
         assert str(dirs[0]).endswith("set/scoring/versa_eval")
         assert str(dirs[1]).endswith("set/scoring/versa_leak")
+
+
+def test_versa_uses_one_shared_model_cache(monkeypatch, tmp_path):
+    # a per-test-set cache made every arm download ~6 GB of models 20 times
+    # (1.8 TB of copies on /work/nvme by 2026-10-14) and fail on any GitHub or
+    # Hugging Face hiccup
+    from src.metrics.versa import VersaMetric
+
+    monkeypatch.setenv("LEMAS_VERSA_CACHE", str(tmp_path / "shared"))
+    m = VersaMetric(score_config=[{"name": "speaker"}])
+    assert m.cache_folder("inf", "set_a") == m.cache_folder("inf", "set_b")
+    assert m.cache_folder("inf", "set_a") == tmp_path / "shared"
+    monkeypatch.delenv("LEMAS_VERSA_CACHE")
+    m = VersaMetric(score_config=[{"name": "speaker"}])
+    assert m.cache_folder("inf", "set_a").name == "cache"  # old behaviour, unset env
+
+
+def test_delta_env_points_versa_at_the_shared_cache():
+    from pathlib import Path
+
+    assert "export LEMAS_VERSA_CACHE=" in Path("local/delta_env.sh").read_text()

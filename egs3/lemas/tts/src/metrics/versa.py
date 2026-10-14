@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -48,6 +49,18 @@ class VersaMetric(BaseMetric):
     def eval_dir(self, inference_dir, test_name: str) -> Path:
         """Return the directory this block's VERSA files go to."""
         return Path(inference_dir) / test_name / "scoring" / self.subdir
+
+    def cache_folder(self, inference_dir, test_name: str) -> Path:
+        """Return the model cache VERSA downloads into.
+
+        ``LEMAS_VERSA_CACHE`` names one cache shared by every arm and test
+        set; without it each block caches under its own eval dir, which
+        downloads about 6 GB of models per test set.
+        """
+        shared = os.environ.get("LEMAS_VERSA_CACHE")
+        if shared:
+            return Path(shared)
+        return self.eval_dir(inference_dir, test_name) / "cache"
 
     def _resolve_score_config_path(self, eval_dir: Path) -> Path:
         """Return a YAML file path VERSA can `open()`.
@@ -110,7 +123,7 @@ class VersaMetric(BaseMetric):
             "--score_config",
             str(score_config_path),
             "--cache_folder",
-            str(eval_dir / "cache"),
+            str(self.cache_folder(inference_dir, test_name)),
             "--output_file",
             str(result_file),
             "--io",
