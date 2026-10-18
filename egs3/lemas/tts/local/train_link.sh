@@ -38,6 +38,8 @@ if [ -z "${NO_CHAIN:-}" ]; then
   fi
 fi
 CKPT=exp/$TAG/last.ckpt
+# a kill in the middle of a save can leave last.ckpt pointing at a deleted file
+$PY local/chain_guard.py "exp/$TAG" --repair_last
 if [ -L "$CKPT" ] && [ ! -e "$CKPT" ]; then
   echo "$CKPT points to a missing file; refusing to restart from scratch" >&2
   exit 1

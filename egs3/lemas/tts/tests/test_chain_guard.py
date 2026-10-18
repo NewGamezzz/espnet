@@ -107,3 +107,57 @@ def test_dtai_script_and_env_follow_the_aarch64_rules():
     assert "export PYTHONPATH=$ROOT:$RECIPE:$PYLIBS" in env
     for f in (s, env):
         assert "module load cudnn" not in f
+
+
+def _zip_ckpt(path, complete=True):
+    import zipfile
+
+    with zipfile.ZipFile(path, "w") as z:
+        z.writestr("archive/data.pkl", b"x" * 100)
+    if not complete:  # a kill mid-write leaves no central directory at the end
+        data = path.read_bytes()
+        path.write_bytes(data[: len(data) // 2])
+
+
+def test_a_link_left_dangling_by_a_kill_mid_save_is_repaired(tmp_path):
+    # 2026-10-14: the walltime kill landed after Lightning wrote step78000.ckpt
+    # and deleted step77900.ckpt but before it repointed last.ckpt
+    from local.chain_guard import repair_last
+
+    exp = tmp_path / "tag"
+    exp.mkdir()
+    _zip_ckpt(exp / "step78000.ckpt")
+    os.symlink("step77900.ckpt", exp / "last.ckpt")
+    assert repair_last(exp) == "step78000.ckpt"
+    assert os.readlink(exp / "last.ckpt") == "step78000.ckpt"
+
+
+def test_repair_refuses_an_incomplete_or_ambiguous_checkpoint(tmp_path):
+    from local.chain_guard import repair_last
+
+    exp = tmp_path / "tag"
+    exp.mkdir()
+    _zip_ckpt(exp / "step78000.ckpt", complete=False)
+    os.symlink("step77900.ckpt", exp / "last.ckpt")
+    assert repair_last(exp) is None  # left for a human
+    assert os.readlink(exp / "last.ckpt") == "step77900.ckpt"
+    (exp / "step78000.ckpt").unlink()
+    _zip_ckpt(exp / "step78000.ckpt")
+    _zip_ckpt(exp / "step78100.ckpt")
+    assert repair_last(exp) is None  # two candidates: not the known race
+
+
+def test_a_healthy_link_is_left_alone(tmp_path):
+    from local.chain_guard import repair_last
+
+    exp = tmp_path / "tag"
+    exp.mkdir()
+    _zip_ckpt(exp / "step78000.ckpt")
+    os.symlink("step78000.ckpt", exp / "last.ckpt")
+    assert repair_last(exp) is None
+    assert repair_last(tmp_path / "missing") is None
+
+
+def test_the_link_body_repairs_before_refusing():
+    s = Path("local/train_link.sh").read_text()
+    assert s.index("--repair_last") < s.index('[ -L "$CKPT" ] && [ ! -e "$CKPT" ]')

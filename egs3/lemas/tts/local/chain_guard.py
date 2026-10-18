@@ -15,8 +15,11 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import sys
+import zipfile
 from pathlib import Path
+from typing import Optional
 
 STOP_EXIT = 3
 STATE_FILE = "chain_state.json"
@@ -31,6 +34,49 @@ def checkpoint_marker(exp_dir: Path) -> str:
         st = last.stat()
         return f"{st.st_size}:{st.st_mtime_ns}"
     return "none"
+
+
+def repair_last(exp_dir) -> Optional[str]:
+    """Repoint a ``last.ckpt`` left dangling by a kill in the middle of a save.
+
+    Lightning writes ``step<N>.ckpt``, removes the previous one and then
+    repoints ``last.ckpt``; a walltime kill between the last two steps leaves
+    the link pointing at a deleted file (2026-10-14). The link is repaired
+    only in that exact situation: its target is missing and exactly one
+    ``step*.ckpt`` with a higher step exists and is a complete zip archive
+    (torch checkpoints are zips whose central directory is written last).
+
+    Args:
+        exp_dir: Experiment directory.
+
+    Returns:
+        The new link target, or ``None`` when nothing was repaired.
+
+    Example:
+        >>> repair_last("exp/tag")  # last.ckpt -> deleted step77900.ckpt
+        'step78000.ckpt'
+    """
+    last = Path(exp_dir) / "last.ckpt"
+    if not last.is_symlink() or last.exists():
+        return None
+    m = re.fullmatch(r"step(\d+)\.ckpt", os.readlink(last))
+    if not m:
+        return None
+    newer = [
+        p
+        for p in Path(exp_dir).glob("step*.ckpt")
+        if re.fullmatch(r"step\d+\.ckpt", p.name)
+        and int(p.stem[len("step") :]) > int(m.group(1))
+    ]
+    if len(newer) != 1 or not zipfile.is_zipfile(newer[0]):
+        return None
+    tmp = last.with_name("last.ckpt.repair")
+    if tmp.is_symlink() or tmp.exists():
+        tmp.unlink()
+    os.symlink(newer[0].name, tmp)
+    os.replace(tmp, last)
+    print(f"chain guard: repaired last.ckpt -> {newer[0].name}")
+    return newer[0].name
 
 
 def check(exp_dir, max_stalls: int = 2) -> int:
@@ -77,7 +123,15 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("exp_dir")
     parser.add_argument("--max_stalls", type=int, default=2)
+    parser.add_argument(
+        "--repair_last",
+        action="store_true",
+        help="only repair a dangling last.ckpt (see repair_last) and exit",
+    )
     args = parser.parse_args(argv)
+    if args.repair_last:
+        repair_last(args.exp_dir)
+        return 0
     return check(args.exp_dir, args.max_stalls)
 
 
