@@ -290,3 +290,36 @@ def test_verify_language_pack_catches_a_corrupted_row(tmp_path):
         f.write(np.array([12345], dtype="<i2").tobytes())
     with pytest.raises(RuntimeError, match="vidA-00007"):
         verify_language_pack("de", shards, tmp_path / "pcm", n_check=30)
+
+
+def test_regroup_all_marks_no_language_done_when_one_fails_verification(
+    tmp_path, monkeypatch
+):
+    import dataset.extract as ex
+    from dataset.extract import regroup_all
+
+    rng = np.random.default_rng(2)
+    shards_by_lang = {}
+    for lang in ("de", "fr"):
+        lang_dir = tmp_path / "pcm" / lang
+        lang_dir.mkdir(parents=True)
+        members = [f"{lang}000/vidA-{i:05d}.mp3" for i in range(10)]
+        _write_shard_pack(lang_dir / f"{lang}000", members, rng)
+        rows = {m: (0, "vidA") for m in members}
+        shards_by_lang[lang] = [
+            (lang_dir / f"{lang}000.pcm", lang_dir / f"{lang}000.index.tsv", rows)
+        ]
+    real = ex.verify_language_pack
+
+    def flaky(lang, *a, **k):
+        if lang == "de":
+            raise RuntimeError("de: corrupted")
+        return real(lang, *a, **k)
+
+    monkeypatch.setattr(ex, "verify_language_pack", flaky)
+    with pytest.raises(RuntimeError, match="de: corrupted"):
+        regroup_all(shards_by_lang, tmp_path / "pcm", seed=1, n_buckets=1, n_workers=2)
+    # de failed; fr merged alongside but was never verified (the run stopped
+    # at de), so neither may count as done on a rerun
+    for lang in ("de", "fr"):
+        assert not (tmp_path / "pcm" / lang / f"{lang}.regrouped").exists()

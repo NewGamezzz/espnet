@@ -1,5 +1,7 @@
 #!/bin/bash
-# Extraction (48 shard tars -> 16 kHz FLAC), phonemization + manifests,
+# Extraction (shard tars -> 24 kHz int16 packs, then the chunk-contiguous
+# regroup, each language verified against its shard packs), phonemization +
+# manifests,
 # token list and analytic feats_shape, on one cpu node. Re-runs are free:
 # extracted shards carry .complete markers.
 #SBATCH --job-name=lemas_create_dataset

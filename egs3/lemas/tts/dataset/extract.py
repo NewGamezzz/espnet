@@ -414,7 +414,7 @@ def _merge_language(args):
     tmp.replace(lang_dir / f"{lang}.pcm")
     stats = {"rows": n_rows, "chunks": n_chunks, "samples": pos}
     (lang_dir / f"{lang}.regroup.json").write_text(json.dumps(stats, indent=1))
-    (lang_dir / f"{lang}.regrouped").touch()
+    # the .regrouped marker is the caller's to write, after verification
     return lang, stats
 
 
@@ -544,11 +544,8 @@ def regroup_language(
     _lang, stats = _merge_language(
         (lang, parts_dirs, str(out_root), n_buckets, seed, chunk_rows)
     )
-    try:
-        verify_language_pack(lang, shards, out_root)
-    except RuntimeError:
-        (lang_dir / f"{lang}.regrouped").unlink(missing_ok=True)
-        raise
+    verify_language_pack(lang, shards, out_root)
+    (lang_dir / f"{lang}.regrouped").touch()
     if not keep_parts:
         shutil.rmtree(parts_root, ignore_errors=True)
     logger.info("regrouped %s: %s", lang, stats)
@@ -631,11 +628,8 @@ def regroup_all(
             max_workers=max(1, min(n_workers, len(merges)))
         ) as pool:
             for lang, st in pool.map(_merge_language, merges):
-                try:
-                    n = verify_language_pack(lang, shards_by_lang[lang], out_root)
-                except RuntimeError:
-                    (out_root / lang / f"{lang}.regrouped").unlink(missing_ok=True)
-                    raise
+                n = verify_language_pack(lang, shards_by_lang[lang], out_root)
+                (out_root / lang / f"{lang}.regrouped").touch()
                 stats[lang] = st
                 logger.info("regrouped %s: %s (%d rows verified)", lang, st, n)
                 if not keep_parts:
