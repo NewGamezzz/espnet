@@ -198,21 +198,95 @@ def test_disable_transparent_hugepages_is_safe_everywhere():
         assert "THP_enabled:\t0" in status or "THP_enabled" not in status
 
 
-def test_seq_reader_returns_exact_samples_across_buffer_refills(tmp_path, monkeypatch):
+def test_seq_reader_returns_exact_samples_across_buffer_refills(tmp_path):
     # Rows that straddle the end of the read buffer used to come back with
     # the kept tail followed by a second copy of it (the refill re-read from
     # the row start), shifting every later row of that buffer to earlier
     # audio. Production buffers are 64 MB, so only real packs refilled.
     import dataset.extract as ex
 
-    monkeypatch.setattr(ex, "_READ_BYTES", 2 * 100)  # 100-sample buffer
     pcm = np.arange(1000, dtype="<i2")
     path = tmp_path / "x.pcm"
     pcm.tofile(path)
-    reader = ex._SeqReader(path)
+    reader = ex._SeqReader(path, read_bytes=2 * 100)  # 100-sample buffer
     rows = [(0, 70), (70, 70), (140, 5), (300, 250), (550, 30), (580, 420)]
     try:
         for start, n in rows:
             assert reader.read(start, n).tolist() == pcm[start : start + n].tolist()
     finally:
         reader.close()
+
+
+def _write_shard_pack(path_stem, members, rng):
+    """A shard pack of random audio with varied lengths, plus its index."""
+    index, pos, chunks = [], 0, []
+    for m in members:
+        n = int(rng.integers(50, 900))
+        pcm = rng.integers(-32768, 32767, size=n, dtype=np.int16)
+        chunks.append(pcm)
+        index.append((m, pos, n))
+        pos += n
+    np.concatenate(chunks).astype("<i2").tofile(f"{path_stem}.pcm")
+    with open(f"{path_stem}.index.tsv", "w", encoding="utf-8") as f:
+        f.writelines(f"{m}\t{s}\t{n}\n" for m, s, n in index)
+
+
+def test_regroup_keeps_every_sample_of_every_row(tmp_path):
+    # The pass-1 reader serves rows from a fixed-size buffer; a buffer far
+    # smaller than a shard makes it refill constantly, as on real 100 GB
+    # shard packs. Random audio makes any shift or duplication visible. The
+    # size is an argument because pass 1 runs in worker processes, which a
+    # monkeypatched module global does not reach under the spawn start method.
+    rng = np.random.default_rng(0)
+    lang_dir = tmp_path / "pcm" / "de"
+    lang_dir.mkdir(parents=True)
+    shards, members_all = [], []
+    for s in ("de000", "de001"):
+        members = [f"{s}/vid{v}-{i:05d}.mp3" for v in "ABC" for i in range(40)]
+        members_all += members
+        _write_shard_pack(lang_dir / s, members, rng)
+        rows = {}
+        for m in members:
+            vid, seg = m.split("/")[1][:-4].split("-")
+            ck = chunk_key(vid, m, int(seg), 80, chunk_rows=7)
+            rows[m] = (bucket_of(ck, 4), ck)
+        shards.append((lang_dir / f"{s}.pcm", lang_dir / f"{s}.index.tsv", rows))
+    regroup_language(
+        "de",
+        shards,
+        tmp_path / "pcm",
+        seed=1,
+        chunk_rows=7,
+        n_buckets=4,
+        n_workers=1,
+        read_bytes=2 * 1000,
+    )
+    out = np.fromfile(lang_dir / "de.pcm", dtype="<i2")
+    out_index = read_pack_index(lang_dir / "de.index.tsv")
+    assert set(out_index) == set(members_all)
+    for pack, index_path, _rows in shards:
+        src = np.fromfile(pack, dtype="<i2")
+        for m, (s0, n) in read_pack_index(index_path).items():
+            o0, on = out_index[m]
+            assert on == n and np.array_equal(out[o0 : o0 + n], src[s0 : s0 + n]), m
+
+
+def test_verify_language_pack_catches_a_corrupted_row(tmp_path):
+    from dataset.extract import verify_language_pack
+
+    rng = np.random.default_rng(1)
+    lang_dir = tmp_path / "pcm" / "de"
+    lang_dir.mkdir(parents=True)
+    members = [f"de000/vidA-{i:05d}.mp3" for i in range(30)]
+    _write_shard_pack(lang_dir / "de000", members, rng)
+    rows = {m: (0, "vidA") for m in members}
+    shards = [(lang_dir / "de000.pcm", lang_dir / "de000.index.tsv", rows)]
+    regroup_language("de", shards, tmp_path / "pcm", seed=1, n_buckets=1, n_workers=1)
+    assert verify_language_pack("de", shards, tmp_path / "pcm", n_check=30) == 30
+    index = read_pack_index(lang_dir / "de.index.tsv")
+    s0, _n = index[members[7]]
+    with open(lang_dir / "de.pcm", "r+b") as f:  # flip one sample of one row
+        f.seek(2 * (s0 + 3))
+        f.write(np.array([12345], dtype="<i2").tobytes())
+    with pytest.raises(RuntimeError, match="vidA-00007"):
+        verify_language_pack("de", shards, tmp_path / "pcm", n_check=30)

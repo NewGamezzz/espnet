@@ -268,8 +268,9 @@ def chunk_key(
 class _SeqReader:
     """Sequential slices out of a pack: rows are requested in increasing order."""
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, read_bytes: int = _READ_BYTES):
         self.f = path.open("rb")
+        self.read_bytes = int(read_bytes)
         self.base = 0  # sample index of buf[0]
         self.buf = np.zeros(0, dtype=PCM_DTYPE)
 
@@ -282,7 +283,7 @@ class _SeqReader:
             # continue the file right after the kept tail (or at ``start``
             # when the row begins past the buffer and nothing is kept)
             self.f.seek((start + len(keep)) * 2)
-            want = max(_READ_BYTES, (end - start - len(keep)) * 2)
+            want = max(self.read_bytes, (end - start - len(keep)) * 2)
             self.buf = np.concatenate(
                 [keep, np.frombuffer(self.f.read(want), dtype=PCM_DTYPE)]
             )
@@ -334,13 +335,13 @@ def _tune_worker() -> None:
 
 def _bucket_shard(args):
     """Pass 1 for one shard pack: append its rows to per-shard bucket parts."""
-    pack, index_path, parts_dir, rows, n_buckets = args
+    pack, index_path, parts_dir, rows, n_buckets, read_bytes = args
     # rows: member -> (bucket, chunk) computed by the caller from the keys
     _tune_worker()
     parts_dir = Path(parts_dir)
     parts_dir.mkdir(parents=True, exist_ok=True)
     index = read_pack_index(index_path)
-    reader = _SeqReader(Path(pack))
+    reader = _SeqReader(Path(pack), read_bytes)
     files = {}
     offsets = [0] * n_buckets
     n_rows = 0
@@ -417,6 +418,68 @@ def _merge_language(args):
     return lang, stats
 
 
+def verify_language_pack(
+    lang: str,
+    shards: List[Tuple[str, str, Dict[str, Tuple[int, str]]]],
+    out_root,
+    n_check: int = 2000,
+    seed: int = 0,
+) -> int:
+    """Compare rows of a language pack with their source shard packs, sample by sample.
+
+    The language index must list exactly the shard members that were
+    regrouped, each with its shard length; ``n_check`` rows spread over the
+    pack (all rows when fewer) must be byte-identical to the shard copy.
+
+    Args:
+        lang: Language code.
+        shards: As for :func:`regroup_language`.
+        out_root: Pack root holding ``<lang>/<lang>.pcm``.
+        n_check: Rows compared sample by sample.
+        seed: Row sampling seed.
+
+    Returns:
+        The number of rows compared.
+
+    Raises:
+        RuntimeError: On a missing or extra member, a length mismatch, or a
+            row whose samples differ from the shard pack.
+
+    Example:
+        >>> verify_language_pack("de", shards, "pcm", n_check=2000)
+        2000
+    """
+    lang_dir = Path(out_root) / lang
+    index = read_pack_index(lang_dir / f"{lang}.index.tsv")
+    src: Dict[str, Tuple[str, int, int]] = {}
+    for pack, index_path, rows in shards:
+        for member, (start, n) in read_pack_index(index_path).items():
+            if member in rows:
+                src[member] = (str(pack), start, n)
+    if set(src) != set(index):
+        missing, extra = set(src) - set(index), set(index) - set(src)
+        raise RuntimeError(
+            f"{lang}: {len(missing)} members missing, {len(extra)} unexpected"
+        )
+    bad = [m for m, (_s, n) in index.items() if n != src[m][2]]
+    if bad:
+        raise RuntimeError(f"{lang}: length differs from the shard for {bad[:5]}")
+    members = sorted(index)
+    if len(members) > n_check:
+        members = random.Random(seed).sample(members, n_check)
+    with (lang_dir / f"{lang}.pcm").open("rb") as fout:
+        for member in members:
+            pack, start, n = src[member]
+            fout.seek(2 * index[member][0])
+            got = fout.read(2 * n)
+            with open(pack, "rb") as fsrc:
+                fsrc.seek(2 * start)
+                want = fsrc.read(2 * n)
+            if got != want:
+                raise RuntimeError(f"{lang}: {member} differs from {pack}")
+    return len(members)
+
+
 def _member_sort_key(member: str):
     # segment order inside a chunk: numeric runs in the member name sort by
     # value (yodas "<vid>-00012-..." before "-00013-...")
@@ -432,6 +495,7 @@ def regroup_language(
     n_buckets: int = N_BUCKETS,
     n_workers: int = 8,
     keep_parts: bool = False,
+    read_bytes: int = _READ_BYTES,
 ) -> dict:
     """Re-lay out one language's shard packs into a chunk-contiguous pack.
 
@@ -446,6 +510,8 @@ def regroup_language(
         n_buckets: Hash buckets (RAM per bucket ~ pack size / n_buckets).
         n_workers: Processes for pass 1 (one per shard).
         keep_parts: Keep the pass-1 bucket parts (debugging).
+        read_bytes: Sequential read size of pass 1 (tests shrink it so the
+            reader refills as it does on real shard packs).
 
     Returns:
         ``{"rows", "chunks", "samples"}`` of the language pack.
@@ -468,7 +534,9 @@ def regroup_language(
         parts_dirs.append(str(parts_dir))
         if (parts_dir / ".complete").is_file():
             continue
-        jobs.append((str(pack), str(index_path), str(parts_dir), rows, n_buckets))
+        jobs.append(
+            (str(pack), str(index_path), str(parts_dir), rows, n_buckets, read_bytes)
+        )
     if jobs:
         with ProcessPoolExecutor(max_workers=max(1, min(n_workers, len(jobs)))) as pool:
             for pack, n in pool.map(_bucket_shard, jobs):
@@ -476,6 +544,11 @@ def regroup_language(
     _lang, stats = _merge_language(
         (lang, parts_dirs, str(out_root), n_buckets, seed, chunk_rows)
     )
+    try:
+        verify_language_pack(lang, shards, out_root)
+    except RuntimeError:
+        (lang_dir / f"{lang}.regrouped").unlink(missing_ok=True)
+        raise
     if not keep_parts:
         shutil.rmtree(parts_root, ignore_errors=True)
     logger.info("regrouped %s: %s", lang, stats)
@@ -495,6 +568,7 @@ def regroup_all(
     n_buckets: int = N_BUCKETS,
     n_workers: int = 32,
     keep_parts: bool = False,
+    read_bytes: int = _READ_BYTES,
 ) -> Dict[str, dict]:
     """Run :func:`regroup_language` for several languages with shared pools.
 
@@ -511,6 +585,7 @@ def regroup_all(
         n_buckets: Hash buckets per language.
         n_workers: Process pool size.
         keep_parts: Keep the pass-1 bucket parts.
+        read_bytes: Sequential read size of pass 1.
 
     Returns:
         ``lang -> {"rows", "chunks", "samples"}``.
@@ -535,7 +610,14 @@ def regroup_all(
             parts_dirs.append(str(parts_dir))
             if not (parts_dir / ".complete").is_file():
                 jobs.append(
-                    (str(pack), str(index_path), str(parts_dir), rows, n_buckets)
+                    (
+                        str(pack),
+                        str(index_path),
+                        str(parts_dir),
+                        rows,
+                        n_buckets,
+                        read_bytes,
+                    )
                 )
         merges.append(
             (lang, parts_dirs, str(out_root), n_buckets, seed + _crc(lang), chunk_rows)
@@ -549,8 +631,13 @@ def regroup_all(
             max_workers=max(1, min(n_workers, len(merges)))
         ) as pool:
             for lang, st in pool.map(_merge_language, merges):
+                try:
+                    n = verify_language_pack(lang, shards_by_lang[lang], out_root)
+                except RuntimeError:
+                    (out_root / lang / f"{lang}.regrouped").unlink(missing_ok=True)
+                    raise
                 stats[lang] = st
-                logger.info("regrouped %s: %s", lang, st)
+                logger.info("regrouped %s: %s (%d rows verified)", lang, st, n)
                 if not keep_parts:
                     shutil.rmtree(parts_roots[lang], ignore_errors=True)
     return stats
