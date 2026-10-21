@@ -22,9 +22,6 @@ class FakePhon:
     def phonemize(self, text, lang):
         return [c for c in text.replace(" ", "_")]
 
-    def phonemize_words(self, words, lang):
-        return [[c for c in w] for w in words]
-
 
 def test_decide_spk_mode():
     assert decide_spk_mode(group_size=3, dur=2.0, cfg=CFG) == "group"
@@ -98,7 +95,10 @@ def test_build_rows_assigns_modes_groups_and_split_columns():
     zh = by["zh_emilia_zh_0000000001"]
     assert zh.spk_mode == "split" and zh.group == ""
     assert zh.word_bounds.startswith("0.2:0.9,1:1.7")
-    assert zh.phones_by_word.count("|") == 5
+    # 6 s row: k=2 (prompt ends at 1.7 s) is the one point legal by time
+    assert zh.split_targets == "2=" + " ".join(
+        FakePhon().phonemize("世 界 朋 友", "zh")
+    )
     assert zh.phones == "你 _ 好 _ 世 _ 界 _ 朋 _ 友"
 
 
@@ -307,13 +307,13 @@ def test_word_bounds_are_ms_rounded_so_manifest_and_build_agree(tmp_path):
     from dataset.builder import _chunk_job, split_candidates
 
     dur = 12.3456888  # 0.4 * dur = 4.93827552; {:g} of the raw end gives 4.93828
-    words = [("a", 0.0, 0.4 * dur - 0.0000001), ("b", 0.4 * dur, dur)]
+    words = [("jia3", 0.0, 0.4 * dur - 0.0000001), ("yi3", 0.4 * dur, dur)]
     jl = tmp_path / "zh000.jsonl"
     obj = {
         "key": "zh_emilia_zh_0000000001",
         "audio": "zh000/x.mp3",
         "dur": dur,
-        "txt": "a b",
+        "txt": "甲乙",
         "align": {"words": [{"word": w, "start": s, "end": e} for w, s, e in words]},
     }
     jl.write_bytes((_json.dumps(obj) + "\n").encode())
@@ -333,10 +333,10 @@ def test_split_candidates_drop_points_whose_target_text_exceeds_its_frames():
     # 5 s row at 24 kHz; k=2 is the only split point legal by time. Its target
     # starts at 1.5 s: (120000 - 36000) // 256 = 328 frames.
     wb = [(0.0, 0.5), (0.6, 1.4), (1.5, 2.2), (2.3, 3.1), (3.2, 5.0)]
-    fits = [["a"], ["a"], ["a"] * 200, ["a"] * 100, ["a"] * 28]  # 328 after k=2
-    assert split_candidates(wb, 5.0, CFG, fits, 120000) == [2]
-    over = [["a"], ["a"], ["a"] * 200, ["a"] * 100, ["a"] * 29]  # 329 after k=2
-    assert split_candidates(wb, 5.0, CFG, over, 120000) == []
+    assert split_candidates(wb, 5.0, CFG, {2: ["a"] * 328}, 120000) == [2]
+    assert split_candidates(wb, 5.0, CFG, {2: ["a"] * 329}, 120000) == []
+    # a point without a target (no transcript word starts there) is dropped
+    assert split_candidates(wb, 5.0, CFG, {3: ["a"]}, 120000) == []
 
 
 def _row(key, dur, txt, words):
@@ -368,4 +368,59 @@ def test_build_rows_demotes_split_rows_without_a_fitting_split_point():
     txt = " ".join(w for w, _s, _e in words)  # 410 phones fit the row's 562 frames
     pool = [_row("de_vidCCCCCCCC-00001-00000000-00000600", 6.0, txt, words)]
     (row,) = build_rows(pool, CFG, FakePhon())
-    assert (row.spk_mode, row.word_bounds, row.phones_by_word) == ("none", "", "")
+    assert (row.spk_mode, row.word_bounds, row.split_targets) == ("none", "", "")
+
+
+def test_split_points_land_on_transcript_word_starts():
+    from dataset.builder import split_points
+
+    txt = "I'm not sure. I like that one."
+    words = ["I", "m", "not", "sure", "I", "like", "that", "one"]
+    pts = split_points(txt, words, "en")
+    # "m" is the second half of "I'm": no transcript word starts there
+    assert 1 not in pts
+    assert txt[pts[2] :] == "not sure. I like that one."
+    assert txt[pts[4] :] == "I like that one."
+    assert sorted(pts) == [2, 3, 4, 5, 6, 7]
+
+
+def test_split_points_resync_after_normalized_numbers():
+    from dataset.builder import split_points
+
+    txt = "BMW en este 6 20 23 presentó el"
+    words = ["BMW", "en", "este", "seis", "veinte", "veintitrés", "presentó", "el"]
+    pts = split_points(txt, words, "es")
+    assert txt[pts[6] :] == "presentó el" and txt[pts[2] :].startswith("este 6")
+    assert not {3, 4, 5} & set(pts)  # inside the spelled-out number
+
+
+def test_split_points_zh_map_syllables_onto_characters():
+    from dataset.builder import split_points
+
+    txt = "我记得，你说过。"
+    words = ["wo3", "ji4", "de5", "ni3", "shuo1", "guo4"]
+    pts = split_points(txt, words, "zh")
+    assert txt[pts[3] :] == "你说过。"
+    assert split_points(txt, words[:-1], "zh") == {}  # counts disagree: no split
+
+
+def test_build_rows_split_targets_are_the_phonemized_transcript_tail():
+    words = [
+        ("eins", 0.2, 0.9),
+        ("zwei", 1.0, 1.7),
+        ("drei", 1.8, 2.5),
+        ("vier", 2.6, 3.4),
+        ("fünf", 3.5, 4.6),
+        ("sechs", 4.7, 5.8),
+    ]
+    txt = "Eins, zwei drei vier fünf sechs."
+    (row,) = build_rows(
+        [_row("de_vidCCCCCCCC-00001-00000000-00000600", 6.0, txt, words)],
+        CFG,
+        FakePhon(),
+    )
+    assert row.spk_mode == "split"
+    # k=2 is the only point legal by time: the prompt is words[:2] (ends at
+    # 1.7 s = 28%) and the target is the transcript from word 2 on
+    tail = FakePhon().phonemize("drei vier fünf sechs.", "de")
+    assert row.split_targets == "2=" + " ".join(tail)

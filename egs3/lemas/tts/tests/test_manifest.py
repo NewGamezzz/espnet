@@ -14,7 +14,7 @@ def _row(i, **kw):
         byte_offset=0,
         spk_mode="group",
         word_bounds="",
-        phones_by_word="",
+        split_targets="",
     )
     base.update(kw)
     return ManifestRow(**base)
@@ -30,7 +30,7 @@ def test_roundtrip(tmp_path):
             group="",
             spk_mode="split",
             word_bounds="0.1:0.5,0.6:1.2",
-            phones_by_word="a b|c d",
+            split_targets="1=c d|2=d",
             dur=1.3,
             source="golos",
             lang="ru",
@@ -48,7 +48,8 @@ def test_roundtrip(tmp_path):
     assert cols.spk_mode.tolist() == [1, 2]
     assert cols.seg.tolist() == [0, -1]
     assert cols.word_bounds(1) == [(0.1, 0.5), (0.6, 1.2)]
-    assert cols.phones_by_word(1) == [["a", "b"], ["c", "d"]]
+    assert cols.split_targets(1) == {1: ["c", "d"], 2: ["d"]}
+    assert cols.split_targets(0) == {}
     assert cols.word_bounds(0) == []
     assert abs(float(cols.dur[1]) - 1.3) < 1e-6
     assert cols.group_names == ["vidAAAAAAAA"]

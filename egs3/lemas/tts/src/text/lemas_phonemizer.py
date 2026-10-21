@@ -196,7 +196,3 @@ class LEMASPhonemizer:
             for phone in word.split(_PHONE_SEP):
                 out.extend(p for p in _split_punct(phone) if p and p not in _DROP)
         return out
-
-    def phonemize_words(self, words: Sequence[str], lang: str) -> List[List[str]]:
-        """Phonemize each word on its own (used for split-mode rows)."""
-        return [self.phonemize(w, lang) for w in words]

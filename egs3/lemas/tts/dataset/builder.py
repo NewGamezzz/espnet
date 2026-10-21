@@ -14,6 +14,7 @@ import json
 import logging
 import random
 import re
+import unicodedata
 from collections import Counter, defaultdict
 from concurrent.futures import ProcessPoolExecutor
 from importlib import resources
@@ -63,7 +64,7 @@ def split_candidates(
     word_bounds: Sequence[Tuple[float, float]],
     dur: float,
     cfg: dict,
-    phones_by_word: Optional[Sequence[Sequence[str]]] = None,
+    targets: Optional[Dict[int, Sequence[str]]] = None,
     n_samples: Optional[int] = None,
 ) -> List[int]:
     """Word indexes ``k`` such that ``words[:k]`` is a legal prompt.
@@ -72,9 +73,10 @@ def split_candidates(
         word_bounds: ``(start, end)`` seconds per word.
         dur: Row duration in seconds.
         cfg: Needs ``split_frac`` ``[lo, hi]`` and ``split_min_prompt_sec``.
-        phones_by_word: Phones per word. With ``n_samples``, a split point
-            is kept only when the phones of ``words[k:]`` fit the frames of
-            the target it leaves (``src.layout.text_fits``).
+        targets: Target phones per split point (see :func:`split_points`).
+            With ``n_samples``, a split point is kept only when it has a
+            target and that target fits the frames it is left with
+            (``src.layout.text_fits``).
         n_samples: Row length in samples at 24 kHz.
 
     Returns:
@@ -91,16 +93,87 @@ def split_candidates(
         end = word_bounds[k - 1][1]
         if end >= floor and lo * dur <= end <= hi * dur:
             ks.append(k)
-    if phones_by_word is None or n_samples is None:
+    if targets is None or n_samples is None:
         return ks
     return [
         k
         for k in ks
-        if text_fits(
-            sum(len(w) for w in phones_by_word[k:]),
-            n_samples - int(word_bounds[k][0] * PACK_SR),
-        )
+        if k in targets
+        and text_fits(len(targets[k]), n_samples - int(word_bounds[k][0] * PACK_SR))
     ]
+
+
+_WORD_PIECE = re.compile(r"[^\W_]+")
+_HANZI = re.compile(r"[\u4e00-\u9fff]")
+_RESYNC_TXT, _RESYNC_ALIGN = 4, 12  # how far a mismatch may be skipped
+
+
+def _pieces(text: str) -> List[str]:
+    """Lower-cased letter/digit runs: what the aligner's words are made of."""
+    return _WORD_PIECE.findall(unicodedata.normalize("NFKC", text).lower())
+
+
+def split_points(txt: str, words: Sequence[str], lang: str) -> Dict[int, int]:
+    """Where the transcript resumes after the first ``k`` aligned words.
+
+    The aligner's words are a normalized transcript: punctuation stripped,
+    apostrophes and hyphens split (``I'm`` -> ``I``, ``m``), numbers spelled
+    out, and pinyin syllables for zh. A split point ``k`` is kept only when
+    aligned word ``k`` starts a transcript word (a character for zh), so
+    the target text is a suffix of the transcript and is phonemized exactly
+    as inference phonemizes a target. Words that do not match one to one
+    (numbers, abbreviations) are skipped up to the next matching word.
+
+    Args:
+        txt: Transcript (manifest column 3 is phonemized from it).
+        words: Aligned words, in order.
+        lang: Language code.
+
+    Returns:
+        ``k -> character offset in txt`` for ``1 <= k < len(words)``; zh
+        rows whose character and syllable counts differ get ``{}``.
+
+    Example:
+        >>> split_points("I'm not sure.", ["I", "m", "not", "sure"], "en")
+        {2: 4, 3: 8}
+    """
+    if lang == "zh":
+        offs = [m.start() for m in _HANZI.finditer(txt)]
+        if len(offs) != len(words):
+            return {}
+        return {k: offs[k] for k in range(1, len(words))}
+    tokens = [(m.start(), _pieces(m.group())) for m in re.finditer(r"\S+", txt)]
+    tokens = [(off, p) for off, p in tokens if p]
+    aligned = ["".join(_pieces(w)) for w in words]
+
+    def matches(j: int, a: int) -> bool:
+        p = tokens[j][1]
+        return aligned[a : a + len(p)] == p
+
+    points: Dict[int, int] = {}
+    j = a = 0
+    while j < len(tokens) and a < len(aligned):
+        if not matches(j, a):
+            jump = next(
+                (
+                    (j + dj, a + da)
+                    for dj in range(_RESYNC_TXT + 1)
+                    for da in range(_RESYNC_ALIGN + 1)
+                    if (dj or da)
+                    and j + dj < len(tokens)
+                    and a + da < len(aligned)
+                    and matches(j + dj, a + da)
+                ),
+                None,
+            )
+            if jump is None:
+                break
+            j, a = jump
+        if 0 < a < len(aligned):
+            points[a] = tokens[j][0]
+        a += len(tokens[j][1])
+        j += 1
+    return points
 
 
 def _fmt_bounds(words) -> str:
@@ -129,8 +202,7 @@ def build_rows(
         pool: Items ``(key, audio_rel, dur, source, jsonl_path, byte_offset,
             txt, words)`` with ``words`` as ``(word, start, end)`` tuples.
         cfg: Builder config block.
-        phonemizer: Object with ``phonemize(text, lang)`` and
-            ``phonemize_words(words, lang)``.
+        phonemizer: Object with ``phonemize(text, lang)``.
         group_sizes: ``(lang, group) -> count`` over the WHOLE language; when
             ``None`` it is computed from ``pool`` (fine for tests, wrong for a
             chunk of a language).
@@ -164,20 +236,24 @@ def build_rows(
         g = group_id(key, source) or ""
         mode = decide_spk_mode(sizes[(lang, g)] if g else 0, dur, cfg)
         n_samples = int(round(dur * PACK_SR))
-        wb, pbw = "", ""
+        wb, st = "", ""
         if mode == "split":
             bounds = [(s, e) for _w, s, e in words]
-            if not split_candidates(bounds, dur, cfg):
+            offsets = split_points(txt, [w for w, _s, _e in words], lang)
+            targets = {}
+            for k in split_candidates(bounds, dur, cfg):
+                if k in offsets:
+                    tail = phonemizer.phonemize(txt[offsets[k] :], lang)
+                    # "|" and " " delimit the column; a token holding one
+                    # could not be read back
+                    if tail and not any("|" in t or " " in t for t in tail):
+                        targets[k] = tail
+            ks = split_candidates(bounds, dur, cfg, targets, n_samples)
+            if not ks:
                 mode = "none"
             else:
-                per_word = phonemizer.phonemize_words([w for w, _s, _e in words], lang)
-                if any(not p for p in per_word) or not split_candidates(
-                    bounds, dur, cfg, per_word, n_samples
-                ):
-                    mode = "none"
-                else:
-                    wb = _fmt_bounds(words)
-                    pbw = "|".join(" ".join(p) for p in per_word)
+                wb = _fmt_bounds(words)
+                st = "|".join(f"{k}={' '.join(targets[k])}" for k in ks)
         phones = " ".join(phonemizer.phonemize(txt, lang))
         # counted as the dataset counts them: the space-separated column
         if not phones or not text_fits(len(phones.split(" ")), n_samples):
@@ -195,7 +271,7 @@ def build_rows(
                 int(byte_offset),
                 mode,
                 wb,
-                pbw,
+                st,
             )
         )
     return rows

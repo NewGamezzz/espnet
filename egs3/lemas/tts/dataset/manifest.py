@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Dict, Iterable, List, Tuple
 
 import numpy as np
 from dataset.keys import SOURCES, segment_index
@@ -27,7 +27,7 @@ COLUMNS = [
     "byte_offset",
     "spk_mode",
     "word_bounds",
-    "phones_by_word",
+    "split_targets",
 ]
 SPK_MODES = ["none", "group", "split"]
 
@@ -47,7 +47,7 @@ class ManifestRow:
     byte_offset: int
     spk_mode: str
     word_bounds: str
-    phones_by_word: str
+    split_targets: str
 
     def to_line(self) -> str:
         """Serialize as one tab-separated line (no newline)."""
@@ -100,7 +100,7 @@ class ManifestColumns:
     the source has no segment index), ``pack`` (int32 index into
     ``pack_names``) with ``a_start`` / ``a_len`` (int64 samples at 24 kHz, the
     row's region inside its ``.pcm`` pack); accessors ``audio(i)``,
-    ``phones(i)``, ``word_bounds(i)``, ``phones_by_word(i)``.
+    ``phones(i)``, ``word_bounds(i)``, ``split_targets(i)``.
     """
 
     def __init__(self, **cols):
@@ -126,7 +126,7 @@ class ManifestColumns:
             >>> cols.audio(0)
             'de/de000.pcm:0:38400'
         """
-        utt, phones, lang, source, group, dur, seg, mode, wb, pbw = (
+        utt, phones, lang, source, group, dur, seg, mode, wb, st = (
             [] for _ in range(10)
         )
         pack, a_start, a_len = [], [], []
@@ -154,7 +154,7 @@ class ManifestColumns:
                 seg.append(-1 if s is None else s)
                 mode.append(SPK_MODES.index(parts[9].decode()))
                 wb.append(parts[10])
-                pbw.append(parts[11])
+                st.append(parts[11])
         if not utt:
             raise RuntimeError(f"Manifest is empty: {path}")
         return cls(
@@ -172,7 +172,7 @@ class ManifestColumns:
             seg=np.array(seg, dtype=np.int32),
             spk_mode=np.array(mode, dtype=np.int8),
             _wb=_StrColumn(wb),
-            _pbw=_StrColumn(pbw),
+            _st=_StrColumn(st),
             group_names=list(group_index),
         )
 
@@ -187,7 +187,25 @@ class ManifestColumns:
             return []
         return [tuple(float(v) for v in x.split(":")) for x in s.split(",")]
 
-    def phones_by_word(self, i: int) -> List[List[str]]:
-        """Per-word phone lists for split rows, else ``[]``."""
-        s = self._pbw(i)
-        return [w.split(" ") for w in s.split("|")] if s else []
+    def split_targets(self, i: int) -> Dict[int, List[str]]:
+        """Target phones per legal split point ``k`` of a split row, else ``{}``.
+
+        The column holds ``k=<phones>|k=<phones>``: the transcript after the
+        ``k``-th aligned word, phonemized as one text (spec 3.4).
+
+        Raises:
+            ValueError: On a column in another format, e.g. the per-word
+                phones of builds before 2026-10-21, whose split targets
+                lacked word boundaries and did not match the transcript.
+        """
+        s = self._st(i)
+        out: Dict[int, List[str]] = {}
+        for item in s.split("|") if s else []:
+            k, sep, phones = item.partition("=")
+            if not sep or not k.isdigit():
+                raise ValueError(
+                    f"split_targets of row {i} is not 'k=<phones>|...': rebuild"
+                    " the manifest (create_dataset)"
+                )
+            out[int(k)] = phones.split(" ")
+        return out

@@ -65,11 +65,6 @@ def test_de_per_phone_with_space_and_stress():
 
 
 @pytest.mark.skipif(not _has_espeak(), reason="espeak-ng not available")
-def test_phonemize_words_returns_one_list_per_word():
-    out = LEMASPhonemizer(langs=["ru"]).phonemize_words(["привет", "мир"], "ru")
-    assert len(out) == 2 and all(out)
-
-
 def test_unknown_lang_raises():
     with pytest.raises(KeyError):
         LEMASPhonemizer(langs=["de"]).phonemize("x", "xx")

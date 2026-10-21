@@ -1,4 +1,5 @@
 import numpy as np
+import pytest
 from dataset.dataset import LEMASDataset
 from src.layout import n_frames_total
 
@@ -258,12 +259,12 @@ def test_group_row_without_surviving_mates_falls_back(corpus, tmp_path):
 
 
 def test_split_row_never_draws_a_split_point_its_text_cannot_fit(corpus, tmp_path):
-    # A manifest built before the frame rule existed: the row's only legal
-    # split point (k=2, target from 2.1 s = 365 frames) carries 403 phones.
+    # The row's only legal split point (k=2, target from 2.1 s = 365
+    # frames) carries 400 phones.
     lines = corpus["manifest"].read_text().splitlines()
     i = next(n for n, line in enumerate(lines) if "\tsplit\t" in line)
     parts = lines[i].split("\t")
-    parts[11] = "a|b|" + " ".join(["a"] * 400) + "|b|a|b"
+    parts[11] = "2=" + " ".join(["a"] * 400)
     lines[i] = "\t".join(parts)
     m = tmp_path / "old_build.tsv"
     m.write_text("\n".join(lines) + "\n")
@@ -273,3 +274,17 @@ def test_split_row_never_draws_a_split_point_its_text_cannot_fit(corpus, tmp_pat
         assert ds.draw(i).split_k is None
         s = ds[i]
         assert len(s["text"]) <= len(s["speech"]) // 256 + 1
+
+
+def test_manifest_with_per_word_split_phones_is_refused(corpus, tmp_path):
+    # builds before 2026-10-21 stored per-word phones of the aligner's words
+    lines = corpus["manifest"].read_text().splitlines()
+    i = next(n for n, line in enumerate(lines) if "\tsplit\t" in line)
+    parts = lines[i].split("\t")
+    parts[11] = "a|b|a|b|a|b"
+    lines[i] = "\t".join(parts)
+    m = tmp_path / "old_build.tsv"
+    m.write_text("\n".join(lines) + "\n")
+    ds = _ds(dict(corpus, manifest=m))
+    with pytest.raises(ValueError, match="rebuild"):
+        ds.draw(i)

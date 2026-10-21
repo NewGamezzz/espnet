@@ -110,7 +110,9 @@ def corpus(tmp_path):
                 0,
                 "split",
                 "0.1:1.0,1.1:2.0,2.1:3.0,3.1:4.0,4.1:5.0,5.1:5.9",
-                "a|b|a|b|a|b",
+                # k=2 is the one split point legal by time (prompt ends at
+                # 2.0 s of 6 s); its target is the transcript after word 2
+                "2=a b a b",
             )
         )
     for pack, buf in packs.items():

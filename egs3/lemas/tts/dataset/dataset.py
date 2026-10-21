@@ -195,7 +195,7 @@ class LEMASDataset(torch.utils.data.Dataset):
                 c.word_bounds(idx),
                 float(c.dur[idx]),
                 self.cfg,
-                c.phones_by_word(idx),
+                c.split_targets(idx),
                 int(c.a_len[idx]),
             )
             if not ks:  # the build guarantees one for its own split config
@@ -354,7 +354,7 @@ class LEMASDataset(torch.utils.data.Dataset):
             wb = c.word_bounds(idx)
             p_end = quantize_prompt(int(wb[d.split_k - 1][1] * PACK_SR))
             t_start = int(wb[d.split_k][0] * PACK_SR)
-            phones = [p for w in c.phones_by_word(idx)[d.split_k :] for p in w]
+            phones = c.split_targets(idx)[d.split_k]
             if self.load_speech:
                 full = self._read_pcm(idx)
                 spk_w = self._quantize(full[:p_end])
