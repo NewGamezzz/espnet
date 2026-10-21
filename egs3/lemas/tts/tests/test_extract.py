@@ -196,3 +196,23 @@ def test_disable_transparent_hugepages_is_safe_everywhere():
     if ok:
         status = open("/proc/self/status").read()
         assert "THP_enabled:\t0" in status or "THP_enabled" not in status
+
+
+def test_seq_reader_returns_exact_samples_across_buffer_refills(tmp_path, monkeypatch):
+    # Rows that straddle the end of the read buffer used to come back with
+    # the kept tail followed by a second copy of it (the refill re-read from
+    # the row start), shifting every later row of that buffer to earlier
+    # audio. Production buffers are 64 MB, so only real packs refilled.
+    import dataset.extract as ex
+
+    monkeypatch.setattr(ex, "_READ_BYTES", 2 * 100)  # 100-sample buffer
+    pcm = np.arange(1000, dtype="<i2")
+    path = tmp_path / "x.pcm"
+    pcm.tofile(path)
+    reader = ex._SeqReader(path)
+    rows = [(0, 70), (70, 70), (140, 5), (300, 250), (550, 30), (580, 420)]
+    try:
+        for start, n in rows:
+            assert reader.read(start, n).tolist() == pcm[start : start + n].tolist()
+    finally:
+        reader.close()

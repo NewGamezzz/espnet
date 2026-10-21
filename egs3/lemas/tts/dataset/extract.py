@@ -279,8 +279,10 @@ class _SeqReader:
             raise ValueError("rows must be read in increasing order")
         if end > self.base + len(self.buf):
             keep = self.buf[start - self.base :]
-            self.f.seek(start * 2)
-            want = max(_READ_BYTES, (end - start) * 2)
+            # continue the file right after the kept tail (or at ``start``
+            # when the row begins past the buffer and nothing is kept)
+            self.f.seek((start + len(keep)) * 2)
+            want = max(_READ_BYTES, (end - start - len(keep)) * 2)
             self.buf = np.concatenate(
                 [keep, np.frombuffer(self.f.read(want), dtype=PCM_DTYPE)]
             )
