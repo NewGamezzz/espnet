@@ -15,9 +15,8 @@ from pathlib import Path
 from typing import Callable, List, Sequence, Tuple
 
 RUNS: List[Tuple[str, str]] = [
-    ("train_f5_base_lemas_dualprompt_r2", "conf/training_f5_base_dualprompt.yaml"),
     (
-        "train_f5_base_lemas_dualprompt_gh200_lr1.5e-4",
+        "train_f5_base_lemas_dualprompt_gh200_lr1.5e-4_r3",
         "conf/training_f5_base_dualprompt_gh200.yaml",
     ),
 ]

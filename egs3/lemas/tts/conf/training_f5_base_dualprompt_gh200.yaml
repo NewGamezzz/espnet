@@ -23,7 +23,7 @@ exp_dir: ${recipe_dir}/exp/${exp_tag}
 # experiment, so it is shared across exp_tags.
 stats_dir: ${recipe_dir}/exp/stats
 inference_dir: ${exp_dir}/inference
-exp_tag: train_f5_base_lemas_dualprompt_gh200_lr1.5e-4
+exp_tag: train_f5_base_lemas_dualprompt_gh200_lr1.5e-4_r3
 
 sample_rate: 24000
 n_mel_channels: 100

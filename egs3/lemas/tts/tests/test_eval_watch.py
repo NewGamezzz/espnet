@@ -58,11 +58,15 @@ def test_a_run_without_backups_or_without_exp_dir_is_fine(tmp_path):
     assert pending_arms(tmp_path, [("missing", "conf/train.yaml")]) == []
 
 
-def test_runs_table_names_both_experiments():
-    assert {tag for tag, _ in RUNS} == {
-        "train_f5_base_lemas_dualprompt_r2",
-        "train_f5_base_lemas_dualprompt_gh200_lr1.5e-4",
-    }
+def test_runs_table_watches_the_live_run_under_its_config_tag():
+    assert RUNS == [
+        (
+            "train_f5_base_lemas_dualprompt_gh200_lr1.5e-4_r3",
+            "conf/training_f5_base_dualprompt_gh200.yaml",
+        )
+    ]
+    for tag, conf in RUNS:
+        assert f"exp_tag: {tag}\n" in Path(conf).read_text()
 
 
 def test_watch_script_rechains_hourly_and_is_stoppable():
