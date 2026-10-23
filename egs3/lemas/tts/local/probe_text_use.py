@@ -21,10 +21,9 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from dataset.dataset import LEMASDataset
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
-
-from dataset.dataset import LEMASDataset
 from src.layout import TokenTable
 from src.sampler import BlockBatchSampler
 from src.text.lemas_phonemizer import LANGS, special_tokens
@@ -57,6 +56,17 @@ def load_model(train_config: str, ckpt: str, device: str):
     model.cfm.audio_drop_prob = 0.0  # the probe wants every row conditioned
     model.cfm.cond_drop_prob = 0.0
     return cfg, model.to(device).eval()
+
+
+def valid_dataset(cfg, audio_root=None) -> LEMASDataset:
+    """Build the validation set exactly as the training config does.
+
+    The config's ``dataset.valid`` entry carries the manifest, the token list
+    and the prompt config (with its layout), so a diagnostic config on another
+    manifest or layout is probed on its own validation rows.
+    """
+    args = OmegaConf.to_container(cfg.dataset.valid[0].data_src_args, resolve=True)
+    return LEMASDataset(recipe_dir=".", audio_root=audio_root, **args)
 
 
 def ablate(text: np.ndarray, cond: str, table: TokenTable, rng) -> np.ndarray:
@@ -108,13 +118,7 @@ def main():
     args = ap.parse_args()
 
     cfg, model = load_model(args.train_config, args.ckpt, args.device)
-    ds = LEMASDataset(
-        split="valid",
-        recipe_dir=".",
-        token_list=cfg.token_list,
-        prompt_config=OmegaConf.to_container(cfg.prompt_config),
-        seed=int(cfg.seed),
-    )
+    ds = valid_dataset(cfg)
     table = TokenTable(cfg.token_list)
     sampler = BlockBatchSampler(
         ds, batch_bins=int(cfg.batch_sampler.batch_bins), n_mels=100, seed=0

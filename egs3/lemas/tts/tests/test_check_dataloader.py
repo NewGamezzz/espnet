@@ -19,8 +19,8 @@ class _Wrapper:
         return str(idx), self.datasets[0][idx]
 
 
-def _batch(corpus, rows):
-    ds = _ds(corpus)
+def _batch(corpus, rows, **kw):
+    ds = _ds(corpus, **kw)
     ds.set_epoch(4)
     wrapper = _Wrapper(ds)
     collate = CommonCollateFn(
@@ -33,8 +33,8 @@ def _batch(corpus, rows):
     return ds, wrapper, uids, data, f_len, table, langs
 
 
-def _check(corpus, rows, mutate=None):
-    ds, wrapper, uids, data, f_len, table, langs = _batch(corpus, rows)
+def _check(corpus, rows, mutate=None, **kw):
+    ds, wrapper, uids, data, f_len, table, langs = _batch(corpus, rows, **kw)
     if mutate:
         mutate(uids, data)
     return [
@@ -97,3 +97,32 @@ def test_missing_role_tokens_are_caught(corpus):
     assert (
         "prompt frames without a role token" in _check(corpus, _rows(corpus), unrole)[0]
     )
+
+
+def test_a_correct_stock_batch_has_no_problems(corpus):
+    assert _check(corpus, _rows(corpus), layout="stock") == [[], [], []]
+
+
+def test_stock_audio_of_another_time_is_caught(corpus):
+    def shift(uids, data):
+        n = int(data["speech_lengths"][0])
+        data["speech"][0, :n] = torch.roll(data["speech"][0, :n], 4000)
+
+    problems = _check(corpus, _rows(corpus), shift, layout="stock")[0]
+    assert "speech != the row's own audio" in problems
+
+
+def test_stock_wrong_phone_is_caught(corpus):
+    def retag(uids, data):
+        data["text"][0, 1] = 3 if int(data["text"][0, 1]) == 2 else 2
+
+    problems = _check(corpus, _rows(corpus), retag, layout="stock")[0]
+    assert "target phones != manifest" in problems
+
+
+def test_stock_row_with_a_prompt_boundary_is_caught(corpus):
+    def bound(uids, data):
+        data["cond_frames"][0] = 3
+
+    problems = _check(corpus, _rows(corpus), bound, layout="stock")[0]
+    assert "stock row without the random-span sentinel" in problems

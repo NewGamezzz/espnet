@@ -6,7 +6,7 @@ to ask you again or disconnect the server when I want".
 
 from pathlib import Path
 
-from local.eval_watch import RUNS, pending_arms, submit_pending
+from local.eval_watch import PROBE_RUNS, RUNS, pending_arms, submit_pending
 
 
 def _run(tmp_path, tag, backups):
@@ -74,3 +74,41 @@ def test_watch_script_rechains_hourly_and_is_stoppable():
     assert "--partition=cpu" in s and "--time=00:10:00" in s
     assert "--begin=now+1hour" in s and "exp/eval_watch/STOP" in s
     assert "$PY local/eval_watch.py" in s
+
+
+def test_probes_are_submitted_once_per_backup_beside_the_eval_arms(tmp_path):
+    exp = _run(tmp_path, "tag", [5000])
+    (exp / "eval_submitted").mkdir()
+    (exp / "eval_submitted" / "backup_step5000.job").write_text("1")
+    calls = []
+
+    def sbatch(cmd):
+        calls.append(cmd)
+        return "777"
+
+    runs = [("tag", "conf/diag.yaml")]
+    submit_pending(tmp_path, runs, sbatch, kind="probe")
+    assert calls == [
+        "sbatch --parsable -J probe_tag_step5000 local/probe_text_1gpu.sbatch "
+        "conf/diag.yaml backup_step5000"
+    ]
+    assert (exp / "probe_submitted" / "backup_step5000.job").read_text() == "777"
+    submit_pending(tmp_path, runs, sbatch, kind="probe")
+    assert len(calls) == 1
+
+
+def test_probe_runs_cover_the_live_run_and_both_layout_diagnostics():
+    assert [conf for _, conf in PROBE_RUNS] == [
+        "conf/training_f5_base_dualprompt_gh200.yaml",
+        "conf/training_f5_small_en_dualprompt.yaml",
+        "conf/training_f5_small_en_stock.yaml",
+    ]
+    for tag, conf in PROBE_RUNS:
+        assert f"exp_tag: {tag}\n" in Path(conf).read_text()
+
+
+def test_probe_script_probes_the_named_checkpoint_on_one_a100():
+    s = Path("local/probe_text_1gpu.sbatch").read_text()
+    assert "#SBATCH --partition=gpuA100x4" in s and "#SBATCH --gpus=1" in s
+    assert "$PY local/probe_text_use.py --train_config" in s
+    assert "--out exp/$TAG/probe_text_$CKPT.json" in s

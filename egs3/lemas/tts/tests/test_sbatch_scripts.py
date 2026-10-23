@@ -63,3 +63,18 @@ def test_arm_script_can_rerun_only_the_measure_stage():
     # a wrong test-set name); the wavs are kept and only measure reruns
     s = Path("local/run_arm_1gpu.sbatch").read_text()
     assert 'STAGES=${STAGES:-"infer measure"}' in s and "--stages $STAGES" in s
+
+
+def test_one_gpu_chain_for_the_layout_diagnostics():
+    s = Path("local/submit_train_1gpu.sbatch").read_text()
+    for line in (
+        "#SBATCH --partition=gpuA100x4",
+        "#SBATCH --ntasks-per-node=1",
+        "#SBATCH --gpus-per-node=1",
+        "#SBATCH --time=01:00:00",
+        "SELF=submit_train_1gpu.sbatch",
+        'source "$SLURM_SUBMIT_DIR/local/train_link.sh"',
+    ):
+        assert line in s
+    # no default config: each diagnostic names its own
+    assert 'CONF_DEFAULT=""' in s

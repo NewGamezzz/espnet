@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from dataset.dataset import LEMASDataset
 from src.layout import n_frames_total
+from src.text.lemas_phonemizer import LANGS
 
 
 def _ds(corpus, split="train", **kw):
@@ -288,3 +289,30 @@ def test_manifest_with_per_word_split_phones_is_refused(corpus, tmp_path):
     ds = _ds(dict(corpus, manifest=m))
     with pytest.raises(ValueError, match="rebuild"):
         ds.draw(i)
+
+
+def test_stock_layout_is_the_whole_row_with_its_own_phones(corpus):
+    ds = _ds(corpus, layout="stock")
+    for idx in range(len(ds)):
+        s = ds[idx]
+        lang = LANGS[int(ds.cols.lang[idx])]
+        assert np.array_equal(s["speech"], ds._read_pcm(idx))
+        want = [ds.table.tag(lang)] + [
+            ds.table.id(p) for p in ds.cols.phones(idx).split(" ")
+        ]
+        assert s["text"].tolist() == want
+        assert s["cond_frames"].tolist() == [-1]  # stock F5's random infill span
+
+
+def test_stock_layout_frame_bounds_add_no_prompt(corpus):
+    ds = _ds(corpus, layout="stock")
+    want = 1 + (ds.cols.dur * 24000).astype(np.int64) // 256
+    assert ds.frames_bound().tolist() == want.tolist()
+    assert ds.n_frames(256, 24000).tolist() == want.tolist()
+    for idx in range(len(ds)):
+        assert n_frames_total(len(ds[idx]["speech"])) <= ds.frames_bound()[idx]
+
+
+def test_unknown_layout_is_refused(corpus):
+    with pytest.raises(ValueError, match="layout"):
+        _ds(corpus, layout="stack")

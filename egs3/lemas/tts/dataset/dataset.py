@@ -6,6 +6,10 @@ sample is ``[speaker prompt | language prompt | target]`` at 24 kHz with a text
 lane of ``<spk>`` and ``<lang>`` repeated per prompt frame, the language tag,
 and the target phones. Dropout is omission of a region, so ``cond_frames``
 shrinks with the row and reaches 0 when both prompts are dropped.
+
+The ``stock`` layout (``prompt_config.layout``) is the control of the layout
+diagnostic: the row's own audio with the language tag and its full phones,
+and ``cond_frames = -1`` so the model draws stock F5's random infill span.
 """
 
 from __future__ import annotations
@@ -45,7 +49,11 @@ DEFAULT_PROMPT_CONFIG = dict(
     # the language prompt may come from (see src/sampler.py)
     block_samples=2_097_152,
     lang_block_span=1,
+    # "dualprompt": [spk | lang | target] with role tokens; "stock": the row
+    # alone with its full phones and stock F5's random span (diagnostic)
+    layout="dualprompt",
 )
+LAYOUTS = ("dualprompt", "stock")
 
 
 @dataclass(frozen=True)
@@ -112,7 +120,12 @@ class LEMASDataset(torch.utils.data.Dataset):
         self.seed, self.epoch = int(seed), 0
         cfg = dict(DEFAULT_PROMPT_CONFIG)
         cfg.update(dict(prompt_config or {}))
+        if cfg["layout"] not in LAYOUTS:
+            raise ValueError(
+                f"unknown layout {cfg['layout']!r}, expected one of {LAYOUTS}"
+            )
         self.cfg = cfg
+        self.stock = cfg["layout"] == "stock"
         root = (
             Path(recipe_dir).resolve()
             if recipe_dir
@@ -346,6 +359,8 @@ class LEMASDataset(torch.utils.data.Dataset):
         """Return ``text``, ``cond_frames`` and (unless disabled) ``speech``."""
         idx = int(idx)
         c = self.cols
+        if self.stock:
+            return self._stock_item(idx)
         d = self.draw(idx)
         lang = LANGS[int(c.lang[idx])]
         phones = c.phones(idx).split(" ")
@@ -400,17 +415,32 @@ class LEMASDataset(torch.utils.data.Dataset):
                 assert len(text) <= len(sample["speech"]) // HOP + 1, (idx, len(text))
         return sample
 
+    def _stock_item(self, idx: int) -> Dict[str, Any]:
+        """Stock F5 sample: the whole row, tag + full phones, random span."""
+        c = self.cols
+        lang = LANGS[int(c.lang[idx])]
+        sample: Dict[str, Any] = {"cond_frames": np.asarray([-1], dtype=np.int64)}
+        if self.table:
+            sample["text"] = build_text_ids(
+                0, 0, lang, c.phones(idx).split(" "), self.table
+            )
+        if self.load_speech:
+            sample["speech"] = self._read_pcm(idx)
+        return sample
+
     def frames_bound(self, hop_length: int = HOP, sample_rate: int = SR) -> np.ndarray:
         """Per-row upper bound on frames for batching, aware of the prompt mode.
 
         ``none``/``split`` rows never get a separate speaker-prompt region
         (the split prompt lies inside the row), so only the language prompt is
-        added; ``group`` rows add both.
+        added; ``group`` rows add both. The stock layout adds nothing.
         """
         c = self.cols
         lang_hi = float(self.cfg["lang_prompt_sec"][1])
         spk_hi = float(self.cfg["spk_prompt_sec"][1])
         extra = np.where(c.spk_mode == 1, spk_hi + lang_hi, lang_hi)
+        if self.stock:
+            extra = np.zeros_like(c.dur)
         n = ((c.dur.astype(np.float64) + extra) * sample_rate).astype(np.int64)
         return (1 + n // hop_length).astype(np.int64)
 
@@ -419,6 +449,8 @@ class LEMASDataset(torch.utils.data.Dataset):
         extra = float(self.cfg["spk_prompt_sec"][1]) + float(
             self.cfg["lang_prompt_sec"][1]
         )
+        if self.stock:
+            extra = 0.0
         n = ((self.cols.dur.astype(np.float64) + extra) * sample_rate).astype(np.int64)
         return (1 + n // hop_length).astype(np.int32)
 

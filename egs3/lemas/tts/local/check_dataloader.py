@@ -105,8 +105,9 @@ def row_problems(r, uids, data, f_len, dataset, wrapper, table, lang):
 
     Returns:
         ``(problem kinds, info)`` with ``info`` holding the unpadded ``wav``,
-        ``ids``, ``cf``, ``n_spk``, the epoch's ``draw`` and the target
-        tokens ``got``.
+        ``ids``, the language tag position ``head`` (the first target frame
+        in the dual-prompt layout, 0 in the stock one), ``n_spk``, the
+        epoch's ``split_k`` and the target tokens ``got``.
 
     Example:
         >>> kinds, info = row_problems(0, uids, data, f_len, ds, wrapper, t, "de")
@@ -130,19 +131,28 @@ def row_problems(r, uids, data, f_len, dataset, wrapper, table, lang):
         kinds.append("mel frames != samples // hop + 1")
     if nt > int(f_len[r]):
         kinds.append("text longer than mel")
-    if not 0 <= cf < int(f_len[r]) - 1:
+    stock = dataset.stock
+    if stock:
+        # the whole row is the target; the model draws the random span
+        if cf != -1:
+            kinds.append("stock row without the random-span sentinel")
+        if not np.array_equal(wav, dataset._read_pcm(row)):
+            kinds.append("speech != the row's own audio")
+    elif not 0 <= cf < int(f_len[r]) - 1:
         kinds.append("empty or negative target span")
-    roles = ids[:cf]
+    head = 0 if stock else cf  # position of the language tag
+    roles = ids[:head]
     if not np.all((roles == table.spk) | (roles == table.lang)):
         kinds.append("prompt frames without a role token")
     n_spk = int((roles == table.spk).sum())
     if np.any(roles[n_spk:] != table.lang):
         kinds.append("role tokens out of order")
-    if cf >= len(ids) or int(ids[cf]) != table.tag(lang):
+    if head >= len(ids) or int(ids[head]) != table.tag(lang):
         kinds.append("language tag missing or wrong")
     # the same row through the wrapper, in this process, at this epoch (the
     # loader's workers forked after the epoch was set)
-    draw = dataset.draw(row)
+    draw = None if stock else dataset.draw(row)
+    split_k = None if draw is None else draw.split_k
     uid, item = wrapper[row]
     if uid != str(row):
         kinds.append("uid is not the manifest row")
@@ -155,13 +165,13 @@ def row_problems(r, uids, data, f_len, dataset, wrapper, table, lang):
     cols = dataset.cols
     want = (
         cols.phones(row).split(" ")
-        if draw.split_k is None
-        else cols.split_targets(row)[draw.split_k]
+        if split_k is None
+        else cols.split_targets(row)[split_k]
     )
-    got = [inv[int(x)] for x in ids[cf + 1 :]]
+    got = [inv[int(x)] for x in ids[head + 1 :]]
     if got != [t if t in table._id else "<unk>" for t in want]:
         kinds.append("target phones != manifest")
-    info = dict(wav=wav, ids=ids, cf=cf, n_spk=n_spk, draw=draw, got=got)
+    info = dict(wav=wav, ids=ids, head=head, n_spk=n_spk, split_k=split_k, got=got)
     return kinds, info
 
 
@@ -266,15 +276,16 @@ def main() -> None:
                     )
                     for kind in kinds:
                         flag(kind, tag)
-                    wav, cf, n_spk = row_info["wav"], row_info["cf"], row_info["n_spk"]
-                    draw, got = row_info["draw"], row_info["got"]
-                    roles = row_info["ids"][:cf]
+                    wav, head = row_info["wav"], row_info["head"]
+                    n_spk, split_k = row_info["n_spk"], row_info["split_k"]
+                    got = row_info["got"]
+                    roles = row_info["ids"][:head]
                     problems["unk_tokens"] += got.count("<unk>")
                     problems["target_tokens"] += len(got)
                     if r >= args.asr_rows:
                         continue
-                    tgt = wav[cf * HOP :]
-                    ref = _source_text(jsonl_root, refs[row], draw.split_k)
+                    tgt = wav[head * HOP :]
+                    ref = _source_text(jsonl_root, refs[row], split_k)
                     segs, _ = asr.transcribe(tgt, language=lang, beam_size=5)
                     hyp = " ".join(s.text for s in segs).strip()
                     if lang == "zh":
@@ -282,12 +293,10 @@ def main() -> None:
                     else:
                         a, h = _norm(ref), _norm(hyp)
                     e = Levenshtein.distance(a, h)
-                    key = lang + ("_split" if draw.split_k is not None else "")
+                    key = lang + ("_split" if split_k is not None else "")
                     wer[key][0] += e
                     wer[key][1] += len(a)
-                    rec = dict(
-                        tag=tag, lang=lang, split_k=draw.split_k, ref=ref, hyp=hyp
-                    )
+                    rec = dict(tag=tag, lang=lang, split_k=split_k, ref=ref, hyp=hyp)
                     if len(tgt) > 8000:
                         et = emb(tgt)
                         n_lang = int((roles == table.lang).sum())

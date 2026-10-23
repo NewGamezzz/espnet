@@ -127,3 +127,86 @@ def test_gh200_config_differs_from_base_only_in_the_intended_knobs():
         c["trainer"]["accumulate_grad_batches"] = None
         c["trainer"].pop("precision", None)
     assert gh == base
+
+
+DIAG_A = "conf/training_f5_small_en_dualprompt.yaml"
+DIAG_B = "conf/training_f5_small_en_stock.yaml"
+SMALL = dict(
+    hidden_size=768,
+    depth=18,
+    attention_heads=12,
+    attention_head_size=64,
+    feed_forward_multiplier=2,
+    text_embedding_size=512,
+    convolution_layers=4,
+)
+
+
+def _frames_per_update(c):
+    return (
+        c["num_device"]
+        * c["batch_sampler"]["batch_bins"]
+        // c["n_mel_channels"]
+        * c["trainer"]["accumulate_grad_batches"]
+    )
+
+
+def _backup(c):
+    return next(
+        cb
+        for cb in c["trainer"]["callbacks"]
+        if cb.get("filename") == "backup_step{step}"
+    )
+
+
+def test_layout_diagnostic_a_is_the_gh200_run_shrunk_to_english_on_one_gpu():
+    # Thanapat 2026-10-23: F5-Small, English only, 1 A100, bf16; the step axis
+    # (lr, schedule, 320k frames per update) stays the GH200 run's
+    gh = OmegaConf.to_container(OmegaConf.load(GH200))
+    a = OmegaConf.to_container(OmegaConf.load(DIAG_A))
+    assert a["num_device"] == 1 and a["trainer"]["precision"] == "bf16-mixed"
+    assert {k: a["model"][k] for k in SMALL} == SMALL
+    assert _frames_per_update(a) == _frames_per_update(gh) == 320_000
+    steps = (
+        a["batch_sampler"]["batches_per_epoch"]
+        // a["trainer"]["accumulate_grad_batches"]
+    )
+    assert steps == 100
+    assert _backup(a)["every_n_epochs"] * steps == 5_000
+    for split in ("train", "valid"):
+        args = a["dataset"][split][0]["data_src_args"]
+        assert args["manifest_path"] == "${data_dir}/manifest_en/" + split + ".tsv"
+        assert a["create_shape"]["manifest_paths"][split] == args["manifest_path"]
+    assert a["stats_dir"] == "${recipe_dir}/exp/stats_en_dualprompt"
+    assert a["prompt_config"].pop("layout") == "dualprompt"  # the default
+    for c in (gh, a):
+        c["exp_tag"] = c["num_device"] = c["stats_dir"] = None
+        for k in SMALL:
+            c["model"][k] = None
+        c["batch_sampler"]["batch_bins"] = c["batch_sampler"]["batches_per_epoch"] = (
+            None
+        )
+        c["trainer"]["accumulate_grad_batches"] = None
+        c["create_shape"]["manifest_paths"] = None
+        for split in ("train", "valid"):
+            c["dataset"][split][0]["data_src_args"]["manifest_path"] = None
+        _backup(c)["every_n_epochs"] = None
+    assert a == gh
+
+
+def test_layout_diagnostic_b_differs_from_a_only_in_the_layout():
+    a = OmegaConf.to_container(OmegaConf.load(DIAG_A))
+    b = OmegaConf.to_container(OmegaConf.load(DIAG_B))
+    assert a["prompt_config"]["layout"] == "dualprompt"
+    assert b["prompt_config"]["layout"] == "stock"
+    assert b["stats_dir"] == "${recipe_dir}/exp/stats_en_stock"
+    assert a["exp_tag"] != b["exp_tag"]
+    for c in (a, b):
+        c["exp_tag"] = c["stats_dir"] = c["prompt_config"]["layout"] = None
+    assert a == b
+
+
+@pytest.mark.parametrize("path", [DIAG_A, DIAG_B])
+def test_layout_diagnostics_instantiate(tmp_path, path):
+    cfg = _tiny(tmp_path, path)
+    assert type(instantiate(cfg.model)).__name__ == "DualPromptF5TTS"

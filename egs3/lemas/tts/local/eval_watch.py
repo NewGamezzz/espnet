@@ -4,6 +4,8 @@
 arms need Delta's espeak-ng), so a new ``backup_step<N>.ckpt`` of either run
 is evaluated without anyone asking. A marker ``exp/<tag>/eval_submitted/
 <ckpt>.job`` holds the job id, so each checkpoint is submitted once.
+The text-use probe (``local/probe_text_1gpu.sbatch``) runs the same way for
+every backup of ``PROBE_RUNS``, marked in ``exp/<tag>/probe_submitted/``.
 """
 
 from __future__ import annotations
@@ -20,6 +22,13 @@ RUNS: List[Tuple[str, str]] = [
         "conf/training_f5_base_dualprompt_gh200.yaml",
     ),
 ]
+# Text-use probe (local/probe_text_use.py) of every backup: the earliest sign
+# that a run reads its phones. The layout diagnostics get only the probe.
+PROBE_RUNS: List[Tuple[str, str]] = RUNS + [
+    ("diag_f5_small_en_dualprompt", "conf/training_f5_small_en_dualprompt.yaml"),
+    ("diag_f5_small_en_stock", "conf/training_f5_small_en_stock.yaml"),
+]
+MARKER_DIRS = {"eval": "eval_submitted", "probe": "probe_submitted"}
 INFERENCE = "conf/inference_lemas_eval_sub50.yaml"
 METRICS = "conf/metrics_sub50.yaml"
 
@@ -29,9 +38,16 @@ class Arm:
     tag: str
     ckpt: str
     train_config: str
+    kind: str = "eval"
 
     @property
     def command(self) -> str:
+        if self.kind == "probe":
+            return (
+                f"sbatch --parsable -J probe_{self.tag[-12:]}_"
+                f"{self.ckpt[len('backup_'):]} local/probe_text_1gpu.sbatch "
+                f"{self.train_config} {self.ckpt}"
+            )
         return (
             f"LEMAS_CKPT={self.ckpt} sbatch --parsable -J arm_{self.tag[-12:]}_"
             f"{self.ckpt[len('backup_'):]} local/run_arm_1gpu.sbatch "
@@ -39,8 +55,10 @@ class Arm:
         )
 
 
-def pending_arms(recipe_dir, runs: Sequence[Tuple[str, str]]) -> List[Arm]:
-    """Return the arms to submit, oldest checkpoint first per run."""
+def pending_arms(
+    recipe_dir, runs: Sequence[Tuple[str, str]], kind: str = "eval"
+) -> List[Arm]:
+    """Return the ``kind`` jobs to submit, oldest checkpoint first per run."""
     arms = []
     for tag, train_config in runs:
         exp = Path(recipe_dir) / "exp" / tag
@@ -52,22 +70,24 @@ def pending_arms(recipe_dir, runs: Sequence[Tuple[str, str]]) -> List[Arm]:
             ].isdigit()  # not the -v1 of a re-fired epoch end
         ]
         for ckpt in sorted(backups, key=lambda p: int(p.stem[len("backup_step") :])):
-            if not (exp / "eval_submitted" / f"{ckpt.stem}.job").exists():
-                arms.append(Arm(tag, ckpt.stem, train_config))
+            if not (exp / MARKER_DIRS[kind] / f"{ckpt.stem}.job").exists():
+                arms.append(Arm(tag, ckpt.stem, train_config, kind))
     return arms
 
 
-def submit_pending(recipe_dir, runs, sbatch: Callable[[str], str]) -> List[Arm]:
-    """Submit every pending arm through ``sbatch(command) -> job id`` and mark it."""
+def submit_pending(
+    recipe_dir, runs, sbatch: Callable[[str], str], kind: str = "eval"
+) -> List[Arm]:
+    """Submit every pending job through ``sbatch(command) -> job id`` and mark it."""
     done = []
-    for arm in pending_arms(recipe_dir, runs):
+    for arm in pending_arms(recipe_dir, runs, kind):
         job = sbatch(arm.command).strip()
         marker = (
-            Path(recipe_dir) / "exp" / arm.tag / "eval_submitted" / f"{arm.ckpt}.job"
+            Path(recipe_dir) / "exp" / arm.tag / MARKER_DIRS[kind] / f"{arm.ckpt}.job"
         )
         marker.parent.mkdir(parents=True, exist_ok=True)
         marker.write_text(job)
-        print(f"eval_watch: submitted {job} for {arm.tag}/{arm.ckpt}")
+        print(f"eval_watch: submitted {kind} {job} for {arm.tag}/{arm.ckpt}")
         done.append(arm)
     return done
 
@@ -80,6 +100,7 @@ def _sbatch(command: str) -> str:
 
 if __name__ == "__main__":
     arms = submit_pending(Path.cwd(), RUNS, _sbatch)
+    arms += submit_pending(Path.cwd(), PROBE_RUNS, _sbatch, kind="probe")
     if not arms:
         print("eval_watch: nothing new")
     sys.exit(0)
