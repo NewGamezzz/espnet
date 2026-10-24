@@ -96,7 +96,7 @@ class LEMASDataset(torch.utils.data.Dataset):
             token_list: Token list file; required when samples need ``text``.
             audio_root: Pack root holding ``<lang>/<shard>.pcm`` (default from
                 ``dataset/config.yaml``).
-            load_speech: Skip audio when False (``create_shape``).
+            load_speech: Skip audio when False (text and frame counts only).
             prompt_config: Overrides of ``DEFAULT_PROMPT_CONFIG``.
             seed: Base seed of every draw.
             train: Force per-epoch (True) or fixed (False) draws.
@@ -390,7 +390,7 @@ class LEMASDataset(torch.utils.data.Dataset):
             spk24 = spk_w if spk_present else np.zeros(0, np.float32)
             lang24 = lang_w if lang_present else np.zeros(0, np.float32)
             sf_, lf_ = region_frames(len(spk24)), region_frames(len(lang24))
-        else:  # frame counts from the draw alone (create_shape never reads audio)
+        else:  # frame counts from the draw alone, no audio read
             if d.split_k is not None:
                 n_spk_w = quantize_prompt(
                     int(c.word_bounds(idx)[d.split_k - 1][1] * PACK_SR)
@@ -484,16 +484,6 @@ class LEMASDataset(torch.utils.data.Dataset):
             extra = np.zeros_like(c.dur)
         n = ((c.dur.astype(np.float64) + extra) * sample_rate).astype(np.int64)
         return (1 + n // hop_length).astype(np.int64)
-
-    def n_frames(self, hop_length: int, sample_rate: int) -> np.ndarray:
-        """Upper-bound frame count per row at the longest prompt layout."""
-        extra = float(self.cfg["spk_prompt_sec"][1]) + float(
-            self.cfg["lang_prompt_sec"][1]
-        )
-        if self.stock:
-            extra = 0.0
-        n = ((self.cols.dur.astype(np.float64) + extra) * sample_rate).astype(np.int64)
-        return (1 + n // hop_length).astype(np.int32)
 
 
 Dataset = LEMASDataset

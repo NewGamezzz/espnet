@@ -134,14 +134,6 @@ def test_prompt_lengths_within_config(corpus):
         assert 0.5 * 24000 - 256 <= d.lang_len <= 1.0 * 24000 and d.lang_len % 256 == 0
 
 
-def test_n_frames_upper_bound(corpus):
-    ds = _ds(corpus)
-    fr = ds.n_frames(256, 24000)
-    assert len(fr) == len(ds)
-    assert fr[0] == 1 + int((3.0 + 2.0 + 2.0) * 24000) // 256
-    assert len(ds[0]["speech"]) // 256 + 1 <= fr[0]
-
-
 def test_load_speech_false_has_no_speech(corpus):
     ds = LEMASDataset(
         split="train",
@@ -308,7 +300,6 @@ def test_stock_layout_frame_bounds_add_no_prompt(corpus):
     ds = _ds(corpus, layout="stock")
     want = 1 + (ds.cols.dur * 24000).astype(np.int64) // 256
     assert ds.frames_bound().tolist() == want.tolist()
-    assert ds.n_frames(256, 24000).tolist() == want.tolist()
     for idx in range(len(ds)):
         assert n_frames_total(len(ds[idx]["speech"])) <= ds.frames_bound()[idx]
 

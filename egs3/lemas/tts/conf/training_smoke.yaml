@@ -9,9 +9,8 @@
 # recording) and a language prompt (same language, different speaker).
 # Spec: vault note "Design - LEMAS Dual-Prompt F5 Recipe" (2026-09-05).
 #
-# Stages: create_dataset -> create_token_list -> create_shape -> train.
-# create_shape writes feats_shape analytically (upper bound at the longest
-# prompt layout), so collect_stats is not used.
+# Stages: create_dataset -> create_token_list -> train. Batches come from
+# src/sampler.py, so collect_stats is not used.
 num_device: 4
 num_nodes: 1
 seed: 0
@@ -19,8 +18,8 @@ seed: 0
 recipe_dir: .
 data_dir: ${recipe_dir}/data
 exp_dir: ${recipe_dir}/exp/${exp_tag}
-# feats_shape is a property of the corpus and the prompt caps, not of one
-# experiment, so it is shared across exp_tags.
+# espnet3's collect_stats output dir; unused here (batches come from
+# src/sampler.py)
 stats_dir: ${recipe_dir}/exp/stats
 inference_dir: ${exp_dir}/inference
 exp_tag: smoke_lemas_dualprompt_r2
@@ -82,17 +81,6 @@ create_token_list:
   # tokens seen <= cutoff times over ~30 M rows are noise (stray symbols);
   # they map to <unk>
   cutoff: 20
-
-create_shape:
-  splits: [train, valid]
-  save_path: ${stats_dir}
-  hop_length: ${hop_length}
-  sample_rate: ${sample_rate}
-  n_mels: ${n_mel_channels}
-  manifest_paths:
-    train: ${data_dir}/manifest/train.tsv
-    valid: ${data_dir}/manifest/valid.tsv
-  prompt_config: ${prompt_config}
 
 dataset:
   _target_: espnet3.components.data.data_organizer.DataOrganizer

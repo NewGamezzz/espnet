@@ -1,8 +1,7 @@
 #!/bin/bash
 # Extraction (shard tars -> 24 kHz int16 packs, then the chunk-contiguous
 # regroup, each language verified against its shard packs), phonemization +
-# manifests,
-# token list and analytic feats_shape, on one cpu node. Re-runs are free:
+# manifests and the token list, on one cpu node. Re-runs are free:
 # extracted shards carry .complete markers.
 #SBATCH --job-name=lemas_create_dataset
 #SBATCH --account=bbjs-delta-cpu

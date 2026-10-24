@@ -6,7 +6,6 @@ def test_packages_import():
         "egs3.lemas.tts.dataset",
         "egs3.lemas.tts.src",
         "src.system",
-        "src.shape",
     ]:
         importlib.import_module(name)
 

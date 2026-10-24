@@ -172,7 +172,7 @@ def main(args) -> None:
         metrics_config=metrics_config,
     )
 
-    pretrain_stages = {"create_dataset", "create_token_list", "create_shape", "train"}
+    pretrain_stages = {"create_dataset", "create_token_list", "train"}
     required_configs = {stage: training_config for stage in pretrain_stages}
     required_configs["infer"] = inference_config
     missing = [

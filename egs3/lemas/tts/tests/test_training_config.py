@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 from hydra.utils import instantiate
 from omegaconf import OmegaConf
@@ -21,7 +23,7 @@ def test_training_config_instantiates_tiny_model(tmp_path):
     m = instantiate(cfg.model)
     assert type(m).__name__ == "DualPromptF5TTS"
     assert list(cfg.dataloader.collate_fn.not_sequence) == ["cond_frames"]
-    assert list(cfg.create_shape.prompt_config.spk_prompt_sec) == [1.0, 6.0]
+    assert list(cfg.prompt_config.spk_prompt_sec) == [1.0, 6.0]
     assert cfg.dataset.train[0].data_src_args.prompt_config.p_drop_spk == 0.3
     assert cfg.dataset.train[0].data_src_args.prompt_config.p_drop_lang == 0.1
     assert cfg.create_token_list.token_type == "word"
@@ -189,7 +191,6 @@ def test_layout_diagnostic_a_is_the_gh200_run_shrunk_to_english_on_one_gpu():
     for split in ("train", "valid"):
         args = a["dataset"][split][0]["data_src_args"]
         assert args["manifest_path"] == "${data_dir}/manifest_en/" + split + ".tsv"
-        assert a["create_shape"]["manifest_paths"][split] == args["manifest_path"]
     assert a["stats_dir"] == "${recipe_dir}/exp/stats_en_dualprompt"
     assert a["prompt_config"].pop("layout") == "dualprompt"  # the default
     for c in (gh, a):
@@ -200,7 +201,6 @@ def test_layout_diagnostic_a_is_the_gh200_run_shrunk_to_english_on_one_gpu():
             None
         )
         c["trainer"]["accumulate_grad_batches"] = None
-        c["create_shape"]["manifest_paths"] = None
         for split in ("train", "valid"):
             c["dataset"][split][0]["data_src_args"]["manifest_path"] = None
         _backup(c)["every_n_epochs"] = None
@@ -239,3 +239,20 @@ def test_layout_diagnostic_b_differs_from_a_only_in_the_layout():
 def test_layout_diagnostics_instantiate(tmp_path, path):
     cfg = _tiny(tmp_path, path)
     assert type(instantiate(cfg.model)).__name__ == "DualPromptF5TTS"
+
+
+@pytest.mark.parametrize(
+    "path", sorted(str(p) for p in Path("conf").glob("training_*.yaml"))
+)
+def test_configs_carry_no_block_for_a_stage_run_py_does_not_define(path):
+    # a removed stage (create_shape, 2026-09) left dead blocks in every config
+    import run
+    from src.system import TTSSystem
+
+    cfg = OmegaConf.load(path)
+    stages = set(run.DEFAULT_STAGES)
+    stray = [
+        k for k in cfg if callable(getattr(TTSSystem, k, None)) and k not in stages
+    ]
+    assert stray == [], stray
+    assert not hasattr(TTSSystem, "create_shape")

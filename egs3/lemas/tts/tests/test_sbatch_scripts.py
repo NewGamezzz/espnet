@@ -22,7 +22,6 @@ def test_readme_documents_stages_and_knobs():
     for key in (
         "create_dataset",
         "create_token_list",
-        "create_shape",
         "p_drop_spk",
         "spk_prompt_sec",
         "inference_lemas_eval_spk_only.yaml",

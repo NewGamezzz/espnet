@@ -51,15 +51,14 @@ The model change is one subclass (`src/model.py`): `DualPromptCFM` masks
 # phonemizes 30 M rows (zh rows whose text has Latin letters are dropped,
 # `drop_text_regex` in dataset/config.yaml; counts land in lang_stats.json),
 # writes data/manifest/{train,valid}.tsv,
-# data/lang_stats.json, data/tokens/tokens.txt and exp/stats/*/feats_shape.
+# data/lang_stats.json and data/tokens/tokens.txt.
 sbatch local/submit_create_dataset.sbatch
 # equivalent stages:
-python run.py --stages create_dataset create_token_list create_shape \
+python run.py --stages create_dataset create_token_list \
     --training_config conf/training_f5_base_dualprompt.yaml
 ```
 
-`create_shape` writes `feats_shape` analytically from manifest durations at
-the longest prompt layout (an upper bound), so `collect_stats` is not used.
+Batches come from `src/sampler.py` (below), so `collect_stats` is not used.
 `remove_long_short` is not used either: the 1 to 20 s target filter is
 applied in build.
 
@@ -213,7 +212,7 @@ around 4 MB pack blocks:
 - `src/sampler.py` (`BlockBatchSampler`, the top-level `batch_sampler`) cuts numel batches
   inside each block, shuffles and shards them per epoch; the plain torch DataLoader path is
   used (`iter_factory: null`, `trainer.use_distributed_sampler: false`,
-  `reload_dataloaders_every_n_epochs: 1`). `create_shape` is no longer needed.
+  `reload_dataloaders_every_n_epochs: 1`).
 
 Acceptance is `iter_time` at or below `train_time` in the 4-GPU smoke.
 
