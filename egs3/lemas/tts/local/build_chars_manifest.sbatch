@@ -31,6 +31,12 @@ for split in train valid; do
 done
 echo "== utt_id symmetric difference (train): $(comm -3 <(cut -f1 data/manifest/train.tsv | sort) <(cut -f1 data_chars/manifest/train.tsv | sort) | wc -l)"
 echo "== rows only in phones (train): $(comm -23 <(cut -f1 data/manifest/train.tsv | sort) <(cut -f1 data_chars/manifest/train.tsv | sort) | wc -l)"
+# the rows only on the chars side must be the text_fits drops of the phone
+# build (YODAS rows whose transcript eSpeak spelled out into hundreds of
+# phones: ru 50, es 9, fr 9, id 2, it 1 on 2026-09-29), never zh rows: the
+# drop_text_regex is applied before tokenization in both builds
+echo "== rows only in chars (train), per language:"
+comm -13 <(cut -f1 data/manifest/train.tsv | sort) <(cut -f1 data_chars/manifest/train.tsv | sort) | cut -c1-2 | sort | uniq -c
 echo "== columns 1,2,4-9 on common rows (train):"
 if cmp <(sort -k1,1 data/manifest/train.tsv | cut -f1,2,4-9 | sort) \
        <(sort -k1,1 data_chars/manifest/train.tsv | cut -f1,2,4-9 | sort) ; then
