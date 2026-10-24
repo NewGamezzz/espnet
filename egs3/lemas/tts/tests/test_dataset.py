@@ -346,3 +346,25 @@ def test_frames_bound_omits_a_prompt_that_is_always_dropped(corpus):
     assert np.all(no_lang.frames_bound() < full.frames_bound())
     for i in range(len(dur)):
         assert no_lang.drawn_frames(i) <= no_lang.frames_bound()[i]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        dict(text_tag="false"),  # a YAML string is truthy: S0a would train with a tag
+        dict(text_tag=0),
+        dict(p_drop_lang=1.5),
+        dict(p_drop_spk=-0.1),
+        dict(p_drop_lang="0.1"),
+    ],
+)
+def test_prompt_config_is_validated_at_construction(corpus, bad):
+    with pytest.raises(ValueError):
+        _ds(corpus, **bad)
+
+
+def test_both_prompts_always_dropped_stays_legal(corpus):
+    # design decision 7: a row with both prompts dropped is text-only
+    # generation, a shape the model trains on (see
+    # test_dropout_omits_regions_and_zero_when_both)
+    _ds(corpus, p_drop_spk=1.0, p_drop_lang=1.0)

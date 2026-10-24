@@ -127,6 +127,16 @@ class LEMASDataset(torch.utils.data.Dataset):
             raise ValueError(
                 f"unknown layout {cfg['layout']!r}, expected one of {LAYOUTS}"
             )
+        # fail at start-up, not after a queue wait: a YAML string such as
+        # "false" is truthy, and a rate outside [0, 1] silently never fires
+        if not isinstance(cfg["text_tag"], bool):
+            raise ValueError(f"text_tag must be a bool, got {cfg['text_tag']!r}")
+        for key in ("p_drop_spk", "p_drop_lang"):
+            v = cfg[key]
+            if isinstance(v, bool) or not isinstance(v, (int, float)):
+                raise ValueError(f"{key} must be a number in [0, 1], got {v!r}")
+            if not 0.0 <= float(v) <= 1.0:
+                raise ValueError(f"{key} must be in [0, 1], got {v!r}")
         self.cfg = cfg
         self.stock = cfg["layout"] == "stock"
         root = (
