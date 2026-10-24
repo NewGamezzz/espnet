@@ -256,3 +256,89 @@ def test_configs_carry_no_block_for_a_stage_run_py_does_not_define(path):
     ]
     assert stray == [], stray
     assert not hasattr(TTSSystem, "create_shape")
+
+
+# ---- paper baseline rows at F5-Base on all 10 languages (design note section 14,
+# Thanapat 2026-10-24) -------------------------------------------------------
+S0C = "conf/training_f5_base_s0c_stock_phones.yaml"
+S0A = "conf/training_f5_base_s0a_stock_chars.yaml"
+D1 = "conf/training_f5_base_d1_spkonly.yaml"
+# keys each row changes against BASE (the Delta D2 run); everything else is
+# pinned equal. lr 1.5e-4 pairs the rows with the GH200 D2 run.
+ROW_DELTAS = {
+    S0C: {
+        "exp_tag": "train_f5_base_lemas_s0c_stock_phones",
+        "stats_dir": "${recipe_dir}/exp/stats_s0c",
+        ("prompt_config", "layout"): "stock",
+        ("batch_sampler", "batch_bins"): 400_000,
+    },
+    S0A: {
+        "exp_tag": "train_f5_base_lemas_s0a_stock_chars",
+        "stats_dir": "${recipe_dir}/exp/stats_s0a",
+        "data_dir": "${recipe_dir}/data_chars",
+        ("prompt_config", "layout"): "stock",
+        ("prompt_config", "text_tag"): False,
+        ("create_dataset", "text_units"): "chars",
+        ("create_dataset", "data_path"): "data_chars",
+        ("batch_sampler", "batch_bins"): 400_000,
+    },
+    D1: {
+        "exp_tag": "train_f5_base_lemas_d1_spkonly",
+        "stats_dir": "${recipe_dir}/exp/stats_d1",
+        ("prompt_config", "p_drop_lang"): 1.0,
+    },
+}
+
+
+def _get(c, key):
+    return c[key] if isinstance(key, str) else c[key[0]][key[1]]
+
+
+def _set(c, key, value):
+    if isinstance(key, str):
+        c[key] = value
+    else:
+        c.setdefault(key[0], {})[key[1]] = value
+
+
+@pytest.mark.parametrize("path", [S0C, S0A, D1])
+def test_baseline_row_differs_from_base_only_in_its_knobs(path):
+    base = OmegaConf.to_container(OmegaConf.load(BASE))
+    row = OmegaConf.to_container(OmegaConf.load(path))
+    gh = OmegaConf.to_container(OmegaConf.load(GH200))
+    for key, value in ROW_DELTAS[path].items():
+        assert _get(row, key) == value, key
+    assert row["optimizer"]["lr"] == gh["optimizer"]["lr"] == 1.5e-4
+    # 100 optimizer steps per epoch; accumulate is set from the measured fill
+    acc = row["trainer"]["accumulate_grad_batches"]
+    assert row["batch_sampler"]["batches_per_epoch"] == 100 * acc
+    for c in (base, row):
+        for key in ROW_DELTAS[path]:
+            _set(c, key, None)
+        c["optimizer"]["lr"] = None
+        c["trainer"]["accumulate_grad_batches"] = None
+        c["batch_sampler"]["batches_per_epoch"] = None
+    assert row == base
+
+
+@pytest.mark.parametrize("path", [S0C, S0A, D1])
+def test_baseline_rows_instantiate(tmp_path, path):
+    cfg = _tiny(tmp_path, path)
+    assert type(instantiate(cfg.model)).__name__ == "DualPromptF5TTS"
+
+
+def test_stock_rows_keep_their_own_data_and_token_list():
+    # raw strings (no interpolation): every data path of S0a hangs off data_dir,
+    # so the one data_dir change moves manifests, token list and lang_stats
+    s0a = OmegaConf.to_container(OmegaConf.load(S0A), resolve=False)
+    s0c = OmegaConf.to_container(OmegaConf.load(S0C), resolve=False)
+    for split in ("train", "valid"):
+        args = s0a["dataset"][split][0]["data_src_args"]
+        assert args["manifest_path"] == "${data_dir}/manifest/" + split + ".tsv"
+    assert s0a["token_list"] == "${data_dir}/tokens/tokens.txt"
+    assert s0a["create_token_list"]["manifest_path"] == "${data_dir}/manifest/train.tsv"
+    assert s0a["create_token_list"]["save_path"] == "${data_dir}/tokens"
+    resolved = OmegaConf.load(S0A)
+    assert resolved.token_list == "./data_chars/tokens/tokens.txt"
+    assert s0c["data_dir"] == "${recipe_dir}/data"
+    assert "text_tag" not in s0c["prompt_config"]  # S0c keeps the tag (default)
