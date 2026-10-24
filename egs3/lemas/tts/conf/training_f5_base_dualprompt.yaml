@@ -2,6 +2,9 @@
 # two transcript-free audio prompts: a speaker prompt (same speaker or
 # recording) and a language prompt (same language, different speaker).
 # Spec: vault note "Design - LEMAS Dual-Prompt F5 Recipe" (2026-09-05).
+# Delta (4 A100) run at F5's learning rate 7.5e-5. Relaunched fresh as _r3
+# (Thanapat 2026-10-24) on the rebuilt packs with the 600k schedule of the
+# GH200 run and bf16 mixed precision (r2 was fp32 on 300k).
 #
 # Stages: create_dataset -> create_token_list -> create_shape -> train.
 # create_shape writes feats_shape analytically (upper bound at the longest
@@ -17,7 +20,7 @@ exp_dir: ${recipe_dir}/exp/${exp_tag}
 # experiment, so it is shared across exp_tags.
 stats_dir: ${recipe_dir}/exp/stats
 inference_dir: ${exp_dir}/inference
-exp_tag: train_f5_base_lemas_dualprompt_r2
+exp_tag: train_f5_base_lemas_dualprompt_bf16_r3
 
 sample_rate: 24000
 n_mel_channels: 100
@@ -146,7 +149,7 @@ optimizer:
 scheduler:
   _target_: espnet3.components.schedulers.linear_warmup_decay.LinearWarmupDecayLR
   warmup_steps: 20000
-  total_steps: 300000
+  total_steps: 600000
 scheduler_interval: step
 
 best_model_criterion:
@@ -203,7 +206,8 @@ trainer:
   num_nodes: ${num_nodes}
   # 4 GPUs x 8,000 frames x 10 = 320k frames per update (F5: 307,200).
   accumulate_grad_batches: 10
-  max_steps: 300000
+  max_steps: 600000
+  precision: bf16-mixed
   max_epochs: -1   # epochs are short (batch_sampler.batches_per_epoch); max_steps ends the run
   # Validation at the end of EVERY epoch. Lightning 2.6.5 resumes an
   # epoch-end checkpoint exactly only when a validation is due at that epoch

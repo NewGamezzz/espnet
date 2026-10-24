@@ -1,7 +1,8 @@
 # DeltaAI (GH200) variant of training_f5_base_dualprompt.yaml, Thanapat's
 # second experiment (2026-10-01): 2 GPUs, learning rate 1.5e-4 (2x F5's
-# 7.5e-5), bf16 mixed precision, and the 96 GB GPU spent on 20,000-frame
-# micro-batches (batch_bins 2M x accumulate 8 on 2 GPUs = the same 320k
+# 7.5e-5), bf16 mixed precision (the base config too since its _r3), and the
+# 96 GB GPU spent on 20,000-frame micro-batches (batch_bins 2M x accumulate 8
+# on 2 GPUs = the same 320k
 # frames per update as the 4-A100 run, in fewer micro-batches; so not a pure
 # learning-rate comparison). Epochs stay 100 optimizer steps = 800
 # micro-batches. Everything else is byte-identical to the base config;

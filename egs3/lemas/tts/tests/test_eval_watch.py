@@ -63,7 +63,11 @@ def test_runs_table_watches_the_live_run_under_its_config_tag():
         (
             "train_f5_base_lemas_dualprompt_gh200_lr1.5e-4_r3",
             "conf/training_f5_base_dualprompt_gh200.yaml",
-        )
+        ),
+        (
+            "train_f5_base_lemas_dualprompt_bf16_r3",
+            "conf/training_f5_base_dualprompt.yaml",
+        ),
     ]
     for tag, conf in RUNS:
         assert f"exp_tag: {tag}\n" in Path(conf).read_text()
@@ -100,6 +104,7 @@ def test_probes_are_submitted_once_per_backup_beside_the_eval_arms(tmp_path):
 def test_probe_runs_cover_the_live_run_and_both_layout_diagnostics():
     assert [conf for _, conf in PROBE_RUNS] == [
         "conf/training_f5_base_dualprompt_gh200.yaml",
+        "conf/training_f5_base_dualprompt.yaml",
         "conf/training_f5_small_en_dualprompt.yaml",
         "conf/training_f5_small_en_stock.yaml",
     ]

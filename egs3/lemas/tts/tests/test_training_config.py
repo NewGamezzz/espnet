@@ -39,6 +39,16 @@ def test_base_config_geometry():
     assert cfg.trainer.plugins[0]._target_.endswith("MmapCheckpointIO")
 
 
+def test_base_config_is_the_delta_low_lr_run_on_600k_steps_in_bf16():
+    # Thanapat 2026-10-24: relaunch the 7.5e-5 run on Delta with the 600k
+    # schedule and bf16 mixed precision, under a new run name
+    cfg = OmegaConf.load(BASE)
+    assert cfg.exp_tag == "train_f5_base_lemas_dualprompt_bf16_r3"
+    assert cfg.optimizer.lr == 7.5e-5 and cfg.num_device == 4
+    assert cfg.trainer.max_steps == cfg.scheduler.total_steps == 600_000
+    assert cfg.trainer.precision == "bf16-mixed"
+
+
 def test_smoke_config_differs_only_in_run_length(tmp_path):
     base = OmegaConf.load("conf/training_f5_base_dualprompt.yaml")
     smoke = OmegaConf.load("conf/training_smoke.yaml")
@@ -101,10 +111,7 @@ def test_gh200_config_differs_from_base_only_in_the_intended_knobs():
     assert gh["exp_tag"] != base["exp_tag"]
     assert gh["num_device"] == 2 and base["num_device"] == 4
     assert gh["optimizer"]["lr"] == 1.5e-4 and base["optimizer"]["lr"] == 7.5e-5
-    assert (
-        gh["trainer"]["precision"] == "bf16-mixed"
-        and "precision" not in base["trainer"]
-    )
+    assert gh["trainer"]["precision"] == base["trainer"]["precision"] == "bf16-mixed"
     frames = lambda c: (  # noqa: E731
         c["num_device"]
         * c["batch_sampler"]["batch_bins"]
@@ -120,12 +127,10 @@ def test_gh200_config_differs_from_base_only_in_the_intended_knobs():
     assert gh["trainer"]["max_steps"] == gh["scheduler"]["total_steps"] == 600_000
     for c in (base, gh):
         c["exp_tag"] = c["optimizer"]["lr"] = c["num_device"] = None
-        c["trainer"]["max_steps"] = c["scheduler"]["total_steps"] = None
         c["batch_sampler"]["batch_bins"] = c["batch_sampler"]["batches_per_epoch"] = (
             None
         )
         c["trainer"]["accumulate_grad_batches"] = None
-        c["trainer"].pop("precision", None)
     assert gh == base
 
 

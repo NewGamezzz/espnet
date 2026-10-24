@@ -21,6 +21,7 @@ RUNS: List[Tuple[str, str]] = [
         "train_f5_base_lemas_dualprompt_gh200_lr1.5e-4_r3",
         "conf/training_f5_base_dualprompt_gh200.yaml",
     ),
+    ("train_f5_base_lemas_dualprompt_bf16_r3", "conf/training_f5_base_dualprompt.yaml"),
 ]
 # Text-use probe (local/probe_text_use.py) of every backup: the earliest sign
 # that a run reads its phones. The layout diagnostics get only the probe.
