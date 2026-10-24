@@ -18,7 +18,8 @@ source "$SLURM_SUBMIT_DIR/local/delta_env.sh"
 mkdir -p logs exp/eval_watch
 LEFT=${WATCH_LEFT:-720}   # hourly checks for a month
 if [ "$LEFT" -gt 1 ] && [ ! -f exp/eval_watch/STOP ]; then
-  WATCH_LEFT=$((LEFT - 1)) sbatch --begin=now+1hour "$SLURM_SUBMIT_DIR/local/eval_watch.sbatch" >> logs/eval_watch_chain.log
+  WATCH_LEFT=$((LEFT - 1)) sbatch --begin=now+1hour -J "$SLURM_JOB_NAME" \
+    "$SLURM_SUBMIT_DIR/local/eval_watch.sbatch" >> logs/eval_watch_chain.log
 else
   echo "eval watch stopped (WATCH_LEFT=$LEFT)" >> logs/eval_watch_chain.log
 fi

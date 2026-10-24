@@ -31,8 +31,10 @@ if [ -z "${NO_CHAIN:-}" ]; then
   fi
   LEFT=${CHAIN_LEFT:-400}
   if [ "$LEFT" -gt 1 ] && [ ! -f "exp/$TAG/STOP" ]; then
+    # successors keep the name this chain was submitted with (-J), so chains
+    # of different rows stay distinguishable in squeue
     CHAIN_LEFT=$((LEFT - 1)) sbatch --dependency=afterany:$SLURM_JOB_ID \
-      "$SLURM_SUBMIT_DIR/local/$SELF" "$CONF" >> "$CHAIN_LOG"
+      -J "$SLURM_JOB_NAME" "$SLURM_SUBMIT_DIR/local/$SELF" "$CONF" >> "$CHAIN_LOG"
   else
     echo "chain stopped (CHAIN_LEFT=$LEFT, STOP=$([ -f exp/$TAG/STOP ] && echo yes || echo no))" >> "$CHAIN_LOG"
   fi

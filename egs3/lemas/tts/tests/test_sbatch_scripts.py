@@ -144,3 +144,14 @@ def test_readme_documents_the_baseline_rows():
         "build_chars_manifest.sbatch",
     ):
         assert key in s, key
+
+
+def test_chain_links_and_watcher_requeues_inherit_the_job_name():
+    # the baseline rows run from their own worktree next to the production
+    # chain; submitted with -J lemas_rows_<row> they must keep that name on
+    # every successor so squeue tells them apart from lemas_f5_base and
+    # lemas_eval_watch (jobs that must never be touched)
+    link = Path("local/train_link.sh").read_text()
+    assert '-J "$SLURM_JOB_NAME"' in link
+    watch = Path("local/eval_watch.sbatch").read_text()
+    assert '-J "$SLURM_JOB_NAME"' in watch
