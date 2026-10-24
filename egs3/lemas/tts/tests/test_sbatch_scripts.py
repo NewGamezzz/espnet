@@ -78,3 +78,21 @@ def test_one_gpu_chain_for_the_layout_diagnostics():
         assert line in s
     # no default config: each diagnostic names its own
     assert 'CONF_DEFAULT=""' in s
+
+
+def test_scripts_only_name_stages_that_run_py_defines():
+    import ast
+    import re
+
+    tree = ast.parse(Path("run.py").read_text())
+    stages = next(
+        ast.literal_eval(n.value)
+        for n in tree.body
+        if isinstance(n, ast.Assign) and n.targets[0].id == "DEFAULT_STAGES"
+    )
+    for p in sorted(Path("local").glob("*.s*")):
+        s = p.read_text()
+        named = re.findall(r"--stages ([^-\n]+)", s) + re.findall(r'STAGES:-"([^"]+)"', s)
+        for words in named:
+            for w in words.split():
+                assert w.startswith("$") or w in stages, f"{p}: unknown stage {w}"

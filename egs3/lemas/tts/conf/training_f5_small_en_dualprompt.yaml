@@ -14,7 +14,7 @@ seed: 0
 recipe_dir: .
 data_dir: ${recipe_dir}/data
 exp_dir: ${recipe_dir}/exp/${exp_tag}
-# own feats_shape: another manifest (row keys are indices) and layout
+# own stats dir: another manifest (row keys are indices) and layout
 stats_dir: ${recipe_dir}/exp/stats_en_dualprompt
 inference_dir: ${exp_dir}/inference
 exp_tag: diag_f5_small_en_dualprompt
