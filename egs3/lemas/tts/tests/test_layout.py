@@ -63,3 +63,11 @@ def test_text_ids_golden(tmp_path):
     assert cond_frames(3, 2) == 5
     assert build_text_ids(0, 0, "zh", ["a"], t).tolist() == [8, 2]
     assert t.size == len(TOKENS) and t.spk == 5 and t.lang == 6
+
+
+def test_build_text_ids_without_tag_is_role_tokens_then_phones(tmp_path):
+    # S0a (stock F5-TTS) has no language tag: the lane is the phones alone,
+    # or the role tokens then the phones in the dual-prompt layout
+    table = _table(tmp_path)
+    assert build_text_ids(2, 1, "de", ["a"], table, tag=False).tolist() == [5, 5, 6, 2]
+    assert build_text_ids(0, 0, "de", ["a", "b"], table, tag=False).tolist() == [2, 3]

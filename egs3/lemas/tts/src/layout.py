@@ -108,6 +108,7 @@ def build_text_ids(
     lang: str,
     phones: Sequence[str],
     table: TokenTable,
+    tag: bool = True,
 ) -> np.ndarray:
     """Build the text lane: role tokens per prompt frame, then tag + phones.
 
@@ -117,14 +118,21 @@ def build_text_ids(
         lang: Target language code (selects the tag token).
         phones: Target phone tokens.
         table: Token table.
+        tag: Put the language tag before the phones (``False`` for the stock
+            F5-TTS baseline, whose lane has no language token).
 
     Returns:
-        ``int64`` id array of length ``spk_frames + lang_frames + 1 + len(phones)``.
+        ``int64`` id array of length ``spk_frames + lang_frames + int(tag) +
+        len(phones)``.
 
     Example:
         >>> build_text_ids(2, 1, "de", ["a"], table).tolist()
         [5, 5, 6, 7, 2]
+        >>> build_text_ids(2, 1, "de", ["a"], table, tag=False).tolist()
+        [5, 5, 6, 2]
     """
-    ids = [table.spk] * spk_frames + [table.lang] * lang_frames + [table.tag(lang)]
+    ids = [table.spk] * spk_frames + [table.lang] * lang_frames
+    if tag:
+        ids.append(table.tag(lang))
     ids.extend(table.id(p) for p in phones)
     return np.asarray(ids, dtype=np.int64)

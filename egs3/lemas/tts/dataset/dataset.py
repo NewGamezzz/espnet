@@ -52,6 +52,9 @@ DEFAULT_PROMPT_CONFIG = dict(
     # "dualprompt": [spk | lang | target] with role tokens; "stock": the row
     # alone with its full phones and stock F5's random span (diagnostic)
     layout="dualprompt",
+    # language tag before the target phones; False for the stock F5-TTS
+    # baseline row, whose lane carries no language token
+    text_tag=True,
 )
 LAYOUTS = ("dualprompt", "stock")
 
@@ -400,7 +403,11 @@ class LEMASDataset(torch.utils.data.Dataset):
             sf_ = region_frames(n_spk_w) if spk_present else 0
             lf_ = region_frames(d.lang_len) if lang_present else 0
         text = (
-            build_text_ids(sf_, lf_, lang, phones, self.table) if self.table else None
+            build_text_ids(
+                sf_, lf_, lang, phones, self.table, tag=bool(self.cfg["text_tag"])
+            )
+            if self.table
+            else None
         )
         sample: Dict[str, Any] = {
             "cond_frames": np.asarray([cond_frames(sf_, lf_)], dtype=np.int64)
@@ -416,13 +423,18 @@ class LEMASDataset(torch.utils.data.Dataset):
         return sample
 
     def _stock_item(self, idx: int) -> Dict[str, Any]:
-        """Stock F5 sample: the whole row, tag + full phones, random span."""
+        """Stock F5 sample: the whole row, [tag +] full phones, random span."""
         c = self.cols
         lang = LANGS[int(c.lang[idx])]
         sample: Dict[str, Any] = {"cond_frames": np.asarray([-1], dtype=np.int64)}
         if self.table:
             sample["text"] = build_text_ids(
-                0, 0, lang, c.phones(idx).split(" "), self.table
+                0,
+                0,
+                lang,
+                c.phones(idx).split(" "),
+                self.table,
+                tag=bool(self.cfg["text_tag"]),
             )
         if self.load_speech:
             sample["speech"] = self._read_pcm(idx)

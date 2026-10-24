@@ -310,9 +310,7 @@ def test_unknown_layout_is_refused(corpus):
 
 
 @pytest.mark.parametrize("layout", ["dualprompt", "stock"])
-def test_drawn_frames_is_the_served_sample_length_without_reading_audio(
-    corpus, layout
-):
+def test_drawn_frames_is_the_served_sample_length_without_reading_audio(corpus, layout):
     ds = _ds(corpus, layout=layout, p_drop_spk=0.5, p_drop_lang=0.5)
     for epoch in range(4):
         ds.set_epoch(epoch)
@@ -320,3 +318,15 @@ def test_drawn_frames_is_the_served_sample_length_without_reading_audio(
             want = n_frames_total(len(ds[idx]["speech"]))
             assert ds.drawn_frames(idx) == want, (epoch, idx)
             assert want <= ds.frames_bound()[idx]
+
+
+def test_stock_layout_without_tag_emits_only_the_phones(corpus):
+    # the stock F5-TTS baseline row (S0a): no language tag anywhere in the lane
+    ds = _ds(corpus, layout="stock", text_tag=False)
+    assert ds[0]["text"].tolist() == [2, 3, 4, 2]  # "a b <space> a" of row 0, no <de>
+    assert int(ds[0]["cond_frames"][0]) == -1
+
+
+def test_text_tag_defaults_to_true(corpus):
+    ds = _ds(corpus, layout="stock")
+    assert ds.cfg["text_tag"] is True and ds[0]["text"].tolist()[0] == 7  # <de>
