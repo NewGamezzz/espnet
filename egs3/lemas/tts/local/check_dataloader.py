@@ -7,8 +7,9 @@ reseeding, collate). Only ``current_epoch`` is overridden. Every row of
 every inspected batch is checked for:
 
 - structure: lengths within the padded tensors, zero padding, one role
-  token per prompt frame then the language tag, text no longer than the
-  mel the model extracts, a non-empty target span;
+  token per prompt frame then the language tag (or no tag at all when the
+  config's ``text_tag`` is false), text no longer than the mel the model
+  extracts, a non-empty target span;
 - consistency: the row equals ``dataset[index]`` drawn at the same epoch,
   and its target phones equal the manifest's (column 3, or the split
   target of the drawn split point);
@@ -37,6 +38,7 @@ import torch
 from dataset.builder import split_points
 from src.layout import HOP, SR, TokenTable
 from src.lit_module import LEMASLightningModule
+from src.text.lemas_phonemizer import LANGS, lang_tag
 
 from espnet3.systems.base.training import _instantiate_model
 from espnet3.utils.config_utils import load_and_merge_config
@@ -147,8 +149,16 @@ def row_problems(r, uids, data, f_len, dataset, wrapper, table, lang):
     n_spk = int((roles == table.spk).sum())
     if np.any(roles[n_spk:] != table.lang):
         kinds.append("role tokens out of order")
-    if head >= len(ids) or int(ids[head]) != table.tag(lang):
-        kinds.append("language tag missing or wrong")
+    text_tag = bool(dataset.cfg.get("text_tag", True))
+    if text_tag:
+        if head >= len(ids) or int(ids[head]) != table.tag(lang):
+            kinds.append("language tag missing or wrong")
+        first = head + 1
+    else:  # stock F5-TTS baseline: no language token anywhere in the lane
+        tag_ids = {table.id(lang_tag(lg)) for lg in LANGS} - {table.unk}
+        if head < len(ids) and int(ids[head]) in tag_ids:
+            kinds.append("language tag present but text_tag is false")
+        first = head
     # the same row through the wrapper, in this process, at this epoch (the
     # loader's workers forked after the epoch was set)
     draw = None if stock else dataset.draw(row)
@@ -168,7 +178,7 @@ def row_problems(r, uids, data, f_len, dataset, wrapper, table, lang):
         if split_k is None
         else cols.split_targets(row)[split_k]
     )
-    got = [inv[int(x)] for x in ids[head + 1 :]]
+    got = [inv[int(x)] for x in ids[first:]]
     if got != [t if t in table._id else "<unk>" for t in want]:
         kinds.append("target phones != manifest")
     info = dict(wav=wav, ids=ids, head=head, n_spk=n_spk, split_k=split_k, got=got)

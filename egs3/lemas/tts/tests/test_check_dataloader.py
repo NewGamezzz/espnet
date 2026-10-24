@@ -126,3 +126,21 @@ def test_stock_row_with_a_prompt_boundary_is_caught(corpus):
 
     problems = _check(corpus, _rows(corpus), bound, layout="stock")[0]
     assert "stock row without the random-span sentinel" in problems
+
+
+def test_a_stock_batch_without_tag_passes(corpus):
+    # S0a (stock F5-TTS): no language tag in the lane, phones == manifest
+    assert _check(corpus, [0, 5], layout="stock", text_tag=False) == [[], []]
+
+
+def test_a_tag_in_a_no_tag_lane_is_caught(corpus):
+    def add_tag(uids, data):  # a <de> slipped in although text_tag is false
+        n = int(data["text_lengths"][0])
+        text = torch.nn.functional.pad(data["text"], (0, 1))
+        text[0, 1 : n + 1] = data["text"][0, :n].clone()
+        text[0, 0] = 7  # <de>
+        data["text"] = text
+        data["text_lengths"][0] = n + 1
+
+    kinds = _check(corpus, [0], mutate=add_tag, layout="stock", text_tag=False)
+    assert "language tag present but text_tag is false" in kinds[0]
