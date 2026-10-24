@@ -96,3 +96,16 @@ def test_scripts_only_name_stages_that_run_py_defines():
         for words in named:
             for w in words.split():
                 assert w.startswith("$") or w in stages, f"{p}: unknown stage {w}"
+
+
+def test_batch_fill_job_measures_both_diagnostics_and_both_main_runs_on_cpu():
+    s = Path("local/measure_batch_fill.sbatch").read_text()
+    assert "--partition=cpu" in s and "--account=bbjs-delta-cpu" in s
+    assert 'source "$SLURM_SUBMIT_DIR/local/delta_env.sh"' in s
+    for conf in (
+        "conf/training_f5_small_en_dualprompt.yaml",
+        "conf/training_f5_small_en_stock.yaml",
+        "conf/training_f5_base_dualprompt.yaml",
+        "conf/training_f5_base_dualprompt_gh200.yaml",
+    ):
+        assert conf in s and Path(conf).is_file()

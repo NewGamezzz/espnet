@@ -316,3 +316,16 @@ def test_stock_layout_frame_bounds_add_no_prompt(corpus):
 def test_unknown_layout_is_refused(corpus):
     with pytest.raises(ValueError, match="layout"):
         _ds(corpus, layout="stack")
+
+
+@pytest.mark.parametrize("layout", ["dualprompt", "stock"])
+def test_drawn_frames_is_the_served_sample_length_without_reading_audio(
+    corpus, layout
+):
+    ds = _ds(corpus, layout=layout, p_drop_spk=0.5, p_drop_lang=0.5)
+    for epoch in range(4):
+        ds.set_epoch(epoch)
+        for idx in range(len(ds)):
+            want = n_frames_total(len(ds[idx]["speech"]))
+            assert ds.drawn_frames(idx) == want, (epoch, idx)
+            assert want <= ds.frames_bound()[idx]

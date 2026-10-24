@@ -428,6 +428,47 @@ class LEMASDataset(torch.utils.data.Dataset):
             sample["speech"] = self._read_pcm(idx)
         return sample
 
+    def drawn_frames(self, idx: int) -> int:
+        """Frames of row ``idx``'s sample at the current epoch, without audio.
+
+        Mirrors the region lengths ``__getitem__`` serves (reads clamped to
+        the row end, prompts trimmed to whole hops, dropped regions omitted),
+        so the real fill of a batch can be measured against ``frames_bound``.
+
+        Args:
+            idx: Row index.
+
+        Returns:
+            Mel frames of the concatenated waveform.
+
+        Example:
+            >>> ds.drawn_frames(0) <= ds.frames_bound()[0]
+            True
+        """
+        c = self.cols
+        idx = int(idx)
+        a_len = int(c.a_len[idx])
+        if self.stock:
+            return a_len // HOP + 1
+        d = self.draw(idx)
+
+        def window(row: int, start: int, length: int) -> int:
+            stop = min(start + length, int(c.a_len[row]))
+            return quantize_prompt(max(0, stop - start))
+
+        spk, target = 0, a_len
+        if d.split_k is not None:
+            wb = c.word_bounds(idx)
+            p_end = quantize_prompt(int(wb[d.split_k - 1][1] * PACK_SR))
+            spk = quantize_prompt(min(p_end, a_len))
+            target = max(0, a_len - int(wb[d.split_k][0] * PACK_SR))
+        elif d.spk_row is not None:
+            spk = window(d.spk_row, d.spk_start, d.spk_len)
+        if d.spk_row is None or d.drop_spk:
+            spk = 0
+        lang = 0 if d.drop_lang else window(d.lang_row, d.lang_start, d.lang_len)
+        return (spk + lang + target) // HOP + 1
+
     def frames_bound(self, hop_length: int = HOP, sample_rate: int = SR) -> np.ndarray:
         """Per-row upper bound on frames for batching, aware of the prompt mode.
 
