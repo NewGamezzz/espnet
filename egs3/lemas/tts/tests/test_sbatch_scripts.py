@@ -91,7 +91,9 @@ def test_scripts_only_name_stages_that_run_py_defines():
     )
     for p in sorted(Path("local").glob("*.s*")):
         s = p.read_text()
-        named = re.findall(r"--stages ([^-\n]+)", s) + re.findall(r'STAGES:-"([^"]+)"', s)
+        named = re.findall(r"--stages ([^-\n]+)", s) + re.findall(
+            r'STAGES:-"([^"]+)"', s
+        )
         for words in named:
             for w in words.split():
                 assert w.startswith("$") or w in stages, f"{p}: unknown stage {w}"
@@ -108,3 +110,37 @@ def test_batch_fill_job_measures_both_diagnostics_and_both_main_runs_on_cpu():
         "conf/training_f5_base_dualprompt_gh200.yaml",
     ):
         assert conf in s and Path(conf).is_file()
+
+
+def test_chars_manifest_build_script():
+    # S0a's character manifests: the create_dataset + create_token_list stages
+    # driven by the S0a config, into data_chars/, on a cpu node
+    s = Path("local/build_chars_manifest.sbatch").read_text()
+    assert "--partition=cpu" in s and 'cd "$SLURM_SUBMIT_DIR"' in s
+    assert 'source "$SLURM_SUBMIT_DIR/local/delta_env.sh"' in s
+    assert "conf/training_f5_base_s0a_stock_chars.yaml" in s
+    assert "create_dataset create_token_list" in s and "data_chars" in s
+
+
+def test_fill_measurement_covers_the_rows_and_the_base():
+    # the base config stays in the list as the regression reference (3,261.45)
+    s = Path("local/measure_batch_fill.sbatch").read_text()
+    for c in (
+        "training_f5_base_s0c_stock_phones.yaml",
+        "training_f5_base_s0a_stock_chars.yaml",
+        "training_f5_base_d1_spkonly.yaml",
+        "training_f5_base_dualprompt.yaml",
+    ):
+        assert c in s, c
+
+
+def test_readme_documents_the_baseline_rows():
+    s = Path("README.md").read_text()
+    for key in (
+        "training_f5_base_s0c_stock_phones.yaml",
+        "training_f5_base_s0a_stock_chars.yaml",
+        "training_f5_base_d1_spkonly.yaml",
+        "WANDB_MODE=disabled",
+        "build_chars_manifest.sbatch",
+    ):
+        assert key in s, key

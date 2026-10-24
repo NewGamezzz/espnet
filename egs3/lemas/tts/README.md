@@ -71,6 +71,42 @@ point of a `split` row, at build and again when the dataset draws one.
 
 Paths (mirror, FLAC root, languages, filters) live in `dataset/config.yaml`.
 
+## Baseline rows (paper ablation)
+
+Four rows at F5-Base on all 10 languages, decided 2026-10-24 (design note
+"Design - LEMAS Component Ablation Baselines", section 14). Each differs
+from `conf/training_f5_base_dualprompt.yaml` only in the knobs listed, pinned
+by `tests/test_training_config.py`; all three new rows use lr 1.5e-4 to pair
+with the GH200 D2 run.
+
+| Row | Config | Delta |
+|---|---|---|
+| S0a stock F5-TTS | `conf/training_f5_base_s0a_stock_chars.yaml` | characters (pinyin for zh), no language tag, stock layout, own data tree `data_chars/` |
+| S0c F5 + LEMAS front-end | `conf/training_f5_base_s0c_stock_phones.yaml` | stock layout over the recipe's phonemes and tag |
+| D1 speaker prompt only | `conf/training_f5_base_d1_spkonly.yaml` | `p_drop_lang: 1.0` |
+| D2 full | `conf/training_f5_base_dualprompt_gh200.yaml` | the system |
+
+Gate before a chain head is submitted (each step from the recipe dir):
+
+```bash
+sbatch local/build_chars_manifest.sbatch       # S0a only: data_chars/ from the same packs
+sbatch local/measure_batch_fill.sbatch         # sets accumulate_grad_batches per row (307,200 real frames per update)
+sbatch local/check_dataloader.sbatch conf/training_f5_base_<row>.yaml
+# 30 min smoke on the real config; WANDB_MODE=disabled keeps the smoke's steps
+# out of the run's wandb history (id = exp_tag, resume allow)
+NO_CHAIN=1 WANDB_MODE=disabled sbatch --time=00:30:00 local/submit_train.sbatch conf/training_f5_base_<row>.yaml
+# a second smoke resumes from the first's last.ckpt; then move the smoke dir
+# aside so the chain starts fresh
+mv exp/<exp_tag> exp/<exp_tag>_smoke_<jobid>
+CHAIN_LEFT=1000 sbatch local/submit_train.sbatch conf/training_f5_base_<row>.yaml
+```
+
+A stock micro-batch fills its bound (no prompt regions), so the stock rows run
+at `batch_bins: 400000`; at 800,000 they would carry 2.5x the real frames of a
+dual-prompt micro-batch. The eval watcher probes every backup of the three
+rows; only D1 gets the WER/SIM arm (speaker-only configs), the stock rows have
+no inference path yet.
+
 ## 2. Train
 
 ```bash
