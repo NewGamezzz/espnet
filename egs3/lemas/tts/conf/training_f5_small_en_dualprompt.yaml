@@ -1,9 +1,11 @@
 # Layout diagnostic A (Thanapat 2026-10-23): can the dual-prompt layout align
 # at all? F5-Small on the English rows only, 1 A100, bf16 mixed precision,
-# with the GH200 run's step axis (lr 1.5e-4, warmup 20k, 600k schedule,
-# 320k frames per update) so "aligned by step N" compares across runs.
-# Its control is training_f5_small_en_stock.yaml (B), which differs only in
-# prompt_config.layout; tests/test_training_config.py pins both differences.
+# with the GH200 run's step axis (lr 1.5e-4, warmup 20k, 600k schedule)
+# so "aligned by step N" compares across runs.
+# Its control is training_f5_small_en_stock.yaml (B), which differs in
+# prompt_config.layout and in accumulate_grad_batches (21 vs 20, so both see
+# the same REAL frames per update; see below);
+# tests/test_training_config.py pins both differences.
 # The English manifests are data/manifest_en/{train,valid}.tsv, the lines of
 # data/manifest/*.tsv whose language column is en.
 # Submit with local/submit_train_1gpu.sbatch <this config>.
@@ -191,12 +193,12 @@ dataloader:
 # micro-batches = 100 optimizer steps = about 5 min on 4 A100.
 batch_sampler:
   _target_: src.sampler.BlockBatchSampler
-  # 16,000 frames per micro-batch on one A100 40 GB (F5-Small, bf16), x 20
+  # at most 16,000 frames per micro-batch on one A100 40 GB (F5-Small, bf16)
   batch_bins: 1600000
   n_mels: ${n_mel_channels}
   min_batch_size: 1
   seed: ${seed}
-  batches_per_epoch: 2000
+  batches_per_epoch: 2100   # 100 optimizer steps of 21 micro-batches
 
 trainer:
   accelerator: auto
@@ -206,8 +208,12 @@ trainer:
   reload_dataloaders_every_n_epochs: 1
   devices: ${num_device}
   num_nodes: ${num_nodes}
-  # 4 GPUs x 8,000 frames x 10 = 320k frames per update (F5: 307,200).
-  accumulate_grad_batches: 20
+  # Measured (local/measure_batch_fill.py, Delta job 23156524): A's
+  # micro-batches carry 7,409 real frames (70% of the sampler's bound, which
+  # assumes both prompts at their longest; batches also stay inside one 4 MB
+  # pack block), B's 7,925. 21 x 7,409 = 155.6k real frames per update vs
+  # B's 20 x 7,925 = 158.5k (Thanapat 2026-10-24: equalize A with B).
+  accumulate_grad_batches: 21
   max_steps: 600000
   precision: bf16-mixed
   max_epochs: -1   # epochs are short (batch_sampler.batches_per_epoch); max_steps ends the run

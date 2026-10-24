@@ -171,7 +171,9 @@ def test_layout_diagnostic_a_is_the_gh200_run_shrunk_to_english_on_one_gpu():
     a = OmegaConf.to_container(OmegaConf.load(DIAG_A))
     assert a["num_device"] == 1 and a["trainer"]["precision"] == "bf16-mixed"
     assert {k: a["model"][k] for k in SMALL} == SMALL
-    assert _frames_per_update(a) == _frames_per_update(gh) == 320_000
+    # A accumulates more micro-batches than the GH200 run to match B's real
+    # frames per update (test_layout_diagnostic_b_differs_from_a_only_...)
+    assert _frames_per_update(gh) == 320_000
     steps = (
         a["batch_sampler"]["batches_per_epoch"]
         // a["trainer"]["accumulate_grad_batches"]
@@ -199,6 +201,13 @@ def test_layout_diagnostic_a_is_the_gh200_run_shrunk_to_english_on_one_gpu():
     assert a == gh
 
 
+# Real frames per micro-batch, measured by local/measure_batch_fill.py over 3
+# epochs (Delta job 23156524, 2026-10-24). The sampler sizes batches on a
+# bound with both prompts at their longest, so A's batches are 70% full and
+# B's (no prompts) 100%.
+MEASURED_REAL_FRAMES = {DIAG_A: 7408.57, DIAG_B: 7924.93}
+
+
 def test_layout_diagnostic_b_differs_from_a_only_in_the_layout():
     a = OmegaConf.to_container(OmegaConf.load(DIAG_A))
     b = OmegaConf.to_container(OmegaConf.load(DIAG_B))
@@ -206,8 +215,24 @@ def test_layout_diagnostic_b_differs_from_a_only_in_the_layout():
     assert b["prompt_config"]["layout"] == "stock"
     assert b["stats_dir"] == "${recipe_dir}/exp/stats_en_stock"
     assert a["exp_tag"] != b["exp_tag"]
+    # Thanapat 2026-10-24: equal REAL frames per update. A keeps B's
+    # micro-batch (no new memory risk) and accumulates more of them; 21 is
+    # the closest integer (-1.8%; 22 would be +2.8%). Epochs stay 100 steps.
+    acc = {
+        DIAG_A: a["trainer"]["accumulate_grad_batches"],
+        DIAG_B: b["trainer"]["accumulate_grad_batches"],
+    }
+    assert acc == {DIAG_A: 21, DIAG_B: 20}
+    real = {c: MEASURED_REAL_FRAMES[c] * acc[c] for c in acc}
+    assert abs(real[DIAG_A] / real[DIAG_B] - 1) < 0.02
     for c in (a, b):
+        assert (
+            c["batch_sampler"]["batches_per_epoch"]
+            == 100 * c["trainer"]["accumulate_grad_batches"]
+        )
         c["exp_tag"] = c["stats_dir"] = c["prompt_config"]["layout"] = None
+        c["trainer"]["accumulate_grad_batches"] = None
+        c["batch_sampler"]["batches_per_epoch"] = None
     assert a == b
 
 
