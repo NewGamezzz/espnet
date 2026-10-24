@@ -486,11 +486,17 @@ class LEMASDataset(torch.utils.data.Dataset):
 
         ``none``/``split`` rows never get a separate speaker-prompt region
         (the split prompt lies inside the row), so only the language prompt is
-        added; ``group`` rows add both. The stock layout adds nothing.
+        added; ``group`` rows add both. The stock layout adds nothing, and a
+        prompt dropped with probability 1 (``p_drop_* >= 1``) adds nothing
+        either: it never appears in a sample.
         """
         c = self.cols
         lang_hi = float(self.cfg["lang_prompt_sec"][1])
         spk_hi = float(self.cfg["spk_prompt_sec"][1])
+        if float(self.cfg["p_drop_lang"]) >= 1.0:
+            lang_hi = 0.0
+        if float(self.cfg["p_drop_spk"]) >= 1.0:
+            spk_hi = 0.0
         extra = np.where(c.spk_mode == 1, spk_hi + lang_hi, lang_hi)
         if self.stock:
             extra = np.zeros_like(c.dur)

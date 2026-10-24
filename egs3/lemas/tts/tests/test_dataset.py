@@ -330,3 +330,19 @@ def test_stock_layout_without_tag_emits_only_the_phones(corpus):
 def test_text_tag_defaults_to_true(corpus):
     ds = _ds(corpus, layout="stock")
     assert ds.cfg["text_tag"] is True and ds[0]["text"].tolist()[0] == 7  # <de>
+
+
+def test_frames_bound_omits_a_prompt_that_is_always_dropped(corpus):
+    # D1 (speaker prompt only) sets p_drop_lang 1.0: the sampler's bound must
+    # not reserve the language prompt's 2.0 s cap, or every batch is under-filled
+    full = _ds(corpus)
+    no_lang = _ds(corpus, p_drop_lang=1.0)
+    dur = full.cols.dur
+    # the bound floors (dur + extra) * sr before dividing by the hop, so compute
+    # both sides with the same formula instead of asserting a constant gap
+    spk_hi = np.where(full.cols.spk_mode == 1, 2.0, 0.0)
+    want = 1 + ((dur + spk_hi) * 24000).astype(np.int64) // 256
+    assert np.array_equal(no_lang.frames_bound(), want)
+    assert np.all(no_lang.frames_bound() < full.frames_bound())
+    for i in range(len(dur)):
+        assert no_lang.drawn_frames(i) <= no_lang.frames_bound()[i]
