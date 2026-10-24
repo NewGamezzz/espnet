@@ -68,9 +68,43 @@ def test_runs_table_watches_the_live_run_under_its_config_tag():
             "train_f5_base_lemas_dualprompt_bf16_r3",
             "conf/training_f5_base_dualprompt.yaml",
         ),
+        # baseline row D1 (speaker prompt only): WER/SIM arm with the
+        # speaker-only inference configs (ARM_CONFIGS)
+        ("train_f5_base_lemas_d1_spkonly", "conf/training_f5_base_d1_spkonly.yaml"),
     ]
     for tag, conf in RUNS:
         assert f"exp_tag: {tag}\n" in Path(conf).read_text()
+
+
+def test_d1_arm_uses_the_speaker_only_configs(tmp_path):
+    # D1 never saw a language prompt: the two-prompt arm would be out of
+    # distribution, so its arm runs the spk_only sub50 inference and metrics
+    _run(tmp_path, "train_f5_base_lemas_d1_spkonly", [25000])
+    (arm,) = pending_arms(tmp_path, RUNS)
+    assert "conf/inference_lemas_eval_spk_only_sub50.yaml" in arm.command
+    assert "conf/metrics_spk_only_sub50.yaml" in arm.command
+    assert "conf/inference_lemas_eval_sub50.yaml" not in arm.command
+
+
+def test_other_runs_keep_the_default_arm_configs(tmp_path):
+    _run(tmp_path, "train_f5_base_lemas_dualprompt_bf16_r3", [25000])
+    (arm,) = pending_arms(tmp_path, RUNS)
+    assert "conf/inference_lemas_eval_sub50.yaml conf/metrics_sub50.yaml" in arm.command
+
+
+def test_stock_rows_get_the_probe_only():
+    # no inference path exists for the stock layout yet (design note 14.3)
+    tags = {t for t, _ in RUNS}
+    probe = {t for t, _ in PROBE_RUNS}
+    for t in (
+        "train_f5_base_lemas_s0c_stock_phones",
+        "train_f5_base_lemas_s0a_stock_chars",
+    ):
+        assert t in probe and t not in tags, t
+    assert (
+        "train_f5_base_lemas_d1_spkonly" in tags
+        and "train_f5_base_lemas_d1_spkonly" in probe
+    )
 
 
 def test_watch_script_rechains_hourly_and_is_stoppable():
@@ -105,8 +139,11 @@ def test_probe_runs_cover_the_live_run_and_both_layout_diagnostics():
     assert [conf for _, conf in PROBE_RUNS] == [
         "conf/training_f5_base_dualprompt_gh200.yaml",
         "conf/training_f5_base_dualprompt.yaml",
+        "conf/training_f5_base_d1_spkonly.yaml",
         "conf/training_f5_small_en_dualprompt.yaml",
         "conf/training_f5_small_en_stock.yaml",
+        "conf/training_f5_base_s0c_stock_phones.yaml",
+        "conf/training_f5_base_s0a_stock_chars.yaml",
     ]
     for tag, conf in PROBE_RUNS:
         assert f"exp_tag: {tag}\n" in Path(conf).read_text()

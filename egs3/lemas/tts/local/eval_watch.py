@@ -14,7 +14,7 @@ import subprocess
 import sys
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable, List, Sequence, Tuple
+from typing import Callable, Dict, List, Sequence, Tuple
 
 RUNS: List[Tuple[str, str]] = [
     (
@@ -22,16 +22,35 @@ RUNS: List[Tuple[str, str]] = [
         "conf/training_f5_base_dualprompt_gh200.yaml",
     ),
     ("train_f5_base_lemas_dualprompt_bf16_r3", "conf/training_f5_base_dualprompt.yaml"),
+    # paper baseline row D1 (speaker prompt only); its arm configs are below
+    ("train_f5_base_lemas_d1_spkonly", "conf/training_f5_base_d1_spkonly.yaml"),
 ]
 # Text-use probe (local/probe_text_use.py) of every backup: the earliest sign
-# that a run reads its phones. The layout diagnostics get only the probe.
+# that a run reads its phones. The layout diagnostics and the stock-layout
+# baseline rows (S0c, S0a: no inference path yet) get only the probe.
 PROBE_RUNS: List[Tuple[str, str]] = RUNS + [
     ("diag_f5_small_en_dualprompt", "conf/training_f5_small_en_dualprompt.yaml"),
     ("diag_f5_small_en_stock", "conf/training_f5_small_en_stock.yaml"),
+    (
+        "train_f5_base_lemas_s0c_stock_phones",
+        "conf/training_f5_base_s0c_stock_phones.yaml",
+    ),
+    (
+        "train_f5_base_lemas_s0a_stock_chars",
+        "conf/training_f5_base_s0a_stock_chars.yaml",
+    ),
 ]
 MARKER_DIRS = {"eval": "eval_submitted", "probe": "probe_submitted"}
 INFERENCE = "conf/inference_lemas_eval_sub50.yaml"
 METRICS = "conf/metrics_sub50.yaml"
+# Per-run arm configs where the default two-prompt arm does not apply: D1 never
+# saw a language prompt, so it is scored with the speaker-only configs.
+ARM_CONFIGS: Dict[str, Tuple[str, str]] = {
+    "train_f5_base_lemas_d1_spkonly": (
+        "conf/inference_lemas_eval_spk_only_sub50.yaml",
+        "conf/metrics_spk_only_sub50.yaml",
+    ),
+}
 
 
 @dataclass
@@ -40,6 +59,8 @@ class Arm:
     ckpt: str
     train_config: str
     kind: str = "eval"
+    inference: str = INFERENCE
+    metrics: str = METRICS
 
     @property
     def command(self) -> str:
@@ -52,7 +73,7 @@ class Arm:
         return (
             f"LEMAS_CKPT={self.ckpt} sbatch --parsable -J arm_{self.tag[-12:]}_"
             f"{self.ckpt[len('backup_'):]} local/run_arm_1gpu.sbatch "
-            f"{INFERENCE} {METRICS} {self.train_config}"
+            f"{self.inference} {self.metrics} {self.train_config}"
         )
 
 
@@ -72,7 +93,8 @@ def pending_arms(
         ]
         for ckpt in sorted(backups, key=lambda p: int(p.stem[len("backup_step") :])):
             if not (exp / MARKER_DIRS[kind] / f"{ckpt.stem}.job").exists():
-                arms.append(Arm(tag, ckpt.stem, train_config, kind))
+                inference, metrics = ARM_CONFIGS.get(tag, (INFERENCE, METRICS))
+                arms.append(Arm(tag, ckpt.stem, train_config, kind, inference, metrics))
     return arms
 
 
