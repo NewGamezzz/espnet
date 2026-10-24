@@ -94,10 +94,18 @@ run is a chain of 1 h links, each killed by its walltime. Two facts shape it:
   `tests/test_resume.py` pins both against the installed Lightning.
 
 One pass over the data is 1,578,954 micro-batches per rank (about 154 h), so
-`batch_sampler.batches_per_epoch: 1000` serves a pass as consecutive epochs
-of 1,000 micro-batches = 100 optimizer steps = about 5 min. A killed link
-loses the epoch it was in; the next link resumes at the last epoch end.
-Every batch is still visited once per pass (`src/sampler.py`).
+`batch_sampler.batches_per_epoch` serves a pass as consecutive epochs of
+100 optimizer steps (2,300 micro-batches on 4 A100 at `accumulate 23`). A
+killed link loses the epoch it was in; the next link resumes at the last
+epoch end. Every batch is still visited once per pass (`src/sampler.py`).
+
+Batch size is set in REAL frames. The sampler cuts batches on
+`LEMASDataset.frames_bound`, which assumes both prompts at their longest,
+and keeps every batch inside one 4 MB pack block, so dual-prompt
+micro-batches are about half full. `local/measure_batch_fill.py`
+(`local/measure_batch_fill.sbatch`) measures the real frames per batch, and
+`accumulate_grad_batches` is chosen from it: both main runs carry F5's
+307,200 frames per update (300k measured; `tests/test_training_config.py`).
 
 | file in `exp/<tag>/` | written | holds |
 |---|---|---|
@@ -135,8 +143,8 @@ Prompt knobs (`prompt_config` in `conf/training_f5_base_dualprompt.yaml`):
 
 `conf/training_f5_base_dualprompt_gh200.yaml` is the second experiment
 (2026-10-01): 2 GPUs, learning rate 1.5e-4, `precision: bf16-mixed`, and
-`batch_bins 2M x accumulate 8` (the same 320k frames per update in fewer
-micro-batches). Its smoke is the first two links of the run itself, short
+`batch_bins 2M x accumulate 20` (the same 300k real frames per update in
+fewer micro-batches). Its smoke is the first two links of the run itself, short
 and unchained, the first on the interactive partition (starts in seconds,
 one job per user there); the chain head then continues from their
 checkpoint. From `delta_ai`:

@@ -60,6 +60,19 @@ def test_smoke_config_differs_only_in_run_length(tmp_path):
 
 
 BASE = "conf/training_f5_base_dualprompt.yaml"
+GH200 = "conf/training_f5_base_dualprompt_gh200.yaml"
+DIAG_A = "conf/training_f5_small_en_dualprompt.yaml"
+DIAG_B = "conf/training_f5_small_en_stock.yaml"
+# Real frames per micro-batch, measured by local/measure_batch_fill.py over 3
+# epochs (Delta job 23156524, 2026-10-24). The sampler sizes batches on a
+# bound with both prompts at their longest, and a batch never leaves its 4 MB
+# pack block, so dual-prompt batches are 49-70% full and B's (no prompts) 100%.
+MEASURED_REAL_FRAMES = {
+    BASE: 3261.45,
+    GH200: 7512.07,
+    DIAG_A: 7408.57,
+    DIAG_B: 7924.93,
+}
 SMOKES = ["conf/training_smoke.yaml", "conf/training_smoke_1gpu.yaml"]
 
 
@@ -73,7 +86,9 @@ def test_epochs_are_minutes_long_and_end_on_an_optimizer_step(path):
     cfg = OmegaConf.load(path)
     per_epoch = cfg.batch_sampler.batches_per_epoch
     assert per_epoch % cfg.trainer.accumulate_grad_batches == 0
-    assert per_epoch / 3.3 <= 10 * 60  # 3.3 micro-batches per second on 4 A100
+    # 3.3 micro-batches per second on 4 A100 (fp32, r2): at F5's batch an
+    # epoch of 100 steps is under 12 min, the most a killed 1 h link loses
+    assert per_epoch / 3.3 <= 12 * 60
     assert cfg.trainer.max_epochs == -1  # the run is bounded by max_steps
     # an integer val_check_interval counts micro-batches and validates mid-epoch
     assert "val_check_interval" not in cfg.trainer
@@ -100,25 +115,28 @@ def test_backups_are_written_at_epoch_ends_every_25k_steps():
     assert backup.every_n_epochs * steps == 25000 and backup.save_top_k == -1
 
 
-GH200 = "conf/training_f5_base_dualprompt_gh200.yaml"
-
-
 def test_gh200_config_differs_from_base_only_in_the_intended_knobs():
-    # DeltaAI run (Thanapat 2026-10-01): 2 GPUs, 2x learning rate, bf16, and the
-    # GH200's memory spent on bigger micro-batches at the same 320k frames per update
+    # DeltaAI run (Thanapat 2026-10-01): 2 GPUs, 2x learning rate, and the
+    # GH200's memory spent on bigger micro-batches; both at F5's batch
     base = OmegaConf.to_container(OmegaConf.load(BASE))
     gh = OmegaConf.to_container(OmegaConf.load(GH200))
     assert gh["exp_tag"] != base["exp_tag"]
     assert gh["num_device"] == 2 and base["num_device"] == 4
     assert gh["optimizer"]["lr"] == 1.5e-4 and base["optimizer"]["lr"] == 7.5e-5
     assert gh["trainer"]["precision"] == base["trainer"]["precision"] == "bf16-mixed"
-    frames = lambda c: (  # noqa: E731
-        c["num_device"]
-        * c["batch_sampler"]["batch_bins"]
-        // c["n_mel_channels"]
-        * c["trainer"]["accumulate_grad_batches"]
-    )
-    assert frames(gh) == frames(base) == 320_000
+    # Thanapat 2026-10-24: both runs at F5's batch (307,200 frames per update)
+    # in REAL frames. The sampler's bound assumes both prompts at their
+    # longest, so micro-batches are about half full (measured below).
+    real = {
+        c: MEASURED_REAL_FRAMES[c]
+        * x["num_device"]
+        * x["trainer"]["accumulate_grad_batches"]
+        for c, x in ((BASE, base), (GH200, gh))
+    }
+    assert base["trainer"]["accumulate_grad_batches"] == 23
+    assert gh["trainer"]["accumulate_grad_batches"] == 20
+    for c in real:
+        assert abs(real[c] / 307_200 - 1) < 0.03, (c, real[c])
     steps = lambda c: (  # noqa: E731
         c["batch_sampler"]["batches_per_epoch"]
         // c["trainer"]["accumulate_grad_batches"]
@@ -134,8 +152,6 @@ def test_gh200_config_differs_from_base_only_in_the_intended_knobs():
     assert gh == base
 
 
-DIAG_A = "conf/training_f5_small_en_dualprompt.yaml"
-DIAG_B = "conf/training_f5_small_en_stock.yaml"
 SMALL = dict(
     hidden_size=768,
     depth=18,
@@ -145,15 +161,6 @@ SMALL = dict(
     text_embedding_size=512,
     convolution_layers=4,
 )
-
-
-def _frames_per_update(c):
-    return (
-        c["num_device"]
-        * c["batch_sampler"]["batch_bins"]
-        // c["n_mel_channels"]
-        * c["trainer"]["accumulate_grad_batches"]
-    )
 
 
 def _backup(c):
@@ -171,9 +178,8 @@ def test_layout_diagnostic_a_is_the_gh200_run_shrunk_to_english_on_one_gpu():
     a = OmegaConf.to_container(OmegaConf.load(DIAG_A))
     assert a["num_device"] == 1 and a["trainer"]["precision"] == "bf16-mixed"
     assert {k: a["model"][k] for k in SMALL} == SMALL
-    # A accumulates more micro-batches than the GH200 run to match B's real
-    # frames per update (test_layout_diagnostic_b_differs_from_a_only_...)
-    assert _frames_per_update(gh) == 320_000
+    # batch geometry is A's own: it matches B's real frames per update
+    # (test_layout_diagnostic_b_differs_from_a_only_in_the_layout)
     steps = (
         a["batch_sampler"]["batches_per_epoch"]
         // a["trainer"]["accumulate_grad_batches"]
@@ -199,13 +205,6 @@ def test_layout_diagnostic_a_is_the_gh200_run_shrunk_to_english_on_one_gpu():
             c["dataset"][split][0]["data_src_args"]["manifest_path"] = None
         _backup(c)["every_n_epochs"] = None
     assert a == gh
-
-
-# Real frames per micro-batch, measured by local/measure_batch_fill.py over 3
-# epochs (Delta job 23156524, 2026-10-24). The sampler sizes batches on a
-# bound with both prompts at their longest, so A's batches are 70% full and
-# B's (no prompts) 100%.
-MEASURED_REAL_FRAMES = {DIAG_A: 7408.57, DIAG_B: 7924.93}
 
 
 def test_layout_diagnostic_b_differs_from_a_only_in_the_layout():

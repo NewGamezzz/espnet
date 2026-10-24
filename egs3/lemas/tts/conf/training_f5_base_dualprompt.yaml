@@ -178,7 +178,8 @@ dataloader:
     pin_memory: false
 
 # One instance per split (instantiated with the split's dataset). numel counts
-# frames x n_mels; 800,000 = 8,000 frames per micro-batch. 1,000,000 peaked at
+# frames x n_mels of the sampler's bound; 800,000 = at most 8,000 frames per
+# micro-batch (3,261 real, measured: see accumulate_grad_batches). 1,000,000 peaked at
 # 38 GB on rank 0 of a 4-GPU A100-40G node (31 GB allocated + 5.5 GB fragmented
 # reserve + 3 x 416 MB sibling-rank contexts) and went OOM at batch ~300.
 #
@@ -186,15 +187,16 @@ dataloader:
 # rank, about 154 h) into short epochs. espnet3 writes last.ckpt at the end of
 # an epoch and nowhere else, and Lightning resumes exactly only from such a
 # checkpoint (a mid-epoch resume restarts the loader at its first batch), so
-# the epoch is the resume granularity of the 1 h chain links. 1,000
-# micro-batches = 100 optimizer steps = about 5 min on 4 A100.
+# the epoch is the resume granularity of the 1 h chain links. 2,300
+# micro-batches = 100 optimizer steps = about 12 min on 4 A100 in fp32 (r2's
+# 3.3 micro-batches per second; the bf16 rate is not measured yet).
 batch_sampler:
   _target_: src.sampler.BlockBatchSampler
   batch_bins: 800000
   n_mels: ${n_mel_channels}
   min_batch_size: 1
   seed: ${seed}
-  batches_per_epoch: 1000
+  batches_per_epoch: 2300   # 100 optimizer steps of 23 micro-batches
 
 trainer:
   accelerator: auto
@@ -204,8 +206,12 @@ trainer:
   reload_dataloaders_every_n_epochs: 1
   devices: ${num_device}
   num_nodes: ${num_nodes}
-  # 4 GPUs x 8,000 frames x 10 = 320k frames per update (F5: 307,200).
-  accumulate_grad_batches: 10
+  # F5's batch (307,200 frames per update) in REAL frames (Thanapat
+  # 2026-10-24): micro-batches carry 3,261 real frames (measured,
+  # local/measure_batch_fill.py, Delta job 23156524; the sampler's bound
+  # assumes both prompts at their longest and a batch stays inside one 4 MB
+  # pack block, so it is 49% full) x 4 GPUs x 23 = 300k.
+  accumulate_grad_batches: 23
   max_steps: 600000
   precision: bf16-mixed
   max_epochs: -1   # epochs are short (batch_sampler.batches_per_epoch); max_steps ends the run

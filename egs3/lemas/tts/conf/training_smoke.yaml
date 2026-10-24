@@ -208,7 +208,8 @@ trainer:
   reload_dataloaders_every_n_epochs: 1
   devices: ${num_device}
   num_nodes: ${num_nodes}
-  # 4 GPUs x 8,000 frames x 10 = 320k frames per update (F5: 307,200).
+  # sampler bound 4 GPUs x 8,000 frames x 10 (real frames are about half;
+  # the production config measures them). A smoke only checks the mechanics.
   accumulate_grad_batches: 10
   max_steps: 200
   max_epochs: -1   # epochs are short (batch_sampler.batches_per_epoch); max_steps ends the run

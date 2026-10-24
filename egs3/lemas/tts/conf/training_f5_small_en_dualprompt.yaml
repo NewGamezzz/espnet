@@ -189,8 +189,8 @@ dataloader:
 # rank, about 154 h) into short epochs. espnet3 writes last.ckpt at the end of
 # an epoch and nowhere else, and Lightning resumes exactly only from such a
 # checkpoint (a mid-epoch resume restarts the loader at its first batch), so
-# the epoch is the resume granularity of the 1 h chain links. 1,000
-# micro-batches = 100 optimizer steps = about 5 min on 4 A100.
+# the epoch is the resume granularity of the 1 h chain links. 2,100
+# micro-batches = 100 optimizer steps.
 batch_sampler:
   _target_: src.sampler.BlockBatchSampler
   # at most 16,000 frames per micro-batch on one A100 40 GB (F5-Small, bf16)
