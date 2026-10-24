@@ -117,7 +117,7 @@ def test_a_killed_link_is_resumed_at_the_next_epoch_without_replay(corpus, tmp_p
 
 
 def test_probe_ablations_change_only_the_target_phones(corpus):
-    from local.probe_text_use import CONDITIONS, ablate
+    from local.probe_text_use import CONDITIONS, ablate, lane_head
     from src.layout import TokenTable
 
     ds = _ds(corpus)
@@ -126,15 +126,17 @@ def test_probe_ablations_change_only_the_target_phones(corpus):
     rng = np.random.default_rng(0)
     for i in range(len(ds)):
         text = ds[i]["text"]
-        head = int(ds[i]["cond_frames"][0]) + 1  # role tokens + language tag
+        cf = int(ds[i]["cond_frames"][0])
+        head = lane_head(text, cf, table, text_tag=True)
+        assert head == cf + 1  # role tokens + language tag
         for c in CONDITIONS:
-            out = ablate(text, c, table, rng)
+            out = ablate(text, c, table, rng, head)
             assert list(out[:head]) == list(text[:head])
             if c == "none":
                 assert len(out) == head
             else:
                 assert len(out) == len(text)
-        assert sorted(ablate(text, "shuffled", table, rng)[head:]) == sorted(
+        assert sorted(ablate(text, "shuffled", table, rng, head)[head:]) == sorted(
             text[head:]
         )
-        assert list(ablate(text, "true", table, rng)) == list(text)
+        assert list(ablate(text, "true", table, rng, head)) == list(text)

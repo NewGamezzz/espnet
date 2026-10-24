@@ -69,15 +69,41 @@ def valid_dataset(cfg, audio_root=None) -> LEMASDataset:
     return LEMASDataset(recipe_dir=".", audio_root=audio_root, **args)
 
 
-def ablate(text: np.ndarray, cond: str, table: TokenTable, rng) -> np.ndarray:
-    """Return the text lane with the target phones changed per ``cond``."""
+def lane_head(
+    text: np.ndarray, cond_frames: int, table: TokenTable, text_tag: bool = True
+) -> int:
+    """Index of the first target phone in a text lane.
+
+    Args:
+        text: Lane ids of one sample.
+        cond_frames: The sample's ``cond_frames`` (-1 for a stock-layout row).
+        table: Token table.
+        text_tag: Whether the lane carries a language tag before the phones
+            (``prompt_config.text_tag``).
+
+    Returns:
+        With a tag, the position after it; without one, the first target
+        frame (0 for a stock-layout row, which has no prompt region).
+
+    Example:
+        >>> lane_head(np.array([5, 5, 7, 2, 3]), 2, table, text_tag=True)
+        3
+    """
+    if not text_tag:
+        return max(int(cond_frames), 0)
     tags = set()
     for lang in LANGS:  # a token table may hold a subset of the languages
         try:
             tags.add(table.tag(lang))
         except KeyError:
             pass
-    head = next(i for i, t in enumerate(text.tolist()) if t in tags) + 1
+    return next(i for i, t in enumerate(text.tolist()) if t in tags) + 1
+
+
+def ablate(
+    text: np.ndarray, cond: str, table: TokenTable, rng, head: int
+) -> np.ndarray:
+    """Return the lane with its target phones (from ``head`` on) ablated per ``cond``."""
     phones = text[head:].copy()
     if cond == "shuffled":
         rng.shuffle(phones)
@@ -90,8 +116,17 @@ def ablate(text: np.ndarray, cond: str, table: TokenTable, rng) -> np.ndarray:
     return np.concatenate([text[:head], phones])
 
 
-def collate(samples, condition, table, rng):
-    texts = [ablate(s["text"], condition, table, rng) for s in samples]
+def collate(samples, condition, table, rng, text_tag=True):
+    texts = [
+        ablate(
+            s["text"],
+            condition,
+            table,
+            rng,
+            lane_head(s["text"], int(s["cond_frames"][0]), table, text_tag),
+        )
+        for s in samples
+    ]
     speech = [s["speech"] for s in samples]
     b = len(samples)
     text = torch.zeros(b, max(len(t) for t in texts), dtype=torch.long)
@@ -120,6 +155,7 @@ def main():
     cfg, model = load_model(args.train_config, args.ckpt, args.device)
     ds = valid_dataset(cfg)
     table = TokenTable(cfg.token_list)
+    text_tag = bool(ds.cfg["text_tag"])
     sampler = BlockBatchSampler(
         ds, batch_bins=int(cfg.batch_sampler.batch_bins), n_mels=100, seed=0
     )
@@ -132,7 +168,7 @@ def main():
             for c in CONDITIONS:
                 batch = {
                     k: v.to(args.device)
-                    for k, v in collate(samples, c, table, rng).items()
+                    for k, v in collate(samples, c, table, rng, text_tag).items()
                 }
                 torch.manual_seed(1000 + bi)  # same x0 and t for every condition
                 random.seed(1000 + bi)
