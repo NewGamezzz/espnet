@@ -10,6 +10,7 @@ Prompt partners are NOT chosen here; the dataset draws them online.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import random
@@ -382,8 +383,8 @@ class LEMASBuilder(DatasetBuilder):
     def _manifest_tsvs(self, lang: str) -> List[Path]:
         return sorted((self._mirror() / self.cfg["manifest_dir"] / lang).glob("*.tsv"))
 
-    def _data_dir(self, recipe_dir) -> Path:
-        return Path(recipe_dir).resolve() / self.cfg["data_path"]
+    def _data_dir(self, recipe_dir, data_path=None) -> Path:
+        return Path(recipe_dir).resolve() / (data_path or self.cfg["data_path"])
 
     # ---- source -------------------------------------------------------------
     def is_source_prepared(self, recipe_dir=None, **_kwargs) -> bool:
@@ -452,9 +453,15 @@ class LEMASBuilder(DatasetBuilder):
         )
 
     # ---- build --------------------------------------------------------------
-    def is_built(self, recipe_dir=None, **_kwargs) -> bool:
-        """Return True when both manifests and ``lang_stats.json`` exist."""
-        d = self._data_dir(recipe_dir)
+    def is_built(self, recipe_dir=None, data_path=None, **_kwargs) -> bool:
+        """Return True when both manifests and ``lang_stats.json`` exist.
+
+        Args:
+            recipe_dir: Recipe root.
+            data_path: Data tree under it (default ``cfg["data_path"]``); the
+                character build of the stock F5-TTS baseline uses its own.
+        """
+        d = self._data_dir(recipe_dir, data_path)
         return all(
             (d / p).is_file()
             for p in list(self.cfg["manifest_paths"].values())
@@ -515,17 +522,37 @@ class LEMASBuilder(DatasetBuilder):
         return valid_groups, valid_keys
 
     def build(
-        self, recipe_dir=None, phonemizer_factory: Optional[Callable] = None, **_kwargs
+        self,
+        recipe_dir=None,
+        phonemizer_factory: Optional[Callable] = None,
+        text_units: str = "phones",
+        data_path: Optional[str] = None,
+        **_kwargs,
     ) -> None:
         """Write ``manifest/train.tsv``, ``manifest/valid.tsv`` and ``lang_stats.json``.
 
         Args:
             recipe_dir: Recipe root; outputs go under ``<recipe_dir>/<data_path>``.
-            phonemizer_factory: Zero-arg callable returning a phonemizer; used
-                by tests, defaults to ``LEMASPhonemizer``.
+            phonemizer_factory: Zero-arg callable returning the text front-end;
+                used by tests. Defaults to the front-end of ``text_units``.
+            text_units: ``phones`` (eSpeak IPA and pinyin initials/finals, the
+                recipe's front-end) or ``chars`` (stock F5-TTS: characters and
+                pinyin syllables, for the baseline row S0a).
+            data_path: Data tree under ``recipe_dir`` (default
+                ``cfg["data_path"]``), so a second front-end gets its own
+                manifests, token list and ``lang_stats.json``.
+
+        Raises:
+            ValueError: If ``text_units`` is unknown.
         """
+        from src.text.char_tokenizer import TEXT_UNITS, text_frontend
+
+        if text_units not in TEXT_UNITS:
+            raise ValueError(f"text_units must be one of {TEXT_UNITS}: {text_units!r}")
+        if phonemizer_factory is None:
+            phonemizer_factory = functools.partial(text_frontend, text_units)
         cfg = self.cfg
-        data_dir = self._data_dir(recipe_dir)
+        data_dir = self._data_dir(recipe_dir, data_path)
         train_path = data_dir / cfg["manifest_paths"]["train"]
         valid_path = data_dir / cfg["manifest_paths"]["valid"]
         train_path.parent.mkdir(parents=True, exist_ok=True)

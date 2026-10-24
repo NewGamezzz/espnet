@@ -1,3 +1,4 @@
+import pytest
 from dataset.builder import (
     LEMASBuilder,
     build_rows,
@@ -424,3 +425,43 @@ def test_build_rows_split_targets_are_the_phonemized_transcript_tail():
     # 1.7 s = 28%) and the target is the transcript from word 2 on
     tail = FakePhon().phonemize("drei vier fünf sechs.", "de")
     assert row.split_targets == "2=" + " ".join(tail)
+
+
+def test_build_with_chars_writes_to_its_own_data_dir(tmp_path):
+    # S0a (stock F5-TTS) trains on characters: the same packs and the same
+    # rows, a second manifest tree under data_chars/, the phone tree untouched
+    import json as _json
+
+    pytest.importorskip("rjieba")
+    mirror = _fake_mirror(tmp_path)
+    cfg = dict(
+        CFG,
+        mirror_root=str(mirror),
+        manifest_dir="manifests_poc3k",
+        audio_root=str(tmp_path / "pcm"),
+        data_path="data",
+        langs=["de", "zh"],
+        sample_rate=24000,
+        valid_rows_per_lang=2,
+        n_workers=1,
+        manifest_paths={"train": "manifest/train.tsv", "valid": "manifest/valid.tsv"},
+        lang_stats_path="lang_stats.json",
+        chunk_size=3,
+    )
+    b = LEMASBuilder(cfg)
+    recipe = tmp_path / "recipe"
+    b.prepare_source()
+    assert not b.is_built(recipe_dir=recipe, data_path="data_chars")
+    b.build(recipe_dir=recipe, text_units="chars", data_path="data_chars")
+    assert b.is_built(recipe_dir=recipe, data_path="data_chars")
+    assert not b.is_built(recipe_dir=recipe)  # the phone tree was not written
+    assert not (recipe / "data" / "manifest").exists()
+    train = (recipe / "data_chars/manifest/train.tsv").read_text().splitlines()
+    valid = (recipe / "data_chars/manifest/valid.tsv").read_text().splitlines()
+    assert len(train) + len(valid) == 14
+    de = next(ln.split("\t") for ln in train + valid if ln.startswith("de_"))
+    assert de[2].split(" ")[:3] == ["h", "a", "l"]  # characters, not phones
+    zh = next(ln.split("\t") for ln in train + valid if ln.startswith("zh_"))
+    assert zh[2].split(" ")[:2] == ["<space>", "ni3"]  # F5 pinyin
+    stats = _json.loads((recipe / "data_chars/lang_stats.json").read_text())
+    assert set(stats) == {"de", "zh"}
