@@ -26,11 +26,12 @@ def test_cyrillic_and_vietnamese_stay_character_level():
     assert F5CharTokenizer().phonemize("ươ", "vi") == ["ư", "ơ"]
 
 
-def test_whitespace_of_any_kind_becomes_one_space_token():
+def test_whitespace_of_any_kind_becomes_space_tokens():
     # the manifest is tab-separated and ManifestColumns.load raises on a wrong
-    # column count, so a tab or a no-break space must never survive as a token
-    toks = F5CharTokenizer().phonemize("a  b\tc d", "en")
-    assert toks == ["a", "<space>", "b", "<space>", "c", "<space>", "d"]
+    # column count, so a tab or a no-break space must never survive as a token;
+    # every whitespace character is one token, as F5 maps them
+    toks = F5CharTokenizer().phonemize("a  b\tc\u00a0d", "en")
+    assert toks == ["a", "<space>", "<space>", "b", "<space>", "c", "<space>", "d"]
     for t in toks:
         assert t and "|" not in t and not any(ch.isspace() for ch in t)
 
@@ -57,3 +58,11 @@ def test_pipe_is_a_character_token_like_stock_f5():
     # YODAS captions carry "|"; stock F5 keeps every character, and "|" only
     # delimits the split_targets column, which the builder guards itself
     assert F5CharTokenizer().phonemize("a|b", "en") == ["a", "|", "b"]
+
+
+def test_whitespace_runs_are_kept_like_stock_f5():
+    # F5 emits a space before and after a Chinese segment, so a space-joined
+    # boundary yields two " " tokens; stock F5 maps both, so S0a keeps both
+    assert F5CharTokenizer().phonemize("hello 世界", "zh") == [
+        "h", "e", "l", "l", "o", "<space>", "<space>", "shi4", "<space>", "jie4",
+    ]

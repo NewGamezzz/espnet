@@ -5,8 +5,9 @@ language and pinyin syllables for Chinese, F5's ``Emilia_ZH_EN_pinyin``
 scheme (``espnet3.systems.tts.f5_tts.pinyin.convert_char_to_pinyin``, which
 runs ``rjieba`` on every input, English included). The only change is for
 the manifest: F5's ``" "`` token, and any other whitespace character,
-becomes ``<space>`` (runs collapse to one), because manifest column 3 is a
-space-separated token list in a tab-separated file.
+becomes ``<space>``, one per character (F5 maps every space token, so a run
+of two stays two), because manifest column 3 is a space-separated token list
+in a tab-separated file.
 """
 
 from __future__ import annotations
@@ -42,7 +43,7 @@ class F5CharTokenizer:
 
         Returns:
             Characters, or pinyin syllables with tone numbers for hanzi, with
-            ``<space>`` for whitespace (runs collapsed); never an empty token.
+            ``<space>`` for every whitespace character; never an empty token.
 
         Raises:
             ValueError: If F5 emits a token with whitespace inside it, which
@@ -59,8 +60,7 @@ class F5CharTokenizer:
             if not tok:
                 continue
             if all(c.isspace() for c in tok):
-                if not out or out[-1] != SPACE_TOKEN:
-                    out.append(SPACE_TOKEN)
+                out.extend(SPACE_TOKEN for _ in tok)
                 continue
             if any(c.isspace() for c in tok):
                 raise ValueError(f"token {tok!r} cannot be stored in the manifest")
