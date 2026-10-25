@@ -37,6 +37,10 @@ echo "== rows only in phones (train): $(comm -23 <(cut -f1 data/manifest/train.t
 # drop_text_regex is applied before tokenization in both builds
 echo "== rows only in chars (train), per language:"
 comm -13 <(cut -f1 data/manifest/train.tsv | sort) <(cut -f1 data_chars/manifest/train.tsv | sort) | cut -c1-2 | sort | uniq -c
+# "|" is a character for stock F5 (job 23160666 failed on it before the
+# tokenizer kept it); report how many rows carry it and where
+echo "== rows whose text holds a '|' token (train), per language:"
+awk -F'\t' '{n=split($3,a," "); for(i=1;i<=n;i++) if(a[i]=="|"){print substr($1,1,2); break}}' data_chars/manifest/train.tsv | sort | uniq -c
 echo "== columns 1,2,4-9 on common rows (train):"
 if cmp <(sort -k1,1 data/manifest/train.tsv | cut -f1,2,4-9 | sort) \
        <(sort -k1,1 data_chars/manifest/train.tsv | cut -f1,2,4-9 | sort) ; then

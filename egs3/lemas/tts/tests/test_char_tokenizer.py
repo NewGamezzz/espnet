@@ -51,3 +51,9 @@ def test_frontend_factory_survives_the_process_pool_initializer():
 
     f = pickle.loads(pickle.dumps(functools.partial(text_frontend, "chars")))
     assert f().phonemize("hi", "en") == ["h", "i"]
+
+
+def test_pipe_is_a_character_token_like_stock_f5():
+    # YODAS captions carry "|"; stock F5 keeps every character, and "|" only
+    # delimits the split_targets column, which the builder guards itself
+    assert F5CharTokenizer().phonemize("a|b", "en") == ["a", "|", "b"]

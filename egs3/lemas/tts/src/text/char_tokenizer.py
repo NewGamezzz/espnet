@@ -45,8 +45,10 @@ class F5CharTokenizer:
             ``<space>`` for whitespace (runs collapsed); never an empty token.
 
         Raises:
-            ValueError: If F5 emits a token that would break the manifest
-                column (whitespace inside a token, or ``|``).
+            ValueError: If F5 emits a token with whitespace inside it, which
+                the space-separated manifest column could not hold. ``|`` is
+                kept as a character, as stock F5 does; it delimits only the
+                ``split_targets`` column, which the builder guards itself.
 
         Example:
             >>> F5CharTokenizer().phonemize("中文", "zh")
@@ -60,7 +62,7 @@ class F5CharTokenizer:
                 if not out or out[-1] != SPACE_TOKEN:
                     out.append(SPACE_TOKEN)
                 continue
-            if "|" in tok or any(c.isspace() for c in tok):
+            if any(c.isspace() for c in tok):
                 raise ValueError(f"token {tok!r} cannot be stored in the manifest")
             out.append(tok)
         return out
