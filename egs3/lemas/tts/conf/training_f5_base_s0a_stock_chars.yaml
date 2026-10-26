@@ -8,7 +8,7 @@
 # prompt_config.layout / text_tag, create_dataset.text_units / data_path,
 # batch_bins, accumulate_grad_batches (measured fill) and lr (1.5e-4, the GH200
 # D2 run); tests/test_training_config.py pins everything else equal.
-# accumulate_grad_batches: PROVISIONAL until local/measure_batch_fill.py runs.
+# accumulate_grad_batches: from local/measure_batch_fill.py, Delta job 23217789.
 num_device: 4
 num_nodes: 1
 seed: 0
@@ -193,7 +193,7 @@ batch_sampler:
   n_mels: ${n_mel_channels}
   min_batch_size: 1
   seed: ${seed}
-  batches_per_epoch: 1900   # 100 optimizer steps of 19 micro-batches
+  batches_per_epoch: 2700   # 100 optimizer steps of 27 micro-batches
 
 trainer:
   accelerator: auto
@@ -204,11 +204,11 @@ trainer:
   devices: ${num_device}
   num_nodes: ${num_nodes}
   # F5's batch (307,200 frames per update) in REAL frames (Thanapat
-  # 2026-10-24): micro-batches carry 3,261 real frames (measured,
-  # local/measure_batch_fill.py, Delta job 23156524; the sampler's bound
-  # assumes both prompts at their longest and a batch stays inside one 4 MB
-  # pack block, so it is 49% full) x 4 GPUs x 23 = 300k.
-  accumulate_grad_batches: 19
+  # 2026-10-24): micro-batches carry 2,840 real frames (measured,
+  # local/measure_batch_fill.py, Delta job 23217789, 2026-10-26; a stock
+  # micro-batch fills its 400k bound, fill 1.00) x 4 GPUs x 27 = 306.7k,
+  # within 0.5% of D2's 301k.
+  accumulate_grad_batches: 27
   max_steps: 600000
   precision: bf16-mixed
   max_epochs: -1   # epochs are short (batch_sampler.batches_per_epoch); max_steps ends the run
