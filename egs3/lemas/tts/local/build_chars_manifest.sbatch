@@ -25,31 +25,5 @@ export PYTHONUNBUFFERED=1
 mkdir -p logs
 CONF=conf/training_f5_base_s0a_stock_chars.yaml
 $PY run.py --stages create_dataset create_token_list --training_config "$CONF"
-echo "== rows"
-for split in train valid; do
-  echo "$split: phones $(wc -l < data/manifest/$split.tsv)  chars $(wc -l < data_chars/manifest/$split.tsv)"
-done
-echo "== utt_id symmetric difference (train): $(comm -3 <(cut -f1 data/manifest/train.tsv | sort) <(cut -f1 data_chars/manifest/train.tsv | sort) | wc -l)"
-echo "== rows only in phones (train): $(comm -23 <(cut -f1 data/manifest/train.tsv | sort) <(cut -f1 data_chars/manifest/train.tsv | sort) | wc -l)"
-# the rows only on the chars side must be the text_fits drops of the phone
-# build (YODAS rows whose transcript eSpeak spelled out into hundreds of
-# phones: ru 50, es 9, fr 9, id 2, it 1 on 2026-09-29), never zh rows: the
-# drop_text_regex is applied before tokenization in both builds
-echo "== rows only in chars (train), per language:"
-comm -13 <(cut -f1 data/manifest/train.tsv | sort) <(cut -f1 data_chars/manifest/train.tsv | sort) | cut -c1-2 | sort | uniq -c
-# "|" is a character for stock F5 (job 23160666 failed on it before the
-# tokenizer kept it); report how many rows carry it and where
-echo "== rows whose text holds a '|' token (train), per language:"
-awk -F'\t' '{n=split($3,a," "); for(i=1;i<=n;i++) if(a[i]=="|"){print substr($1,1,2); break}}' data_chars/manifest/train.tsv | sort | uniq -c
-echo "== columns 1,2,4-9 on common rows (train):"
-if cmp <(sort -k1,1 data/manifest/train.tsv | cut -f1,2,4-9 | sort) \
-       <(sort -k1,1 data_chars/manifest/train.tsv | cut -f1,2,4-9 | sort) ; then
-  echo "identical"
-else
-  echo "differ (expected only on the rows one side lacks; inspect with comm)"
-fi
-echo "== tokens: $(wc -l < data_chars/tokens/tokens.txt) lines"
-grep -c "^<space>$\|^<spk>$\|^<lang>$\|^<unk>$\|^<blank>$\|^<sos/eos>$" data_chars/tokens/tokens.txt
-echo "== lang_stats"; cat data_chars/lang_stats.json
-echo "== sample lanes"; cut -f3 data_chars/manifest/valid.tsv | head -2 | cut -c1-200
-awk -F'\t' '$4 == "zh"' data_chars/manifest/valid.tsv | head -1 | cut -f3 | cut -c1-200
+# acceptance checks (also runnable alone, see the script header)
+bash local/verify_chars_manifest.sh data data_chars

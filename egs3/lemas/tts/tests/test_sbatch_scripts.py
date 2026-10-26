@@ -155,3 +155,44 @@ def test_chain_links_and_watcher_requeues_inherit_the_job_name():
     assert '-J "$SLURM_JOB_NAME"' in link
     watch = Path("local/eval_watch.sbatch").read_text()
     assert '-J "$SLURM_JOB_NAME"' in watch
+
+
+def test_chars_manifest_verify_script_compares_common_rows(tmp_path):
+    # job 23191988 built the manifests but exited 141: the acceptance block
+    # piped cut into head under pipefail, and its column comparison could
+    # only say "differ" once the chars side held its extra rows. The checks
+    # live in their own script now, run after the build and on their own.
+    import subprocess
+
+    script = Path("local/verify_chars_manifest.sh").resolve()
+    ph = tmp_path / "data" / "manifest"
+    ch = tmp_path / "data_chars" / "manifest"
+    ph.mkdir(parents=True)
+    ch.mkdir(parents=True)
+    row = "{k}\t{k}.flac\t{t}\t{l}\tsrc\tg\t1.5\tp.jsonl\t7\tgroup\t\t\n"
+    ph.joinpath("train.tsv").write_text(
+        row.format(k="de_a", t="a b", l="de") + row.format(k="zh_b", t="x y", l="zh")
+    )
+    ch.joinpath("train.tsv").write_text(
+        row.format(k="de_a", t="a <space> b", l="de")
+        + row.format(k="zh_b", t="x <space> | y", l="zh")
+        + row.format(k="ru_c", t="c", l="ru")
+    )
+    for d in (ph, ch):
+        d.joinpath("valid.tsv").write_text(row.format(k="de_v", t="v", l="de"))
+    (tmp_path / "data_chars" / "tokens").mkdir()
+    (tmp_path / "data_chars" / "tokens" / "tokens.txt").write_text(
+        "<blank>\n<unk>\n<space>\n|\n<spk>\n<lang>\n<de>\n<sos/eos>\n"
+    )
+    (tmp_path / "data_chars" / "lang_stats.json").write_text("{}\n")
+    r = subprocess.run(
+        ["bash", str(script)], cwd=tmp_path, capture_output=True, text=True
+    )
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "train: phones 2  chars 3" in r.stdout
+    assert "rows only in phones (train): 0" in r.stdout
+    assert "1 ru" in r.stdout and "1 zh" in r.stdout
+    assert "identical" in r.stdout
+    assert "x <space> | y" in r.stdout
+    build = Path("local/build_chars_manifest.sbatch").read_text()
+    assert "bash local/verify_chars_manifest.sh" in build
