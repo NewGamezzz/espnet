@@ -180,7 +180,11 @@ dataloader:
 # 3.3 micro-batches per second; the bf16 rate is not measured yet).
 batch_sampler:
   _target_: src.sampler.BlockBatchSampler
-  batch_bins: 800000
+  # 400,000 (D2 runs 800,000): the 800k smoke (Delta job 23218469) went OOM on
+  # rank 0 at epoch 2 with 36 GB allocated. Without the language prompt a
+  # micro-batch holds 7.6 rows against D2's 4.7 at the same bound, so it pads
+  # to more frames; 400k matches the stock rows' bins.
+  batch_bins: 400000
   n_mels: ${n_mel_channels}
   min_batch_size: 1
   seed: ${seed}

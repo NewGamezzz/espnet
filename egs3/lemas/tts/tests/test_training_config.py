@@ -290,6 +290,10 @@ ROW_DELTAS = {
         "exp_tag": "train_f5_base_lemas_d1_spkonly",
         "stats_dir": "${recipe_dir}/exp/stats_d1",
         ("prompt_config", "p_drop_lang"): 1.0,
+        # 800k went OOM on rank 0 (smoke 23218469: 36 GB allocated at epoch 2;
+        # without the language prompt a micro-batch holds 7.6 rows against
+        # D2's 4.7, so it pads to more frames at the same bound)
+        ("batch_sampler", "batch_bins"): 400_000,
     },
 }
 

@@ -123,8 +123,12 @@ def test_chars_manifest_build_script():
 
 
 def test_fill_measurement_covers_the_rows_and_the_base():
-    # the base config stays in the list as the regression reference (3,261.45)
+    # the base config stays in the list as the regression reference (3,261.45);
+    # configs given on the sbatch command line replace the list (one row
+    # re-measured after a batch_bins change)
     s = Path("local/measure_batch_fill.sbatch").read_text()
+    assert 'if [ "$#" -gt 0 ]; then CONFS=("$@"); fi' in s
+    assert '"${CONFS[@]}"' in s
     for c in (
         "training_f5_base_s0c_stock_phones.yaml",
         "training_f5_base_s0a_stock_chars.yaml",
