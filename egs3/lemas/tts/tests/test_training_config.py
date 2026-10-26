@@ -77,7 +77,7 @@ MEASURED_REAL_FRAMES = {
     # the baseline rows, Delta job 23217789 (2026-10-26; BASE re-read 3274.45)
     "conf/training_f5_base_s0c_stock_phones.yaml": 2842.61,
     "conf/training_f5_base_s0a_stock_chars.yaml": 2839.61,
-    "conf/training_f5_base_d1_spkonly.yaml": 3640.04,
+    "conf/training_f5_base_d1_spkonly.yaml": 1860.41,  # at 400k bins, job 23225819
 }
 SMOKES = ["conf/training_smoke.yaml", "conf/training_smoke_1gpu.yaml"]
 
@@ -356,10 +356,10 @@ def test_stock_rows_keep_their_own_data_and_token_list():
 def test_baseline_rows_match_the_frame_budget(path):
     # every row sees the production budget of 307,200 real frames per
     # optimizer step (D2: 4 GPU x measured fill x accumulate); the stock rows
-    # fill their 400k bound (fill 1.00) and D1 fills 0.56 of its 800k bound
+    # fill their 400k bound (fill 1.00) and D1 fills 0.56 of its 400k bound
     # without the language prompt's cap, both from local/measure_batch_fill.py
     row = OmegaConf.to_container(OmegaConf.load(path))
     acc = row["trainer"]["accumulate_grad_batches"]
     real = MEASURED_REAL_FRAMES[path] * row["num_device"] * acc
     assert abs(real / 307_200 - 1) < 0.01, (path, real)
-    assert acc == {S0C: 27, S0A: 27, D1: 21}[path]
+    assert acc == {S0C: 27, S0A: 27, D1: 41}[path]
