@@ -53,14 +53,17 @@ def _load_cfg(path: str):
     return cfg
 
 
-def _load_weights(model, ckpt: str):
-    """Load the ``model.`` entries of a Lightning checkpoint; return missing keys."""
-    sd = torch.load(ckpt, map_location="cpu", weights_only=False)["state_dict"]
-    sd = {k[len("model."):]: v for k, v in sd.items() if k.startswith("model.")}
-    missing, unexpected = model.load_state_dict(sd, strict=False)
-    if unexpected:
-        raise RuntimeError(f"unexpected checkpoint keys: {unexpected[:5]}")
-    return list(missing)
+def _load_weights(model, ckpt: str) -> int:
+    """Load the live weights of a Lightning checkpoint; return its global step.
+
+    espnet3 saves the inner model's ``state_dict`` without a prefix
+    (``cfm.transformer...``); the EMA copy sits under
+    ``ema_model_state_dict`` and is not what the logged loss measures.
+    """
+    state = torch.load(ckpt, map_location="cpu", weights_only=False, mmap=True)
+    sd = {k.removeprefix("model."): v for k, v in state["state_dict"].items()}
+    model.load_state_dict(sd, strict=True)
+    return int(state["global_step"])
 
 
 def _batch_loss(model, data, device: str, seed: int) -> float:
@@ -114,7 +117,8 @@ def main() -> None:
 
     cfg = _load_cfg(args.training_config)
     model = _instantiate_model(cfg)
-    missing = _load_weights(model, args.ckpt)
+    step = _load_weights(model, args.ckpt)
+    print(f"loaded live weights of step {step}", flush=True)
     device = "cuda"
     model.eval().to(device)
     for m in model.modules():
@@ -153,7 +157,7 @@ def main() -> None:
     summary = dict(
         ckpt=args.ckpt,
         limit_val_batches=head,
-        missing_keys=missing[:10],
+        global_step=step,
         valid=_summarise([r for r in rows if r["split"] == "valid"], head),
         train=_summarise([r for r in rows if r["split"] == "train"], head),
     )
