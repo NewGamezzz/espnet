@@ -48,6 +48,16 @@ def test_train_chain_is_bounded_and_stoppable():
     assert "CHAIN_LEFT" in s and "exp/$TAG/STOP" in s
 
 
+def test_train_link_can_sample_gpu_memory_from_inside_the_job():
+    # smokes read the rank-0 peak; sampling through srun --overlap from the
+    # login node needs the Slurm controller, which was down during one smoke
+    s = Path("local/train_link.sh").read_text()
+    assert 'if [ -n "${GPU_SAMPLE:-}" ]; then' in s
+    assert "nvidia-smi --query-gpu=timestamp,index,memory.used" in s
+    assert 'logs/gpu_${SLURM_JOB_ID}.csv' in s
+    assert "kill" in s  # the sampler stops with the job
+
+
 def test_arm_script_takes_the_training_config_and_passes_the_checkpoint():
     # the GH200 run has its own training config (exp_tag); LEMAS_CKPT selects
     # the frozen checkpoint through the environment sbatch exports

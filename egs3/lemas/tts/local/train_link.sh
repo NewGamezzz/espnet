@@ -48,5 +48,14 @@ if [ -L "$CKPT" ] && [ ! -e "$CKPT" ]; then
 fi
 EXTRA=""
 if [ -f "$CKPT" ]; then EXTRA="--ckpt_path $CKPT"; fi
+# GPU_SAMPLE=1: record the node's GPU memory from inside the job every 30 s
+# (smokes read the rank-0 peak; sampling through srun --overlap from the
+# login node needs the Slurm controller, which was down during one smoke)
+if [ -n "${GPU_SAMPLE:-}" ]; then
+  nvidia-smi --query-gpu=timestamp,index,memory.used,utilization.gpu \
+    --format=csv,noheader -l 30 > "logs/gpu_${SLURM_JOB_ID}.csv" &
+  SAMPLER=$!
+  trap 'kill "$SAMPLER" 2>/dev/null' EXIT
+fi
 # one dead rank ends the job: the others would idle in NCCL until the walltime
 srun --kill-on-bad-exit=1 $PY run.py --stages train --training_config "$CONF" $EXTRA
