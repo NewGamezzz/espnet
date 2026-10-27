@@ -7,9 +7,10 @@ Lightning scores the first ``limit_val_batches`` of each rank, so the valid
 loss is measured on the shortest rows. This script scores one checkpoint on
 every validation batch and on training batches of epoch 0 with one model
 state (eval mode, CFG coins off, a fixed seed per batch) and reports the
-means by split and by length tertile. A valid loss that matches the train
-loss at matched length makes the gap a property of the metric, not of the
-model or the data.
+means by split and by length tertile, with the share of rows that carry a
+prompt (dual-prompt layouts). A valid loss that matches the train loss at
+matched length and prompt share makes the gap a property of the metric, not
+of the model or the data.
 
 Usage (recipe dir, one GPU):
     python local/loss_by_split.py --training_config conf/training_...yaml \\
@@ -90,6 +91,8 @@ def _summarise(rows, head: int):
         )
     return dict(
         batches=len(rows),
+        prompt_rows=float(np.mean([r["prompt_rows"] for r in rows])),
+        mean_cond_frames=float(np.mean([r["mean_cond_frames"] for r in rows])),
         first_batches_mean_loss=float(loss[:head].mean()),
         mean_loss=float(loss.mean()),
         frame_weighted_loss=float((loss * frames).sum() / frames.sum()),
@@ -130,12 +133,17 @@ def main() -> None:
         for b, (uids, data) in enumerate(loader):
             if b >= limit:
                 break
+            cf = torch.as_tensor(data["cond_frames"]).view(-1)
             rows.append(
                 dict(
                     split=split,
                     batch=b,
                     rows=len(uids),
                     mean_frames=float(data["speech_lengths"].float().mean()) / HOP,
+                    # dual-prompt rows: cond_frames > 0 when a prompt is present
+                    # (for D1 that is the speaker prompt); stock rows carry -1
+                    prompt_rows=float((cf > 0).float().mean()),
+                    mean_cond_frames=float(cf.clamp(min=0).float().mean()),
                     loss=_batch_loss(model, data, device, 1000 + b),
                 )
             )
