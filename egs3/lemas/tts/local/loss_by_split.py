@@ -53,15 +53,24 @@ def _load_cfg(path: str):
     return cfg
 
 
-def _load_weights(model, ckpt: str) -> int:
-    """Load the live weights of a Lightning checkpoint; return its global step.
+def _load_weights(model, ckpt: str, weights: str = "live") -> int:
+    """Load the live or the EMA weights of a Lightning checkpoint; return its step.
 
     espnet3 saves the inner model's ``state_dict`` without a prefix
-    (``cfm.transformer...``); the EMA copy sits under
-    ``ema_model_state_dict`` and is not what the logged loss measures.
+    (``cfm.transformer...``). The EMA copy sits under ``ema_model_state_dict``
+    with an ``ema_model.`` prefix; ``EMACallback`` swaps it in for every
+    validation pass, so the logged ``valid/loss`` is the EMA model's.
     """
     state = torch.load(ckpt, map_location="cpu", weights_only=False, mmap=True)
-    sd = {k.removeprefix("model."): v for k, v in state["state_dict"].items()}
+    if weights == "ema":
+        prefix = "ema_model."
+        sd = {
+            k[len(prefix):]: v
+            for k, v in state["ema_model_state_dict"].items()
+            if k.startswith(prefix)
+        }
+    else:
+        sd = {k.removeprefix("model."): v for k, v in state["state_dict"].items()}
     model.load_state_dict(sd, strict=True)
     return int(state["global_step"])
 
@@ -109,6 +118,7 @@ def main() -> None:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument("--training_config", required=True)
     p.add_argument("--ckpt", required=True)
+    p.add_argument("--weights", choices=("live", "ema"), default="live")
     p.add_argument("--valid_batches", type=int, default=10**9, help="all by default")
     p.add_argument("--train_batches", type=int, default=100)
     p.add_argument("--out", required=True)
@@ -117,8 +127,8 @@ def main() -> None:
 
     cfg = _load_cfg(args.training_config)
     model = _instantiate_model(cfg)
-    step = _load_weights(model, args.ckpt)
-    print(f"loaded live weights of step {step}", flush=True)
+    step = _load_weights(model, args.ckpt, args.weights)
+    print(f"loaded {args.weights} weights of step {step}", flush=True)
     device = "cuda"
     model.eval().to(device)
     for m in model.modules():
@@ -156,6 +166,7 @@ def main() -> None:
 
     summary = dict(
         ckpt=args.ckpt,
+        weights=args.weights,
         limit_val_batches=head,
         global_step=step,
         valid=_summarise([r for r in rows if r["split"] == "valid"], head),
