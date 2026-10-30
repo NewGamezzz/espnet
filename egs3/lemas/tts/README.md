@@ -111,13 +111,14 @@ no inference path yet.
 
 ```bash
 NO_CHAIN=1 sbatch --time=02:00:00 local/submit_train.sbatch conf/training_smoke.yaml   # measure memory/throughput first
-sbatch local/submit_train.sbatch                                                       # chain of 1 h links
+sbatch local/submit_train.sbatch                                                       # chain of 12 h links
 ```
 
 ### Chain links, epochs and checkpoints
 
-A 4-GPU job starts quickly on Delta only with a limit of 1 h or less, so the
-run is a chain of 1 h links, each killed by its walltime. Two facts shape it:
+The run is a chain of fixed-walltime links (12 h since 2026-10-30; 1 h before,
+when short 4-GPU jobs still started quickly), each killed by its walltime.
+Two facts shape it:
 
 - espnet3 writes `last.ckpt` at the end of an epoch and nowhere else.
 - Lightning resumes exactly only from a checkpoint written at the end of an

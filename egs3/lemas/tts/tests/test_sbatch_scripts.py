@@ -43,7 +43,7 @@ def test_delta_env_sets_phonemizer_and_python_path():
 
 
 def test_train_chain_is_bounded_and_stoppable():
-    assert "#SBATCH --time=01:00:00" in Path("local/submit_train.sbatch").read_text()
+    assert "#SBATCH --time=12:00:00" in Path("local/submit_train.sbatch").read_text()
     s = Path("local/train_link.sh").read_text()
     assert "CHAIN_LEFT" in s and "exp/$TAG/STOP" in s
 

@@ -181,7 +181,7 @@ dataloader:
 # rank, about 154 h) into short epochs. espnet3 writes last.ckpt at the end of
 # an epoch and nowhere else, and Lightning resumes exactly only from such a
 # checkpoint (a mid-epoch resume restarts the loader at its first batch), so
-# the epoch is the resume granularity of the 1 h chain links. 2,300
+# the epoch is the resume granularity of the chain links. 2,300
 # micro-batches = 100 optimizer steps = about 12 min on 4 A100 in fp32 (r2's
 # 3.3 micro-batches per second; the bf16 rate is not measured yet).
 batch_sampler:
@@ -246,7 +246,7 @@ trainer:
     name: ${exp_tag}
     save_dir: ${exp_dir}
     log_model: false
-    id: ${exp_tag}       # one wandb run across the 1 h chain links
+    id: ${exp_tag}       # one wandb run across the chain links
     resume: allow
 
 fit: {}
