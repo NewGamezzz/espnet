@@ -1,5 +1,9 @@
 builder:
-  corpus_root: /ocean/projects/cis210027p/ttrachu/emilia_dataset/raw
+  # Both read from the environment so another cluster points the recipe at its
+  # own copy without editing this file (see dataset/layout.py for the layouts;
+  # local/delta_env.sh sets them for NCSA Delta).
+  corpus_root: ${oc.env:EMILIA_CORPUS_ROOT,/ocean/projects/cis210027p/ttrachu/emilia_dataset/raw}
+  corpus_layout: ${oc.env:EMILIA_CORPUS_LAYOUT,sub_shards}
   langs: [EN, ZH]
   data_path: data
   val_ratio: 0.01

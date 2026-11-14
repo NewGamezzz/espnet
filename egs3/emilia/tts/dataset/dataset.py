@@ -18,6 +18,11 @@ import torch
 import torchaudio
 from torch.utils.data import Dataset as TorchDataset
 
+from egs3.emilia.tts.dataset.layout import (
+    SPEAKER_TREE,
+    corpus_layout,
+    speaker_tree_audio_dir,
+)
 from espnet3.utils.config_utils import load_config_with_defaults
 
 _UTT_ID_WIDTH = 32
@@ -67,6 +72,7 @@ class EmiliaDataset(TorchDataset):
         builder_cfg, dataset_cfg = _load_cfg(recipe_root)
         self.corpus_root = Path(builder_cfg["corpus_root"]) / "emilia"
         self.audio_suffix = builder_cfg.get("audio_suffix", ".mp3")
+        self.corpus_layout = corpus_layout(builder_cfg)
         data_dir = recipe_root / builder_cfg["data_path"]
 
         if manifest_path is not None:
@@ -141,8 +147,14 @@ class EmiliaDataset(TorchDataset):
         return self._text_buffer[start:end].decode("utf-8")
 
     def _wav_path(self, idx: int) -> Path:
-        shard = self._shards[int(self._shard_idx[idx])]
-        return self.corpus_root / shard / (self._utt_id(idx) + self.audio_suffix)
+        utt_id = self._utt_id(idx)
+        if self.corpus_layout == SPEAKER_TREE:
+            # Located from the id alone; the shard column is not consulted, so
+            # a manifest built on the sub-shard layout loads unchanged.
+            shard = speaker_tree_audio_dir(utt_id)
+        else:
+            shard = self._shards[int(self._shard_idx[idx])]
+        return self.corpus_root / shard / (utt_id + self.audio_suffix)
 
     def __getitem__(self, idx: int) -> dict[str, Any]:
         idx = int(idx)

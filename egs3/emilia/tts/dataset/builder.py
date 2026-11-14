@@ -22,6 +22,12 @@ from pathlib import Path
 # dataset/__init__.py imports this builder, so a package-level import would
 # resolve against a partially-initialized package.
 from egs3.emilia.tts.dataset.filters import keep_utterance, normalize_text
+from egs3.emilia.tts.dataset.layout import (
+    SPEAKER_TREE,
+    SUB_SHARDS,
+    corpus_layout,
+    speaker_tree_audio_dir,
+)
 from espnet3.components.data.dataset_builder import DatasetBuilder
 from espnet3.utils.config_utils import load_config_with_defaults
 
@@ -46,18 +52,8 @@ def _load_cfg(recipe_dir: Path) -> dict:
     return load_config_with_defaults(str(cfg_path), resolve=False)["builder"]
 
 
-def _scan_shard(args) -> tuple[int, Counter]:
-    """Read one shard directory and checkpoint it. Runs in a worker process.
-
-    Returns ``(n_rows, dropped)`` rather than the rows themselves: the rows go
-    to a per-shard cache file, so they never cross the process boundary and the
-    parent never has to hold the whole corpus in memory.
-    """
-    (shard_rel, shard_idx, lang, corpus_root, lo, hi, strict, audio_suffix,
-     cache_dir) = args
-    shard_dir = Path(corpus_root) / "emilia" / shard_rel
-    rows: list = []
-    dropped: Counter = Counter()
+def _iter_sub_shard(shard_dir: Path, audio_suffix: str, dropped: Counter):
+    """Yield the records of one flat sub-shard directory that have audio."""
     try:
         names = os.listdir(shard_dir)
     except OSError:
@@ -73,11 +69,66 @@ def _scan_shard(args) -> tuple[int, Counter]:
             continue
         try:
             with open(shard_dir / name, "r", encoding="utf-8") as fh:
-                record = json.load(fh)
+                yield json.load(fh)
         except (OSError, json.JSONDecodeError):
             dropped["unreadable_json"] += 1
-            continue
 
+
+def _iter_batch_jsonl(
+    emilia_root: Path, shard_rel: str, audio_suffix: str, dropped: Counter
+):
+    """Yield the records of one speaker-tree batch jsonl that have audio.
+
+    The jsonl is the only metadata, so audio presence is checked against one
+    listing per speaker directory (~10,000 per batch) rather than one stat
+    per utterance (~250,000 per batch).
+    """
+    try:
+        fh = open(emilia_root / f"{shard_rel}.jsonl", "r", encoding="utf-8")
+    except OSError:
+        dropped["unreadable_shard"] += 1
+        return
+    listings: dict[str, frozenset] = {}
+    with fh:
+        for line in fh:
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+                audio_dir = speaker_tree_audio_dir(record["id"])
+            except (json.JSONDecodeError, KeyError, TypeError, ValueError):
+                dropped["unreadable_json"] += 1
+                continue
+            names = listings.get(audio_dir)
+            if names is None:
+                try:
+                    names = frozenset(os.listdir(emilia_root / audio_dir))
+                except OSError:
+                    names = frozenset()
+                listings[audio_dir] = names
+            if record["id"] + audio_suffix not in names:
+                dropped["missing_audio"] += 1
+                continue
+            yield record
+
+
+def _scan_shard(args) -> tuple[int, Counter]:
+    """Read one shard and checkpoint it. Runs in a worker process.
+
+    Returns ``(n_rows, dropped)`` rather than the rows themselves: the rows go
+    to a per-shard cache file, so they never cross the process boundary and the
+    parent never has to hold the whole corpus in memory.
+    """
+    (shard_rel, shard_idx, lang, corpus_root, lo, hi, strict, audio_suffix,
+     cache_dir, layout) = args
+    emilia_root = Path(corpus_root) / "emilia"
+    rows: list = []
+    dropped: Counter = Counter()
+    if layout == SPEAKER_TREE:
+        records = _iter_batch_jsonl(emilia_root, shard_rel, audio_suffix, dropped)
+    else:
+        records = _iter_sub_shard(emilia_root / shard_rel, audio_suffix, dropped)
+    for record in records:
         keep, reason = keep_utterance(record, lang, lo, hi, strict)
         if not keep:
             dropped[reason] += 1
@@ -161,6 +212,7 @@ class EmiliaBuilder(DatasetBuilder):
         # sends this tuple to a ProcessPoolExecutor worker (matches the
         # existing str(corpus_root) below, for the same reason).
         audio_suffix = str(cfg.get("audio_suffix", ".mp3"))
+        layout = corpus_layout(cfg)
 
         # Deterministic shard ordering: language order from config, then
         # directory name. shard_idx is the line number in shards.txt.
@@ -169,7 +221,15 @@ class EmiliaBuilder(DatasetBuilder):
             lang_dir = corpus_root / "emilia" / lang
             if not lang_dir.is_dir():
                 raise FileNotFoundError(f"Missing language dir: {lang_dir}")
-            for d in sorted(p.name for p in lang_dir.iterdir() if p.is_dir()):
+            if layout == SPEAKER_TREE:
+                names = sorted(
+                    p.name[: -len(".jsonl")]
+                    for p in lang_dir.iterdir()
+                    if p.name.endswith(".jsonl")
+                )
+            else:
+                names = sorted(p.name for p in lang_dir.iterdir() if p.is_dir())
+            for d in names:
                 shard_rels.append((f"{lang}/{d}", lang))
 
         manifest_dir = data_dir / "manifest"
@@ -190,6 +250,10 @@ class EmiliaBuilder(DatasetBuilder):
             "audio_suffix": audio_suffix,
             "filter_version": _FILTER_VERSION,
         }
+        # Recorded only off the default, so caches written before the layout
+        # option existed keep their fingerprint and stay reusable.
+        if layout != SUB_SHARDS:
+            fingerprint["corpus_layout"] = layout
         fp_path = cache_dir / "fingerprint.json"
         if fp_path.is_file():
             previous = json.loads(fp_path.read_text(encoding="utf-8"))
@@ -205,7 +269,7 @@ class EmiliaBuilder(DatasetBuilder):
 
         all_jobs = [
             (rel, idx, lang, str(corpus_root), lo, hi, strict, audio_suffix,
-             str(cache_dir))
+             str(cache_dir), layout)
             for idx, (rel, lang) in enumerate(shard_rels)
         ]
         # The .json is written last by the worker, so it marks a complete pair.

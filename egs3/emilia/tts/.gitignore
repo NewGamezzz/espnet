@@ -1,0 +1,4 @@
+# per-site paths for the NCSA Delta job scripts (see local/delta/env.sh)
+local/delta/site_env.sh
+# Slurm job output
+logs/
