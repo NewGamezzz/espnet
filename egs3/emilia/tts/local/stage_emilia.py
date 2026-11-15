@@ -31,6 +31,7 @@ import os
 import re
 import shutil
 import tarfile
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -120,6 +121,7 @@ def stage(
     names: list[str],
     fetch: Callable[[str], Path],
     workers: int = 1,
+    max_fetches: int | None = None,
 ) -> dict[str, bool]:
     """Download and extract the archives that are not finished yet.
 
@@ -133,6 +135,9 @@ def stage(
         fetch: Downloads the named archive and returns its local path. The
             file is deleted once it has been extracted.
         workers: Archives handled at a time.
+        max_fetches: Archives downloading at a time; ``None`` means
+            ``workers``. Extraction is the slow part (one small file per
+            utterance), while a download holds about an archive in memory.
 
     Returns:
         ``{name: finished}`` for every name.
@@ -148,12 +153,14 @@ def stage(
     )
     started = time.time()
     n_done = 0
+    fetch_slots = threading.Semaphore(max(1, int(max_fetches or workers)))
 
     def one(name: str) -> bool:
         nonlocal n_done
         try:
             t_fetch = time.time()
-            tar_path = Path(fetch(name))
+            with fetch_slots:
+                tar_path = Path(fetch(name))
             t_extract = time.time()
             try:
                 counts = extract_archive(
@@ -258,6 +265,9 @@ def main(argv=None) -> int:
     parser.add_argument("--lang", required=True)
     parser.add_argument("--dest", required=True, help="corpus root to write into")
     parser.add_argument("--workers", type=int, default=4)
+    parser.add_argument(
+        "--max_fetches", type=int, default=4, help="archives downloading at a time"
+    )
     parser.add_argument("--limit", type=int, default=None, help="archives this run")
     parser.add_argument(
         "--slice",
@@ -297,7 +307,14 @@ def main(argv=None) -> int:
     todo = unfinished(share)
     if args.limit is not None:
         todo = todo[: args.limit]
-    stage(args.lang, dest, todo, fetch, workers=args.workers)
+    stage(
+        args.lang,
+        dest,
+        todo,
+        fetch,
+        workers=args.workers,
+        max_fetches=args.max_fetches,
+    )
 
     left = unfinished(names)
     if args.slice is not None:

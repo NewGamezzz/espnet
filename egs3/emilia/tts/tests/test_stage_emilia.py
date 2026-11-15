@@ -228,6 +228,38 @@ def test_stage_reports_an_archive_that_failed_and_goes_on(tmp_path):
     assert done == {"ZH-B000000": True, "ZH-B000001": False, "ZH-B000010": True}
 
 
+def test_stage_limits_how_many_archives_download_at_once(tmp_path):
+    """Extraction is the slow part and wants many workers; a download holds
+    about an archive in memory, so downloads get their own, smaller limit."""
+    import threading
+    import time
+
+    contents = {f"ZH-B{i:06d}": [f"ZH_B00000_S{i:05d}_W000000"] for i in range(8)}
+    build = _fetcher(tmp_path, contents, [])
+    lock = threading.Lock()
+    active, peak = 0, 0
+
+    def fetch(name: str) -> Path:
+        nonlocal active, peak
+        with lock:
+            active += 1
+            peak = max(peak, active)
+        time.sleep(0.05)
+        try:
+            with lock:  # tarfile creation in the helper is not the subject
+                return build(name)
+        finally:
+            with lock:
+                active -= 1
+
+    done = stage(
+        "ZH", tmp_path / "corpus", sorted(contents), fetch, workers=8, max_fetches=2
+    )
+
+    assert all(done.values())
+    assert peak == 2
+
+
 def test_merge_writes_one_sorted_jsonl_per_batch(tmp_path):
     dest = tmp_path / "corpus"
     stage("ZH", dest, sorted(_CONTENTS), _fetcher(tmp_path, _CONTENTS, []))
