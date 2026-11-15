@@ -152,7 +152,9 @@ def stage(
     def one(name: str) -> bool:
         nonlocal n_done
         try:
+            t_fetch = time.time()
             tar_path = Path(fetch(name))
+            t_extract = time.time()
             try:
                 counts = extract_archive(
                     tar_path, dest / "emilia", lang, parts / f"{name}.jsonl"
@@ -164,9 +166,12 @@ def stage(
             return False
         n_done += 1
         logger.info(
-            "stage: %s %s | %d/%d this run | %.2f h elapsed",
+            "stage: %s %s | fetch %.0f s, extract %.0f s | %d/%d this run | "
+            "%.2f h elapsed",
             name,
             counts,
+            t_extract - t_fetch,
+            time.time() - t_extract,
             n_done,
             len(todo),
             (time.time() - started) / 3600.0,
@@ -217,6 +222,26 @@ def merge_parts(lang: str, dest: str | Path, names: list[str]) -> dict[str, int]
     return rows
 
 
+def select_slice(names: list[str], spec: str | None) -> list[str]:
+    """Return the archives of slice ``"I/N"``: every N-th name from the I-th.
+
+    Slices of the same ``N`` are disjoint and cover ``names``, so N jobs can
+    stage one language at once. ``None`` selects everything.
+
+    Raises:
+        ValueError: If ``spec`` is not ``"I/N"`` with ``0 <= I < N``.
+    """
+    if spec is None:
+        return list(names)
+    try:
+        index, count = (int(part) for part in spec.split("/"))
+    except ValueError:
+        raise ValueError(f"Invalid slice {spec!r}; expected I/N") from None
+    if not 0 <= index < count:
+        raise ValueError(f"Invalid slice {spec!r}; need 0 <= I < N")
+    return list(names[index::count])
+
+
 def archive_names(lang: str) -> list[str]:
     """List the language's archive names in the dataset repo, sorted."""
     from huggingface_hub import HfApi
@@ -228,14 +253,25 @@ def archive_names(lang: str) -> list[str]:
 
 
 def main(argv=None) -> int:
-    """Stage a language; exit 0 when complete, 3 when archives remain."""
+    """Stage a language; exit 0 when the run's share is done, 3 otherwise."""
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--lang", required=True)
     parser.add_argument("--dest", required=True, help="corpus root to write into")
     parser.add_argument("--workers", type=int, default=4)
     parser.add_argument("--limit", type=int, default=None, help="archives this run")
+    parser.add_argument(
+        "--slice",
+        default=None,
+        help="I/N: stage only every N-th archive from the I-th, so N jobs can "
+        "share a language; the batch jsonl files are then left to a final "
+        "run without --slice",
+    )
     args = parser.parse_args(argv)
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    # force: an imported package may have configured the root logger already,
+    # and the per-archive progress lines are the only view into a long run
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(message)s", force=True
+    )
 
     from huggingface_hub import hf_hub_download
 
@@ -252,14 +288,25 @@ def main(argv=None) -> int:
             )
         )
 
+    def unfinished(candidates: list[str]) -> list[str]:
+        return [n for n in candidates if not (parts / f"{n}.jsonl").is_file()]
+
     names = archive_names(args.lang)
     parts = _parts_dir(dest, args.lang)
-    todo = [n for n in names if not (parts / f"{n}.jsonl").is_file()]
-    this_run = todo if args.limit is None else todo[: args.limit]
-    finished = [n for n in names if n not in todo]
-    stage(args.lang, dest, finished + this_run, fetch, workers=args.workers)
+    share = select_slice(names, args.slice)
+    todo = unfinished(share)
+    if args.limit is not None:
+        todo = todo[: args.limit]
+    stage(args.lang, dest, todo, fetch, workers=args.workers)
 
-    left = [n for n in names if not (parts / f"{n}.jsonl").is_file()]
+    left = unfinished(names)
+    if args.slice is not None:
+        mine = unfinished(share)
+        print(
+            f"STAGE_SLICE {args.slice}: {len(mine)} of {len(share)} archives left "
+            f"in this slice, {len(left)} of {len(names)} in all"
+        )
+        return 3 if mine else 0
     if left:
         print(f"STAGE_INCOMPLETE {len(left)} of {len(names)} archives left")
         return 3

@@ -19,6 +19,10 @@
 #   sbatch --account=<cpu account> local/delta/stage_emilia.sbatch [LANG]
 #   EMILIA_STAGE_LIMIT=8 sbatch --account=<cpu account> \
 #     --partition=cpu-interactive --time=01:00:00 local/delta/stage_emilia.sbatch
+# Several nodes at once, then one last run to write the batch jsonl files:
+#   sbatch --account=<cpu account> --array=0-7 local/delta/stage_emilia.sbatch
+#   sbatch --account=<cpu account> --dependency=afterany:<array job id> \
+#     local/delta/stage_emilia.sbatch
 #SBATCH --job-name=emilia_stage
 #SBATCH --partition=cpu
 #SBATCH --nodes=1
@@ -32,13 +36,19 @@ cd "$SLURM_SUBMIT_DIR"
 source "$SLURM_SUBMIT_DIR/local/delta/env.sh"
 : "${EMILIA_STAGE_DEST:?set EMILIA_STAGE_DEST in local/delta/site_env.sh or the environment}"
 STAGE_LANG=${1:-ZH}
+# As an array job of N tasks (--array=0-<N-1>), each task stages its own slice.
+SLICE=${EMILIA_STAGE_SLICE:-}
+if [ -z "$SLICE" ] && [ -n "${SLURM_ARRAY_TASK_ID:-}" ]; then
+  SLICE="$SLURM_ARRAY_TASK_ID/$SLURM_ARRAY_TASK_COUNT"
+fi
 WORKERS=${EMILIA_STAGE_WORKERS:-8}
-echo "stage: $STAGE_LANG -> $EMILIA_STAGE_DEST  workers: $WORKERS  limit: ${EMILIA_STAGE_LIMIT:-none}"
+echo "stage: $STAGE_LANG -> $EMILIA_STAGE_DEST  workers: $WORKERS  limit: ${EMILIA_STAGE_LIMIT:-none}  slice: ${SLICE:-all}"
 git -C "$ROOT" log -1 --format='tree: %h %s' || true
 date
 $PY local/delta/check_imports.py "$ROOT"
 rc=0
 $PY local/stage_emilia.py --lang "$STAGE_LANG" --dest "$EMILIA_STAGE_DEST" \
-  --workers "$WORKERS" ${EMILIA_STAGE_LIMIT:+--limit "$EMILIA_STAGE_LIMIT"} || rc=$?
+  --workers "$WORKERS" ${EMILIA_STAGE_LIMIT:+--limit "$EMILIA_STAGE_LIMIT"} \
+  ${SLICE:+--slice "$SLICE"} || rc=$?
 date
 exit "$rc"

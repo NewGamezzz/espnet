@@ -16,7 +16,12 @@ import pytest
 import soundfile as sf
 
 from egs3.emilia.tts.dataset.builder import EmiliaBuilder
-from egs3.emilia.tts.local.stage_emilia import extract_archive, merge_parts, stage
+from egs3.emilia.tts.local.stage_emilia import (
+    extract_archive,
+    merge_parts,
+    select_slice,
+    stage,
+)
 
 _CONFIG = """
 builder:
@@ -283,3 +288,26 @@ def test_a_staged_language_builds_with_the_speaker_tree_layout(tmp_path):
     report = json.loads((recipe / "data/manifest/report.json").read_text("utf-8"))
     assert report["kept"] == 2
     assert report["dropped"] == {}
+
+
+def test_slices_split_the_archives_between_jobs_without_overlap():
+    """Several jobs stage one language at once, each taking its own slice."""
+    names = [f"ZH-B{i:06d}" for i in range(10)]
+
+    slices = [select_slice(names, f"{i}/4") for i in range(4)]
+
+    assert sorted(n for part in slices for n in part) == names
+    assert slices[1] == ["ZH-B000001", "ZH-B000005", "ZH-B000009"]
+
+
+def test_a_slice_does_not_depend_on_what_is_already_finished():
+    """Slices are cut from the full list, so a rerun keeps each job's share."""
+    names = [f"ZH-B{i:06d}" for i in range(10)]
+    assert select_slice(names, None) == names
+    assert select_slice(names[:5], "1/4") == ["ZH-B000001"]
+
+
+@pytest.mark.parametrize("spec", ["4/4", "-1/4", "1/0", "1", "a/b"])
+def test_an_impossible_slice_is_rejected(spec):
+    with pytest.raises(ValueError, match="slice"):
+        select_slice(["ZH-B000000"], spec)
