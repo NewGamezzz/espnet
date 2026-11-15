@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import gc
 import json
 import logging
 import time
@@ -130,6 +131,47 @@ def _synthetic_batch(
     }
 
 
+def _run_steps(
+    model,
+    params: list,
+    optimizer,
+    ema: list,
+    ema_decay: float,
+    clip: float,
+    precision: str,
+    device: torch.device,
+    make_batch: Callable[[], dict],
+    steps: int,
+) -> tuple[float, float]:
+    """Run ``steps`` full training steps; return ``(loss, seconds_per_step)``.
+
+    Every tensor of a step is a local of this function, so nothing of a step
+    that runs out of memory (its loss holds the whole autograd graph)
+    outlives the call.
+    """
+    timings = []
+    loss_value = float("nan")
+    for _ in range(steps):
+        batch = make_batch()
+        start = time.perf_counter()
+        with _autocast(precision, device):
+            loss, _stats, _weight = model(**batch)
+        loss.backward()
+        if clip > 0:
+            torch.nn.utils.clip_grad_norm_(params, clip)
+        optimizer.step()
+        with torch.no_grad():
+            for shadow, param in zip(ema, params):
+                shadow.lerp_(param, 1.0 - ema_decay)
+        optimizer.zero_grad(set_to_none=True)
+        if device.type == "cuda":
+            torch.cuda.synchronize(device)
+        timings.append(time.perf_counter() - start)
+        loss_value = float(loss.detach())
+    # the first step pays cuDNN autotuning and allocator growth
+    return loss_value, float(np.mean(timings[1:] or timings))
+
+
 def run_probe(
     config: DictConfig,
     shapes: dict[str, tuple[int, int]],
@@ -184,40 +226,39 @@ def run_probe(
                 "loss": None,
                 "seconds_per_step": None,
                 "peak_allocated_gib": None,
+                "allocated_before_gib": None,
                 "peak_reserved_gib": None,
             }
             if on_cuda:
-                torch.cuda.empty_cache()
                 torch.cuda.reset_peak_memory_stats(dev)
+                row["allocated_before_gib"] = torch.cuda.memory_allocated(dev) / _GIB
             try:
-                timings = []
-                for _ in range(steps):
-                    batch = _synthetic_batch(
+                row["loss"], row["seconds_per_step"] = _run_steps(
+                    model,
+                    params,
+                    optimizer,
+                    ema,
+                    ema_decay,
+                    clip,
+                    precision,
+                    dev,
+                    lambda: _synthetic_batch(
                         n_utts, n_frames, hop_length, vocab_size, dev
-                    )
-                    start = time.perf_counter()
-                    with _autocast(precision, dev):
-                        loss, _stats, _weight = model(**batch)
-                    loss.backward()
-                    if clip > 0:
-                        torch.nn.utils.clip_grad_norm_(params, clip)
-                    optimizer.step()
-                    with torch.no_grad():
-                        for shadow, param in zip(ema, params):
-                            shadow.lerp_(param, 1.0 - ema_decay)
-                    optimizer.zero_grad(set_to_none=True)
-                    if on_cuda:
-                        torch.cuda.synchronize(dev)
-                    timings.append(time.perf_counter() - start)
-                    row["loss"] = float(loss.detach())
-                # the first step pays cuDNN autotuning and allocator growth
-                row["seconds_per_step"] = float(np.mean(timings[1:] or timings))
+                    ),
+                    steps,
+                )
             except torch.OutOfMemoryError:
                 row["status"] = "oom"
-                optimizer.zero_grad(set_to_none=True)
             if on_cuda:
                 row["peak_allocated_gib"] = torch.cuda.max_memory_allocated(dev) / _GIB
                 row["peak_reserved_gib"] = torch.cuda.max_memory_reserved(dev) / _GIB
+            # A failed step leaves gradients behind, and its traceback kept the
+            # graph alive until the except clause ended: release both, or every
+            # later row is measured on a GPU that is already full.
+            optimizer.zero_grad(set_to_none=True)
+            gc.collect()
+            if on_cuda:
+                torch.cuda.empty_cache()
             logger.info("probe: %s", row)
             rows.append(row)
     return rows
@@ -268,13 +309,14 @@ def main(argv=None) -> None:
 
     print(
         "precision   batch_bins/batch                 B     L  padded  status"
-        "  alloc GiB  reserved GiB  s/step"
+        "  before GiB  alloc GiB  reserved GiB  s/step"
     )
     for row in report["rows"]:
         print(
             f"{row['precision']:<11} {row['batch']:<30} {row['utterances']:>3} "
             f"{row['frames']:>5} {row['padded_frames']:>7}  {row['status']:<6} "
-            f"{_format(row['peak_allocated_gib'], '9.2f')} "
+            f"{_format(row['allocated_before_gib'], '10.2f')} "
+            f"{_format(row['peak_allocated_gib'], '10.2f')} "
             f"{_format(row['peak_reserved_gib'], '13.2f')} "
             f"{_format(row['seconds_per_step'], '7.3f')}"
         )

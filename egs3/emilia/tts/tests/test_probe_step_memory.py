@@ -155,6 +155,53 @@ def test_run_probe_trains_the_model_it_measures(tiny_config):
     assert any(not torch.equal(b, a) for b, a in zip(seen["before"], after))
 
 
+def test_run_probe_frees_a_failed_step_before_the_next_measurement(tiny_config):
+    """An out-of-memory step must not leak into the rows measured after it.
+
+    On the A100 the loss of the first failed step stayed referenced, its
+    autograd graph kept the GPU full, and every later row (all of bf16)
+    reported "oom" whatever its size.
+    """
+    import weakref
+
+    import torch
+
+    failed_loss_alive = []
+
+    def spy(model):
+        real_forward = model.forward
+        state = {"calls": 0, "failed_loss": None}
+
+        def forward(**batch):
+            state["calls"] += 1
+            if state["failed_loss"] is not None:
+                failed_loss_alive.append(state["failed_loss"]() is not None)
+                state["failed_loss"] = None
+            loss, stats, weight = real_forward(**batch)
+            if state["calls"] == 1:
+
+                def out_of_memory(grad):
+                    raise torch.OutOfMemoryError("simulated")
+
+                loss.register_hook(out_of_memory)
+                state["failed_loss"] = weakref.ref(loss)
+            return loss, stats, weight
+
+        model.forward = forward
+
+    rows = run_probe(
+        tiny_config,
+        shapes={"a": (2, 40), "b": (1, 60)},
+        precisions=["32-true"],
+        device="cpu",
+        steps=1,
+        on_model_built=spy,
+    )
+
+    assert [row["status"] for row in rows] == ["oom", "ok"]
+    assert failed_loss_alive == [False]
+
+
 def test_run_probe_rejects_an_unknown_precision(tiny_config):
     with pytest.raises(ValueError, match="precision"):
         run_probe(
