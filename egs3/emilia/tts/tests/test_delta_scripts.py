@@ -48,7 +48,19 @@ def site(tmp_path):
 
 def test_delta_scripts_exist():
     names = {p.name for p in SBATCH}
-    assert {"prepare_data.sbatch", "probe_memory.sbatch"} <= names
+    assert {
+        "prepare_data.sbatch",
+        "probe_memory.sbatch",
+        "stage_emilia.sbatch",
+    } <= names
+
+
+def test_stage_job_refuses_to_run_without_a_destination():
+    """Staging writes about a terabyte; where to must be said, never guessed."""
+    text = (DELTA / "stage_emilia.sbatch").read_text(encoding="utf-8")
+    guard = text.index('"${EMILIA_STAGE_DEST:?')
+    assert guard < text.index("$PY local/stage_emilia.py")
+    assert '--dest "$EMILIA_STAGE_DEST"' in text
 
 
 @pytest.mark.parametrize("path", [ENV, *SBATCH], ids=lambda p: p.name)
