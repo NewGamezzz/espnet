@@ -147,4 +147,26 @@ def test_check_imports_reports_modules_from_another_tree(tmp_path):
     from egs3.emilia.tts.local.delta.check_imports import foreign_modules
 
     foreign = foreign_modules(tmp_path)
-    assert {name for name, _ in foreign} == {"espnet2", "espnet3", "egs3.emilia.tts"}
+    assert {name for name, _ in foreign} == {
+        "espnet2",
+        "espnet3",
+        "egs3.emilia.tts",
+        "espnet2.tasks.tts",
+    }
+
+
+def test_check_imports_fails_when_the_training_task_cannot_be_imported(monkeypatch):
+    """The task's imports need packages the data stages never touch.
+
+    On Delta the env lacked pyworld: the CPU job passed and the GPU job died
+    in its first minute. The check runs at the top of every job instead.
+    """
+    import sys
+
+    from egs3.emilia.tts.local.delta.check_imports import foreign_modules
+
+    monkeypatch.setitem(sys.modules, "pyworld", None)  # import pyworld -> ImportError
+    for name in ("espnet2.tasks.tts", "espnet2.tts.feats_extract.dio"):
+        monkeypatch.delitem(sys.modules, name, raising=False)
+    with pytest.raises(ImportError, match="pyworld"):
+        foreign_modules(REPO)

@@ -1,9 +1,10 @@
-"""Fail a job early when python imports the recipe from another checkout.
+"""Fail a job early when python cannot import the recipe from this checkout.
 
 The shared environment on Delta has a different espnet checkout installed.
 If PYTHONPATH is wrong, ``espnet3`` and ``egs3`` resolve from that checkout
 while ``src/`` and ``dataset/`` load from this one, and the job dies hours
-later (or, worse, trains with the other tree's dataloader).
+later (or, worse, trains with the other tree's dataloader). A module that
+cannot be imported at all raises here, with its traceback.
 
 Usage: python local/delta/check_imports.py <repo root>
 """
@@ -14,7 +15,9 @@ import importlib
 import sys
 from pathlib import Path
 
-MODULES = ("espnet2", "espnet3", "egs3.emilia.tts")
+# espnet2.tasks.tts is the training task: importing it here also fails a job
+# at once when the env lacks a package only the model code needs (pyworld).
+MODULES = ("espnet2", "espnet3", "egs3.emilia.tts", "espnet2.tasks.tts")
 
 
 def foreign_modules(repo_root: str | Path) -> list[tuple[str, str]]:

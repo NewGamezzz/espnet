@@ -6,7 +6,10 @@
 # Site settings are NOT kept in version control. Put them in the untracked
 # local/delta/site_env.sh (or a file named by EMILIA_SITE_ENV), or export them:
 #   EMILIA_PY             python of an env with torch, lightning, soundfile
-#                         (mp3-capable libsndfile), vocos, rjieba and pypinyin
+#                         (mp3-capable libsndfile), vocos, rjieba, pypinyin
+#                         and pyworld (imported by espnet2.tasks.tts)
+#   PYTHONPATH            optional: a directory of extra packages the env
+#                         lacks (pip/uv --target); kept after this tree
 #   EMILIA_CORPUS_ROOT    directory holding emilia/<LANG>/...
 #   EMILIA_CORPUS_LAYOUT  optional, default speaker_tree (dataset/layout.py)
 _DELTA_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)

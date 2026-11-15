@@ -6,6 +6,7 @@ per-utterance ``.json`` + ``.mp3`` sub-shards the default layout reads.
 """
 
 import json
+import os
 from pathlib import Path
 
 import numpy as np
@@ -148,6 +149,26 @@ def test_builder_drops_records_whose_audio_is_missing(recipe):
     )
     assert report["kept"] == 3
     assert report["dropped"] == {"blocklist": 1, "duration": 1, "missing_audio": 1}
+
+
+def test_builder_stops_on_an_audio_directory_it_cannot_read(recipe, corpus):
+    """Permission denied is a fault of the site, not a property of the data.
+
+    Counted as missing audio it silently halves the corpus (on Delta every ZH
+    batch directory was owner-only and the build "succeeded" on EN alone).
+    """
+    if os.geteuid() == 0:
+        pytest.skip("root can list a directory whatever its mode")
+    locked = corpus / "emilia" / "ZH" / "ZH_B00000" / "ZH_B00000_S00001" / "mp3"
+    locked.chmod(0o000)
+    try:
+        with pytest.raises(OSError, match="ZH_B00000_S00001"):
+            EmiliaBuilder().build(recipe_dir=recipe)
+    finally:
+        locked.chmod(0o755)
+    # The shard is not checkpointed, so a rerun after the fix scans it again.
+    EmiliaBuilder().build(recipe_dir=recipe)
+    assert "ZH_B00000_S00001_W000000" in {r[0] for r in _all_rows(recipe)}
 
 
 def test_builder_is_source_prepared_in_speaker_tree_layout(recipe):

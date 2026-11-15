@@ -103,8 +103,11 @@ def _iter_batch_jsonl(
             if names is None:
                 try:
                     names = frozenset(os.listdir(emilia_root / audio_dir))
-                except OSError:
+                except (FileNotFoundError, NotADirectoryError):
                     names = frozenset()
+                # Any other OSError (permission denied, I/O error) propagates:
+                # it is a fault of the site, and counting it as missing audio
+                # would quietly drop every utterance under that directory.
                 listings[audio_dir] = names
             if record["id"] + audio_suffix not in names:
                 dropped["missing_audio"] += 1
