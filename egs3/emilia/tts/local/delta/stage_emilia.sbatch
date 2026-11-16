@@ -7,15 +7,18 @@
 # Needs, in local/delta/site_env.sh or the environment:
 #   EMILIA_STAGE_DEST   corpus root to write into (about 1.3 TB for ZH, plus
 #                       2 GB per worker while an archive is being extracted)
-# Measured on Delta's /work/hdd: about 90 s to download an archive and about
-# 750 s to extract it with 8 workers in one job.
 # and a Hugging Face login with access to the gated dataset (hf auth login).
+#
+# Measured on Delta's /work/hdd for ZH (920 archives, 20.0M utterances): about
+# 90 s to download an archive and about 750 s to extract it with 8 workers in
+# one job; as 8 array tasks of 16 workers, 898 archives took 2 h 15 min to
+# 3 h 04 min per task (peak memory 49 GB), the largest archives (83,000
+# utterances) over an hour each. The last run, which only merges, took 5.5 min
+# (peak memory 27 GB).
+#
 # To read the result together with a shared copy of the other languages, link
 # them into the same root and point EMILIA_CORPUS_ROOT at it:
 #   ln -s <shared root>/emilia/EN "$EMILIA_STAGE_DEST/emilia/EN"
-#
-# Memory: the final merge holds every record of the language (about 20M
-# lines for ZH) at once.
 #
 # Usage, from the recipe dir (the account is given at submit time):
 #   sbatch --account=<cpu account> local/delta/stage_emilia.sbatch [LANG]
