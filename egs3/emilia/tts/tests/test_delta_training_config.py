@@ -63,6 +63,10 @@ def test_delta_config_validates_on_the_batches_psc_validates_on():
     after ``limit_val_batches``, so a valid budget that followed the train one
     would score different utterances than the PSC run did. It is written as a
     number here, not as the interpolation the base config uses.
+
+    This pins the budget only. The utterances are the same only when the
+    valid manifest is: the builder draws the split from a seeded shuffle over
+    all kept rows, so another corpus copy yields another split.
     """
     base = OmegaConf.load(CONF)
     delta = OmegaConf.load(DELTA_CONF)

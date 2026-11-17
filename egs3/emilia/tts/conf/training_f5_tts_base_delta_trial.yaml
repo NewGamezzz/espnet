@@ -253,8 +253,14 @@ dataloader:
         # The base config's value as a number, NOT train's batch_bins: the
         # sampler packs the valid batches by this budget and validation stops
         # after limit_val_batches, so following train's larger budget would
-        # score other utterances than the base run does and make the two
-        # runs' valid losses incomparable.
+        # score other utterances than the base run does.
+        #
+        # That keeps the budget, not the data: create_dataset draws the valid
+        # split from a seeded shuffle over ALL kept rows, so a manifest built
+        # from a corpus copy with a different row set has a different valid
+        # split. To continue a run trained elsewhere, use that run's own
+        # train.tsv and valid.tsv; otherwise most of this site's valid rows
+        # were training data of the checkpoint.
         batch_bins: 960000
 
 trainer:
