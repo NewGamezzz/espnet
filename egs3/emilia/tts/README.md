@@ -169,7 +169,7 @@ Two constraints that don't change with GPU count:
   batches via `batches[rank::world_size]` and never splits one, so batch
   size and world size are unrelated.
 
-## Precision: fp32, no exceptions
+## Precision: fp32 on Bridges-2, no exceptions
 
 `conf/training_f5_tts_base.yaml` sets no `trainer.precision` key, which
 means fp32.
@@ -179,6 +179,13 @@ fp16 is a separate, opt-in throughput experiment with its own decision
 point (raised via the GPU smoke's peak-memory measurement below, if fp32
 turns out not to fit); it is not a dependency of getting this recipe
 launch-ready.
+
+The Delta config (`conf/training_f5_tts_base_delta.yaml`, see "Training on
+NCSA Delta") is the exception by design: it trains in `bf16-mixed` on A100s
+from its first step.
+What has been shown for it is that the step runs, resumes and gives finite
+losses; no result of a bf16 run has been compared with an fp32 one yet, so
+its evaluation scores are the first evidence either way.
 
 ## Running the GPU smoke
 
