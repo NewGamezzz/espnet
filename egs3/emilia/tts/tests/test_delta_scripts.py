@@ -52,7 +52,54 @@ def test_delta_scripts_exist():
         "prepare_data.sbatch",
         "probe_memory.sbatch",
         "stage_emilia.sbatch",
+        "train_trial.sbatch",
     } <= names
+
+
+def _sbatch_option(text: str, name: str) -> str:
+    match = re.search(rf"^#SBATCH --{name}=(\S+)$", text, re.MULTILINE)
+    assert match, f"no #SBATCH --{name}"
+    return match.group(1)
+
+
+def _code(text: str) -> str:
+    return "\n".join(
+        line for line in text.splitlines() if not line.lstrip().startswith("#")
+    )
+
+
+def test_trial_job_runs_the_trial_config_once_on_the_interactive_partition():
+    """The trial is one job: it resumes nothing and queues no successor."""
+    text = (DELTA / "train_trial.sbatch").read_text(encoding="utf-8")
+    code = _code(text)
+    assert _sbatch_option(text, "partition") == "gpuA100x4-interactive"
+    assert "CONF=${1:-conf/training_f5_tts_base_delta_trial.yaml}" in code
+    assert 'run.py --stages train --training_config "$CONF"' in code
+    assert "--ckpt_path" not in code
+    assert not re.search(r"\bsbatch\b", code)
+    # one dead rank must end the job instead of idling the others in NCCL
+    assert "srun --kill-on-bad-exit=1 " in code
+
+
+def test_trial_job_has_one_task_per_device_of_its_config():
+    """Lightning takes the rank count from Slurm; it must match the config."""
+    from omegaconf import OmegaConf
+
+    text = (DELTA / "train_trial.sbatch").read_text(encoding="utf-8")
+    cfg = OmegaConf.load(RECIPE / "conf" / "training_f5_tts_base_delta_trial.yaml")
+    assert int(_sbatch_option(text, "ntasks-per-node")) == cfg.num_device
+    assert int(_sbatch_option(text, "gpus-per-node")) == cfg.num_device
+    assert int(_sbatch_option(text, "nodes")) == cfg.num_nodes
+
+
+def test_trial_job_gives_every_rank_a_core_per_loader_worker():
+    """Loader workers beyond the task's cores only contend with each other."""
+    from omegaconf import OmegaConf
+
+    text = (DELTA / "train_trial.sbatch").read_text(encoding="utf-8")
+    cfg = OmegaConf.load(RECIPE / "conf" / "training_f5_tts_base_delta_trial.yaml")
+    workers = cfg.dataloader.train.iter_factory.num_workers
+    assert workers < int(_sbatch_option(text, "cpus-per-task"))
 
 
 def test_stage_job_refuses_to_run_without_a_destination():

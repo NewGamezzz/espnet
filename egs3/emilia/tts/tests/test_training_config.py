@@ -16,6 +16,17 @@ SMOKE_2GPU_CONF = (
     / "conf"
     / "training_f5_tts_base_smoke_2gpu.yaml"
 )
+# NCSA Delta: the production config and its short trial copy; what they change
+# is pinned in test_delta_training_config.py, and they join the checks below
+# that guard every training config.
+DELTA_CONF = (
+    Path(__file__).resolve().parents[1] / "conf" / "training_f5_tts_base_delta.yaml"
+)
+DELTA_TRIAL_CONF = (
+    Path(__file__).resolve().parents[1]
+    / "conf"
+    / "training_f5_tts_base_delta_trial.yaml"
+)
 
 
 @pytest.fixture
@@ -138,7 +149,7 @@ def test_stats_dir_is_shared_across_exp_tags(cfg):
     assert "${exp_dir}" not in raw["stats_dir"]
 
 
-@pytest.mark.parametrize("conf_path", [CONF, SMOKE_CONF])
+@pytest.mark.parametrize("conf_path", [CONF, SMOKE_CONF, DELTA_CONF, DELTA_TRIAL_CONF])
 def test_stats_dir_survives_the_real_template_merge(conf_path):
     """CRITICAL 3, through the actual production pipeline, not a plain
     OmegaConf.load of the recipe file in isolation.
@@ -225,9 +236,7 @@ def test_smoke_config_only_differs_from_base_in_five_places():
     pin and the falsification note below.
     """
     base = _flatten(OmegaConf.to_container(OmegaConf.load(CONF), resolve=True))
-    smoke = _flatten(
-        OmegaConf.to_container(OmegaConf.load(SMOKE_CONF), resolve=True)
-    )
+    smoke = _flatten(OmegaConf.to_container(OmegaConf.load(SMOKE_CONF), resolve=True))
 
     # trainer.logger is a wholesale block replacement (WandbLogger ->
     # CSVLogger), so its key SET is expected to differ, not just its
@@ -316,7 +325,7 @@ def test_smoke_config_has_short_step_budget():
 # construction on a real PSC job, exactly the class of defect C1/C2 were.
 
 
-@pytest.mark.parametrize("conf_path", [CONF, SMOKE_CONF])
+@pytest.mark.parametrize("conf_path", [CONF, SMOKE_CONF, DELTA_CONF, DELTA_TRIAL_CONF])
 def test_task_and_every_target_resolve(conf_path):
     cfg = OmegaConf.load(conf_path)
     resolved = OmegaConf.to_container(cfg, resolve=True)
@@ -447,7 +456,13 @@ def test_min_batch_size_is_one_on_both_loaders():
     limit_val_batches stopped before the long tail -- luck that evaporates
     the moment limit_val_batches is raised.
     """
-    for conf_path in (CONF, SMOKE_CONF, SMOKE_2GPU_CONF):
+    for conf_path in (
+        CONF,
+        SMOKE_CONF,
+        SMOKE_2GPU_CONF,
+        DELTA_CONF,
+        DELTA_TRIAL_CONF,
+    ):
         cfg = OmegaConf.load(conf_path)
         train = cfg.dataloader.train.iter_factory.batches
         valid = cfg.dataloader.valid.iter_factory.batches
@@ -465,7 +480,13 @@ def test_num_workers_is_inside_iter_factory():
     step waiting on the loader against train_time=1.751s of compute, 26% of
     every step decoding mp3 on the main process.
     """
-    for conf_path in (CONF, SMOKE_CONF, SMOKE_2GPU_CONF):
+    for conf_path in (
+        CONF,
+        SMOKE_CONF,
+        SMOKE_2GPU_CONF,
+        DELTA_CONF,
+        DELTA_TRIAL_CONF,
+    ):
         cfg = OmegaConf.load(conf_path)
         for mode in ("train", "valid"):
             block = cfg.dataloader[mode]
@@ -477,9 +498,9 @@ def test_num_workers_is_inside_iter_factory():
                 f"{conf_path.name}: dataloader.{mode}.pin_memory is a sibling "
                 "of iter_factory, where espnet3 ignores it"
             )
-            assert block.iter_factory.num_workers > 0, (
-                f"{conf_path.name}: dataloader.{mode}.iter_factory.num_workers"
-            )
+            assert (
+                block.iter_factory.num_workers > 0
+            ), f"{conf_path.name}: dataloader.{mode}.iter_factory.num_workers"
             assert block.iter_factory.pin_memory is True
 
 
@@ -501,7 +522,13 @@ def test_checkpointing_is_step_based_not_epoch_based():
     ~275 updates/hour an 8h segment is ~2,200 updates, so the interval has to
     be well under that or the guarantee is void.
     """
-    for conf_path in (CONF, SMOKE_CONF, SMOKE_2GPU_CONF):
+    for conf_path in (
+        CONF,
+        SMOKE_CONF,
+        SMOKE_2GPU_CONF,
+        DELTA_CONF,
+        DELTA_TRIAL_CONF,
+    ):
         cfg = OmegaConf.load(conf_path)
         n = cfg.trainer.get("save_every_n_train_steps", None)
         assert n is not None, (
@@ -558,7 +585,13 @@ def test_every_trainer_key_is_accepted_by_lightning_or_espnet3():
     assert "callbacks" in espnet3_consumed, espnet3_consumed
     allowed = lightning_args | espnet3_consumed
 
-    for conf_path in (CONF, SMOKE_CONF, SMOKE_2GPU_CONF):
+    for conf_path in (
+        CONF,
+        SMOKE_CONF,
+        SMOKE_2GPU_CONF,
+        DELTA_CONF,
+        DELTA_TRIAL_CONF,
+    ):
         cfg = OmegaConf.load(conf_path)
         for key in cfg.trainer.keys():
             assert key in allowed, (
