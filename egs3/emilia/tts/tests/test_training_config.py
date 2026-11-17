@@ -522,13 +522,9 @@ def test_checkpointing_is_step_based_not_epoch_based():
     ~275 updates/hour an 8h segment is ~2,200 updates, so the interval has to
     be well under that or the guarantee is void.
     """
-    for conf_path in (
-        CONF,
-        SMOKE_CONF,
-        SMOKE_2GPU_CONF,
-        DELTA_CONF,
-        DELTA_TRIAL_CONF,
-    ):
+    # The Delta configs checkpoint at the end of short epochs instead
+    # (test_delta_training_config.py); a step-based save is what they avoid.
+    for conf_path in (CONF, SMOKE_CONF, SMOKE_2GPU_CONF):
         cfg = OmegaConf.load(conf_path)
         n = cfg.trainer.get("save_every_n_train_steps", None)
         assert n is not None, (

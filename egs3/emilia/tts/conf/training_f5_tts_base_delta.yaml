@@ -1,26 +1,33 @@
-# F5-TTS Base on Emilia for NCSA Delta (one gpuA100x4 node, 4 x A100-40GB).
+# F5-TTS Base on Emilia, trained from scratch on NCSA Delta (one gpuA100x4
+# node, 4 x A100-40GB), as a chain of jobs (local/delta/train.sbatch).
 #
-# The same experiment as training_f5_tts_base.yaml (same exp_tag, model,
-# optimizer, schedule and data), so a checkpoint of that run resumes here.
-# Only what the hardware changes differs; tests/test_delta_training_config.py
-# pins the list:
+# Model, optimizer, schedule and data settings are those of
+# training_f5_tts_base.yaml; tests/test_delta_training_config.py pins what
+# differs:
+#   - its own exp_tag: a separate experiment and logger run. It does not
+#     continue a run of the base config.
 #   - batch_bins 1920000 and accumulate_grad_batches 4 instead of 960000 and 8.
 #     Global batch: batch_bins(1920000) * accumulate_grad_batches(4) *
 #     num_device(4) / n_mel_channels(100) == 307200 mel-frames/update, the
 #     paper's batch size, unchanged.
 #   - precision bf16-mixed. The V100s of the base config have no bf16.
-#   - more loader workers, and val_check_interval halved so that validation
-#     falls on the same optimizer steps (see the notes at each key).
+#   - more loader workers.
+#   - the pass over the data is cut into short epochs, and the run validates
+#     and checkpoints at the end of each epoch and nowhere else (see
+#     num_iters_per_epoch below). The base config's step-based checkpoint
+#     must not be used with a chain of jobs: the loader cannot resume in the
+#     middle of an epoch, so every job would train the epoch's opening
+#     batches again and never reach the rest of the corpus.
 #
 # Where the batch setting comes from: local/delta/probe_memory.sbatch ran a
 # full training step at the worst batch shapes on one A100-40GB (39.49 GiB
 # usable). bf16 at batch_bins 1920000 reserved 29.58 GiB (0.47-0.53 s/step)
-# and at 2560000 36.34 GiB; fp32 ran out of memory at 1920000. The fallback
-# that fits in fp32 is batch_bins 1536000 with accumulate_grad_batches 5
-# (32.89 GiB). That is a one-GPU probe on synthetic audio: the setting still
-# has to hold in 4-rank DDP on real batches (local/delta/train_trial.sbatch),
-# and bf16 has to be checked against fp32 on a trained checkpoint before a
-# run trained in fp32 is continued with it.
+# and at 2560000 36.34 GiB; fp32 ran out of memory at 1920000. A 300-update
+# trial in 4-rank DDP on real batches then ran at 1.85 s per update with
+# nvidia-smi showing at most 37.1 of 40.96 GB in use (allocator cache
+# included). The setting with more room is batch_bins 1536000 with
+# accumulate_grad_batches 5 (25.22 GiB in the probe); it has not been run in
+# DDP.
 task: espnet2.tasks.tts.TTSTask
 
 num_device: 4
@@ -40,7 +47,7 @@ exp_dir: ${recipe_dir}/exp/${exp_tag}
 stats_dir: ${recipe_dir}/exp/stats
 inference_dir: ${exp_dir}/inference
 
-exp_tag: train_f5_tts_base_emilia
+exp_tag: train_f5_tts_base_emilia_delta
 
 # Mel / audio front-end settings shared by feats_extract and the model.
 sample_rate: 24000
@@ -180,6 +187,17 @@ dataloader:
       num_workers: 12
       pin_memory: true
       shuffle: true
+      # One epoch is this many micro-batches per rank, i.e. 2,000 optimizer
+      # updates: epoch e is slice e of the rank's pass, which is shuffled once
+      # per pass and covered without replacement. A job killed at its
+      # walltime loses the epoch it was in, and every epoch end costs a
+      # sampler rebuild, a validation and a 5.4 GB checkpoint, so the slice
+      # is a trade between the two. It must be a multiple of
+      # accumulate_grad_batches, or an epoch ends on a partial update.
+      num_iters_per_epoch: 8000
+      # 1, not 0: for epoch 0 espnet2 also draws the pass before the first
+      # with RandomState(seed - 1), which raises at seed 0.
+      seed: 1
       collate_fn: ${dataloader.collate_fn}
       batches:
         # Stock espnet2 sampler, same as the LibriTTS F5 recipe. An earlier
@@ -284,16 +302,16 @@ trainer:
   # Real optimizer-update count isn't fixed under numel batching, so stop
   # explicitly at the paper's target instead of relying on max_epochs.
   max_steps: 1200000
-  # REQUIRED here, not optional: espnet3's last-checkpoint callback
-  # otherwise fires only at the end of a train epoch, and an epoch of this
-  # corpus is far longer than any job, so a chained run would restart from
-  # step 0 in every link without any error. Each save is ~5.4 GB (params +
-  # AdamW moments + EMA) and overwrites the previous one.
-  save_every_n_train_steps: 200
-  # Lightning counts this in micro-batches, not optimizer updates: the base
-  # config's 5000 at 8 micro-batches per update is every 625 updates, and
-  # 2500 at 4 per update keeps validation on those same updates.
-  val_check_interval: 2500
+  # No save_every_n_train_steps and no val_check_interval. espnet3 writes
+  # last.ckpt at the end of every training epoch, and an epoch here is one
+  # slice (num_iters_per_epoch), so that is the only checkpoint a job
+  # resumes from. A checkpoint from the middle of an epoch resumes wrongly:
+  # the loader starts the epoch again while the step counter goes on.
+  #
+  # 1 is required as well: when no validation is due at an epoch end,
+  # Lightning trains the first batch of the finished epoch once more after a
+  # resume and takes an extra optimizer step on it.
+  check_val_every_n_epoch: 1
   limit_val_batches: 200
   log_every_n_steps: 50
   max_epochs: -1
@@ -311,14 +329,8 @@ trainer:
     id: ${exp_tag}
     resume: allow
 
-# Resume is NOT configured here unconditionally: on a fresh run
-# ${exp_dir}/last.ckpt does not exist, and Lightning 2.x's
-# CheckpointConnector._parse_ckpt_path passes a literal (non-"best"/"last"/
-# "hpc") ckpt_path straight through to TorchCheckpointIO.load_checkpoint,
-# which raises FileNotFoundError for a nonexistent path -- verified
-# directly against the installed lightning==2.6.5
-# (lightning_fabric/plugins/io/torch_io.py:88-89). local/submit_train.sbatch
-# passes --ckpt_path to run.py, and run.py sets fit.ckpt_path here, only
-# when $LAST_CKPT already exists, so the first hop of a chain runs with no
-# ckpt_path at all.
+# No fit.ckpt_path here: on a fresh run exp_dir/last.ckpt does not exist and
+# Lightning raises FileNotFoundError for a path that is missing.
+# local/delta/train.sbatch passes --ckpt_path to run.py only when last.ckpt
+# exists, so the first job of a chain starts from scratch.
 fit: {}

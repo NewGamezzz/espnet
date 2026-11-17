@@ -1,15 +1,17 @@
 # Short trial of training_f5_tts_base_delta.yaml for Delta's interactive GPU
-# partition (local/delta/train_trial.sbatch): does the production step run on
-# 4 A100s in real DDP, how long does an update take, and how much of it is
-# spent waiting for data.
+# partition, run through the production job script:
+#   NO_CHAIN=1 sbatch --account=<gpu account> --partition=gpuA100x4-interactive \
+#     --time=00:30:00 local/delta/train.sbatch conf/training_f5_tts_base_delta_trial.yaml
+# submitted twice, so that the second job resumes what the walltime cut off
+# in the first.
 #
-# A full copy of that config with only the run length, the checkpoint and
-# validation cadence, exp_tag and the logger changed
-# (tests/test_delta_training_config.py pins the list), so every per-step knob
-# is the production one. It starts from scratch in its own exp dir and must
+# A full copy of that config with only exp_tag, the run length, the slice
+# length and limit_val_batches changed (tests/test_delta_training_config.py
+# pins the list), so the step, the loader, the logger and the resume path are
+# the production ones. It writes into its own exp dir and logger run and must
 # never be used for a real training run. With a 20,000-step warmup the loss
-# barely moves in 300 updates: the trial shows that the step runs, not that
-# the model learns.
+# barely moves in a few hundred updates: the trial shows that the chain runs
+# and resumes, not that the model learns.
 task: espnet2.tasks.tts.TTSTask
 
 num_device: 4
@@ -169,6 +171,11 @@ dataloader:
       num_workers: 12
       pin_memory: true
       shuffle: true
+      # trial: 100 optimizer updates per epoch, a few minutes
+      num_iters_per_epoch: 400
+      # 1, not 0: for epoch 0 espnet2 also draws the pass before the first
+      # with RandomState(seed - 1), which raises at seed 0.
+      seed: 1
       collate_fn: ${dataloader.collate_fn}
       batches:
         # Stock espnet2 sampler, same as the LibriTTS F5 recipe. An earlier
@@ -272,18 +279,18 @@ trainer:
   precision: bf16-mixed
   # Real optimizer-update count isn't fixed under numel batching, so stop
   # explicitly at the paper's target instead of relying on max_epochs.
-  max_steps: 300
-  # REQUIRED here, not optional: espnet3's last-checkpoint callback
-  # otherwise fires only at the end of a train epoch, and an epoch of this
-  # corpus is far longer than any job, so a chained run would restart from
-  # step 0 in every link without any error. Each save is ~5.4 GB (params +
-  # AdamW moments + EMA) and overwrites the previous one.
-  save_every_n_train_steps: 100   # trial: three saves
-  # Lightning counts this in micro-batches, not optimizer updates: the base
-  # config's 5000 at 8 micro-batches per update is every 625 updates, and
-  # 2500 at 4 per update keeps validation on those same updates.
-  val_check_interval: 600        # trial: micro-batches, i.e. updates 150 and 300
-  limit_val_batches: 5           # trial: a handful of batches, not 200
+  max_steps: 2000              # trial: more than two short jobs reach
+  # No save_every_n_train_steps and no val_check_interval. espnet3 writes
+  # last.ckpt at the end of every training epoch, and an epoch here is one
+  # slice (num_iters_per_epoch), so that is the only checkpoint a job
+  # resumes from. A checkpoint from the middle of an epoch resumes wrongly:
+  # the loader starts the epoch again while the step counter goes on.
+  #
+  # 1 is required as well: when no validation is due at an epoch end,
+  # Lightning trains the first batch of the finished epoch once more after a
+  # resume and takes an extra optimizer step on it.
+  check_val_every_n_epoch: 1
+  limit_val_batches: 5         # trial: a handful of batches, not 200
   log_every_n_steps: 50
   max_epochs: -1
   gradient_clip_val: 1.0
@@ -291,14 +298,17 @@ trainer:
   callbacks:
     - _target_: espnet3.components.callbacks.ema.EMACallback
       decay: 0.9999
-  # Offline CSVLogger: a trial leaves no run in the production project.
-  # (`logger: false` cannot work: espnet3 always installs a
-  # LearningRateMonitor, which Lightning refuses without a logger.)
   logger:
-    _target_: lightning.pytorch.loggers.CSVLogger
+    _target_: lightning.pytorch.loggers.WandbLogger
+    project: espnet3-emilia-f5-tts
+    name: ${exp_tag}
     save_dir: ${exp_dir}
-    name: ""
-    version: ${exp_tag}
+    log_model: false
+    id: ${exp_tag}
+    resume: allow
 
-# One job, no resume: local/delta/train_trial.sbatch passes no --ckpt_path.
+# No fit.ckpt_path here: on a fresh run exp_dir/last.ckpt does not exist and
+# Lightning raises FileNotFoundError for a path that is missing.
+# local/delta/train.sbatch passes --ckpt_path to run.py only when last.ckpt
+# exists, so the first job of a chain starts from scratch.
 fit: {}

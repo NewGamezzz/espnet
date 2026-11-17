@@ -6,7 +6,9 @@ that pin PSC-specific details of every local/*.sbatch) are left alone.
 
 import os
 import re
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -52,7 +54,7 @@ def test_delta_scripts_exist():
         "prepare_data.sbatch",
         "probe_memory.sbatch",
         "stage_emilia.sbatch",
-        "train_trial.sbatch",
+        "train.sbatch",
     } <= names
 
 
@@ -68,38 +70,194 @@ def _code(text: str) -> str:
     )
 
 
-def test_trial_job_runs_the_trial_config_once_on_the_interactive_partition():
-    """The trial is one job: it resumes nothing and queues no successor."""
-    text = (DELTA / "train_trial.sbatch").read_text(encoding="utf-8")
+TRAIN = DELTA / "train.sbatch"
+TRAIN_CONF = RECIPE / "conf" / "training_f5_tts_base_delta.yaml"
+
+
+def test_train_job_is_the_production_config_on_a_whole_a100_node():
+    text = TRAIN.read_text(encoding="utf-8")
     code = _code(text)
-    assert _sbatch_option(text, "partition") == "gpuA100x4-interactive"
-    assert "CONF=${1:-conf/training_f5_tts_base_delta_trial.yaml}" in code
-    assert 'run.py --stages train --training_config "$CONF"' in code
-    assert "--ckpt_path" not in code
-    assert not re.search(r"\bsbatch\b", code)
+    assert _sbatch_option(text, "partition") == "gpuA100x4"
+    assert "CONF=${1:-conf/training_f5_tts_base_delta.yaml}" in code
     # one dead rank must end the job instead of idling the others in NCCL
     assert "srun --kill-on-bad-exit=1 " in code
 
 
-def test_trial_job_has_one_task_per_device_of_its_config():
+def test_train_job_has_one_task_per_device_of_its_config():
     """Lightning takes the rank count from Slurm; it must match the config."""
     from omegaconf import OmegaConf
 
-    text = (DELTA / "train_trial.sbatch").read_text(encoding="utf-8")
-    cfg = OmegaConf.load(RECIPE / "conf" / "training_f5_tts_base_delta_trial.yaml")
+    text = TRAIN.read_text(encoding="utf-8")
+    cfg = OmegaConf.load(TRAIN_CONF)
     assert int(_sbatch_option(text, "ntasks-per-node")) == cfg.num_device
     assert int(_sbatch_option(text, "gpus-per-node")) == cfg.num_device
     assert int(_sbatch_option(text, "nodes")) == cfg.num_nodes
 
 
-def test_trial_job_gives_every_rank_a_core_per_loader_worker():
+def test_train_job_gives_every_rank_a_core_per_loader_worker():
     """Loader workers beyond the task's cores only contend with each other."""
     from omegaconf import OmegaConf
 
-    text = (DELTA / "train_trial.sbatch").read_text(encoding="utf-8")
-    cfg = OmegaConf.load(RECIPE / "conf" / "training_f5_tts_base_delta_trial.yaml")
+    text = TRAIN.read_text(encoding="utf-8")
+    cfg = OmegaConf.load(TRAIN_CONF)
     workers = cfg.dataloader.train.iter_factory.num_workers
     assert workers < int(_sbatch_option(text, "cpus-per-task"))
+
+
+class _Link:
+    """train.sbatch in a throwaway recipe dir, with Slurm and the GPU stubbed.
+
+    ``sbatch``, ``srun``, ``nvidia-smi`` and ``git`` are stand-ins that record
+    how they were called; the script itself, env.sh and chain_guard.py are the
+    real files.
+    """
+
+    def __init__(self, tmp_path):
+        self.recipe = tmp_path / "recipe"
+        delta = self.recipe / "local" / "delta"
+        delta.mkdir(parents=True)
+        (self.recipe / "conf").mkdir()
+        for name in ("env.sh", "train.sbatch"):
+            shutil.copy(DELTA / name, delta / name)
+        shutil.copy(RECIPE / "local" / "chain_guard.py", self.recipe / "local")
+        # the import check has its own tests; here it only has to be callable
+        (delta / "check_imports.py").write_text("", "utf-8")
+        (self.recipe / "conf" / "t.yaml").write_text("exp_tag: tag\n", "utf-8")
+        self.exp = self.recipe / "exp" / "tag"
+        self.bin = tmp_path / "bin"
+        self.bin.mkdir()
+        self.calls = tmp_path / "calls"
+        for name in ("sbatch", "srun", "nvidia-smi", "git"):
+            stub = self.bin / name
+            rc = "STUB_" + name.upper().replace("-", "_") + "_RC"
+            stub.write_text(
+                "#!/bin/bash\n"
+                f'echo "{name} CHAIN_LEFT=${{CHAIN_LEFT:-}} $*" >> "{self.calls}"\n'
+                f"exit ${{{rc}:-0}}\n",
+                "utf-8",
+            )
+            stub.chmod(0o755)
+        self.absent = tmp_path / "absent_site_env.sh"
+
+    def checkpoint(self, step):
+        self.exp.mkdir(parents=True, exist_ok=True)
+        (self.exp / f"step{step}.ckpt").write_bytes(b"x")
+        last = self.exp / "last.ckpt"
+        if last.is_symlink():
+            last.unlink()
+        os.symlink(f"step{step}.ckpt", last)
+
+    def run(self, **env):
+        if self.calls.exists():
+            self.calls.unlink()
+        result = subprocess.run(
+            [
+                "bash",
+                str(self.recipe / "local" / "delta" / "train.sbatch"),
+                "conf/t.yaml",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=self.recipe.parent,
+            env={
+                "PATH": f"{self.bin}:{os.environ['PATH']}",
+                "HOME": os.environ["HOME"],
+                "EMILIA_PY": sys.executable,
+                "EMILIA_CORPUS_ROOT": "/site/corpus",
+                "EMILIA_SITE_ENV": str(self.absent),
+                "SLURM_SUBMIT_DIR": str(self.recipe),
+                "SLURM_JOB_ID": "100",
+                "SLURM_JOB_ACCOUNT": "acct",
+                **env,
+            },
+        )
+        lines = (
+            self.calls.read_text("utf-8").splitlines() if self.calls.exists() else []
+        )
+        calls = {
+            name: [c for c in lines if c.startswith(name + " ")]
+            for name in ("sbatch", "srun")
+        }
+        return result, calls, lines
+
+
+@pytest.fixture
+def link(tmp_path):
+    return _Link(tmp_path)
+
+
+def test_first_link_trains_from_scratch_and_queues_its_successor_first(link):
+    """A walltime kill ends the script too, so the successor is queued before."""
+    result, calls, lines = link.run()
+    assert result.returncode == 0, result.stderr
+    (srun,) = calls["srun"]
+    assert "run.py --stages train --training_config conf/t.yaml" in srun
+    assert "--ckpt_path" not in srun
+    (sbatch,) = calls["sbatch"]
+    assert lines.index(sbatch) < lines.index(srun)
+    assert "--dependency=afterany:100" in sbatch
+    # the scripts carry no account: the successor is charged like this job
+    assert "--account=acct" in sbatch
+    assert sbatch.endswith("local/delta/train.sbatch conf/t.yaml")
+
+
+def test_the_chain_budget_goes_down_by_one_per_link(link):
+    _, calls, _ = link.run(CHAIN_LEFT="7")
+    assert calls["sbatch"][0].startswith("sbatch CHAIN_LEFT=6 ")
+    _, calls, _ = link.run(CHAIN_LEFT="1")
+    assert calls["sbatch"] == [] and len(calls["srun"]) == 1
+
+
+def test_a_link_resumes_from_the_last_checkpoint(link):
+    link.checkpoint(500)
+    result, calls, _ = link.run()
+    assert result.returncode == 0, result.stderr
+    assert "--ckpt_path exp/tag/last.ckpt" in calls["srun"][0]
+
+
+def test_no_chain_runs_one_link_and_queues_nothing(link):
+    result, calls, _ = link.run(NO_CHAIN="1")
+    assert result.returncode == 0, result.stderr
+    assert calls["sbatch"] == [] and len(calls["srun"]) == 1
+
+
+def test_a_stop_file_ends_the_chain_without_training(link):
+    """Links start days apart; one that is no longer wanted must cost nothing."""
+    link.exp.mkdir(parents=True)
+    (link.exp / "STOP").write_text("stop\n", "utf-8")
+    result, calls, _ = link.run()
+    assert result.returncode == 0, result.stderr
+    assert calls["sbatch"] == [] and calls["srun"] == []
+
+
+def test_a_successor_that_cannot_be_queued_does_not_stop_this_link(link):
+    result, calls, _ = link.run(STUB_SBATCH_RC="1")
+    assert result.returncode == 0, result.stderr
+    assert len(calls["srun"]) == 1
+    assert "successor" in result.stderr
+
+
+def test_a_chain_that_does_not_advance_the_checkpoint_stops_itself(link):
+    link.checkpoint(500)
+    codes = [link.run()[0].returncode for _ in range(2)]
+    assert codes == [0, 0]
+    result, calls, _ = link.run()
+    assert result.returncode != 0
+    assert calls["sbatch"] == [] and calls["srun"] == []
+    assert (link.exp / "STOP").exists()
+
+
+def test_a_link_refuses_to_restart_from_scratch_over_a_broken_checkpoint(link):
+    link.exp.mkdir(parents=True)
+    os.symlink("step500.ckpt", link.exp / "last.ckpt")  # the file is gone
+    result, calls, _ = link.run(NO_CHAIN="1")
+    assert result.returncode != 0
+    assert calls["srun"] == []
+
+
+def test_a_failed_training_step_fails_the_job(link):
+    result, _, _ = link.run(NO_CHAIN="1", STUB_SRUN_RC="7")
+    assert result.returncode == 7
 
 
 def test_stage_job_refuses_to_run_without_a_destination():
@@ -171,6 +329,8 @@ def test_delta_scripts_carry_no_site_paths_or_accounts(path):
         line for line in text.splitlines() if not line.lstrip().startswith("# ")
     )
     assert not re.search(r"(?<![\w$}])/(work|u|projects|scratch|ocean)/", code)
+    # handing this job's own account to its successor names no account
+    code = code.replace('--account="$SLURM_JOB_ACCOUNT"', "")
     assert "--account" not in code and "#SBATCH -A" not in code
 
 

@@ -332,6 +332,23 @@ To actually stop the chain:
 - **Alternative:** also `scancel` the queued successor's job id (find it
   with `squeue -u $USER`) if even that brief start is undesirable.
 
+### Training on NCSA Delta
+
+`conf/training_f5_tts_base_delta.yaml` trains the same model from scratch on one `gpuA100x4` node (4 x A100-40GB) in `bf16-mixed`, with twice the micro-batch and half the accumulation, so an update is still 307,200 frames.
+It is its own experiment (`exp_tag`), not a continuation of the base config's run.
+The job scripts are in `local/delta/`; site paths and the python to use go in the untracked `local/delta/site_env.sh` (see `local/delta/env.sh`), and the account is given on the `sbatch` command line.
+
+```bash
+sbatch --account=<cpu account> local/delta/prepare_data.sbatch conf/training_f5_tts_base_delta.yaml
+sbatch --account=<gpu account> local/delta/train.sbatch
+```
+
+`local/delta/train.sbatch` is one link of a chain: it queues its successor before it trains and resumes from `exp/<exp_tag>/last.ckpt`.
+That config cuts the pass over the data into short epochs (`num_iters_per_epoch`) and checkpoints at the end of each epoch only.
+The loader cannot resume in the middle of an epoch, so a step-based checkpoint would make every link train the same opening batches again.
+`touch exp/<exp_tag>/STOP` ends the chain; `local/chain_guard.py` writes that file itself after two links in a row that did not advance the checkpoint.
+Before a chain is started, run the trial config twice through the same script on the interactive partition (its header has the command) and check that the second job resumes where the first was cut off.
+
 ### Rank-0 OOM masquerading as an NCCL timeout
 
 The plan describes a diagnostic that "wraps the training step in a
