@@ -311,7 +311,13 @@ class DataLoaderBuilder:
                 )
                 _LOGGED_DISTRIBUTED_BATCHES.add(mode)
 
-        iter_factory = instantiate(factory_config, dataset, batches=batches)
+        # The dataset and the batch list are handed to the partial, not to
+        # instantiate: Hydra merges its arguments into an OmegaConf config,
+        # which turns every batch into config nodes. For a corpus of 37M
+        # utterances that took about 20 minutes per build, and the factory
+        # then received ListConfig batches.
+        factory = instantiate(factory_config, _partial_=True)
+        iter_factory = factory(dataset, batches=batches)
         iterator = iter_factory.build_iter(self.epoch)
         log_dataloader(
             logger,
